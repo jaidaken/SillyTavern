@@ -29,6 +29,11 @@
 /tests
 
 # --- Sensitive Info ---
+# Live configs hold basicAuthUser credentials; COPY would bake them into an image layer.
+/config.yaml
+/config.conf
+/config.conf.bak
+/config
 **/.env*
 **/*.pem
 **/certs

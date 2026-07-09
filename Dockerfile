@@ -1,4 +1,5 @@
-FROM node:lts-alpine3.23
+# Digest pins the multi-arch index, not one platform; bump tag and digest together.
+FROM node:lts-alpine3.23@sha256:595398b0081eacda8e1c4c5b97b76cd1020e4d58a8ebcb4843b9bca1e79e7436
 
 # Arguments
 ARG APP_HOME=/home/node/app
@@ -49,5 +50,6 @@ RUN git config --global --add safe.directory "*"
 
 EXPOSE 8000
 
+# No USER directive: the entrypoint needs root to chown mounted volumes, then drops to 'node' via su-exec.
 # Ensure proper handling of kernel signals
 ENTRYPOINT ["tini", "--", "./docker-entrypoint.sh"]

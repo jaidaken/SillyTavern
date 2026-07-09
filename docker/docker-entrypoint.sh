@@ -62,30 +62,32 @@ if [ "$(id -u)" = "0" ]; then
         # Update the internal 'node' user to match requested IDs
         groupmod -o -g "$PGID" node
         usermod -o -u "$PUID" -g "$PGID" node
-
-        for dir in $CHECK_DIRS; do
-            if [ -d "$dir" ]; then
-                # Runs chown only if there is an mismatch
-                DIR_UID=$(stat -c '%u' "$dir")
-                DIR_GID=$(stat -c '%g' "$dir")
-
-                if [ "$DIR_UID" != "$PUID" ] || [ "$DIR_GID" != "$PGID" ]; then
-                    echo "(Detected mismatch) Adjusting permissions for: $dir."
-                    chown -R node:node "$dir" || echo "Warning: Failed to update permissions for '$dir'." >&2
-                fi
-            fi
-        done
-
-        # Fix config file specifically
-        chown node:node "config/config.yaml" 2>/dev/null
-
-        # Set execution prefix to run as 'node' user
-        EXEC_PREFIX="su-exec node:node"
     else
-        # Default: Run as Root (original behavior)
-        echo "Mode: Default (Root)"
-        EXEC_PREFIX=""
+        echo "Mode: Default (dropping root to 'node')"
     fi
+
+    # Target IDs are whatever 'node' resolves to now (remapped above, or the image default).
+    NODE_UID=$(id -u node)
+    NODE_GID=$(id -g node)
+
+    for dir in $CHECK_DIRS; do
+        if [ -d "$dir" ]; then
+            # Runs chown only if there is an mismatch
+            DIR_UID=$(stat -c '%u' "$dir")
+            DIR_GID=$(stat -c '%g' "$dir")
+
+            if [ "$DIR_UID" != "$NODE_UID" ] || [ "$DIR_GID" != "$NODE_GID" ]; then
+                echo "(Detected mismatch) Adjusting permissions for: $dir."
+                chown -R node:node "$dir" || echo "Warning: Failed to update permissions for '$dir'." >&2
+            fi
+        fi
+    done
+
+    # Fix config file specifically
+    chown node:node "config/config.yaml" 2>/dev/null
+
+    # Set execution prefix to run as 'node' user
+    EXEC_PREFIX="su-exec node:node"
 
 else
     # Non-Root Mode (Docker CLI --user flag)
