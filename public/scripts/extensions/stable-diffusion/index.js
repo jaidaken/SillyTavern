@@ -1,4 +1,5 @@
 import { Popper } from '../../../lib.js';
+import { log } from '../../log.js';
 import {
     animation_duration,
     appendMediaToMessage,
@@ -414,13 +415,13 @@ function processTriggers(chat, _, abort, type) {
             return;
         }
 
-        console.log(`SD: Triggered by "${message}", detected subject: "${subject}"`);
+        log.media.debug(`SD: Triggered by "${message}", detected subject: "${subject}"`);
 
         outer: for (const [specialMode, triggers] of Object.entries(messageTrigger.specialCases)) {
             for (const trigger of triggers) {
                 if (subject === trigger) {
                     subject = triggerWords[specialMode][0];
-                    console.log(`SD: Detected special case "${trigger}", switching to mode ${specialMode}`);
+                    log.media.debug(`SD: Detected special case "${trigger}", switching to mode ${specialMode}`);
                     break outer;
                 }
             }
@@ -429,7 +430,7 @@ function processTriggers(chat, _, abort, type) {
         abort(true);
         setTimeout(() => generatePicture(initiators.interactive, {}, subject, message), 1);
     } catch {
-        console.log('SD: Failed to process triggers.');
+        log.media.warn('SD: Failed to process triggers.');
     }
 }
 
@@ -677,7 +678,7 @@ function onStyleSelect() {
     const styleObject = extension_settings.sd.styles.find(x => x.name === selectedStyle);
 
     if (!styleObject) {
-        console.warn(`Could not find style object for ${selectedStyle}`);
+        log.media.warn(`Could not find style object for ${selectedStyle}`);
         return;
     }
 
@@ -1097,7 +1098,7 @@ function onResolutionChange() {
     const selectedResolution = resolutionOptions[selectedOption];
 
     if (!selectedResolution) {
-        console.warn(`Could not find resolution option for ${selectedOption}`);
+        log.media.warn(`Could not find resolution option for ${selectedOption}`);
         return;
     }
 
@@ -1531,7 +1532,7 @@ async function getAutoRemoteModel() {
 
         return await result.text();
     } catch (error) {
-        console.error(error);
+        log.media.error(error);
         return null;
     }
 }
@@ -1550,7 +1551,7 @@ async function getDrawthingsRemoteModel() {
 
         return await result.text();
     } catch (error) {
-        console.error(error);
+        log.media.error(error);
         return null;
     }
 }
@@ -1573,7 +1574,7 @@ async function getAutoRemoteUpscalers() {
 
         return await result.json();
     } catch (error) {
-        console.error(error);
+        log.media.error(error);
         return [extension_settings.sd.hr_upscaler];
     }
 }
@@ -1592,7 +1593,7 @@ async function getAutoRemoteSchedulers() {
 
         return await result.json();
     } catch (error) {
-        console.error(error);
+        log.media.error(error);
         return ['N/A'];
     }
 }
@@ -1611,7 +1612,7 @@ async function getVladRemoteUpscalers() {
 
         return await result.json();
     } catch (error) {
-        console.error(error);
+        log.media.error(error);
         return [extension_settings.sd.hr_upscaler];
     }
 }
@@ -1632,7 +1633,7 @@ async function getDrawthingsRemoteUpscalers() {
 
         return data ? [data] : ['N/A'];
     } catch (error) {
-        console.error(error);
+        log.media.error(error);
         return ['N/A'];
     }
 }
@@ -1649,9 +1650,9 @@ async function updateAutoRemoteModel() {
             throw new Error('SD WebUI returned an error.');
         }
 
-        console.log('Model successfully updated on SD WebUI remote.');
+        log.media.info('Model successfully updated on SD WebUI remote.');
     } catch (error) {
-        console.error(error);
+        log.media.error(error);
         toastr.error(`Could not update SD WebUI model: ${error.message}`);
     }
 }
@@ -1665,7 +1666,7 @@ async function updateExtrasRemoteModel() {
     });
 
     if (getCurrentModelResult.ok) {
-        console.log('Model successfully updated on SD remote.');
+        log.media.info('Model successfully updated on SD remote.');
     }
 }
 
@@ -1836,7 +1837,7 @@ async function loadSdcppModels() {
             return data.data.map(model => ({ value: model.id, text: model.name || model.id }));
         }
     } catch (error) {
-        console.error('Failed to load sd.cpp models:', error);
+        log.media.error('Failed to load sd.cpp models:', error);
     }
 
     return [{ value: '', text: 'N/A' }];
@@ -2079,7 +2080,7 @@ function ensureElectronHubQualitySelect(models) {
             saveSettingsDebounced();
         }
     } catch (e) {
-        console.error(e);
+        log.media.error(e);
     }
 }
 
@@ -2170,7 +2171,7 @@ async function loadPollinationsModels() {
 
 async function loadTogetherAIModels() {
     if (!secret_state[SECRET_KEYS.TOGETHERAI]) {
-        console.debug('TogetherAI API key is not set.');
+        log.media.debug('TogetherAI API key is not set.');
         return [];
     }
 
@@ -2188,7 +2189,7 @@ async function loadTogetherAIModels() {
 
 async function loadChutesModels() {
     if (!secret_state[SECRET_KEYS.CHUTES]) {
-        console.debug('Chutes API key is not set.');
+        log.media.debug('Chutes API key is not set.');
         return [];
     }
 
@@ -2199,17 +2200,17 @@ async function loadChutesModels() {
 
     if (result.ok) {
         const models = await result.json();
-        console.debug('Loaded Chutes image models:', models);
+        log.media.debug('Loaded Chutes image models:', models);
         return models;
     }
 
-    console.warn('Failed to load Chutes models:', result.status);
+    log.media.warn('Failed to load Chutes models:', result.status);
     return [];
 }
 
 async function loadElectronHubModels() {
     if (!secret_state[SECRET_KEYS.ELECTRONHUB]) {
-        console.debug('Electron Hub API key is not set.');
+        log.media.debug('Electron Hub API key is not set.');
         return [];
     }
 
@@ -2242,7 +2243,7 @@ async function loadElectronHubModels() {
 
 async function loadNanoGPTModels() {
     if (!secret_state[SECRET_KEYS.NANOGPT]) {
-        console.debug('NanoGPT API key is not set.');
+        log.media.debug('NanoGPT API key is not set.');
         return [];
     }
 
@@ -2375,7 +2376,7 @@ async function loadDrawthingsModels() {
 
         return data;
     } catch (error) {
-        console.log('Error loading DrawThings API models:', error);
+        log.media.error('Error loading DrawThings API models:', error);
         return [];
     }
 }
@@ -2853,7 +2854,7 @@ async function loadComfyWorkflows() {
             $('#sd_comfy_workflow').append(option);
         }
     } catch (error) {
-        console.error(`Could not load ComfyUI workflows: ${error.message}`);
+        log.media.error(`Could not load ComfyUI workflows: ${error.message}`);
     }
 }
 
@@ -2951,7 +2952,7 @@ function getRawLastMessage() {
         : context.characters[context.characterId];
 
     if (!character) {
-        console.debug('Character not found, using raw message.');
+        log.media.debug('Character not found, using raw message.');
         return processReply(lastMessage.mes);
     }
 
@@ -2989,7 +2990,7 @@ function ensureSelectionExists(setting, selector) {
  */
 async function generatePicture(initiator, args, trigger, message, callback) {
     if (!trigger || trigger.trim().length === 0) {
-        console.log('Trigger word empty, aborting');
+        log.media.debug('Trigger word empty, aborting');
         return;
     }
 
@@ -3004,7 +3005,7 @@ async function generatePicture(initiator, args, trigger, message, callback) {
     trigger = trigger.trim();
     const generationType = getGenerationType(trigger);
     const generationTypeKey = Object.keys(generationMode).find(key => generationMode[key] === generationType);
-    console.log(`Image generation mode ${generationTypeKey} triggered with "${trigger}"`);
+    log.media.debug(`Image generation mode ${generationTypeKey} triggered with "${trigger}"`);
 
     const quietPrompt = getQuietPrompt(generationType, trigger);
     const context = getContext();
@@ -3049,7 +3050,7 @@ async function generatePicture(initiator, args, trigger, message, callback) {
 
         // generate the text prompt for the image
         let prompt = await getPrompt(generationType, message, trigger, quietPrompt, combineNegatives);
-        console.log('Processed image prompt:', prompt);
+        log.media.debug('Processed image prompt:', prompt);
 
         // Extension hook for prompt processing
         const eventData = { prompt, generationType, message, trigger };
@@ -3074,12 +3075,12 @@ async function generatePicture(initiator, args, trigger, message, callback) {
     } catch (err) {
         // Check if this was an intentional abort by user
         if (abortController.signal.aborted) {
-            console.log('SD: Image generation aborted by user');
+            log.media.debug('SD: Image generation aborted by user');
             toastr.info('Image generation stopped.', 'Image Generation');
             return;
         }
 
-        console.trace(err);
+        log.media.error(err);
         // errors here are most likely due to text generation failure
         // sendGenerationRequest mostly deals with its own errors
         const reason = err.error?.message || err.message || 'Unknown error';
@@ -3128,15 +3129,15 @@ function setTypeSpecificDimensions(generationType, mediaAttachment = null) {
             const ratio = Math.sqrt(prevPixelCount / newPixelCount);
             extension_settings.sd.height = Math.round(extension_settings.sd.height * ratio / 64) * 64;
             extension_settings.sd.width = Math.round(extension_settings.sd.width * ratio / 64) * 64;
-            console.log(`Pixel counts after rescaling: ${prevPixelCount} -> ${newPixelCount} (ratio: ${ratio})`);
+            log.media.debug(`Pixel counts after rescaling: ${prevPixelCount} -> ${newPixelCount} (ratio: ${ratio})`);
 
             const resolution = resolutionOptions[getClosestKnownResolution()];
             if (resolution) {
                 extension_settings.sd.height = resolution.height;
                 extension_settings.sd.width = resolution.width;
-                console.log('Snap to resolution', JSON.stringify(resolution));
+                log.media.debug('Snap to resolution', JSON.stringify(resolution));
             } else {
-                console.warn('Snap to resolution failed, using custom dimensions');
+                log.media.warn('Snap to resolution failed, using custom dimensions');
             }
         }
     }
@@ -3164,7 +3165,7 @@ function restoreOriginalDimensions(savedParams) {
  */
 async function getPrompt(generationType, message, trigger, quietPrompt, combineNegatives) {
     let prompt;
-    console.log('getPrompt: Generation mode', generationType, 'triggered with', trigger);
+    log.media.debug('getPrompt: Generation mode', generationType, 'triggered with', trigger);
     switch (generationType) {
         case generationMode.RAW_LAST:
             prompt = message || getRawLastMessage();
@@ -3260,7 +3261,7 @@ async function generateMultimodalPrompt(generationType, quietPrompt) {
 
         return caption;
     } catch (error) {
-        console.error(error);
+        log.media.error(error);
         toastr.error('Multimodal captioning failed. Please try again.', 'Image Generation');
         throw new Error('Multimodal captioning failed.', { cause: error });
     }
@@ -3426,18 +3427,18 @@ async function sendGenerationRequest(generationType, prompt, additionalNegativeP
     } catch (err) {
         // Check if this was an intentional abort by user
         if (signal?.aborted) {
-            console.log('SD: Image generation aborted by user');
+            log.media.debug('SD: Image generation aborted by user');
             toastr.info('Image generation stopped.', 'Image Generation');
             return;
         }
 
-        console.error('Image generation request error: ', err);
+        log.media.error('Image generation request error: ', err);
         toastr.error('Image generation failed. Please try again.' + '\n\n' + String(err), 'Image Generation');
         return;
     }
 
     if (currentChatId !== getCurrentChatId()) {
-        console.warn('Chat changed, aborting SD result saving');
+        log.media.warn('Chat changed, aborting SD result saving');
         toastr.warning('Chat changed, generated image discarded.', 'Image Generation');
         return;
     }
@@ -3611,7 +3612,7 @@ function getClosestAspectRatio(width, height, source) {
                     '2:1': 2 / 1,
                 };
             default:
-                console.warn(`Unknown source "${source}" for aspect ratio calculation.`);
+                log.media.warn(`Unknown source "${source}" for aspect ratio calculation.`);
                 return null;
         }
     }
@@ -3741,7 +3742,7 @@ async function generateStabilityImage(prompt, negativePrompt, signal) {
             data: base64Image,
         };
     } catch (error) {
-        console.error('Error generating image with Stability AI:', error);
+        log.media.error('Error generating image with Stability AI:', error);
         throw error;
     }
 }
@@ -4051,13 +4052,13 @@ function getNovelParams() {
             }
         }
 
-        console.log(`Anlas Guard: Image size (${width}x${height}) > ${MAX_PIXELS}, reducing size to ${newWidth}x${newHeight}`);
+        log.media.warn(`Anlas Guard: Image size (${width}x${height}) > ${MAX_PIXELS}, reducing size to ${newWidth}x${newHeight}`);
         width = newWidth;
         height = newHeight;
     }
 
     if (steps > MAX_STEPS) {
-        console.log(`Anlas Guard: Steps (${steps}) > ${MAX_STEPS}, reducing steps to ${MAX_STEPS}`);
+        log.media.warn(`Anlas Guard: Steps (${steps}) > ${MAX_STEPS}, reducing steps to ${MAX_STEPS}`);
         steps = MAX_STEPS;
     }
 
@@ -4270,7 +4271,7 @@ async function generateComfyImageCommon(prompt, negativePrompt, signal, basePath
             workflow = workflow.replaceAll('"%char_avatar%"', JSON.stringify(PNG_PIXEL));
         }
     }
-    console.log(`{
+    log.media.debug(`{
         "prompt": ${workflow}
     }`);
     const promptResult = await fetch(`${basePath}/generate`, {
@@ -5067,7 +5068,7 @@ async function addSDGenButtons() {
         const param = idParamMap[id];
 
         if (param) {
-            console.log('doing /sd ' + param);
+            log.media.debug('doing /sd ' + param);
             generatePicture(initiators.wand, {}, param);
         }
     });
@@ -5174,7 +5175,7 @@ async function sdMessageButton($icon, { animate } = {}) {
 
     if ($icon.hasClass(classes.busy)) {
         abortController.abort('Aborted by user');
-        console.log('SD: Image generation aborted by user');
+        log.media.debug('SD: Image generation aborted by user');
         return;
     }
 
@@ -5185,7 +5186,7 @@ async function sdMessageButton($icon, { animate } = {}) {
     const message = context.chat[messageId];
 
     if (!message) {
-        console.error('Could not find message for SD generation button');
+        log.media.error('Could not find message for SD generation button');
         return;
     }
 
@@ -5514,7 +5515,7 @@ export async function init() {
 
                 return url;
             } catch (error) {
-                console.error('Failed to generate image:', error);
+                log.media.error('Failed to generate image:', error);
                 return '';
             } finally {
                 if (Object.keys(currentSettings).length) {

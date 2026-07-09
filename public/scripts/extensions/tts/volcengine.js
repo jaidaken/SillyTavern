@@ -2,6 +2,7 @@ import { event_types, eventSource, getRequestHeaders } from '../../../script.js'
 import { SECRET_KEYS, secret_state } from '../../secrets.js';
 import { saveTtsProviderSettings, initVoiceMap } from './index.js';
 import { Popup } from '../../popup.js';
+import { log } from '../../log.js';
 export { VolcengineTtsProvider };
 
 class VolcengineTtsProvider {
@@ -80,7 +81,7 @@ class VolcengineTtsProvider {
         const text = 'Hello! Nice to meet you!';
         const audio = await this.generateTts(text, voice);
         const audioElement = new Audio(URL.createObjectURL(await audio.blob()));
-        audioElement.play().catch(e => console.error('Error playing audio:', e));
+        audioElement.play().catch(e => log.tts.error('Error playing audio:', e));
     }
 
     async fetchTtsVoiceObjects() {
@@ -186,7 +187,7 @@ class VolcengineTtsProvider {
     async loadSettings(settings) {
         // Populate Provider UI given input settings
         if (Object.keys(settings).length == 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
 
         // Only accept keys defined in defaultSettings
@@ -242,7 +243,7 @@ class VolcengineTtsProvider {
 
         await this.checkReady();
 
-        console.info('Volcengine TTS: Settings loaded');
+        log.tts.info('Volcengine TTS: Settings loaded');
     }
 
     async createNewVoice() {
@@ -293,7 +294,7 @@ class VolcengineTtsProvider {
         return response;
     }
     async fetchTtsGeneration(text, voice_speaker) {
-        console.info(`Generating new TTS for voice_id ${voice_speaker}`);
+        log.tts.debug(`Generating new TTS for voice_id ${voice_speaker}`);
         const response = await fetch('/api/volcengine/generate-voice', {
             method: 'POST',
             headers: getRequestHeaders(),
@@ -307,7 +308,7 @@ class VolcengineTtsProvider {
         });
         if (!response.ok) {
             const errorText = await response.text();
-            console.error(`HTTP ${response.status}: ${errorText}`);
+            log.tts.error(`HTTP ${response.status}: ${errorText}`);
             toastr.error(errorText);
             throw new Error(`HTTP ${response.status}: ${errorText}`);
         }

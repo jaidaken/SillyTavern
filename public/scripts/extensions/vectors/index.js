@@ -38,6 +38,7 @@ import { generateWebLlmChatPrompt, isWebLlmSupported } from '../shared.js';
 import { WebLlmVectorProvider } from './webllm.js';
 import { removeReasoningFromString } from '../../reasoning.js';
 import { oai_settings } from '../../openai.js';
+import { log } from '../../log.js';
 
 /**
  * @typedef {object} HashedMessage
@@ -268,7 +269,7 @@ async function onVectorizeAllClick() {
             toastr.warning(`${skippedHashes.size} message(s) skipped due to errors. Click Vectorize All again to retry.`, 'Vectorization partial');
         }
     } catch (error) {
-        console.error('Vectors: Failed to vectorize all', error);
+        log.vectors.error('Vectors: Failed to vectorize all', error);
     } finally {
         $('#vectorize_progress').hide();
     }
@@ -340,7 +341,7 @@ async function summarizeExtra(element) {
             element.text = removeReasoningFromString(data.summary);
         }
     } catch (error) {
-        console.log(error);
+        log.vectors.error(error);
         return false;
     }
 
@@ -364,7 +365,7 @@ async function summarizeMain(element) {
  */
 async function summarizeWebLLM(element) {
     if (!isWebLlmSupported()) {
-        console.warn('Vectors: WebLLM is not supported');
+        log.vectors.warn('Vectors: WebLLM is not supported');
         return false;
     }
 
@@ -419,13 +420,13 @@ async function summarize(hashedMessages, endpoint = 'main', { skipOnFailure = fa
                 if (success) break;
             } catch (error) {
                 if (FATAL_CAUSES.has(error?.cause)) throw error;
-                console.warn(`Vectors: summary attempt ${attempt}/${maxAttempts} threw for hash ${element.hash}`, error);
+                log.vectors.warn(`Vectors: summary attempt ${attempt}/${maxAttempts} threw for hash ${element.hash}`, error);
             }
-            console.warn(`Vectors: summary attempt ${attempt}/${maxAttempts} failed for hash ${element.hash}`);
+            log.vectors.warn(`Vectors: summary attempt ${attempt}/${maxAttempts} failed for hash ${element.hash}`);
         }
         if (!success) {
             if (skipOnFailure) {
-                console.warn(`Vectors: summarization exhausted ${maxAttempts} attempt(s) for hash ${element.hash} — marking for skip`);
+                log.vectors.warn(`Vectors: summarization exhausted ${maxAttempts} attempt(s) for hash ${element.hash} — marking for skip`);
                 element.summaryFailed = true;
                 continue;
             }
@@ -445,7 +446,7 @@ async function synchronizeChat(batchSize = 5) {
     try {
         await waitUntilCondition(() => !syncBlocked && !is_send_press, 1000);
     } catch {
-        console.log('Vectors: Synchronization blocked by another process');
+        log.vectors.debug('Vectors: Synchronization blocked by another process');
         return -1;
     }
 
@@ -455,7 +456,7 @@ async function synchronizeChat(batchSize = 5) {
         const chatId = getCurrentChatId();
 
         if (!chatId || !Array.isArray(context.chat)) {
-            console.debug('Vectors: No chat selected');
+            log.vectors.debug('Vectors: No chat selected');
             return -1;
         }
 
@@ -486,21 +487,21 @@ async function synchronizeChat(batchSize = 5) {
         if (batch.length > 0) {
             const chunkedBatch = splitByChunks(batch);
 
-            console.log(`Vectors: Found ${newVectorItems.length} new items. Processing ${batch.length}...`);
+            log.vectors.debug(`Vectors: Found ${newVectorItems.length} new items. Processing ${batch.length}...`);
             try {
                 await insertVectorItems(chatId, chunkedBatch);
             } catch (insertError) {
                 if (FATAL_CAUSES.has(insertError?.cause)) {
                     throw insertError;
                 }
-                console.warn('Vectors: insert failed for batch — marking for skip', insertError);
+                log.vectors.warn('Vectors: insert failed for batch — marking for skip', insertError);
                 for (const item of batch) skippedHashes.add(item.hash);
             }
         }
 
         if (deletedHashes.length > 0) {
             await deleteVectorItems(chatId, deletedHashes);
-            console.log(`Vectors: Deleted ${deletedHashes.length} old hashes`);
+            log.vectors.debug(`Vectors: Deleted ${deletedHashes.length} old hashes`);
         }
 
         return newVectorItems.length - batchSize;
@@ -533,7 +534,7 @@ async function synchronizeChat(batchSize = 5) {
             }
         }
 
-        console.error('Vectors: Failed to synchronize chat', error);
+        log.vectors.error('Vectors: Failed to synchronize chat', error);
 
         const message = getErrorMessage(error.cause);
         toastr.error(message, 'Vectorization failed', { preventDuplicates: true });
@@ -632,7 +633,7 @@ async function processFiles(chat) {
             message.mes = `${allFileChunks.join('\n\n')}\n\n${message.mes}`;
         }
     } catch (error) {
-        console.error('Vectors: Failed to retrieve files', error);
+        log.vectors.error('Vectors: Failed to retrieve files', error);
     }
 }
 
@@ -658,7 +659,7 @@ async function ingestDataBankAttachments(source) {
 
         // Download and process the file
         const fileText = await getFileAttachment(file.url);
-        console.log(`Vectors: Retrieved file ${file.name} from Data Bank`);
+        log.vectors.debug(`Vectors: Retrieved file ${file.name} from Data Bank`);
         // Convert kilobytes to string length
         const thresholdLength = settings.size_threshold_db * 1024;
         // Use chunk size from settings if file is larger than threshold
@@ -678,24 +679,24 @@ async function ingestDataBankAttachments(source) {
 async function injectDataBankChunks(queryText, collectionIds) {
     try {
         const queryResults = await queryMultipleCollections(collectionIds, queryText, settings.chunk_count_db, settings.score_threshold);
-        console.debug(`Vectors: Retrieved ${collectionIds.length} Data Bank collections`, queryResults);
+        log.vectors.debug(`Vectors: Retrieved ${collectionIds.length} Data Bank collections`, queryResults);
         let textResult = '';
 
         for (const collectionId in queryResults) {
-            console.debug(`Vectors: Processing Data Bank collection ${collectionId}`, queryResults[collectionId]);
+            log.vectors.debug(`Vectors: Processing Data Bank collection ${collectionId}`, queryResults[collectionId]);
             const metadata = queryResults[collectionId].metadata?.filter(x => x.text)?.sort((a, b) => a.index - b.index)?.map(x => x.text)?.filter(onlyUnique) || [];
             textResult += metadata.join('\n') + '\n\n';
         }
 
         if (!textResult) {
-            console.debug('Vectors: No Data Bank chunks found');
+            log.vectors.debug('Vectors: No Data Bank chunks found');
             return;
         }
 
         const insertedText = substituteParamsExtended(settings.file_template_db, { text: textResult });
         setExtensionPrompt(EXTENSION_PROMPT_TAG_DB, insertedText, settings.file_position_db, settings.file_depth_db, settings.include_wi, settings.file_depth_role_db);
     } catch (error) {
-        console.error('Vectors: Failed to insert Data Bank chunks', error);
+        log.vectors.error('Vectors: Failed to insert Data Bank chunks', error);
     }
 }
 
@@ -706,9 +707,9 @@ async function injectDataBankChunks(queryText, collectionIds) {
  * @returns {Promise<string>} Retrieved file text
  */
 async function retrieveFileChunks(queryText, collectionId) {
-    console.debug(`Vectors: Retrieving file chunks for collection ${collectionId}`, queryText);
+    log.vectors.debug(`Vectors: Retrieving file chunks for collection ${collectionId}`, queryText);
     const queryResults = await queryCollection(collectionId, queryText, settings.chunk_count);
-    console.debug(`Vectors: Retrieved ${queryResults.hashes.length} file chunks for collection ${collectionId}`, queryResults);
+    log.vectors.debug(`Vectors: Retrieved ${queryResults.hashes.length} file chunks for collection ${collectionId}`, queryResults);
     const metadata = queryResults.metadata.filter(x => x.text).sort((a, b) => a.index - b.index).map(x => x.text).filter(onlyUnique);
     const fileText = metadata.join('\n');
 
@@ -729,7 +730,7 @@ async function vectorizeFile(fileText, fileName, collectionId, chunkSize, overla
 
     try {
         if (settings.translate_files && typeof globalThis.translate === 'function') {
-            console.log(`Vectors: Translating file ${fileName} to English...`);
+            log.vectors.debug(`Vectors: Translating file ${fileName} to English...`);
             const translatedText = await globalThis.translate(fileText, 'en');
             fileText = translatedText;
         }
@@ -745,7 +746,7 @@ async function vectorizeFile(fileText, fileName, collectionId, chunkSize, overla
         const chunks = settings.only_custom_boundary && settings.force_chunk_delimiter
             ? fileText.split(settings.force_chunk_delimiter).map(applyOverlap)
             : splitRecursive(fileText, chunkSize, delimiters).map(applyOverlap);
-        console.debug(`Vectors: Split file ${fileName} into ${chunks.length} chunks with ${overlapPercent}% overlap`, chunks);
+        log.vectors.debug(`Vectors: Split file ${fileName} into ${chunks.length} chunks with ${overlapPercent}% overlap`, chunks);
 
         const items = chunks.map((chunk, index) => ({ hash: getStringHash(chunk), text: chunk, index: index }));
 
@@ -756,12 +757,12 @@ async function vectorizeFile(fileText, fileName, collectionId, chunkSize, overla
         }
 
         toastr.clear(toast);
-        console.log(`Vectors: Inserted ${chunks.length} vector items for file ${fileName} into ${collectionId}`);
+        log.vectors.debug(`Vectors: Inserted ${chunks.length} vector items for file ${fileName} into ${collectionId}`);
         return true;
     } catch (error) {
         toastr.clear(toast);
         toastr.error(String(error), 'Failed to vectorize file', { preventDuplicates: true });
-        console.error('Vectors: Failed to vectorize file', error);
+        log.vectors.error('Vectors: Failed to vectorize file', error);
         return false;
     }
 }
@@ -776,7 +777,7 @@ async function vectorizeFile(fileText, fileName, collectionId, chunkSize, overla
 async function rearrangeChat(chat, _contextSize, _abort, type) {
     try {
         if (type === 'quiet') {
-            console.debug('Vectors: Skipping quiet prompt');
+            log.vectors.debug('Vectors: Skipping quiet prompt');
             return;
         }
 
@@ -799,19 +800,19 @@ async function rearrangeChat(chat, _contextSize, _abort, type) {
         const chatId = getCurrentChatId();
 
         if (!chatId || !Array.isArray(chat)) {
-            console.debug('Vectors: No chat selected');
+            log.vectors.debug('Vectors: No chat selected');
             return;
         }
 
         if (chat.length < settings.protect) {
-            console.debug(`Vectors: Not enough messages to rearrange (less than ${settings.protect})`);
+            log.vectors.debug(`Vectors: Not enough messages to rearrange (less than ${settings.protect})`);
             return;
         }
 
         const queryText = await getQueryText(chat, 'chat');
 
         if (queryText.length === 0) {
-            console.debug('Vectors: No text to query');
+            log.vectors.debug('Vectors: No text to query');
             return;
         }
 
@@ -845,7 +846,7 @@ async function rearrangeChat(chat, _contextSize, _abort, type) {
         }
 
         if (queriedMessages.length === 0) {
-            console.debug('Vectors: No relevant messages found');
+            log.vectors.debug('Vectors: No relevant messages found');
             return;
         }
 
@@ -854,7 +855,7 @@ async function rearrangeChat(chat, _contextSize, _abort, type) {
         setExtensionPrompt(EXTENSION_PROMPT_TAG, insertedText, settings.position, settings.depth, settings.include_wi);
     } catch (error) {
         toastr.error('Generation interceptor aborted. Check browser console for more details.', 'Vector Storage');
-        console.error('Vectors: Failed to rearrange chat', error);
+        log.vectors.error('Vectors: Failed to rearrange chat', error);
     }
 }
 
@@ -864,7 +865,7 @@ async function rearrangeChat(chat, _contextSize, _abort, type) {
  */
 function getPromptText(queriedMessages) {
     const queriedText = queriedMessages.map(x => collapseNewlines(`${x.name}: ${x.mes}`).trim()).join('\n\n');
-    console.log('Vectors: relevant past messages found.\n', queriedText);
+    log.vectors.debug('Vectors: relevant past messages found.\n', queriedText);
     return substituteParamsExtended(settings.template, { text: queriedText });
 }
 
@@ -1210,7 +1211,7 @@ async function purgeFileVectorIndex(fileUrl) {
             return;
         }
 
-        console.log(`Vectors: Purging file vector index for ${fileUrl}`);
+        log.vectors.debug(`Vectors: Purging file vector index for ${fileUrl}`);
         const collectionId = getFileCollectionId(fileUrl);
 
         const response = await fetch('/api/vector/purge', {
@@ -1226,9 +1227,9 @@ async function purgeFileVectorIndex(fileUrl) {
             throw new Error(`Could not delete vector index for collection ${collectionId}`);
         }
 
-        console.log(`Vectors: Purged vector index for collection ${collectionId}`);
+        log.vectors.debug(`Vectors: Purged vector index for collection ${collectionId}`);
     } catch (error) {
-        console.error('Vectors: Failed to purge file', error);
+        log.vectors.error('Vectors: Failed to purge file', error);
     }
 }
 
@@ -1256,10 +1257,10 @@ async function purgeVectorIndex(collectionId) {
             throw new Error(`Could not delete vector index for collection ${collectionId}`);
         }
 
-        console.log(`Vectors: Purged vector index for collection ${collectionId}`);
+        log.vectors.info(`Vectors: Purged vector index for collection ${collectionId}`);
         return true;
     } catch (error) {
-        console.error('Vectors: Failed to purge', error);
+        log.vectors.error('Vectors: Failed to purge', error);
         return false;
     }
 }
@@ -1281,10 +1282,10 @@ async function purgeAllVectorIndexes() {
             throw new Error('Failed to purge all vector indexes');
         }
 
-        console.log('Vectors: Purged all vector indexes');
+        log.vectors.info('Vectors: Purged all vector indexes');
         toastr.success('All vector indexes purged', 'Purge successful');
     } catch (error) {
-        console.error('Vectors: Failed to purge all', error);
+        log.vectors.error('Vectors: Failed to purge all', error);
         toastr.error('Failed to purge all vector indexes', 'Purge failed');
     }
 }
@@ -1376,7 +1377,7 @@ async function loadRemoteEmbeddingModels(source) {
 
         populateSelect(models);
     } catch (err) {
-        console.warn(`${source} models fetch failed`, err);
+        log.vectors.warn(`${source} models fetch failed`, err);
         populateSelect([]);
     }
 }
@@ -1391,7 +1392,7 @@ async function executeWithWebLlmErrorHandling(func) {
     try {
         return await func();
     } catch (error) {
-        console.log('Vectors: Failed to load WebLLM models', error);
+        log.vectors.error('Vectors: Failed to load WebLLM models', error);
         if (!(error instanceof Error)) {
             return;
         }
@@ -1579,7 +1580,7 @@ async function onVectorizeAllFilesClick() {
             const hashes = await getSavedHashes(collectionId);
 
             if (hashes.length) {
-                console.log(`Vectors: File ${file.name} is already vectorized`);
+                log.vectors.debug(`Vectors: File ${file.name} is already vectorized`);
                 continue;
             }
 
@@ -1598,7 +1599,7 @@ async function onVectorizeAllFilesClick() {
             toastr.warning('Some files failed to vectorize. Check browser console for more details.', 'Vector Storage');
         }
     } catch (error) {
-        console.error('Vectors: Failed to vectorize all files', error);
+        log.vectors.error('Vectors: Failed to vectorize all files', error);
         toastr.error('Failed to vectorize all files', 'Vectorization failed');
     }
 }
@@ -1615,21 +1616,21 @@ async function onPurgeFilesClick() {
 
         toastr.success('All files purged', 'Purge successful');
     } catch (error) {
-        console.error('Vectors: Failed to purge all files', error);
+        log.vectors.error('Vectors: Failed to purge all files', error);
         toastr.error('Failed to purge all files', 'Purge failed');
     }
 }
 
 async function activateWorldInfo(chat) {
     if (!settings.enabled_world_info) {
-        console.debug('Vectors: Disabled for World Info');
+        log.vectors.debug('Vectors: Disabled for World Info');
         return;
     }
 
     const entries = await getSortedEntries();
 
     if (!Array.isArray(entries) || entries.length === 0) {
-        console.debug('Vectors: No WI entries found');
+        log.vectors.debug('Vectors: No WI entries found');
         return;
     }
 
@@ -1639,25 +1640,25 @@ async function activateWorldInfo(chat) {
     for (const entry of entries) {
         // Skip orphaned entries. Is it even possible?
         if (!entry.world) {
-            console.debug('Vectors: Skipped orphaned WI entry', entry);
+            log.vectors.debug('Vectors: Skipped orphaned WI entry', entry);
             continue;
         }
 
         // Skip disabled entries
         if (entry.disable) {
-            console.debug('Vectors: Skipped disabled WI entry', entry);
+            log.vectors.debug('Vectors: Skipped disabled WI entry', entry);
             continue;
         }
 
         // Skip entries without content
         if (!entry.content) {
-            console.debug('Vectors: Skipped WI entry without content', entry);
+            log.vectors.debug('Vectors: Skipped WI entry without content', entry);
             continue;
         }
 
         // Skip non-vectorized entries
         if (!entry.vectorized && !settings.enabled_for_all) {
-            console.debug('Vectors: Skipped non-vectorized WI entry', entry);
+            log.vectors.debug('Vectors: Skipped non-vectorized WI entry', entry);
             continue;
         }
 
@@ -1671,7 +1672,7 @@ async function activateWorldInfo(chat) {
     const collectionIds = [];
 
     if (Object.keys(groupedEntries).length === 0) {
-        console.debug('Vectors: No WI entries to synchronize');
+        log.vectors.debug('Vectors: No WI entries to synchronize');
         return;
     }
 
@@ -1683,12 +1684,12 @@ async function activateWorldInfo(chat) {
         const deletedHashes = hashesInCollection.filter(x => !groupedEntries[world].some(y => getStringHash(y.content) === x));
 
         if (newEntries.length > 0) {
-            console.log(`Vectors: Found ${newEntries.length} new WI entries for world ${world}`);
+            log.vectors.debug(`Vectors: Found ${newEntries.length} new WI entries for world ${world}`);
             await insertVectorItems(collectionId, newEntries.map(x => ({ hash: getStringHash(x.content), text: x.content, index: x.uid })));
         }
 
         if (deletedHashes.length > 0) {
-            console.log(`Vectors: Deleted ${deletedHashes.length} old hashes for world ${world}`);
+            log.vectors.debug(`Vectors: Deleted ${deletedHashes.length} old hashes for world ${world}`);
             await deleteVectorItems(collectionId, deletedHashes);
         }
 
@@ -1699,7 +1700,7 @@ async function activateWorldInfo(chat) {
     const queryText = await getQueryText(chat, 'world-info');
 
     if (queryText.length === 0) {
-        console.debug('Vectors: No text to query for WI');
+        log.vectors.debug('Vectors: No text to query for WI');
         return;
     }
 
@@ -1717,11 +1718,11 @@ async function activateWorldInfo(chat) {
     }
 
     if (activatedEntries.length === 0) {
-        console.debug('Vectors: No activated WI entries found');
+        log.vectors.debug('Vectors: No activated WI entries found');
         return;
     }
 
-    console.log(`Vectors: Activated ${activatedEntries.length} WI entries`, activatedEntries);
+    log.vectors.debug(`Vectors: Activated ${activatedEntries.length} WI entries`, activatedEntries);
     await eventSource.emit(event_types.WORLDINFO_FORCE_ACTIVATE, activatedEntries);
 }
 

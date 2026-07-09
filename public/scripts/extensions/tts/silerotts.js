@@ -1,5 +1,6 @@
 import { doExtrasFetch, getApiUrl, modules } from '../../extensions.js';
 import { saveTtsProviderSettings } from './index.js';
+import { log } from '../../log.js';
 
 export { SileroTtsProvider };
 
@@ -38,7 +39,7 @@ class SileroTtsProvider {
     async loadSettings(settings) {
         // Pupulate Provider UI given input settings
         if (Object.keys(settings).length == 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
 
         // Only accept keys defined in defaultSettings
@@ -69,7 +70,7 @@ class SileroTtsProvider {
 
         await this.checkReady();
 
-        console.debug('SileroTTS: Settings loaded');
+        log.tts.debug('SileroTTS: Settings loaded');
     }
 
     // Perform a simple readiness check by trying to fetch voiceIds
@@ -120,7 +121,7 @@ class SileroTtsProvider {
     }
 
     async fetchTtsGeneration(inputText, voiceId) {
-        console.info(`Generating new TTS for voice_id ${voiceId}`);
+        log.tts.debug(`Generating new TTS for voice_id ${voiceId}`);
         const response = await doExtrasFetch(
             `${this.settings.provider_endpoint}/generate`,
             {
@@ -144,7 +145,7 @@ class SileroTtsProvider {
     }
 
     async initSession() {
-        console.info('Silero TTS: requesting new session');
+        log.tts.debug('Silero TTS: requesting new session');
         try {
             const response = await doExtrasFetch(
                 `${this.settings.provider_endpoint}/session`,
@@ -164,7 +165,7 @@ class SileroTtsProvider {
                 throw new Error(`HTTP ${response.status}: ${await response.text()}`);
             }
         } catch (error) {
-            console.info('Silero TTS: endpoint not available', error);
+            log.tts.warn('Silero TTS: endpoint not available', error);
         }
     }
 

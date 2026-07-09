@@ -1,6 +1,7 @@
 import { event_types, eventSource, getRequestHeaders } from '../../../script.js';
 import { SECRET_KEYS, secret_state } from '../../secrets.js';
 import { getPreviewString, saveTtsProviderSettings } from './index.js';
+import { log } from '../../log.js';
 
 export { OpenAICompatibleTtsProvider };
 
@@ -57,7 +58,7 @@ class OpenAICompatibleTtsProvider {
     async loadSettings(settings) {
         // Populate Provider UI given input settings
         if (Object.keys(settings).length == 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
 
         // Only accept keys defined in defaultSettings
@@ -94,7 +95,7 @@ class OpenAICompatibleTtsProvider {
 
         await this.checkReady();
 
-        console.debug('OpenAI Compatible TTS: Settings loaded');
+        log.tts.debug('OpenAI Compatible TTS: Settings loaded');
     }
 
     onSettingsChange() {
@@ -157,7 +158,7 @@ class OpenAICompatibleTtsProvider {
     }
 
     async fetchTtsGeneration(inputText, voiceId) {
-        console.info(`Generating new TTS for voice_id ${voiceId}`);
+        log.tts.debug(`Generating new TTS for voice_id ${voiceId}`);
         const response = await fetch('/api/openai/custom/generate-voice', {
             method: 'POST',
             headers: getRequestHeaders(),

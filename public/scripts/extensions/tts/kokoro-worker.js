@@ -1,4 +1,6 @@
 // kokoro-worker.js
+import { log } from '../../log.js';
+
 /** @type {import('./lib/kokoro.web.js').KokoroTTS} */
 let tts = null;
 /** @type {boolean} */
@@ -59,7 +61,7 @@ async function initializeTts(settings) {
     try {
         const { KokoroTTS } = await import('./lib/kokoro.web.js');
 
-        console.log('Worker: Initializing Kokoro TTS with settings:', {
+        log.tts.debug('Worker: Initializing Kokoro TTS with settings:', {
             modelId: settings.modelId,
             dtype: settings.dtype,
             device: settings.device,
@@ -79,11 +81,11 @@ async function initializeTts(settings) {
             throw new Error('TTS instance does not have generate method');
         }
 
-        console.log('Worker: TTS initialized successfully');
+        log.tts.info('Worker: TTS initialized successfully');
         ready = true;
         return true;
     } catch (error) {
-        console.error('Worker: Kokoro TTS initialization failed:', error);
+        log.tts.error('Worker: Kokoro TTS initialization failed:', error);
         ready = false;
         throw error;
     }
@@ -107,7 +109,7 @@ async function generateTts(text, voiceId, speakingRate) {
 
         return audio.toBlob();
     } catch (error) {
-        console.error('Worker: TTS generation failed:', error);
+        log.tts.error('Worker: TTS generation failed:', error);
         throw error;
     }
 }

@@ -1,4 +1,5 @@
 import { saveTtsProviderSettings } from './index.js';
+import { log } from '../../log.js';
 
 export { GSVITtsProvider };
 
@@ -146,7 +147,7 @@ class GSVITtsProvider {
     async loadSettings(settings) {
         // Populate Provider UI given input settings
         if (Object.keys(settings).length === 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
 
         // Only accept keys defined in defaultSettings
@@ -187,7 +188,7 @@ class GSVITtsProvider {
         $('#gsvi_stream_chunk_size').on('input', () => { this.onSettingsChange(); });
 
         await this.checkReady();
-        console.debug('GSVI: Settings loaded');
+        log.tts.debug('GSVI: Settings loaded');
     }
 
 
@@ -226,14 +227,14 @@ class GSVITtsProvider {
         if (this.voices.length == 0) {
             await this.fetchCharacterList();
         }
-        console.log(this.voices);
+        log.tts.debug(this.voices);
         const voices = this.voices.map(x => ({ name: x, voice_id: x, preview_url: false, lang: 'zh-CN' }));
         return voices;
     }
 
 
     async fetchTtsGeneration(inputText, voiceId) {
-        console.info(`Generating new TTS for voice_id ${voiceId}`);
+        log.tts.debug(`Generating new TTS for voice_id ${voiceId}`);
 
 
         const params = new URLSearchParams();

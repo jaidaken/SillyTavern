@@ -1,4 +1,5 @@
 import { getStringHash, debounce, waitUntilCondition, extractAllWords, isTrueBoolean } from '../../utils.js';
+import { log } from '../../log.js';
 import { getContext, getApiUrl, extension_settings, doExtrasFetch, modules, renderExtensionTemplateAsync } from '../../extensions.js';
 import {
     activateSendButtons,
@@ -187,7 +188,7 @@ async function onPromptForceWordsAutoClick() {
     const targetMessagesInPrompt = maxMessagesPerSummary > 0 ? maxMessagesPerSummary : Math.max(0, averageMessagesPerPrompt);
     const targetSummaryWords = (targetMessagesInPrompt * averageMessageWordCount) + (promptAllowanceWords / 4);
 
-    console.table({
+    log.ext.table({
         maxPromptLength,
         maxPromptLengthWords,
         promptAllowanceWords,
@@ -222,7 +223,7 @@ async function onPromptIntervalAutoClick() {
     const targetMessagesInPrompt = maxMessagesPerSummary > 0 ? maxMessagesPerSummary : Math.max(0, averageMessagesPerPrompt);
     const adjustedAverageMessagesPerPrompt = targetMessagesInPrompt + (averageMessagesPerPrompt - targetMessagesInPrompt) / 4;
 
-    console.table({
+    log.ext.table({
         maxPromptLength,
         promptAllowance,
         targetSummaryTokens,
@@ -401,7 +402,7 @@ function isContextChanged(context) {
     if (newContext.groupId !== context.groupId
         || newContext.chatId !== context.chatId
         || (!newContext.groupId && (newContext.characterId !== context.characterId))) {
-        console.log('Context changed, summary discarded');
+        log.ext.debug('Context changed, summary discarded');
         return true;
     }
 
@@ -463,7 +464,7 @@ async function onChatEvent() {
     }
 
     summarizeChat(context)
-        .catch(console.error)
+        .catch(log.ext.error)
         .finally(() => {
             lastMessageId = context.chat?.length ?? null;
             lastMessageHash = getStringHash((context.chat.length && context.chat[context.chat.length - 1].mes) ?? '');
@@ -533,7 +534,7 @@ async function summarizeCallback(args, text) {
         }
     } catch (error) {
         toastr.error(String(error), 'Failed to summarize text');
-        console.log(error);
+        log.ext.error(error);
         return '';
     }
 }
@@ -564,7 +565,7 @@ async function summarizeChat(context) {
  */
 async function getSummaryPromptForNow(context, force) {
     if (extension_settings.memory.promptInterval === 0 && !force) {
-        console.debug('Prompt interval is set to 0, skipping summarization');
+        log.ext.debug('Prompt interval is set to 0, skipping summarization');
         return '';
     }
 
@@ -576,17 +577,17 @@ async function getSummaryPromptForNow(context, force) {
         // Wait for the send button to be released
         await waitUntilCondition(() => is_send_press === false, 30000, 100);
     } catch {
-        console.debug('Timeout waiting for is_send_press');
+        log.ext.debug('Timeout waiting for is_send_press');
         return '';
     }
 
     if (!context.chat.length) {
-        console.debug('No messages in chat to summarize');
+        log.ext.debug('No messages in chat to summarize');
         return '';
     }
 
     if (context.chat.length < extension_settings.memory.promptInterval && !force) {
-        console.debug(`Not enough messages in chat to summarize (chat: ${context.chat.length}, interval: ${extension_settings.memory.promptInterval})`);
+        log.ext.debug(`Not enough messages in chat to summarize (chat: ${context.chat.length}, interval: ${extension_settings.memory.promptInterval})`);
         return '';
     }
 
@@ -610,15 +611,15 @@ async function getSummaryPromptForNow(context, force) {
     }
 
     if (!conditionSatisfied && !force) {
-        console.debug(`Summary conditions not satisfied (messages: ${messagesSinceLastSummary}, interval: ${extension_settings.memory.promptInterval}, words: ${wordsSinceLastSummary}, force words: ${extension_settings.memory.promptForceWords})`);
+        log.ext.debug(`Summary conditions not satisfied (messages: ${messagesSinceLastSummary}, interval: ${extension_settings.memory.promptInterval}, words: ${wordsSinceLastSummary}, force words: ${extension_settings.memory.promptForceWords})`);
         return '';
     }
 
-    console.log('Summarizing chat, messages since last summary: ' + messagesSinceLastSummary, 'words since last summary: ' + wordsSinceLastSummary);
+    log.ext.debug('Summarizing chat, messages since last summary: ' + messagesSinceLastSummary, 'words since last summary: ' + wordsSinceLastSummary);
     const prompt = substituteParamsExtended(extension_settings.memory.prompt, { words: extension_settings.memory.promptWords });
 
     if (!prompt) {
-        console.debug('Summarization prompt is empty. Skipping summarization.');
+        log.ext.debug('Summarization prompt is empty. Skipping summarization.');
         return '';
     }
 
@@ -662,7 +663,7 @@ async function summarizeChatWebLLM(context, force) {
         const summary = await generateWebLlmChatPrompt(messages, params);
 
         if (!summary) {
-            console.warn('Empty summary received');
+            log.ext.warn('Empty summary received');
             return;
         }
 
@@ -685,7 +686,7 @@ async function summarizeChatMain(context, force, skipWIAN) {
         return;
     }
 
-    console.log('sending summary prompt');
+    log.ext.debug('sending summary prompt');
     let summary = '';
     let index = null;
 
@@ -740,7 +741,7 @@ async function summarizeChatMain(context, force, skipWIAN) {
     }
 
     if (!summary) {
-        console.warn('Empty summary received');
+        log.ext.warn('Empty summary received');
         return;
     }
 
@@ -862,7 +863,7 @@ async function summarizeChatExtras(context) {
     const resultingTokens = await countSourceTokens(resultingString);
 
     if (!resultingString || resultingTokens < CONTEXT_SIZE) {
-        console.debug('Not enough context to summarize');
+        log.ext.debug('Not enough context to summarize');
         return;
     }
 
@@ -872,7 +873,7 @@ async function summarizeChatExtras(context) {
         const summary = await callExtrasSummarizeAPI(resultingString);
 
         if (!summary) {
-            console.warn('Empty summary received');
+            log.ext.warn('Empty summary received');
             return;
         }
 
@@ -882,7 +883,7 @@ async function summarizeChatExtras(context) {
 
         setMemoryContext(summary, true);
     } catch (error) {
-        console.log(error);
+        log.ext.error(error);
     } finally {
         inApiCall = false;
     }
@@ -968,7 +969,7 @@ function setMemoryContext(value, saveToMessage, index = null) {
     const summaryLog = value
         ? `Summary set to: ${value}. Position: ${extension_settings.memory.position}. Depth: ${extension_settings.memory.depth}. Role: ${extension_settings.memory.role}`
         : 'Summary has no content';
-    console.debug(summaryLog);
+    log.ext.debug(summaryLog);
 
     const context = getContext();
     if (saveToMessage && context.chat.length) {
@@ -988,7 +989,7 @@ function doPopout(e) {
     const target = e.target;
     //repurposes the zoomed avatar template to server as a floating div
     if ($('#summaryExtensionPopout').length === 0) {
-        console.debug('did not see popout yet, creating');
+        log.ext.debug('did not see popout yet, creating');
         const originalHTMLClone = $(target).parent().parent().parent().find('.inline-drawer-content').html();
         const originalElement = $(target).parent().parent().parent().find('.inline-drawer-content');
         const template = $('#zoomed_avatar_template').html();
@@ -1028,7 +1029,7 @@ function doPopout(e) {
             loadSettings();
         });
     } else {
-        console.debug('saw existing popout, removing');
+        log.ext.debug('saw existing popout, removing');
         $('#summaryExtensionPopout').fadeOut(animation_duration, () => { $('#summaryExtensionPopoutClose').trigger('click'); });
     }
 }

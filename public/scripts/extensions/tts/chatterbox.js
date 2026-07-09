@@ -1,4 +1,5 @@
 import { saveTtsProviderSettings } from './index.js';
+import { log } from '../../log.js';
 
 export { ChatterboxTtsProvider };
 
@@ -213,7 +214,7 @@ class ChatterboxTtsProvider {
         this.updateStatus('Offline');
 
         if (Object.keys(settings).length === 0) {
-            console.info('Using default Chatterbox TTS Provider settings');
+            log.tts.info('Using default Chatterbox TTS Provider settings');
         } else {
             // Populate settings with provided values
             for (const key in settings) {
@@ -226,7 +227,7 @@ class ChatterboxTtsProvider {
         // Update UI elements
         this.updateUIFromSettings();
 
-        console.debug('ChatterboxTTS: Settings loaded');
+        log.tts.debug('ChatterboxTTS: Settings loaded');
 
         try {
             // Check if TTS provider is ready
@@ -240,7 +241,7 @@ class ChatterboxTtsProvider {
 
             this.setupEventListeners();
         } catch (error) {
-            console.error('Error loading Chatterbox settings:', error);
+            log.tts.error('Error loading Chatterbox settings:', error);
             this.updateStatus('Offline');
         }
     }
@@ -286,13 +287,13 @@ class ChatterboxTtsProvider {
             // Check if we got valid data
             if (data) {
                 this.ready = true;
-                console.log('Chatterbox TTS service is ready.');
+                log.tts.info('Chatterbox TTS service is ready.');
             } else {
                 this.ready = false;
-                console.log('Chatterbox TTS service returned invalid data.');
+                log.tts.warn('Chatterbox TTS service returned invalid data.');
             }
         } catch (error) {
-            console.error('Error checking Chatterbox TTS service readiness:', error);
+            log.tts.error('Error checking Chatterbox TTS service readiness:', error);
             this.ready = false;
         }
     }
@@ -333,16 +334,16 @@ class ChatterboxTtsProvider {
                     }));
                 }
             } catch (error) {
-                console.warn('Failed to fetch reference voices:', error);
+                log.tts.warn('Failed to fetch reference voices:', error);
             }
 
             // Combine all voices
             this.voices = [...predefinedVoices, ...referenceVoices];
 
-            console.log(`Loaded ${this.voices.length} voices (${predefinedVoices.length} predefined, ${referenceVoices.length} reference)`);
+            log.tts.info(`Loaded ${this.voices.length} voices (${predefinedVoices.length} predefined, ${referenceVoices.length} reference)`);
             return this.voices;
         } catch (error) {
-            console.error('Error fetching Chatterbox voices:', error);
+            log.tts.error('Error fetching Chatterbox voices:', error);
             this.voices = [];
             return [];
         }
@@ -449,7 +450,7 @@ class ChatterboxTtsProvider {
                 this.updateStatus('Offline');
             }
         } catch (error) {
-            console.error('Error during refresh:', error);
+            log.tts.error('Error during refresh:', error);
             this.updateStatus('Offline');
         }
     }
@@ -518,7 +519,7 @@ class ChatterboxTtsProvider {
 
             await audio.play();
         } catch (error) {
-            console.error('Error previewing voice:', error);
+            log.tts.error('Error previewing voice:', error);
             this.updateStatus('Ready');
             throw error;
         }
@@ -542,7 +543,7 @@ class ChatterboxTtsProvider {
         );
 
         if (!match) {
-            console.warn(`Voice not found: ${voiceName}`);
+            log.tts.warn(`Voice not found: ${voiceName}`);
             // Check if it's a reference voice that wasn't in the list
             if (voiceName && voiceName.startsWith('ref_')) {
                 const filename = voiceName.substring(4);
@@ -604,7 +605,7 @@ class ChatterboxTtsProvider {
                 requestBody.predefined_voice_id = actualVoiceId || this.settings.predefined_voice;
             }
 
-            console.log('Generating TTS with params:', requestBody);
+            log.tts.debug('Generating TTS with params:', requestBody);
 
             const response = await fetch(`${this.settings.provider_endpoint}/tts`, {
                 method: 'POST',
@@ -617,7 +618,7 @@ class ChatterboxTtsProvider {
 
             if (!response.ok) {
                 const errorText = await response.text();
-                console.error('TTS generation error:', errorText);
+                log.tts.error('TTS generation error:', errorText);
                 throw new Error(`HTTP ${response.status}: ${errorText}`);
             }
 
@@ -626,7 +627,7 @@ class ChatterboxTtsProvider {
             // Return the response directly - SillyTavern expects a Response object
             return response;
         } catch (error) {
-            console.error('Error in generateTts:', error);
+            log.tts.error('Error in generateTts:', error);
             this.updateStatus('Ready');
             throw error;
         }

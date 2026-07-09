@@ -3,6 +3,7 @@ import { getPreviewString } from './index.js';
 import { saveTtsProviderSettings } from './index.js';
 export { SystemTtsProvider };
 import { t } from '../../i18n.js';
+import { log } from '../../log.js';
 
 /**
  * Chunkify
@@ -117,7 +118,7 @@ class SystemTtsProvider {
     async loadSettings(settings) {
         // Populate Provider UI given input settings
         if (Object.keys(settings).length == 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
 
         // iOS should only allows speech synthesis trigged by user interaction
@@ -155,7 +156,7 @@ class SystemTtsProvider {
 
         $('#system_tts_pitch_output').text(this.settings.pitch);
         $('#system_tts_rate_output').text(this.settings.rate);
-        console.debug('SystemTTS: Settings loaded');
+        log.tts.debug('SystemTTS: Settings loaded');
     }
 
     // Perform a simple readiness check by trying to fetch voiceIds
@@ -181,7 +182,7 @@ class SystemTtsProvider {
 
                 if (voices.length === 0) {
                     // Edge compat: Provide default when voices empty
-                    console.warn('SystemTTS: getVoices() returned empty list. Providing browser default option.');
+                    log.tts.warn('SystemTTS: getVoices() returned empty list. Providing browser default option.');
                     const defaultVoice = {
                         name: SystemTtsProvider.BROWSER_DEFAULT_VOICE_NAME,
                         voice_id: SystemTtsProvider.BROWSER_DEFAULT_VOICE_ID,
@@ -210,12 +211,12 @@ class SystemTtsProvider {
             voice = voices.find(x => x.voiceURI === voiceId);
 
             if (!voice && voices.length > 0) {
-                console.warn(`SystemTTS Preview: Voice ID "${voiceId}" not found among available voices. Using browser default.`);
+                log.tts.warn(`SystemTTS Preview: Voice ID "${voiceId}" not found among available voices. Using browser default.`);
             } else if (!voice && voices.length === 0) {
-                console.warn('SystemTTS Preview: Voice list is empty. Using browser default.');
+                log.tts.warn('SystemTTS Preview: Voice list is empty. Using browser default.');
             }
         } else {
-            console.log('SystemTTS Preview: Using browser default voice as requested.');
+            log.tts.info('SystemTTS Preview: Using browser default voice as requested.');
         }
 
         speechSynthesis.cancel();
@@ -231,7 +232,7 @@ class SystemTtsProvider {
         utterance.pitch = this.settings.pitch || 1;
 
         utterance.onerror = (event) => {
-            console.error(`SystemTTS Preview Error: ${event.error}`, event);
+            log.tts.error(`SystemTTS Preview Error: ${event.error}`, event);
         };
 
         speechSynthesis.speak(utterance);
@@ -252,7 +253,7 @@ class SystemTtsProvider {
         const voices = speechSynthesis.getVoices();
 
         if (voices.length === 0) {
-            console.warn('SystemTTS: Empty voice list, using default fallback');
+            log.tts.warn('SystemTTS: Empty voice list, using default fallback');
             return {
                 voice_id: SystemTtsProvider.BROWSER_DEFAULT_VOICE_ID,
                 name: SystemTtsProvider.BROWSER_DEFAULT_VOICE_NAME,
@@ -288,7 +289,7 @@ class SystemTtsProvider {
                 chunkLength: 200,
             }, function () {
                 resolve(silence);
-                console.log('System TTS done');
+                log.tts.debug('System TTS done');
             });
         });
     }

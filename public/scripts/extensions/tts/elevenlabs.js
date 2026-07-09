@@ -2,6 +2,7 @@ import { saveTtsProviderSettings } from './index.js';
 import { event_types, eventSource, getRequestHeaders } from '/script.js';
 import { SECRET_KEYS, secret_state, writeSecret } from '/scripts/secrets.js';
 import { getBase64Async } from '/scripts/utils.js';
+import { log } from '/scripts/log.js';
 export { ElevenLabsTtsProvider };
 
 class ElevenLabsTtsProvider {
@@ -119,7 +120,7 @@ class ElevenLabsTtsProvider {
     async loadSettings(settings) {
         // Pupulate Provider UI given input settings
         if (Object.keys(settings).length == 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
 
         // Only accept keys defined in defaultSettings
@@ -170,9 +171,9 @@ class ElevenLabsTtsProvider {
         $('#elevenlabs_tts_v2_options').toggle(this.shouldInvolveExtendedSettings());
         try {
             await this.checkReady();
-            console.debug('ElevenLabs: Settings loaded');
+            log.tts.debug('ElevenLabs: Settings loaded');
         } catch {
-            console.debug('ElevenLabs: Settings loaded, but not ready');
+            log.tts.debug('ElevenLabs: Settings loaded, but not ready');
         }
 
         this.setupVoiceCloningMenu();
@@ -273,10 +274,10 @@ class ElevenLabsTtsProvider {
         const historyId = await this.findTtsGenerationInHistory(text, voiceId);
 
         if (historyId) {
-            console.debug(`Found existing TTS generation with id ${historyId}`);
+            log.tts.debug(`Found existing TTS generation with id ${historyId}`);
             return await this.fetchTtsFromHistory(historyId);
         } else {
-            console.debug('No existing TTS generation found, requesting new generation');
+            log.tts.debug('No existing TTS generation found, requesting new generation');
             return await this.fetchTtsGeneration(text, voiceId);
         }
     }
@@ -293,7 +294,7 @@ class ElevenLabsTtsProvider {
             const text = history.text;
             const itemId = history.history_item_id;
             if (message === text && history.voice_id == voiceId) {
-                console.info(`Existing TTS history item ${itemId} found: ${text} `);
+                log.tts.debug(`Existing TTS history item ${itemId} found: ${text} `);
                 return itemId;
             }
         }
@@ -331,7 +332,7 @@ class ElevenLabsTtsProvider {
      */
     async fetchTtsGeneration(text, voiceId) {
         let model = this.settings.model ?? 'eleven_monolingual_v1';
-        console.info(`Generating new TTS for voice_id ${voiceId}, model ${model}`);
+        log.tts.debug(`Generating new TTS for voice_id ${voiceId}, model ${model}`);
         const request = {
             model_id: model,
             text: text,
@@ -366,7 +367,7 @@ class ElevenLabsTtsProvider {
      * @returns {Promise<Response>} Response object containing audio data
      */
     async fetchTtsFromHistory(historyItemId) {
-        console.info(`Fetched existing TTS with history_item_id ${historyItemId}`);
+        log.tts.debug(`Fetched existing TTS with history_item_id ${historyItemId}`);
         const response = await fetch('/api/speech/elevenlabs/history-audio', {
             method: 'POST',
             headers: getRequestHeaders(),

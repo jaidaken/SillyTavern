@@ -1,6 +1,7 @@
 import { getRequestHeaders } from '../../../script.js';
 import { splitRecursive } from '../../utils.js';
 import { getPreviewString, saveTtsProviderSettings } from './index.js';
+import { log } from '../../log.js';
 
 export class PollinationsTtsProvider {
     settings;
@@ -26,7 +27,7 @@ export class PollinationsTtsProvider {
     async loadSettings(settings) {
         // Populate Provider UI given input settings
         if (Object.keys(settings).length == 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
 
         // Only accept keys defined in defaultSettings
@@ -42,9 +43,9 @@ export class PollinationsTtsProvider {
 
         try {
             await this.checkReady();
-            console.debug('Pollinations TTS: Settings loaded');
+            log.tts.debug('Pollinations TTS: Settings loaded');
         } catch {
-            console.debug('Pollinations TTS: Settings loaded, but not ready');
+            log.tts.debug('Pollinations TTS: Settings loaded, but not ready');
         }
     }
 
@@ -127,7 +128,7 @@ export class PollinationsTtsProvider {
 
     async* fetchTtsGeneration(text, voiceId) {
         const MAX_LENGTH = 1000;
-        console.info(`Generating new TTS for voice_id ${voiceId}`);
+        log.tts.debug(`Generating new TTS for voice_id ${voiceId}`);
         const chunks = splitRecursive(text, MAX_LENGTH);
         for (const chunk of chunks) {
             const response = await fetch('/api/speech/pollinations/generate', {

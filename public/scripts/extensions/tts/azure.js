@@ -1,6 +1,7 @@
 import { event_types, eventSource, getRequestHeaders } from '../../../script.js';
 import { SECRET_KEYS, secret_state } from '../../secrets.js';
 import { getPreviewString, saveTtsProviderSettings } from './index.js';
+import { log } from '../../log.js';
 export { AzureTtsProvider };
 
 class AzureTtsProvider {
@@ -63,7 +64,7 @@ class AzureTtsProvider {
     async loadSettings(settings) {
         // Populate Provider UI given input settings
         if (Object.keys(settings).length == 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
 
         // Only accept keys defined in defaultSettings
@@ -85,9 +86,9 @@ class AzureTtsProvider {
 
         try {
             await this.checkReady();
-            console.debug('Azure: Settings loaded');
+            log.tts.debug('Azure: Settings loaded');
         } catch {
-            console.debug('Azure: Settings loaded, but not ready');
+            log.tts.debug('Azure: Settings loaded, but not ready');
         }
     }
 
@@ -131,12 +132,12 @@ class AzureTtsProvider {
     //###########//
     async fetchTtsVoiceObjects() {
         if (!secret_state[SECRET_KEYS.AZURE_TTS]) {
-            console.warn('Azure TTS API Key not set');
+            log.tts.warn('Azure TTS API Key not set');
             return [];
         }
 
         if (!this.settings.region) {
-            console.warn('Azure TTS region not set');
+            log.tts.warn('Azure TTS region not set');
             return [];
         }
 

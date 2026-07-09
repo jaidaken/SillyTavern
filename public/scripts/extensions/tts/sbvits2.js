@@ -1,4 +1,5 @@
 import { getPreviewString, saveTtsProviderSettings } from './index.js';
+import { log } from '../../log.js';
 
 export { SBVits2TtsProvider };
 
@@ -142,7 +143,7 @@ class SBVits2TtsProvider {
     async loadSettings(settings) {
         // Pupulate Provider UI given input settings
         if (Object.keys(settings).length == 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
 
         // Only accept keys defined in defaultSettings
@@ -152,7 +153,7 @@ class SBVits2TtsProvider {
             if (key in this.settings) {
                 this.settings[key] = settings[key];
             } else {
-                console.debug(`Ignoring non-user-configurable setting: ${key}`);
+                log.tts.debug(`Ignoring non-user-configurable setting: ${key}`);
             }
         }
 
@@ -195,7 +196,7 @@ class SBVits2TtsProvider {
 
         await this.checkReady();
 
-        console.info('SBVits2: Settings loaded');
+        log.tts.info('SBVits2: Settings loaded');
     }
 
     // Perform a simple readiness check by trying to fetch voiceIds
@@ -274,7 +275,7 @@ class SBVits2TtsProvider {
      * @returns {Promise<Response>} Fetch response
      */
     async fetchTtsGeneration(inputText, voiceId) {
-        console.info(`Generating new TTS for voice_id ${voiceId}`);
+        log.tts.debug(`Generating new TTS for voice_id ${voiceId}`);
 
         const [model_id, speaker_id, ...rest] = voiceId.split('-');
         const style = rest.join('-');

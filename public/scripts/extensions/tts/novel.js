@@ -3,6 +3,7 @@ import { POPUP_TYPE, callGenericPopup } from '../../popup.js';
 import { splitRecursive } from '../../utils.js';
 import { getPreviewString, saveTtsProviderSettings } from './index.js';
 import { initVoiceMap } from './index.js';
+import { log } from '../../log.js';
 
 export { NovelTtsProvider };
 
@@ -89,7 +90,7 @@ class NovelTtsProvider {
     async loadSettings(settings) {
         // Populate Provider UI given input settings
         if (Object.keys(settings).length == 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
         $('#tts-novel-custom-voices-add').on('click', () => (this.addCustomVoice()));
         $('#tts-novel-custom-voices-delete').on('click', () => (this.deleteCustomVoice()));
@@ -107,7 +108,7 @@ class NovelTtsProvider {
 
         this.populateCustomVoices();
         await this.checkReady();
-        console.debug('NovelTTS: Settings loaded');
+        log.tts.debug('NovelTTS: Settings loaded');
     }
 
     // Perform a simple readiness check by trying to fetch voiceIds
@@ -192,7 +193,7 @@ class NovelTtsProvider {
 
     async* fetchTtsGeneration(inputText, voiceId) {
         const MAX_LENGTH = 1000;
-        console.info(`Generating new TTS for voice_id ${voiceId}`);
+        log.tts.debug(`Generating new TTS for voice_id ${voiceId}`);
         const chunks = splitRecursive(inputText, MAX_LENGTH);
         for (const chunk of chunks) {
             const response = await fetch('/api/novelai/generate-voice',

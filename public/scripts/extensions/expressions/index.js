@@ -18,6 +18,7 @@ import { generateWebLlmChatPrompt, isWebLlmSupported } from '../shared.js';
 import { Popup, POPUP_RESULT } from '../../popup.js';
 import { t } from '../../i18n.js';
 import { removeReasoningFromString } from '../../reasoning.js';
+import { log } from '../../log.js';
 export { MODULE_NAME };
 
 /**
@@ -256,9 +257,9 @@ async function visualNovelSetCharacterSprites(vnContainer, spriteFolderName, exp
         img.attr('data-sprite-filename', spriteFile?.fileName || null);
         img.attr('title', expression);
 
-        if (spriteFile) console.info(`Expression set for group member ${character.name}`, { expression: spriteFile.expression, file: spriteFile.fileName });
-        else if (expressionImage.length) console.info(`Expression unset for group member ${character.name} - No sprite found`, { expression: expression });
-        else console.info(`Expression not available for group member ${character.name}`, { expression: expression });
+        if (spriteFile) log.ext.debug(`Expression set for group member ${character.name}`, { expression: spriteFile.expression, file: spriteFile.fileName });
+        else if (expressionImage.length) log.ext.debug(`Expression unset for group member ${character.name} - No sprite found`, { expression: expression });
+        else log.ext.debug(`Expression not available for group member ${character.name}`, { expression: expression });
     }
 
     return setSpritePromises;
@@ -391,7 +392,7 @@ async function setImage(img, path) {
     img.removeClass('default');
     img.off('error');
     img.on('error', function () {
-        console.debug('Error loading image', path);
+        log.ext.debug('Error loading image', path);
         $(this).off('error');
         $(this).attr('src', '');
     });
@@ -463,7 +464,7 @@ async function setImage(img, path) {
             expressionClone.removeClass('default');
             expressionClone.off('error');
             expressionClone.on('error', function () {
-                console.debug('Expression image error', path);
+                log.ext.debug('Expression image error', path);
                 $(this).attr('src', '');
                 $(this).off('error');
                 resolve();
@@ -565,7 +566,7 @@ async function moduleWorker({ newChat = false } = {}) {
 
     // API is busy
     if (inApiCall) {
-        console.debug('Classification API is busy');
+        log.ext.debug('Classification API is busy');
         return;
     }
 
@@ -575,7 +576,7 @@ async function moduleWorker({ newChat = false } = {}) {
         const timeSinceLastServerResponse = now - lastServerResponseTime;
 
         if (timeSinceLastServerResponse < STREAMING_UPDATE_INTERVAL) {
-            console.log('Streaming in progress: throttling expression update. Next update at ' + new Date(lastServerResponseTime + STREAMING_UPDATE_INTERVAL));
+            log.ext.debug('Streaming in progress: throttling expression update. Next update at ' + new Date(lastServerResponseTime + STREAMING_UPDATE_INTERVAL));
             return;
         }
     }
@@ -598,7 +599,7 @@ async function moduleWorker({ newChat = false } = {}) {
 
         await sendExpressionCall(spriteFolderName, expression, { force: force, vnMode: vnMode });
     } catch (error) {
-        console.log(error);
+        log.ext.error(error);
     } finally {
         inApiCall = false;
         lastCharacter = context.groupId || context.characterId;
@@ -671,7 +672,7 @@ export async function sendExpressionCall(spriteFolderName, expression, { force =
  */
 async function setSpriteFolderCommand({ name }, folder) {
     if (!folder) {
-        console.log('Clearing sprite set');
+        log.ext.debug('Clearing sprite set');
         folder = '';
     }
 
@@ -716,7 +717,7 @@ async function classifyCallback(/** @type {{api: string?, filter: string?, promp
     }
 
     const label = await getExpressionLabel(text, expressionApi, { filterAvailable: filterAvailable, customPrompt: prompt });
-    console.debug(`Classification result for "${text}": ${label}`);
+    log.ext.debug(`Classification result for "${text}": ${label}`);
     return label;
 }
 
@@ -899,9 +900,9 @@ async function uploadSpriteCommand({ name, label, folder = null, spriteName = nu
         formData.append('spriteName', spriteName); // this is a redundant comment
 
         await handleFileUpload('/api/sprites/upload', formData);
-        console.debug(`[${MODULE_NAME}] Upload of ${imageUrl} completed for ${name} with label ${label}`);
+        log.ext.debug(`[${MODULE_NAME}] Upload of ${imageUrl} completed for ${name} with label ${label}`);
     } catch (error) {
-        console.error(`[${MODULE_NAME}] Error uploading file:`, error);
+        log.ext.error(`[${MODULE_NAME}] Error uploading file:`, error);
         throw error;
     }
 
@@ -964,7 +965,7 @@ function parseLlmResponse(emotionResponse, labels) {
         const response = parsedEmotion?.emotion?.trim()?.toLowerCase();
 
         if (!response || !labels.includes(response)) {
-            console.debug(`Parsed emotion response: ${response} not in labels: ${labels}`);
+            log.ext.debug(`Parsed emotion response: ${response} not in labels: ${labels}`);
             throw new Error('Emotion not in labels');
         }
 
@@ -974,16 +975,16 @@ function parseLlmResponse(emotionResponse, labels) {
         emotionResponse = removeReasoningFromString(emotionResponse);
 
         const fuse = new Fuse(labels, { includeScore: true });
-        console.debug('Using fuzzy search in labels:', labels);
+        log.ext.debug('Using fuzzy search in labels:', labels);
         const result = fuse.search(emotionResponse);
         if (result.length > 0) {
-            console.debug(`fuzzy search found: ${result[0].item} as closest for the LLM response:`, emotionResponse);
+            log.ext.debug(`fuzzy search found: ${result[0].item} as closest for the LLM response:`, emotionResponse);
             return result[0].item;
         }
         const lowerCaseResponse = String(emotionResponse || '').toLowerCase();
         for (const label of labels) {
             if (lowerCaseResponse.includes(label.toLowerCase())) {
-                console.debug(`Found label ${label} in the LLM response:`, emotionResponse);
+                log.ext.debug(`Found label ${label} in the LLM response:`, emotionResponse);
                 return label;
             }
         }
@@ -1052,7 +1053,7 @@ export async function getExpressionLabel(text, expressionsApi = extension_settin
 
     filterAvailable ??= extension_settings.expressions.filterAvailable;
     if (filterAvailable && ![EXPRESSION_API.llm, EXPRESSION_API.webllm].includes(expressionsApi)) {
-        console.debug('Filter available is only supported for LLM and WebLLM expressions');
+        log.ext.debug('Filter available is only supported for LLM and WebLLM expressions');
     }
 
     try {
@@ -1075,7 +1076,7 @@ export async function getExpressionLabel(text, expressionsApi = extension_settin
                 try {
                     await waitUntilCondition(() => online_status !== 'no_connection', 3000, 250);
                 } catch (error) {
-                    console.warn('No LLM connection. Using fallback expression', error);
+                    log.ext.warn('No LLM connection. Using fallback expression', error);
                     return extension_settings.expressions.fallback_expression;
                 }
 
@@ -1102,7 +1103,7 @@ export async function getExpressionLabel(text, expressionsApi = extension_settin
             // Using WebLLM
             case EXPRESSION_API.webllm: {
                 if (!isWebLlmSupported()) {
-                    console.warn('WebLLM is not supported. Using fallback expression');
+                    log.ext.warn('WebLLM is not supported. Using fallback expression');
                     return extension_settings.expressions.fallback_expression;
                 }
 
@@ -1146,7 +1147,7 @@ export async function getExpressionLabel(text, expressionsApi = extension_settin
         }
     } catch (error) {
         toastr.error('Could not classify expression. Check the console or your backend for more information.');
-        console.error(error);
+        log.ext.error(error);
         return extension_settings.expressions.fallback_expression;
     }
 }
@@ -1189,7 +1190,7 @@ async function validateImages(spriteFolderName, forceRedrawCached = false) {
 
     if (spriteCache[spriteFolderName]) {
         if (forceRedrawCached && $('#image_list').data('name') !== spriteFolderName) {
-            console.debug('force redrawing character sprites list');
+            log.ext.debug('force redrawing character sprites list');
             await drawSpritesList(spriteFolderName, labels, spriteCache[spriteFolderName]);
         }
 
@@ -1289,7 +1290,7 @@ async function getListItem(expression, { images, isCustom = false } = {}) {
  */
 
 async function getSpritesList(name) {
-    console.debug('getting sprites list');
+    log.ext.debug('getting sprites list');
 
     try {
         const result = await fetch(`/api/sprites/get?name=${encodeURIComponent(name)}`);
@@ -1325,7 +1326,7 @@ async function getSpritesList(name) {
 
         return grouped;
     } catch (err) {
-        console.log(err);
+        log.ext.error(err);
         return [];
     }
 }
@@ -1454,7 +1455,7 @@ export async function getExpressionsList({ filterAvailable = false } = {}) {
                 }
             }
         } catch (error) {
-            console.log(error);
+            log.ext.error(error);
         }
 
         // If there was no specific list, or an error, just return the default expressions
@@ -1485,7 +1486,7 @@ function chooseSpriteForExpression(spriteFolderName, expression, { prevExpressio
     let sprite = spriteCache[spriteFolderName].find(x => x.label === expression);
     if (!(sprite?.files.length > 0) && extension_settings.expressions.fallback_expression) {
         sprite = spriteCache[spriteFolderName].find(x => x.label === extension_settings.expressions.fallback_expression);
-        console.debug('Expression', expression, 'not found. Using fallback expression', extension_settings.expressions.fallback_expression);
+        log.ext.debug('Expression', expression, 'not found. Using fallback expression', extension_settings.expressions.fallback_expression);
     }
     if (!(sprite?.files.length > 0)) return null;
 
@@ -1602,7 +1603,7 @@ async function setExpression(spriteFolderName, expression, { force = false, over
             expressionClone.removeClass('default');
             expressionClone.off('error');
             expressionClone.on('error', function (error) {
-                console.debug('Expression image error', spriteFile.imageSrc, error);
+                log.ext.debug('Expression image error', spriteFile.imageSrc, error);
                 $(this).attr('src', '');
                 $(this).off('error');
                 if (force && extension_settings.expressions.showDefault) {
@@ -1611,7 +1612,7 @@ async function setExpression(spriteFolderName, expression, { force = false, over
             });
         }
 
-        console.info('Expression set', { expression: spriteFile.expression, file: spriteFile.fileName });
+        log.ext.debug('Expression set', { expression: spriteFile.expression, file: spriteFile.fileName });
     } else {
         img.attr('data-sprite-folder-name', spriteFolderName);
 
@@ -1622,7 +1623,7 @@ async function setExpression(spriteFolderName, expression, { force = false, over
         } else {
             setNoneForImage(img, expression);
         }
-        console.debug('Expression unset - No sprite found', { expression: expression });
+        log.ext.debug('Expression unset - No sprite found', { expression: expression });
     }
 
     document.getElementById('expression-holder').style.display = '';
@@ -1635,7 +1636,7 @@ async function setExpression(spriteFolderName, expression, { force = false, over
  */
 function setDefaultEmojiForImage(img, expression) {
     if (extension_settings.expressions.custom?.includes(expression)) {
-        console.debug(`Can't set default emoji for a custom expression (${expression}). setting to ${DEFAULT_FALLBACK_EXPRESSION} instead.`);
+        log.ext.debug(`Can't set default emoji for a custom expression (${expression}). setting to ${DEFAULT_FALLBACK_EXPRESSION} instead.`);
         expression = DEFAULT_FALLBACK_EXPRESSION;
     }
 
@@ -1677,7 +1678,7 @@ async function onClickExpressionAddCustom() {
     let expressionName = await Popup.show.input(null, template);
 
     if (!expressionName) {
-        console.debug('No custom expression name provided');
+        log.ext.debug('No custom expression name provided');
         return;
     }
 
@@ -1713,7 +1714,7 @@ async function onClickExpressionRemoveCustom() {
     const noCustomExpressions = extension_settings.expressions.custom.length === 0;
 
     if (!selectedExpression || noCustomExpressions) {
-        console.debug('No custom expression selected');
+        log.ext.debug('No custom expression selected');
         return;
     }
 
@@ -1721,7 +1722,7 @@ async function onClickExpressionRemoveCustom() {
     const confirmation = await Popup.show.confirm(null, template);
 
     if (!confirmation) {
-        console.debug('Custom expression removal cancelled');
+        log.ext.debug('Custom expression removal cancelled');
         return;
     }
 
@@ -1814,7 +1815,7 @@ async function handleFileUpload(url, formData) {
 
         return data ?? {};
     } catch (error) {
-        console.error('Error uploading image:', error);
+        log.ext.error('Error uploading image:', error);
         toastr.error('Failed to upload image');
         return {};
     }
@@ -1849,7 +1850,7 @@ async function onClickExpressionUpload(event) {
         const file = e.target.files[0];
 
         if (!file || !file.name) {
-            console.debug('No valid file selected');
+            log.ext.debug('No valid file selected');
             return;
         }
 
@@ -1879,7 +1880,7 @@ async function onClickExpressionUpload(event) {
                         text: t`Replace Existing`,
                         result: POPUP_RESULT.NEGATIVE,
                         action: () => {
-                            console.debug('Replacing existing sprite');
+                            log.ext.debug('Replacing existing sprite');
                             spriteName = withoutExtension(clickedFileName);
                         },
                     });
@@ -1937,7 +1938,7 @@ async function onClickExpressionOverrideButton() {
 
     // If the avatar name couldn't be found, abort.
     if (!avatarFileName) {
-        console.debug(`Could not find filename for character with name ${currentLastMessage.name} and ID ${context.characterId}`);
+        log.ext.debug(`Could not find filename for character with name ${currentLastMessage.name} and ID ${context.characterId}`);
 
         return;
     }
@@ -1954,7 +1955,7 @@ async function onClickExpressionOverrideButton() {
         }
 
         extension_settings.expressionOverrides.splice(existingOverrideIndex, 1);
-        console.debug(`Removed existing override for ${avatarFileName}`);
+        log.ext.debug(`Removed existing override for ${avatarFileName}`);
     } else {
         // Properly override objects and clear the sprite cache of the previously set names
         const existingOverride = extension_settings.expressionOverrides[existingOverrideIndex];
@@ -1967,7 +1968,7 @@ async function onClickExpressionOverrideButton() {
             delete spriteCache[currentLastMessage.name];
         }
 
-        console.debug(`Added/edited expression override for character with filename ${avatarFileName} to folder ${overridePath}`);
+        log.ext.debug(`Added/edited expression override for character with filename ${avatarFileName} to folder ${overridePath}`);
     }
 
     saveSettingsDebounced();
@@ -1982,7 +1983,7 @@ async function onClickExpressionOverrideButton() {
         await sendExpressionCall(name, expression, { force: true });
         forceUpdateVisualNovelMode();
     } catch (error) {
-        console.debug(`Setting expression override for ${avatarFileName} failed with error: ${error}`);
+        log.ext.debug(`Setting expression override for ${avatarFileName} failed with error: ${error}`);
     } finally {
         inApiCall = false;
     }
@@ -1997,7 +1998,7 @@ async function onClickExpressionOverrideRemoveAllButton() {
     extension_settings.expressionOverrides = [];
     saveSettingsDebounced();
 
-    console.debug('All expression image overrides have been cleared.');
+    log.ext.debug('All expression image overrides have been cleared.');
 
     // Refresh sprites list to use the default name if applicable
     try {
@@ -2008,9 +2009,9 @@ async function onClickExpressionOverrideRemoveAllButton() {
         await sendExpressionCall(currentLastMessage.name, expression, { force: true });
         forceUpdateVisualNovelMode();
 
-        console.debug(extension_settings.expressionOverrides);
+        log.ext.debug(extension_settings.expressionOverrides);
     } catch (error) {
-        console.debug(`The current expression could not be set because of error: ${error}`);
+        log.ext.debug(`The current expression could not be set because of error: ${error}`);
     }
 }
 

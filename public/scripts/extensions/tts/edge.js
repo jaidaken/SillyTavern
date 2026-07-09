@@ -3,6 +3,7 @@ import { getApiUrl } from '../../extensions.js';
 import { doExtrasFetch, modules } from '../../extensions.js';
 import { getPreviewString } from './index.js';
 import { saveTtsProviderSettings } from './index.js';
+import { log } from '../../log.js';
 
 export { EdgeTtsProvider };
 
@@ -50,7 +51,7 @@ class EdgeTtsProvider {
     async loadSettings(settings) {
         // Pupulate Provider UI given input settings
         if (Object.keys(settings).length == 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
 
         // Only accept keys defined in defaultSettings
@@ -71,7 +72,7 @@ class EdgeTtsProvider {
         $('#edge_tts_provider').on('change', () => { this.onSettingsChange(); });
         await this.checkReady();
 
-        console.debug('EdgeTTS: Settings loaded');
+        log.tts.debug('EdgeTTS: Settings loaded');
     }
 
     /**
@@ -167,7 +168,7 @@ class EdgeTtsProvider {
     async fetchTtsGeneration(inputText, voiceId) {
         await this.throwIfModuleMissing();
 
-        console.info(`Generating new TTS for voice_id ${voiceId}`);
+        log.tts.debug(`Generating new TTS for voice_id ${voiceId}`);
         const url = this.getGenerateUrl();
         const response = await this.doFetch(url,
             {

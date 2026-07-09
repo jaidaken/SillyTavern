@@ -1,4 +1,5 @@
 import { saveTtsProviderSettings } from './index.js';
+import { log } from '../../log.js';
 
 export { GptSovitsV2Provider };
 
@@ -77,7 +78,7 @@ class GptSovitsV2Provider {
     async loadSettings(settings) {
         // Pupulate Provider UI given input settings
         if (Object.keys(settings).length == 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
 
         // Only accept keys defined in defaultSettings
@@ -87,7 +88,7 @@ class GptSovitsV2Provider {
             if (key in this.settings) {
                 this.settings[key] = settings[key];
             } else {
-                console.debug(`Ignoring non-user-configurable setting: ${key}`);
+                log.tts.debug(`Ignoring non-user-configurable setting: ${key}`);
             }
         }
 
@@ -98,7 +99,7 @@ class GptSovitsV2Provider {
 
         await this.checkReady();
 
-        console.info('ITS: Settings loaded');
+        log.tts.info('ITS: Settings loaded');
     }
 
     // Perform a simple readiness check by trying to fetch voiceIds
@@ -123,7 +124,7 @@ class GptSovitsV2Provider {
         const match = this.voices.filter(
             v => v.name == voiceName,
         )[0];
-        console.log(match);
+        log.tts.debug(match);
         if (!match) {
             throw `TTS Voice name ${voiceName} not found`;
         }
@@ -141,7 +142,7 @@ class GptSovitsV2Provider {
     //###########//
     async fetchTtsVoiceObjects() {
         const response = await fetch(`${this.settings.provider_endpoint}/speakers`);
-        console.info(response);
+        log.tts.debug(response);
 
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${await response.json()}`);
@@ -167,7 +168,7 @@ class GptSovitsV2Provider {
 
 
     async fetchTtsGeneration(inputText, voiceId, lang = null, forceNoStreaming = false) {
-        console.info(`Generating new TTS for voice_id ${voiceId}`);
+        log.tts.debug(`Generating new TTS for voice_id ${voiceId}`);
 
         function replaceSpeaker(text) {
             return text.replace(/\[.*?\]/gu, '');

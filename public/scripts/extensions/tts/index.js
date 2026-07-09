@@ -39,6 +39,7 @@ import { ElectronHubTtsProvider } from './electronhub.js';
 import { ChutesTtsProvider } from './chutes.js';
 import { VolcengineTtsProvider } from './volcengine.js';
 import { applyLocale, t } from '/scripts/i18n.js';
+import { log } from '../../log.js';
 
 const UPDATE_INTERVAL = 1000;
 const wrapper = new ModuleWorkerWrapper(moduleWorker);
@@ -112,7 +113,7 @@ export function registerTtsProvider(name, provider) {
         throw new Error(`TTS provider ${name} is already registered.`);
     }
     ttsProviders[name] = provider;
-    console.info(`Registered TTS provider: ${name}`);
+    log.tts.info(`Registered TTS provider: ${name}`);
     $('#tts_provider').append($('<option />').val(name).text(name));
 
     // Load if it was previously selected
@@ -294,7 +295,7 @@ function processAndQueueTtsMessage(message, messageId = null, { manual = false }
 }
 
 function debugTtsPlayback() {
-    console.log(JSON.stringify(
+    log.tts.debug(JSON.stringify(
         {
             'ttsProviderName': ttsProviderName,
             'voiceMap': voiceMap,
@@ -339,7 +340,7 @@ async function playAudioData(audioJob) {
     const { audioBlob, char } = audioJob;
     // Since current audio job can be cancelled, don't playback if it is null
     if (currentAudioJob == null) {
-        console.log('Cancelled TTS playback because currentAudioJob was null');
+        log.tts.debug('Cancelled TTS playback because currentAudioJob was null');
     }
     if (audioBlob instanceof Blob) {
         const srcUrl = await getBase64Async(audioBlob);
@@ -357,7 +358,7 @@ async function playAudioData(audioJob) {
     }
     audioElement.addEventListener('ended', completeCurrentAudioJob);
     audioElement.addEventListener('canplay', () => {
-        console.debug('Starting TTS playback');
+        log.tts.debug('Starting TTS playback');
         audioElement.playbackRate = extension_settings.tts.playback_rate;
         audioElement.play();
     });
@@ -469,7 +470,7 @@ async function addAudioJob(response, char) {
         mimeType = audioBlob.type;
     }
     audioJobQueue.push({ audioBlob, char });
-    console.debug('Pushed audio job to queue.');
+    log.tts.debug('Pushed audio job to queue.');
     return { audioBlob, mimeType };
 }
 
@@ -484,7 +485,7 @@ async function processAudioJobQueue() {
         playAudioData(currentAudioJob);
     } catch (error) {
         toastr.error(error.toString());
-        console.error(error);
+        log.tts.error(error);
         audioQueueProcessorReady = true;
     }
 }
@@ -499,7 +500,7 @@ const ttsJobQueue = [];
 let currentTtsJob = null; // Null if nothing is currently being processed
 
 function completeTtsJob() {
-    console.info(`Current TTS job for ${currentTtsJob?.name} completed.`);
+    log.tts.debug(`Current TTS job for ${currentTtsJob?.name} completed.`);
     currentTtsJob = null;
 }
 
@@ -603,7 +604,7 @@ async function processTtsQueue() {
         return;
     }
 
-    console.debug('New message found, running TTS');
+    log.tts.debug('New message found, running TTS');
     currentTtsJob = ttsJobQueue.shift();
 
     // Handle segmented jobs that already have processed text
@@ -612,7 +613,7 @@ async function processTtsQueue() {
         const segmentText = currentTtsJob.segmentText;
         const segmentType = currentTtsJob.segmentType;
 
-        console.log(`TTS (${segmentType}): ${segmentText}`);
+        log.tts.debug(`TTS (${segmentType}): ${segmentText}`);
 
         try {
             let voiceMapKey = char;
@@ -661,7 +662,7 @@ async function processTtsQueue() {
             await tts(segmentText, voiceId, char, voiceMapKey);
         } catch (error) {
             toastr.error(error.toString());
-            console.error(error);
+            log.tts.error(error);
             currentTtsJob = null;
         }
         return;
@@ -694,7 +695,7 @@ async function processTtsQueue() {
             // Clean up extra spaces that might be left after removal
             text = text.replace(regex, '').replace(/\s+/g, ' ').trim();
         } else {
-            console.warn('Invalid regex pattern:', extension_settings.tts.regex_pattern);
+            log.tts.warn('Invalid regex pattern:', extension_settings.tts.regex_pattern);
         }
     }
 
@@ -713,7 +714,7 @@ async function processTtsQueue() {
     // Collapse newlines and spaces into single space
     text = text.replace(/\s+/g, ' ').trim();
 
-    console.log(`TTS: ${text}`);
+    log.tts.debug(`TTS: ${text}`);
     const char = currentTtsJob.name;
 
     // Remove character name from start of the line if power user setting is disabled
@@ -724,7 +725,7 @@ async function processTtsQueue() {
 
     try {
         if (!text) {
-            console.warn('Got empty text in TTS queue job.');
+            log.tts.warn('Got empty text in TTS queue job.');
             completeTtsJob();
             return;
         }
@@ -733,7 +734,7 @@ async function processTtsQueue() {
         const segments = parseMessageSegments(text);
 
         if (segments.length === 0) {
-            console.warn('No valid segments found in text.');
+            log.tts.warn('No valid segments found in text.');
             completeTtsJob();
             return;
         }
@@ -757,7 +758,7 @@ async function processTtsQueue() {
         currentTtsJob = null;
     } catch (error) {
         toastr.error(error.toString());
-        console.error(error);
+        log.tts.error(error);
         currentTtsJob = null;
     }
 }
@@ -929,12 +930,12 @@ function onRefreshClick() {
         extension_settings.tts[ttsProviderName] = ttsProvider.settings;
         saveSettingsDebounced();
         setTtsStatus('Successfully applied settings', true);
-        console.info(`Saved settings ${ttsProviderName} ${JSON.stringify(ttsProvider.settings)}`);
+        log.tts.debug(`Saved settings ${ttsProviderName} ${JSON.stringify(ttsProvider.settings)}`);
         initVoiceMap();
         updateVoiceMap();
     }).catch(error => {
         toastr.error(error.toString());
-        console.error(error);
+        log.tts.error(error);
         setTtsStatus(error, false);
     });
 }
@@ -1000,7 +1001,7 @@ function onSkipTagsClick() {
 function onPassAsterisksClick() {
     extension_settings.tts.pass_asterisks = !!$('#tts_pass_asterisks').prop('checked');
     saveSettingsDebounced();
-    console.log('setting pass asterisks', extension_settings.tts.pass_asterisks);
+    log.tts.debug('setting pass asterisks', extension_settings.tts.pass_asterisks);
 }
 
 function onMultiVoiceClick() {
@@ -1060,7 +1061,7 @@ async function loadTtsProvider(provider) {
     // Init provider settings
     $('#tts_provider_settings').append(ttsProvider.settingsHtml);
     if (!(ttsProviderName in extension_settings.tts)) {
-        console.warn(`Provider ${ttsProviderName} not in Extension Settings, initiatilizing provider in settings`);
+        log.tts.warn(`Provider ${ttsProviderName} not in Extension Settings, initiatilizing provider in settings`);
         extension_settings.tts[ttsProviderName] = {};
     }
     await ttsProvider.loadSettings(extension_settings.tts[ttsProviderName]);
@@ -1082,7 +1083,7 @@ export function saveTtsProviderSettings() {
     extension_settings.tts[ttsProviderName] = ttsProvider.settings;
     updateVoiceMap();
     saveSettingsDebounced();
-    console.info(`Saved settings ${ttsProviderName} ${JSON.stringify(ttsProvider.settings)}`);
+    log.tts.debug(`Saved settings ${ttsProviderName} ${JSON.stringify(ttsProvider.settings)}`);
 }
 
 
@@ -1183,7 +1184,7 @@ async function onMessageEvent(messageId, lastCharIndex) {
     lastMessageHash = hashNew;
     lastChatId = context.chatId;
 
-    console.debug(`Adding message from ${message.name} for TTS processing: "${message.mes}"`);
+    log.tts.debug(`Adding message from ${message.name} for TTS processing: "${message.mes}"`);
 
     if (extension_settings.tts.periodic_auto_generation && isStreamingEnabled()) {
         message.id = messageId;
@@ -1378,7 +1379,7 @@ function updateVoiceMap() {
     }
     if (Object.keys(tempVoiceMap).length !== 0) {
         voiceMap = tempVoiceMap;
-        console.log(`Voicemap updated to ${JSON.stringify(voiceMap)}`);
+        log.tts.debug(`Voicemap updated to ${JSON.stringify(voiceMap)}`);
     }
     if (!extension_settings.tts[ttsProviderName].voiceMap) {
         extension_settings.tts[ttsProviderName].voiceMap = {};

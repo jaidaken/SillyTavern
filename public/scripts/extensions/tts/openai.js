@@ -1,5 +1,6 @@
 import { getRequestHeaders, substituteParams } from '../../../script.js';
 import { saveTtsProviderSettings, sanitizeId } from './index.js';
+import { log } from '../../log.js';
 
 export { OpenAITtsProvider };
 
@@ -57,7 +58,7 @@ class OpenAITtsProvider {
     async loadSettings(settings) {
         // Populate Provider UI given input settings
         if (Object.keys(settings).length == 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
 
         // Only accept keys defined in defaultSettings
@@ -89,7 +90,7 @@ class OpenAITtsProvider {
         // Look for voice map changes
         this.setupVoiceMapObserver();
 
-        console.debug('OpenAI TTS: Settings loaded');
+        log.tts.debug('OpenAI TTS: Settings loaded');
     }
 
     setupVoiceMapObserver() {
@@ -220,7 +221,7 @@ class OpenAITtsProvider {
     }
 
     async fetchTtsGeneration(inputText, voiceId, characterName = null) {
-        console.info(`Generating new TTS for voice_id ${voiceId}`);
+        log.tts.debug(`Generating new TTS for voice_id ${voiceId}`);
 
         const requestBody = {
             'text': inputText,

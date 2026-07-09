@@ -4,6 +4,7 @@ TODO:
 //const DEBUG_TONY_SAMA_FORK_MODE = true
 
 import { DOMPurify } from '../../../lib.js';
+import { log } from '../../log.js';
 import { getRequestHeaders, processDroppedFiles, eventSource, event_types } from '../../../script.js';
 import { deleteExtension, EMPTY_AUTHOR, extensionNames, getAuthorFromUrl, getContext, installExtension, renderExtensionTemplateAsync, isOfficialExtension } from '../../extensions.js';
 import { POPUP_TYPE, Popup, callGenericPopup } from '../../popup.js';
@@ -73,7 +74,7 @@ function createAssetButton(asset, assetType, index) {
     const label = $('<i class="fa-fw fa-solid fa-download fa-lg"></i>');
     element.append(label);
 
-    console.debug(DEBUG_PREFIX, 'Checking asset', asset.id, asset.url);
+    log.ext.debug(DEBUG_PREFIX, 'Checking asset', asset.id, asset.url);
 
     const assetInstall = async function () {
         element.off('click');
@@ -119,7 +120,7 @@ function createAssetButton(asset, assetType, index) {
     };
 
     if (isAssetInstalled(assetType, asset.id)) {
-        console.debug(DEBUG_PREFIX, 'installed, checked');
+        log.ext.debug(DEBUG_PREFIX, 'installed, checked');
         label.toggleClass('fa-download');
         label.toggleClass('fa-check');
         element.on('click', assetDelete);
@@ -133,7 +134,7 @@ function createAssetButton(asset, assetType, index) {
             label.removeClass('redOverlayGlow');
         });
     } else {
-        console.debug(DEBUG_PREFIX, 'not installed, unchecked');
+        log.ext.debug(DEBUG_PREFIX, 'not installed, unchecked');
         element.prop('checked', false);
         element.on('click', assetInstall);
     }
@@ -149,7 +150,7 @@ function createAssetButton(asset, assetType, index) {
  * @returns {JQuery} The asset block element
  */
 function createAssetBlock(asset, assetType, element) {
-    console.debug(DEBUG_PREFIX, 'Created element for ', asset.id);
+    log.ext.debug(DEBUG_PREFIX, 'Created element for ', asset.id);
 
     const displayName = DOMPurify.sanitize(asset.name || asset.id);
     const description = DOMPurify.sanitize(asset.description || '');
@@ -244,7 +245,7 @@ async function populateAssetsMenu(json) {
     availableAssets = {};
     $('#assets_menu').empty();
 
-    console.debug(DEBUG_PREFIX, 'Received assets dictionary', json);
+    log.ext.debug(DEBUG_PREFIX, 'Received assets dictionary', json);
 
     for (const i of json) {
         if (availableAssets[i.type] === undefined)
@@ -252,7 +253,7 @@ async function populateAssetsMenu(json) {
         availableAssets[i.type].push(i);
     }
 
-    console.debug(DEBUG_PREFIX, 'Updated available assets to', availableAssets);
+    log.ext.debug(DEBUG_PREFIX, 'Updated available assets to', availableAssets);
     // First extensions, then everything else
     const assetTypes = Object.keys(availableAssets).sort((a, b) => (a === 'extension') ? -1 : (b === 'extension') ? 1 : 0);
 
@@ -305,7 +306,7 @@ async function downloadAssetsList(url) {
         toastr.info('Click the flashing button at the top right corner of the menu.', 'Trying to install a custom extension?', { timeOut: 10_000 });
 
         // Error logged after, to appear on top
-        console.error(error);
+        log.ext.error(error);
         toastr.error('Problem with assets URL', 'Cannot get assets list');
         $('#assets-connect-button').addClass('fa-plug-circle-exclamation');
         $('#assets-connect-button').addClass('redOverlayGlow');
@@ -360,7 +361,7 @@ function isAssetInstalled(assetType, filename) {
     }
 
     for (const i of assetList) {
-        //console.debug(DEBUG_PREFIX,i,filename)
+        //log.ext.debug(DEBUG_PREFIX,i,filename)
         if (i.includes(filename))
             return true;
     }
@@ -376,13 +377,13 @@ function isAssetInstalled(assetType, filename) {
  * @returns {Promise<boolean>} True if the asset was successfully installed, false otherwise
  */
 async function installAsset(url, assetType, filename) {
-    console.debug(DEBUG_PREFIX, 'Downloading ', url);
+    log.ext.debug(DEBUG_PREFIX, 'Downloading ', url);
     const category = assetType;
     try {
         if (category === 'extension') {
-            console.debug(DEBUG_PREFIX, 'Installing extension ', url);
+            log.ext.debug(DEBUG_PREFIX, 'Installing extension ', url);
             const result = await installExtension(url, false);
-            console.debug(DEBUG_PREFIX, 'Extension installed.');
+            log.ext.debug(DEBUG_PREFIX, 'Extension installed.');
             return result;
         }
 
@@ -394,20 +395,20 @@ async function installAsset(url, assetType, filename) {
             cache: 'no-cache',
         });
         if (result.ok) {
-            console.debug(DEBUG_PREFIX, 'Download success.');
+            log.ext.debug(DEBUG_PREFIX, 'Download success.');
             if (category === 'character') {
-                console.debug(DEBUG_PREFIX, 'Importing character ', filename);
+                log.ext.debug(DEBUG_PREFIX, 'Importing character ', filename);
                 const blob = await result.blob();
                 const file = new File([blob], filename, { type: blob.type });
                 const fileNameMap = new Map([[file, filename]]);
                 await processDroppedFiles([file], fileNameMap);
-                console.debug(DEBUG_PREFIX, 'Character downloaded.');
+                log.ext.debug(DEBUG_PREFIX, 'Character downloaded.');
             }
             return true;
         }
         return false;
     } catch (err) {
-        console.log(err);
+        log.ext.error(err);
         return false;
     }
 }
@@ -419,13 +420,13 @@ async function installAsset(url, assetType, filename) {
  * @returns {Promise<boolean>} True if the asset was successfully deleted, false otherwise
  */
 async function deleteAsset(assetType, filename) {
-    console.debug(DEBUG_PREFIX, 'Deleting ', assetType, filename);
+    log.ext.debug(DEBUG_PREFIX, 'Deleting ', assetType, filename);
     const category = assetType;
     try {
         if (category === 'extension') {
-            console.debug(DEBUG_PREFIX, 'Deleting extension ', filename);
+            log.ext.debug(DEBUG_PREFIX, 'Deleting extension ', filename);
             await deleteExtension(filename);
-            console.debug(DEBUG_PREFIX, 'Extension deleted.');
+            log.ext.debug(DEBUG_PREFIX, 'Extension deleted.');
             return true;
         }
 
@@ -437,12 +438,12 @@ async function deleteAsset(assetType, filename) {
             cache: 'no-cache',
         });
         if (result.ok) {
-            console.debug(DEBUG_PREFIX, 'Deletion success.');
+            log.ext.debug(DEBUG_PREFIX, 'Deletion success.');
             return true;
         }
         return false;
     } catch (err) {
-        console.log(err);
+        log.ext.error(err);
         return false;
     }
 }
@@ -510,7 +511,7 @@ async function openCharacterBrowser(forceDefault) {
 //#############################//
 
 async function updateCurrentAssets() {
-    console.debug(DEBUG_PREFIX, 'Checking installed assets...');
+    log.ext.debug(DEBUG_PREFIX, 'Checking installed assets...');
     try {
         const result = await fetch('/api/assets/get', {
             method: 'POST',
@@ -518,9 +519,9 @@ async function updateCurrentAssets() {
         });
         currentAssets = result.ok ? (await result.json()) : {};
     } catch (err) {
-        console.log(err);
+        log.ext.error(err);
     }
-    console.debug(DEBUG_PREFIX, 'Current assets found:', currentAssets);
+    log.ext.debug(DEBUG_PREFIX, 'Current assets found:', currentAssets);
 }
 
 
@@ -572,20 +573,20 @@ export async function init() {
 
         if (confirmation) {
             try {
-                console.debug(DEBUG_PREFIX, 'Confimation, loading assets...');
+                log.ext.debug(DEBUG_PREFIX, 'Confimation, loading assets...');
                 downloadAssetsList(url);
                 connectButton.removeClass('fa-plug-circle-exclamation');
                 connectButton.removeClass('redOverlayGlow');
                 connectButton.addClass('fa-plug-circle-check');
             } catch (error) {
-                console.error('Error:', error);
+                log.ext.error('Error:', error);
                 toastr.error(`Cannot get assets list from ${url.href}`);
                 connectButton.removeClass('fa-plug-circle-check');
                 connectButton.addClass('fa-plug-circle-exclamation');
                 connectButton.removeClass('redOverlayGlow');
             }
         } else {
-            console.debug(DEBUG_PREFIX, 'Connection refused by user');
+            log.ext.debug(DEBUG_PREFIX, 'Connection refused by user');
         }
     });
 

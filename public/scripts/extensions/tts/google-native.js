@@ -2,6 +2,7 @@ import { getRequestHeaders } from '../../../script.js';
 import { oai_settings } from '../../openai.js';
 import { isValidUrl } from '../../utils.js';
 import { getPreviewString, saveTtsProviderSettings } from './index.js';
+import { log } from '../../log.js';
 
 
 export class GoogleNativeTtsProvider {
@@ -39,7 +40,7 @@ export class GoogleNativeTtsProvider {
 
     async loadSettings(settings) {
         if (Object.keys(settings).length === 0) {
-            console.info('Using default Google TTS Provider settings');
+            log.tts.info('Using default Google TTS Provider settings');
         }
 
         this.settings = { ...this.defaultSettings, ...settings };
@@ -51,9 +52,9 @@ export class GoogleNativeTtsProvider {
 
         try {
             await this.checkReady();
-            console.debug('Google TTS: Settings loaded');
+            log.tts.debug('Google TTS: Settings loaded');
         } catch (err) {
-            console.warn('Google TTS: Settings loaded, but not ready.', err.message);
+            log.tts.warn('Google TTS: Settings loaded, but not ready.', err.message);
         }
     }
 
@@ -108,7 +109,7 @@ export class GoogleNativeTtsProvider {
                     }
                 } catch (parseError) {
                     // Response isn't valid JSON, use the HTTP error message
-                    console.debug('Error response is not JSON:', parseError.message);
+                    log.tts.debug('Error response is not JSON:', parseError.message);
                 }
 
                 throw new Error(errorMessage);
@@ -121,11 +122,11 @@ export class GoogleNativeTtsProvider {
             }
 
             this.voices = responseJson.voices;
-            console.info(`Google TTS: Loaded ${this.voices.length} voices`);
+            log.tts.info(`Google TTS: Loaded ${this.voices.length} voices`);
 
             return this.voices;
         } catch (error) {
-            console.error('Failed to fetch Google TTS voices:', error);
+            log.tts.error('Failed to fetch Google TTS voices:', error);
             throw error;
         }
     }
@@ -151,13 +152,13 @@ export class GoogleNativeTtsProvider {
             this.audioElement.play();
             this.audioElement.onended = () => URL.revokeObjectURL(url);
         } catch (error) {
-            console.error('TTS Preview Error:', error);
+            log.tts.error('TTS Preview Error:', error);
             toastr.error(`Could not generate preview: ${error.message}`);
         }
     }
 
     async fetchNativeTtsGeneration(text, voiceId) {
-        console.info(`Generating native Google TTS for voice_id ${voiceId}`);
+        log.tts.debug(`Generating native Google TTS for voice_id ${voiceId}`);
         const useReverseProxy = oai_settings.reverse_proxy && isValidUrl(oai_settings.reverse_proxy);
 
         const response = await fetch('/api/google/generate-native-tts', {

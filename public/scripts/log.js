@@ -1,4 +1,6 @@
-import { power_user } from './power-user.js';
+// Persisted config injected via log.setPersistedConfig (not imported), keeping
+// this a dependency-free leaf importable from Web Workers.
+let persistedConfig = null;
 
 export const LOG_LEVELS = Object.freeze({
     TRACE: -1,
@@ -12,8 +14,9 @@ export const LOG_LEVELS = Object.freeze({
 const DEFAULT_LEVEL = LOG_LEVELS.INFO;
 
 const CATEGORIES = [
-    'net', 'net.openai', 'gen', 'prompt', 'wi', 'ext', 'settings',
-    'events', 'chat', 'persona', 'tok', 'vectors', 'tts', 'ui',
+    'net', 'net.openai', 'net.google', 'gen', 'prompt', 'wi', 'ext', 'settings',
+    'events', 'chat', 'persona', 'chars', 'users', 'content', 'search', 'media',
+    'slash', 'sys', 'tok', 'vectors', 'tts', 'ui',
 ];
 
 const LEVEL_NAMES = ['trace', 'debug', 'info', 'warn', 'error'];
@@ -70,26 +73,27 @@ function parseSpec(raw) {
 
 function legacySpec() {
     const map = new Map();
-    if (localStorage.getItem('eventTracing') === 'true') {
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('eventTracing') === 'true') {
         map.set('events', LOG_LEVELS.TRACE);
     }
-    if (power_user?.console_log_prompts) {
+    if (persistedConfig?.console_log_prompts) {
         map.set('prompt', LOG_LEVELS.DEBUG);
     }
     return map;
 }
 
 function persistedSpec() {
-    if (!power_user?.logging) {
+    if (!persistedConfig?.logging) {
         return new Map();
     }
-    const raw = Object.entries(power_user.logging).map(([cat, lvl]) => `${cat}:${lvl}`).join(',');
+    const raw = Object.entries(persistedConfig.logging).map(([cat, lvl]) => `${cat}:${lvl}`).join(',');
     return parseSpec(raw);
 }
 
 function loadOverrides() {
-    const query = parseSpec(new URLSearchParams(location.search).get('log'));
-    const stored = parseSpec(localStorage.getItem('ST_LOG'));
+    const search = typeof location !== 'undefined' ? location.search : '';
+    const query = parseSpec(new URLSearchParams(search).get('log'));
+    const stored = parseSpec(typeof localStorage !== 'undefined' ? localStorage.getItem('ST_LOG') : null);
     // precedence high to low: query > stored > persisted > legacy
     return new Map([...legacySpec(), ...persistedSpec(), ...stored, ...query]);
 }
@@ -171,4 +175,9 @@ log.resolve = function resolve() {
     for (const [path, node] of nodes) {
         refreshNode(path, node);
     }
+};
+
+log.setPersistedConfig = function setPersistedConfig(config) {
+    persistedConfig = config;
+    log.resolve();
 };

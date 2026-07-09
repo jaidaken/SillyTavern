@@ -2,6 +2,7 @@ import { getPreviewString, initVoiceMap, saveTtsProviderSettings } from './index
 import { event_types, eventSource, getRequestHeaders } from '../../../script.js';
 import { SECRET_KEYS, secret_state } from '../../secrets.js';
 import { getBase64Async } from '../../utils.js';
+import { log } from '../../log.js';
 
 export { MiniMaxTtsProvider };
 
@@ -337,7 +338,7 @@ class MiniMaxTtsProvider {
                     try {
                         this.removeCustomModel(model.id);
                     } catch (error) {
-                        console.error('MiniMax TTS: Error removing custom model:', error);
+                        log.tts.error('MiniMax TTS: Error removing custom model:', error);
                         toastr.error(`Failed to remove custom model: ${error.message}`);
                     }
                 });
@@ -372,7 +373,7 @@ class MiniMaxTtsProvider {
                     try {
                         this.removeCustomVoice(voice.voice_id);
                     } catch (error) {
-                        console.error('MiniMax TTS: Error removing custom voice:', error);
+                        log.tts.error('MiniMax TTS: Error removing custom voice:', error);
                         toastr.error(`Failed to remove custom voice: ${error.message}`);
                     }
                 });
@@ -452,7 +453,7 @@ class MiniMaxTtsProvider {
     async loadSettings(settings) {
         // Populate Provider UI given input settings
         if (Object.keys(settings).length === 0) {
-            console.info('Using default MiniMax TTS Provider settings');
+            log.tts.info('Using default MiniMax TTS Provider settings');
         }
 
         // Only accept keys defined in defaultSettings
@@ -472,7 +473,7 @@ class MiniMaxTtsProvider {
             if (key in this.settings) {
                 this.settings[key] = settings[key];
             } else {
-                console.warn(`Invalid setting passed to MiniMax TTS Provider: ${key}`);
+                log.tts.warn(`Invalid setting passed to MiniMax TTS Provider: ${key}`);
             }
         }
 
@@ -488,10 +489,10 @@ class MiniMaxTtsProvider {
                 // map old [0.5..1.0] to [-12..0], and [1.0..2.0] to [0..12] (old default was 1.0, new default is 0)
                 const newPitch = (oldPitch < 1.0) ? (oldPitch - 1.0) * 24 : (oldPitch - 1.0) * 12;
                 this.settings.pitch = Math.max(-12, Math.min(12, Math.round(newPitch)));
-                console.info(`MiniMax TTS: Migrated pitch from ${oldPitch} to ${this.settings.pitch}`);
+                log.tts.info(`MiniMax TTS: Migrated pitch from ${oldPitch} to ${this.settings.pitch}`);
             } else {
                 this.settings.pitch = 0;
-                console.info(`MiniMax TTS: Migration reset pitch to default ${this.settings.pitch}`);
+                log.tts.info(`MiniMax TTS: Migration reset pitch to default ${this.settings.pitch}`);
             }
         }
 
@@ -507,7 +508,7 @@ class MiniMaxTtsProvider {
             try {
                 this.onConnectClick();
             } catch (error) {
-                console.error('MiniMax TTS: Error in connect click handler:', error);
+                log.tts.error('MiniMax TTS: Error in connect click handler:', error);
                 toastr.error(`Connection failed: ${error.message}`);
             }
         });
@@ -515,7 +516,7 @@ class MiniMaxTtsProvider {
             try {
                 this.onRefreshClick();
             } catch (error) {
-                console.error('MiniMax TTS: Error in refresh click handler:', error);
+                log.tts.error('MiniMax TTS: Error in refresh click handler:', error);
                 toastr.error(`Refresh failed: ${error.message}`);
             }
         });
@@ -532,7 +533,7 @@ class MiniMaxTtsProvider {
             try {
                 this.addCustomModel();
             } catch (error) {
-                console.error('MiniMax TTS: Error adding custom model:', error);
+                log.tts.error('MiniMax TTS: Error adding custom model:', error);
                 toastr.error(`Failed to add custom model: ${error.message}`);
             }
         });
@@ -540,7 +541,7 @@ class MiniMaxTtsProvider {
             try {
                 this.addCustomVoice();
             } catch (error) {
-                console.error('MiniMax TTS: Error adding custom voice:', error);
+                log.tts.error('MiniMax TTS: Error adding custom voice:', error);
                 toastr.error(`Failed to add custom voice: ${error.message}`);
             }
         });
@@ -552,7 +553,7 @@ class MiniMaxTtsProvider {
                 try {
                     this.addCustomModel();
                 } catch (error) {
-                    console.error('MiniMax TTS: Error adding custom model via keyboard:', error);
+                    log.tts.error('MiniMax TTS: Error adding custom model via keyboard:', error);
                     toastr.error(`Failed to add custom model: ${error.message}`);
                 }
             }
@@ -563,7 +564,7 @@ class MiniMaxTtsProvider {
                 try {
                     this.addCustomVoice();
                 } catch (error) {
-                    console.error('MiniMax TTS: Error adding custom voice via keyboard:', error);
+                    log.tts.error('MiniMax TTS: Error adding custom voice via keyboard:', error);
                     toastr.error(`Failed to add custom voice: ${error.message}`);
                 }
             }
@@ -584,7 +585,7 @@ class MiniMaxTtsProvider {
         try {
             await initVoiceMap();
         } catch (error) {
-            console.debug('MiniMax: Voice map initialization failed, but continuing');
+            log.tts.debug('MiniMax: Voice map initialization failed, but continuing');
         }
 
         $('#api_key_minimax').toggleClass('success', !!secret_state[SECRET_KEYS.MINIMAX]);
@@ -597,12 +598,12 @@ class MiniMaxTtsProvider {
         if (secret_state[SECRET_KEYS.MINIMAX] && secret_state[SECRET_KEYS.MINIMAX_GROUP_ID]) {
             try {
                 await this.checkReady();
-                console.debug('MiniMax TTS: Settings loaded and ready');
+                log.tts.debug('MiniMax TTS: Settings loaded and ready');
             } catch (error) {
-                console.debug('MiniMax TTS: Settings loaded, but not ready:', error);
+                log.tts.debug('MiniMax TTS: Settings loaded, but not ready:', error);
             }
         } else {
-            console.debug('MiniMax TTS: Settings loaded, waiting for API credentials');
+            log.tts.debug('MiniMax TTS: Settings loaded, waiting for API credentials');
         }
     }
 
@@ -610,14 +611,14 @@ class MiniMaxTtsProvider {
     async checkReady() {
         if (!secret_state[SECRET_KEYS.MINIMAX] || !secret_state[SECRET_KEYS.MINIMAX_GROUP_ID]) {
             const error = new Error('API Key and Group ID are required');
-            console.error('MiniMax TTS checkReady error:', error.message);
+            log.tts.error('MiniMax TTS checkReady error:', error.message);
             throw error;
         }
         // Try to fetch available models and voices, but don't block connection on failure
         try {
             await this.updateModelsAndVoices();
         } catch (error) {
-            console.warn('MiniMax TTS: Failed to fetch models/voices during ready check, will use all available:', error);
+            log.tts.warn('MiniMax TTS: Failed to fetch models/voices during ready check, will use all available:', error);
             // Even if API call fails, set all available values to ensure basic functionality
             this.availableModels = this.getAllModels();
             this.availableVoices = this.getAllVoices();
@@ -653,7 +654,7 @@ class MiniMaxTtsProvider {
     async getVoice(voiceName) {
         if (!voiceName) {
             const error = new Error('TTS Voice name not provided');
-            console.error('MiniMax TTS getVoice error:', error.message);
+            log.tts.error('MiniMax TTS getVoice error:', error.message);
             throw error;
         }
 
@@ -673,7 +674,7 @@ class MiniMaxTtsProvider {
 
         if (!voice) {
             const error = new Error(`TTS Voice not found: ${voiceName}`);
-            console.error('MiniMax TTS getVoice error:', error.message);
+            log.tts.error('MiniMax TTS getVoice error:', error.message);
             throw error;
         }
 
@@ -686,7 +687,7 @@ class MiniMaxTtsProvider {
             const customVoiceId = this.settings.customVoiceId;
             if (!customVoiceId || customVoiceId.trim() === '') {
                 const error = new Error('Please enter custom voice ID in settings first');
-                console.error('MiniMax TTS generateTts error:', error.message);
+                log.tts.error('MiniMax TTS generateTts error:', error.message);
                 throw error;
             }
             voiceId = customVoiceId.trim();
@@ -698,10 +699,10 @@ class MiniMaxTtsProvider {
             const voice = await this.getVoice(voiceId);
             if (voice && voice.lang) {
                 language = this.mapLanguageToMiniMaxFormat(voice.lang);
-                console.debug(`MiniMax TTS: Using voice language ${voice.lang}, API language: ${language}`);
+                log.tts.debug(`MiniMax TTS: Using voice language ${voice.lang}, API language: ${language}`);
             }
         } catch (error) {
-            console.debug('MiniMax TTS: Could not determine voice language, using default');
+            log.tts.debug('MiniMax TTS: Could not determine voice language, using default');
         }
 
         return await this.fetchTtsGeneration(text, voiceId, language);
@@ -710,18 +711,18 @@ class MiniMaxTtsProvider {
     async fetchTtsVoiceObjects() {
         try {
             if (!secret_state[SECRET_KEYS.MINIMAX] || !secret_state[SECRET_KEYS.MINIMAX_GROUP_ID]) {
-                console.warn('MiniMax TTS: API Key and Group ID required for fetching voices');
-                console.warn('Using all available voices (default + custom). Please check your API credentials');
+                log.tts.warn('MiniMax TTS: API Key and Group ID required for fetching voices');
+                log.tts.warn('Using all available voices (default + custom). Please check your API credentials');
                 return this.getAllVoices();
             }
 
             // MiniMax API doesn't provide a voices listing endpoint
             // Using all available voices (default + custom)
-            console.info('MiniMax TTS: Using all available voices (default + custom)');
+            log.tts.info('MiniMax TTS: Using all available voices (default + custom)');
             return this.getAllVoices();
         } catch (error) {
-            console.error('Error fetching MiniMax voices:', error);
-            console.warn('Using all available voices (default + custom). Please check your API credentials');
+            log.tts.error('Error fetching MiniMax voices:', error);
+            log.tts.warn('Using all available voices (default + custom). Please check your API credentials');
             return this.getAllVoices();
         }
     }
@@ -729,7 +730,7 @@ class MiniMaxTtsProvider {
     async fetchTtsModels() {
         // MiniMax API doesn't provide a models listing endpoint
         // Using all available models (default + custom)
-        console.info('MiniMax TTS: Using all available models (default + custom)');
+        log.tts.info('MiniMax TTS: Using all available models (default + custom)');
         this.availableModels = this.getAllModels();
         return this.getAllModels();
     }
@@ -738,11 +739,11 @@ class MiniMaxTtsProvider {
         try {
             // Get models list
             this.availableModels = await this.fetchTtsModels();
-            console.info(`MiniMax TTS: Loaded ${this.availableModels.length} models`);
+            log.tts.info(`MiniMax TTS: Loaded ${this.availableModels.length} models`);
 
             // Get voices list (now fetched from API)
             this.availableVoices = await this.fetchTtsVoiceObjects();
-            console.info(`MiniMax TTS: Loaded ${this.availableVoices.length} voices`);
+            log.tts.info(`MiniMax TTS: Loaded ${this.availableVoices.length} voices`);
 
             // Update model dropdown
             this.updateModelSelect(this.availableModels);
@@ -752,7 +753,7 @@ class MiniMaxTtsProvider {
                 voices: this.availableVoices,
             };
         } catch (error) {
-            console.error('MiniMax TTS: Failed to update models and voices:', error);
+            log.tts.error('MiniMax TTS: Failed to update models and voices:', error);
             // Set all available values to ensure basic functionality
             this.availableModels = this.getAllModels();
             this.availableVoices = this.getAllVoices();
@@ -773,11 +774,11 @@ class MiniMaxTtsProvider {
     }
 
     async fetchTtsGeneration(inputText, voiceId, language = null) {
-        console.info(`Generating new MiniMax TTS for voice_id ${voiceId}`);
+        log.tts.debug(`Generating new MiniMax TTS for voice_id ${voiceId}`);
 
         if (!secret_state[SECRET_KEYS.MINIMAX] || !secret_state[SECRET_KEYS.MINIMAX_GROUP_ID]) {
             const error = new Error('API Key and Group ID are required');
-            console.error('MiniMax TTS fetchTtsGeneration error:', error.message);
+            log.tts.error('MiniMax TTS fetchTtsGeneration error:', error.message);
             throw error;
         }
 
@@ -798,7 +799,7 @@ class MiniMaxTtsProvider {
             language: language,
         };
 
-        console.debug('MiniMax TTS Request:', {
+        log.tts.debug('MiniMax TTS Request:', {
             body: { ...requestBody, voiceId: '[REDACTED]' },
         });
 
@@ -815,30 +816,30 @@ class MiniMaxTtsProvider {
                 try {
                     // Try to parse JSON error response from backend
                     const errorData = await response.json();
-                    console.error('MiniMax TTS backend error:', errorData);
+                    log.tts.error('MiniMax TTS backend error:', errorData);
                     errorMessage = errorData.error || errorMessage;
                 } catch (jsonError) {
                     // If not JSON, try to read text
                     try {
                         const errorText = await response.text();
-                        console.error('MiniMax TTS backend error (Text):', errorText);
+                        log.tts.error('MiniMax TTS backend error (Text):', errorText);
                         errorMessage = errorText || errorMessage;
                     } catch (textError) {
-                        console.error('MiniMax TTS: Failed to read error response:', textError);
+                        log.tts.error('MiniMax TTS: Failed to read error response:', textError);
                     }
                 }
 
                 toastr.error(`${errorMessage}`, 'MiniMax TTS Generation Failed');
                 const error = new Error(errorMessage);
-                console.error('MiniMax TTS fetchTtsGeneration error:', error.message);
+                log.tts.error('MiniMax TTS fetchTtsGeneration error:', error.message);
                 throw error;
             }
 
             // Backend handles all the complex processing and returns audio data directly
-            console.debug('MiniMax TTS: Audio response received from backend');
+            log.tts.debug('MiniMax TTS: Audio response received from backend');
             return response;
         } catch (error) {
-            console.error('Error in MiniMax TTS generation:', error);
+            log.tts.error('Error in MiniMax TTS generation:', error);
             throw error;
         }
     }
@@ -903,23 +904,23 @@ class MiniMaxTtsProvider {
 
             // Map the language to MiniMax API format for the request
             const apiLang = this.mapLanguageToMiniMaxFormat(previewLang);
-            console.debug(`MiniMax TTS: Using preview language ${previewLang}, API language: ${apiLang}`);
+            log.tts.debug(`MiniMax TTS: Using preview language ${previewLang}, API language: ${apiLang}`);
 
             const response = await this.fetchTtsGeneration(text, voiceId, apiLang);
 
             if (!response.ok) {
                 const errorText = await response.text();
                 const error = new Error(`HTTP ${response.status}: ${errorText}`);
-                console.error('MiniMax TTS previewTtsVoice error:', error.message);
+                log.tts.error('MiniMax TTS previewTtsVoice error:', error.message);
                 throw error;
             }
 
             const audio = await response.blob();
-            console.debug(`MiniMax TTS: Audio blob size: ${audio.size}, type: ${audio.type}`);
+            log.tts.debug(`MiniMax TTS: Audio blob size: ${audio.size}, type: ${audio.type}`);
 
             // Use the same method as other TTS providers - convert to base64 data URL
             const srcUrl = await getBase64Async(audio);
-            console.debug('MiniMax TTS: Base64 data URL created');
+            log.tts.debug('MiniMax TTS: Base64 data URL created');
 
             // Clean up previous event listener to prevent memory leaks
             this.audioElement.onended = null;
@@ -930,8 +931,8 @@ class MiniMaxTtsProvider {
 
             // Add error handler for audio element
             this.audioElement.onerror = (e) => {
-                console.error('MiniMax TTS: Audio element error:', e);
-                console.error('MiniMax TTS: Audio element error details:', {
+                log.tts.error('MiniMax TTS: Audio element error:', e);
+                log.tts.error('MiniMax TTS: Audio element error details:', {
                     error: this.audioElement.error,
                     networkState: this.audioElement.networkState,
                     readyState: this.audioElement.readyState,
@@ -943,9 +944,9 @@ class MiniMaxTtsProvider {
 
             try {
                 await this.audioElement.play();
-                console.debug('MiniMax TTS: Audio playback started successfully');
+                log.tts.debug('MiniMax TTS: Audio playback started successfully');
             } catch (playError) {
-                console.error('MiniMax TTS: Play error:', playError);
+                log.tts.error('MiniMax TTS: Play error:', playError);
                 throw new Error(`Audio playback failed: ${playError.message}`, { cause: playError });
             }
 
@@ -954,7 +955,7 @@ class MiniMaxTtsProvider {
                 this.audioElement.onerror = null;
             };
         } catch (error) {
-            console.error('MiniMax TTS Preview Error:', error);
+            log.tts.error('MiniMax TTS Preview Error:', error);
             toastr.error(`Could not generate preview: ${error.message}`);
         }
     }

@@ -1,6 +1,7 @@
 import { getPreviewString, saveTtsProviderSettings } from './index.js';
 import { getBase64Async } from '../../utils.js';
 import { getRequestHeaders } from '../../../script.js';
+import { log } from '../../log.js';
 
 export { SpeechT5TtsProvider };
 
@@ -66,7 +67,7 @@ class SpeechT5TtsProvider {
     async loadSettings(settings) {
         // Pupulate Provider UI given input settings
         if (Object.keys(settings).length == 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
 
         // Only accept keys defined in defaultSettings
@@ -133,7 +134,7 @@ class SpeechT5TtsProvider {
             $(`#speecht5_tts_speaker option[value="${speaker.voice_id}"]`).remove();
 
             if (this.settings.speakers.length == 0) {
-                console.log('No speakers left');
+                log.tts.warn('No speakers left');
                 return;
             }
 
@@ -143,7 +144,7 @@ class SpeechT5TtsProvider {
 
         await this.checkReady();
 
-        console.debug('SpeechT5: Settings loaded');
+        log.tts.debug('SpeechT5: Settings loaded');
     }
 
     async checkReady() {
@@ -164,7 +165,7 @@ class SpeechT5TtsProvider {
     }
 
     async fetchTtsGeneration(inputText, voiceId) {
-        console.info(`Generating new TTS for voice_id ${voiceId}`);
+        log.tts.debug(`Generating new TTS for voice_id ${voiceId}`);
         const speaker = await this.getVoice(voiceId);
 
         if (!speaker) {

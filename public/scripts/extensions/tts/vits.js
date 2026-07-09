@@ -1,4 +1,5 @@
 import { getPreviewString, saveTtsProviderSettings } from './index.js';
+import { log } from '../../log.js';
 
 export { VITSTtsProvider };
 
@@ -171,7 +172,7 @@ class VITSTtsProvider {
     async loadSettings(settings) {
         // Pupulate Provider UI given input settings
         if (Object.keys(settings).length == 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
 
         // Only accept keys defined in defaultSettings
@@ -181,7 +182,7 @@ class VITSTtsProvider {
             if (key in this.settings) {
                 this.settings[key] = settings[key];
             } else {
-                console.debug(`Ignoring non-user-configurable setting: ${key}`);
+                log.tts.debug(`Ignoring non-user-configurable setting: ${key}`);
             }
         }
 
@@ -228,7 +229,7 @@ class VITSTtsProvider {
 
         await this.checkReady();
 
-        console.info('VITS: Settings loaded');
+        log.tts.info('VITS: Settings loaded');
     }
 
     // Perform a simple readiness check by trying to fetch voiceIds
@@ -315,7 +316,7 @@ class VITSTtsProvider {
      * @returns {Promise<Response|string>} Fetch response
      */
     async fetchTtsGeneration(inputText, voiceId, lang = null, forceNoStreaming = false) {
-        console.info(`Generating new TTS for voice_id ${voiceId}`);
+        log.tts.debug(`Generating new TTS for voice_id ${voiceId}`);
 
         const streaming = !forceNoStreaming && this.settings.streaming;
         const [model_type, speaker_id] = voiceId.split('&');

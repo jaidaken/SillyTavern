@@ -1,5 +1,6 @@
 import { saveTtsProviderSettings } from './index.js';
 import { getCharacters, getPreviewString } from './index.js';
+import { log } from '../../log.js';
 
 export { GptSoVITSAdapterProvider };
 
@@ -97,7 +98,7 @@ class GptSoVITSAdapterProvider {
     async loadSettings(settings) {
         // Populate Provider UI given input settings
         if (Object.keys(settings).length == 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
 
         // Only accept keys defined in defaultSettings
@@ -107,7 +108,7 @@ class GptSoVITSAdapterProvider {
             if (key in this.settings) {
                 this.settings[key] = settings[key];
             } else {
-                console.debug(`Ignoring non-user-configurable setting: ${key}`);
+                log.tts.debug(`Ignoring non-user-configurable setting: ${key}`);
             }
         }
 
@@ -116,7 +117,7 @@ class GptSoVITSAdapterProvider {
         $('#text_lang').val(this.settings.text_lang).on('change', this.onSettingsChange.bind(this));
         $('#media_type').val(this.settings.media_type).on('change', this.onSettingsChange.bind(this));
         await this.checkReady();
-        console.info('ITS: Settings loaded');
+        log.tts.info('ITS: Settings loaded');
     }
 
     // Perform a simple readiness check by trying to fetch voiceIds
@@ -156,7 +157,7 @@ class GptSoVITSAdapterProvider {
     //###########//
     async fetchTtsVoiceObjects() {
         const response = await fetch(`${this.settings.provider_endpoint}/speakers`);
-        console.info(response);
+        log.tts.debug(response);
 
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${await response.json()}`);
@@ -193,7 +194,7 @@ class GptSoVITSAdapterProvider {
      * @returns {Promise<Response>} Fetch response
      */
     async fetchTtsGeneration(inputText, voiceId, lang = null, forceNoStreaming = false) {
-        console.info(`Generating new TTS for voice_id ${voiceId}`);
+        log.tts.debug(`Generating new TTS for voice_id ${voiceId}`);
 
         const params = {
             text: inputText,

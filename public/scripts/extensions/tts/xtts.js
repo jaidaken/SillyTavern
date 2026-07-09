@@ -1,5 +1,6 @@
 import { doExtrasFetch, getApiUrl, modules } from '../../extensions.js';
 import { saveTtsProviderSettings } from './index.js';
+import { log } from '../../log.js';
 
 export { XTTSTtsProvider };
 
@@ -149,7 +150,7 @@ class XTTSTtsProvider {
     async loadSettings(settings) {
         // Pupulate Provider UI given input settings
         if (Object.keys(settings).length == 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
 
         // Only accept keys defined in defaultSettings
@@ -211,7 +212,7 @@ class XTTSTtsProvider {
 
         await this.checkReady();
 
-        console.debug('XTTS: Settings loaded');
+        log.tts.debug('XTTS: Settings loaded');
     }
 
     // Perform a simple readiness check by trying to fetch voiceIds
@@ -287,7 +288,7 @@ class XTTSTtsProvider {
     }
 
     async fetchTtsGeneration(inputText, voiceId) {
-        console.info(`Generating new TTS for voice_id ${voiceId}`);
+        log.tts.debug(`Generating new TTS for voice_id ${voiceId}`);
 
         if (this.settings.streaming) {
             const params = new URLSearchParams();

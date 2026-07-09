@@ -1,6 +1,7 @@
 import { getRequestHeaders } from '../../../script.js';
 import { splitRecursive } from '../../utils.js';
 import { getPreviewString, saveTtsProviderSettings } from './index.js';
+import { log } from '../../log.js';
 export { GoogleTranslateTtsProvider };
 
 class GoogleTranslateTtsProvider {
@@ -26,7 +27,7 @@ class GoogleTranslateTtsProvider {
     async loadSettings(settings) {
         // Populate Provider UI given input settings
         if (Object.keys(settings).length == 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
 
         // Only accept keys defined in defaultSettings
@@ -42,9 +43,9 @@ class GoogleTranslateTtsProvider {
 
         try {
             await this.checkReady();
-            console.debug('Google Translate TTS: Settings loaded');
+            log.tts.debug('Google Translate TTS: Settings loaded');
         } catch {
-            console.debug('Google Translate TTS: Settings loaded, but not ready');
+            log.tts.debug('Google Translate TTS: Settings loaded, but not ready');
         }
     }
 

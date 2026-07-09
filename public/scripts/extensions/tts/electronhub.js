@@ -1,6 +1,7 @@
 import { event_types, eventSource, getRequestHeaders } from '../../../script.js';
 import { SECRET_KEYS, secret_state } from '../../secrets.js';
 import { getPreviewString, saveTtsProviderSettings, initVoiceMap } from './index.js';
+import { log } from '../../log.js';
 
 export { ElectronHubTtsProvider };
 
@@ -111,7 +112,7 @@ class ElectronHubTtsProvider {
 
     async loadSettings(settings) {
         if (Object.keys(settings).length == 0) {
-            console.info('Using default Electron Hub TTS settings');
+            log.tts.info('Using default Electron Hub TTS settings');
         }
 
         this.settings = { ...this.defaultSettings, ...settings };
@@ -157,7 +158,7 @@ class ElectronHubTtsProvider {
         await this.checkReady();
         this.updateConditionalBlocks();
         this.renderDynamicParams();
-        console.debug('Electron Hub TTS: Settings loaded');
+        log.tts.debug('Electron Hub TTS: Settings loaded');
     }
 
     async onSettingsChange() {
@@ -210,7 +211,7 @@ class ElectronHubTtsProvider {
                 saveTtsProviderSettings();
             }
         } catch (err) {
-            console.warn('Electron Hub models fetch failed', err);
+            log.tts.warn('Electron Hub models fetch failed', err);
             this.models = [];
         }
     }
@@ -400,7 +401,7 @@ class ElectronHubTtsProvider {
     }
 
     async fetchTtsGeneration(inputText, voiceId) {
-        console.info(`Generating Electron Hub TTS for voice_id ${voiceId}`);
+        log.tts.debug(`Generating Electron Hub TTS for voice_id ${voiceId}`);
         const body = {
             input: inputText,
             voice: voiceId,

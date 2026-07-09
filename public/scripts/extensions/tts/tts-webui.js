@@ -1,4 +1,5 @@
 import { getPreviewString, saveTtsProviderSettings } from './index.js';
+import { log } from '../../log.js';
 
 export { TtsWebuiProvider };
 
@@ -196,7 +197,7 @@ class TtsWebuiProvider {
     async loadSettings(settings) {
         // Populate Provider UI given input settings
         if (Object.keys(settings).length == 0) {
-            console.info('Using default TTS Provider settings');
+            log.tts.info('Using default TTS Provider settings');
         }
 
         // Only accept keys defined in defaultSettings
@@ -288,7 +289,7 @@ class TtsWebuiProvider {
 
         await this.checkReady();
 
-        console.debug('OpenAI Compatible TTS: Settings loaded');
+        log.tts.debug('OpenAI Compatible TTS: Settings loaded');
     }
 
     onSettingsChange() {
@@ -338,7 +339,7 @@ class TtsWebuiProvider {
 
     async onRefreshClick() {
         await this.fetchTtsVoiceObjects();
-        console.info('TTS voices refreshed');
+        log.tts.info('TTS voices refreshed');
     }
 
     async getVoice(voiceName) {
@@ -378,7 +379,7 @@ class TtsWebuiProvider {
             }
 
             const responseJson = await response.json();
-            console.info('Discovered voices from provider:', responseJson);
+            log.tts.debug('Discovered voices from provider:', responseJson);
 
             this.voices = responseJson.voices.map(({ value, label }) => ({
                 name: label,
@@ -388,7 +389,7 @@ class TtsWebuiProvider {
 
             return this.voices;
         } catch (error) {
-            console.warn('Voice discovery failed, using configured voices:', error);
+            log.tts.warn('Voice discovery failed, using configured voices:', error);
         }
 
         // Fallback to configured voices
@@ -438,7 +439,7 @@ class TtsWebuiProvider {
             if (!headerParsed) {
                 // Parse WAV header to get sample rate
                 wavInfo = this.parseWavHeader(value.buffer);
-                console.log('WAV Info:', wavInfo);
+                log.tts.debug('WAV Info:', wavInfo);
 
                 // Initialize AudioWorklet with correct sample rate
                 await this.initAudioWorklet(wavInfo.sampleRate);
@@ -487,7 +488,7 @@ class TtsWebuiProvider {
     }
 
     async fetchTtsGeneration(inputText, voiceId) {
-        console.info(`Generating new TTS for voice_id ${voiceId}`);
+        log.tts.debug(`Generating new TTS for voice_id ${voiceId}`);
 
         const settings = this.settings;
         const streaming = settings.streaming;

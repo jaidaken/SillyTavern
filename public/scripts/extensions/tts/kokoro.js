@@ -1,6 +1,7 @@
 import { debounce_timeout } from '../../constants.js';
 import { debounceAsync, splitRecursive } from '../../utils.js';
 import { getPreviewString, saveTtsProviderSettings } from './index.js';
+import { log } from '../../log.js';
 
 export class KokoroTtsProvider {
     constructor() {
@@ -127,13 +128,13 @@ export class KokoroTtsProvider {
                     this.updateStatusDisplay();
                     resolve(success);
                 }).catch(error => {
-                    console.error('Worker initialization failed:', error);
+                    log.tts.error('Worker initialization failed:', error);
                     this.ready = false;
                     this.updateStatusDisplay();
                     reject(error);
                 });
             } catch (error) {
-                console.error('Failed to create worker:', error);
+                log.tts.error('Failed to create worker:', error);
                 this.ready = false;
                 this.updateStatusDisplay();
                 reject(error);
@@ -305,7 +306,7 @@ export class KokoroTtsProvider {
      */
     async* generateTts(text, voiceId) {
         if (!this.ready || !this.worker) {
-            console.log('TTS not ready, initializing...');
+            log.tts.debug('TTS not ready, initializing...');
             await this.initializeWorker();
         }
 

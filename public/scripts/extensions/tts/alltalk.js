@@ -1,6 +1,7 @@
 import { doExtrasFetch } from '../../extensions.js';
 import { debounce } from '../../utils.js';
 import { saveTtsProviderSettings } from './index.js';
+import { log } from '../../log.js';
 
 export { AllTalkTtsProvider };
 
@@ -235,14 +236,14 @@ class AllTalkTtsProvider {
         updateStatus('Offline');
 
         if (Object.keys(settings).length === 0) {
-            console.info('Using default AllTalk TTS Provider settings');
+            log.tts.info('Using default AllTalk TTS Provider settings');
         } else {
             // Populate settings with provided values, ignoring server-provided settings
             for (const key in settings) {
                 if (key in this.settings) {
                     this.settings[key] = settings[key];
                 } else {
-                    console.debug(`Ignoring non-user-configurable setting: ${key}`);
+                    log.tts.debug(`Ignoring non-user-configurable setting: ${key}`);
                 }
             }
         }
@@ -260,7 +261,7 @@ class AllTalkTtsProvider {
         $('#rvc_narrator_pitch').val(this.settings.rvc_narrator_pitch);
         $('#server_version').val(this.settings.server_version);
 
-        console.debug('AllTalkTTS: Settings loaded');
+        log.tts.debug('AllTalkTTS: Settings loaded');
         try {
             // Check if TTS provider is ready
             this.setupEventListeners();
@@ -273,7 +274,7 @@ class AllTalkTtsProvider {
             this.applySettingsToHTML();
             updateStatus('Ready');
         } catch (error) {
-            console.error('Error loading settings:', error);
+            log.tts.error('Error loading settings:', error);
             updateStatus('Offline');
         }
     }
@@ -354,13 +355,13 @@ class AllTalkTtsProvider {
             // Check if the response is 'Ready'
             if (statusText === 'Ready') {
                 this.ready = true; // Set the ready flag to true
-                console.log('TTS service is ready.');
+                log.tts.info('TTS service is ready.');
             } else {
                 this.ready = false;
-                console.log('TTS service is not ready.');
+                log.tts.warn('TTS service is not ready.');
             }
         } catch (error) {
-            console.error('Error checking TTS service readiness:', error);
+            log.tts.error('Error checking TTS service readiness:', error);
             this.ready = false; // Ensure ready flag is set to false in case of error
         }
     }
@@ -390,22 +391,22 @@ class AllTalkTtsProvider {
 
     async fetchRvcVoiceObjects() {
         if (this.settings.server_version == 'v1') {
-            console.log('Skipping RVC voices fetch for V1 server');
+            log.tts.debug('Skipping RVC voices fetch for V1 server');
             return [];
         }
 
-        console.log('Fetching RVC Voices');
+        log.tts.debug('Fetching RVC Voices');
         try {
             const response = await fetch(`${this.settings.provider_endpoint}/api/rvcvoices`);
             if (!response.ok) {
                 const errorText = await response.text();
-                console.error('Error text:', errorText);
+                log.tts.error('Error text:', errorText);
                 throw new Error(`HTTP ${response.status}: ${errorText}`);
             }
 
             const data = await response.json();
             if (!data || !data.rvcvoices) {
-                console.error('Invalid data format:', data);
+                log.tts.error('Invalid data format:', data);
                 throw new Error('Invalid data format received from /api/rvcvoices');
             }
 
@@ -416,12 +417,12 @@ class AllTalkTtsProvider {
                 };
             });
 
-            console.log('RVC voices:', voices);
+            log.tts.debug('RVC voices:', voices);
             this.rvcVoices = voices; // Assign to the class property
             this.updateRvcVoiceDropdowns(); // Update UI after fetching voices
             return voices; // Also return this list
         } catch (error) {
-            console.error('Error fetching RVC voices:', error);
+            log.tts.error('Error fetching RVC voices:', error);
             this.rvcVoices = [{ name: 'Disabled', voice_id: 'Disabled' }]; // Set default on error
             throw error;
         } finally {
@@ -459,7 +460,7 @@ class AllTalkTtsProvider {
             this.updateCheckboxes();
             this.updateRvcVoiceDropdowns(); // Update the RVC voice dropdowns
         } catch (error) {
-            console.error(`Error updating settings from server: ${error}`);
+            log.tts.error(`Error updating settings from server: ${error}`);
         }
     }
 
@@ -624,9 +625,9 @@ class AllTalkTtsProvider {
     setupEventListeners() {
         // Define the event handler function
         const onModelSelectChange = async (event) => {
-            console.log('Model select change event triggered');
+            log.tts.debug('Model select change event triggered');
             const selectedModel = event.target.value;
-            console.log(`Selected model: ${selectedModel}`);
+            log.tts.debug(`Selected model: ${selectedModel}`);
             updateStatus('Processing');
             try {
                 const response = await fetch(`${this.settings.provider_endpoint}/api/reload?tts_method=${encodeURIComponent(selectedModel)}`, {
@@ -636,10 +637,10 @@ class AllTalkTtsProvider {
                     throw new Error(`HTTP Error: ${response.status}`);
                 }
                 const data = await response.json();
-                console.log('POST response data:', data);
+                log.tts.debug('POST response data:', data);
                 updateStatus('Ready');
             } catch (error) {
-                console.error('POST request error:', error);
+                log.tts.error('POST request error:', error);
                 updateStatus('Error');
             }
         };
@@ -711,10 +712,10 @@ class AllTalkTtsProvider {
                         throw new Error(`HTTP Error: ${response.status}`);
                     }
                     const data = await response.json();
-                    console.log('POST response data:', data);
+                    log.tts.debug('POST response data:', data);
                     updateStatus('Ready');
                 } catch (error) {
-                    console.error('POST request error:', error);
+                    log.tts.error('POST request error:', error);
                     updateStatus('Error');
                 }
             };
@@ -737,10 +738,10 @@ class AllTalkTtsProvider {
                         throw new Error(`HTTP Error: ${response.status}`);
                     }
                     const data = await response.json();
-                    console.log('POST response data:', data);
+                    log.tts.debug('POST response data:', data);
                     updateStatus('Ready');
                 } catch (error) {
-                    console.error('POST request error:', error);
+                    log.tts.error('POST request error:', error);
                     updateStatus('Error');
                 }
             };
@@ -878,7 +879,7 @@ class AllTalkTtsProvider {
             await this.checkReady(); // Check if the TTS provider is ready
             updateStatus(this.ready ? 'Ready' : 'Offline'); // Update the status based on readiness
         } catch (error) {
-            console.error('Error during refresh:', error);
+            log.tts.error('Error during refresh:', error);
             updateStatus('Error'); // Set status to Error in case of failure
         }
     }
@@ -910,7 +911,7 @@ class AllTalkTtsProvider {
 
             if (!response.ok) {
                 const errorText = await response.text();
-                console.error('previewTtsVoice Error Response Text:', errorText);
+                log.tts.error('previewTtsVoice Error Response Text:', errorText);
                 throw new Error(`HTTP ${response.status}: ${errorText}`);
             }
 
@@ -922,13 +923,13 @@ class AllTalkTtsProvider {
                     : `${this.settings.provider_endpoint}${data.output_file_url}`;
 
                 const audioElement = new Audio(fullUrl);
-                audioElement.play().catch(e => console.error('Error playing audio:', e));
+                audioElement.play().catch(e => log.tts.error('Error playing audio:', e));
             } else {
-                console.warn('previewTtsVoice No output file URL received in the response');
+                log.tts.warn('previewTtsVoice No output file URL received in the response');
                 throw new Error('No output file URL received in the response');
             }
         } catch (error) {
-            console.error('previewTtsVoice Exception caught during preview generation:', error);
+            log.tts.error('previewTtsVoice Exception caught during preview generation:', error);
             throw error;
         }
     }
@@ -963,7 +964,7 @@ class AllTalkTtsProvider {
             if (this.settings.at_generation_method === 'streaming_enabled') {
                 // Construct the streaming URL
                 const streamingUrl = `${this.settings.provider_endpoint}/api/tts-generate-streaming?text=${encodeURIComponent(inputText)}&voice=${encodeURIComponent(voiceId)}&language=${encodeURIComponent(this.settings.language)}&output_file=stream_output.wav`;
-                console.log('Streaming URL:', streamingUrl);
+                log.tts.debug('Streaming URL:', streamingUrl);
 
                 // Return the streaming URL directly
                 return streamingUrl;
@@ -977,7 +978,7 @@ class AllTalkTtsProvider {
                 return audioResponse; // Return the fetch response directly
             }
         } catch (error) {
-            console.error('Error in generateTts:', error);
+            log.tts.error('Error in generateTts:', error);
             throw error;
         }
     }
@@ -1029,7 +1030,7 @@ class AllTalkTtsProvider {
 
             if (!response.ok) {
                 const errorText = await response.text();
-                console.error('fetchTtsGeneration Error Response Text:', errorText);
+                log.tts.error('fetchTtsGeneration Error Response Text:', errorText);
                 throw new Error(`HTTP ${response.status}: ${errorText}`);
             }
 
@@ -1044,7 +1045,7 @@ class AllTalkTtsProvider {
                 return `${this.settings.provider_endpoint}${data.output_file_url}`;
             }
         } catch (error) {
-            console.error('[fetchTtsGeneration] Exception caught:', error);
+            log.tts.error('[fetchTtsGeneration] Exception caught:', error);
             throw error;
         }
     }
