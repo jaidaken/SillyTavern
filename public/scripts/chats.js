@@ -1565,19 +1565,19 @@ async function openAttachmentManager() {
 
             const includeDisabled = true;
             const attachments = getDataBankAttachments(includeDisabled);
-            selectedAttachments.forEach(async (checkbox) => {
+            for (const checkbox of selectedAttachments) {
                 const listItem = checkbox.closest('.attachmentListItem');
                 if (!(listItem instanceof HTMLElement)) {
-                    return;
+                    continue;
                 }
                 const url = listItem.dataset.attachmentUrl;
                 const source = listItem.dataset.attachmentSource;
                 const attachment = attachments.find(a => a.url === url);
                 if (!attachment) {
-                    return;
+                    continue;
                 }
                 await action.perform(attachment, source);
-            });
+            }
 
             document.querySelectorAll('.attachmentListItemCheckbox, .attachmentsBulkEditCheckbox').forEach(checkbox => {
                 if (checkbox instanceof HTMLInputElement) {
