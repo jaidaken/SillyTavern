@@ -1,0 +1,66 @@
+diff --git i/src/runtime/client/window/document.zig w/src/runtime/client/window/document.zig
+index c804dacf..bb4b9f63 100644
+--- i/src/runtime/client/window/document.zig
++++ w/src/runtime/client/window/document.zig
+@@ -260,6 +260,17 @@ pub const CommentMarker = struct {
+     /// Props ZON extracted from the start comment (e.g., ".{ .name = ..., .props = ... }")
+     props_zon: ?[]const u8,
+ 
++    /// Release the retained JS handles and the props ZON. The caller obtains a marker every
++    /// render; without this each render leaks three jsz object slots and one dupe.
++    pub fn deinit(self: CommentMarker) void {
++        if (is_wasm) {
++            self.start_comment.deinit();
++            self.end_comment.deinit();
++            self.parent.deinit();
++        }
++        if (self.props_zon) |zon| self.allocator.free(zon);
++    }
++
+     /// Insert a new DOM node after the start comment (before existing content)
+     pub fn insertContent(self: CommentMarker, node: HTMLNode) !void {
+         if (!is_wasm) return;
+@@ -317,23 +328,35 @@ pub fn findCommentMarker(self: Document, id: []const u8) error{ MarkerNotFound,
+ 
+     // Use TreeWalker to find comment nodes
+     const body: real_js.Object = self.ref.get(real_js.Object, "body") catch return error.MarkerNotFound;
++    defer body.deinit();
+     const node_filter_show_comment: i32 = 128; // NodeFilter.SHOW_COMMENT
+     const walker: real_js.Object = self.ref.call(real_js.Object, "createTreeWalker", .{ body, node_filter_show_comment }) catch return error.MarkerNotFound;
++    defer walker.deinit();
+ 
+     var start_comment: ?real_js.Object = null;
+     var end_comment: ?real_js.Object = null;
+     var props_zon: ?[]const u8 = null;
++    errdefer {
++        if (start_comment) |start| start.deinit();
++        if (end_comment) |end| end.deinit();
++        if (props_zon) |zon| allocator.free(zon);
++    }
+ 
+     // Iterate through all comment nodes
+     while (true) {
+         const node: real_js.Object = walker.call(real_js.Object, "nextNode", .{}) catch break;
+ 
++        // Released unless captured below: CommentMarker outlives this fn and owns what it keeps.
++        var retained = false;
++        defer if (!retained) node.deinit();
++
+         // Get comment text content
+         const text = node.getAlloc(real_js.String, allocator, "textContent") catch continue;
+ 
+         // Check for start marker: $id or $id {...} or $id [...]
+         if (std.mem.startsWith(u8, text, start_prefix)) {
+             start_comment = node;
++            retained = true;
+             // Extract JSON payload after $id (if present)
+             // Format: $id {"prop":"value"} or $id [val1, val2] -> extract JSON
+             const rest = text[start_prefix.len..];
+@@ -356,6 +379,7 @@ pub fn findCommentMarker(self: Document, id: []const u8) error{ MarkerNotFound,
+         } else if (std.mem.eql(u8, text, end_marker)) {
+             allocator.free(text);
+             end_comment = node;
++            retained = true;
+             break; // Found both, stop searching
+         } else {
+             allocator.free(text);

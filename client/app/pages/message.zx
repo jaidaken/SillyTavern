@@ -1,0 +1,22 @@
+pub const MessageProps = struct {
+    msg: store.Message,
+    cacheable: bool = true,
+};
+
+// Plain component, not @rendering={.client}: a client component needs a <!--$id--> marker
+// in the served HTML, so a message arriving at runtime could never hydrate. Each message is
+// its own element and text node inside ChatView's vtree instead.
+pub fn MessageView(allocator: zx.Allocator, props: MessageProps) zx.Component {
+    const body_html = sanitized.renderMessage(allocator, props.msg.body, props.cacheable).unwrap();
+
+    return (
+        <div @allocator={allocator} class="mes">
+            <div class="mes_name">{props.msg.name}</div>
+            <div class="mes_text" @escaping={.none}>{body_html}</div>
+        </div>
+    );
+}
+
+const zx = @import("zx");
+const store = @import("./store.zig");
+const sanitized = @import("./sanitized.zig");

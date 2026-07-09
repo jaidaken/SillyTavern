@@ -1,0 +1,10 @@
+pub fn Page(ctx: zx.PageContext) !zx.Component {
+    return (
+        <main @allocator={ctx.arena} id="chat-root">
+            <ChatView @rendering={.client} />
+        </main>
+    );
+}
+
+const zx = @import("zx");
+pub const ChatView = @import("./chat.zx").ChatView;

@@ -1,0 +1,12 @@
+diff --git i/src/runtime/client/Client.zig w/src/runtime/client/Client.zig
+index efe794e3..0a233e21 100644
+--- i/src/runtime/client/Client.zig
++++ w/src/runtime/client/Client.zig
+@@ -319,6 +319,7 @@ pub fn render(self: *Client, cmp: ComponentMeta) !void {
+     // Find component boundary using comment markers <!--$id--> or <!--$id|props-->
+     // Props ZON is embedded directly in the start comment for faster extraction
+     const marker = document.findCommentMarker(cmp.id) catch return error.ContainerNotFound;
++    defer marker.deinit();
+ 
+     // Call import with allocator and props_zon from the comment marker
+     const reactivity = @import("reactivity.zig");

@@ -1,0 +1,161 @@
+:root {
+    color-scheme: dark;
+    --bg: oklch(0.18 0.012 265);
+    --surface: oklch(0.24 0.015 265);
+    --text: oklch(0.92 0.008 265);
+    --muted: oklch(0.68 0.02 265);
+}
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, sans-serif;
+    line-height: 1.45;
+}
+
+#chat-root {
+    max-width: 68ch;
+    margin: 0 auto;
+    padding: 2rem 1rem;
+}
+
+.mes {
+    background: var(--surface);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    margin-block-end: 0.75rem;
+}
+
+.mes_name {
+    color: var(--muted);
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-block-end: 0.25rem;
+}
+
+.mes_code {
+    overflow-x: auto;
+    border-radius: 6px;
+}
+
+.demo {
+    margin-block-end: 2.5rem;
+}
+
+.demo_title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    margin: 0 0 0.35rem;
+    color: var(--text);
+}
+
+.demo_note {
+    margin: 0 0 1rem;
+    color: var(--muted);
+    font-size: 0.9rem;
+    max-width: 60ch;
+}
+
+.controls {
+    display: flex;
+    gap: 0.5rem;
+    margin-block-end: 1rem;
+}
+
+.btn {
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid oklch(0.34 0.02 265);
+    border-radius: 6px;
+    padding: 0.45rem 0.85rem;
+    font: inherit;
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+.btn:hover {
+    background: oklch(0.3 0.02 265);
+}
+
+.mes_text h1,
+.mes_text h2 {
+    font-size: 1.1rem;
+    margin: 0.6rem 0 0.3rem;
+}
+
+.mes_text blockquote {
+    margin: 0.5rem 0;
+    padding-left: 0.8rem;
+    border-left: 3px solid oklch(0.4 0.03 265);
+    color: var(--muted);
+}
+
+.mes_text table {
+    border-collapse: collapse;
+    margin: 0.5rem 0;
+}
+
+.mes_text th,
+.mes_text td {
+    border: 1px solid oklch(0.34 0.02 265);
+    padding: 0.25rem 0.6rem;
+    text-align: left;
+}
+
+.mes_text pre {
+    background: oklch(0.14 0.01 265);
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    overflow-x: auto;
+}
+
+.mes_text :not(pre) > code {
+    background: oklch(0.28 0.015 265);
+    border-radius: 4px;
+    padding: 0.1rem 0.3rem;
+    font-size: 0.9em;
+}
+
+.mes_text hr {
+    border: 0;
+    border-top: 1px solid oklch(0.32 0.02 265);
+    margin: 0.9rem 0;
+}
+
+.mes_text img {
+    max-width: 100%;
+    vertical-align: middle;
+}
+
+.mes_text li.task-list-item {
+    list-style: none;
+    margin-inline-start: -1.2rem;
+}
+
+.mes_text li.task-list-item input {
+    margin-inline-end: 0.4rem;
+}
+
+/* Values copied from SillyTavern public/style.css lines 71-74. */
+:root {
+    --st-body: rgb(220, 220, 210);
+    --st-em: rgb(145, 145, 145);
+    --st-quote: rgb(225, 138, 36);
+}
+
+.mes_text q {
+    color: var(--st-quote);
+    quotes: none;
+}
+
+.mes_text q i,
+.mes_text q em {
+    color: inherit;
+}
+
+.mes_text em,
+.mes_text i {
+    color: var(--st-em);
+}

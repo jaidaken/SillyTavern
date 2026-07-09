@@ -1,0 +1,30 @@
+diff --git i/pkg/ziex/src/wasm/core.ts w/pkg/ziex/src/wasm/core.ts
+index 4ab6a0f1..5bac09db 100644
+--- i/pkg/ziex/src/wasm/core.ts
++++ w/pkg/ziex/src/wasm/core.ts
+@@ -58,23 +58,9 @@ export function getMemoryView(): Uint8Array {
+     return memoryView!;
+ }
+ 
+-/**
+- * Cache for WASM string reads keyed by (ptr, len).
+- * Attribute names / tag names are Zig string literals whose pointers are
+- * stable for the lifetime of the module, so caching avoids repeated
+- * TextDecoder.decode calls for the same pointer+length pair.
+- */
+-const stringCache = new Map<number, string>();
+-function stringCacheKey(ptr: number, len: number): number { return ptr * 0x10000 + len; }
+-
+-/** Read a string from WASM memory */
++/** Read a string from WASM memory. Uncached: reused pointers made cache hits return stale text. */
+ export function readString(ptr: number, len: number): string {
+-    const key = stringCacheKey(ptr, len);
+-    const cached = stringCache.get(key);
+-    if (cached !== undefined) return cached;
+-    const str = textDecoder.decode(getMemoryView().subarray(ptr, ptr + len));
+-    stringCache.set(key, str);
+-    return str;
++    return textDecoder.decode(getMemoryView().subarray(ptr, ptr + len));
+ }
+ 
+ /** Write bytes to WASM memory at a specific location */

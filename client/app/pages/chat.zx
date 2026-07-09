@@ -1,0 +1,50 @@
+// The single registered client component. The live message list lives in store.zig, so
+// rerender() resolves to exactly this component and never falls back across the page.
+// Messages are plain elements in this vtree; none of them holds state.
+pub fn ChatView(ctx: *zx.ComponentCtx(void)) zx.Component {
+    return (
+        <div @allocator={ctx.allocator} id="chat">
+            {for (sections) |s| (
+                <section class="demo">
+                    <h2 class="demo_title">{s.title}</h2>
+                    <p class="demo_note">{s.note}</p>
+                    {for (s.messages) |m| (
+                        <MessageView msg={m} />
+                    )}
+                </section>
+            )}
+
+            <section class="demo">
+                <h2 class="demo_title">Live</h2>
+                <p class="demo_note">
+                    These messages have no SSR marker. Append builds one from Zig; Stream opens an
+                    SSE reader in the door and writes tokens into wasm once per animation frame.
+                </p>
+                <div class="controls">
+                    <button class="btn" onclick={onAppend}>Append a message</button>
+                    <button class="btn" onclick={onStream}>Stream 200 tokens</button>
+                </div>
+                {for (store.slice(), 0..) |m, i| (
+                    <MessageView msg={m} cacheable={!store.isStreamingTail(i)} />
+                )}
+            </section>
+        </div>
+    );
+}
+
+fn onAppend(_: zx.client.Event) void {
+    store.append("Seraphina", "Appended at runtime. **No marker** existed for this message.") catch return;
+    zx.client.rerender();
+}
+
+fn onStream(_: zx.client.Event) void {
+    sanitized.beginSse("/dev/stream");
+}
+
+const zx = @import("zx");
+const fixtures = @import("./fixtures.zig");
+// The .zx transpiler appends `.len` to the loop expression, so it must already be a slice.
+const sections: []const fixtures.Section = &fixtures.sections;
+const sanitized = @import("./sanitized.zig");
+const store = @import("./store.zig");
+pub const MessageView = @import("./message.zx").MessageView;

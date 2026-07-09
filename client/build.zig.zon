@@ -1,0 +1,16 @@
+.{
+    .name = .st_client,
+    .version = "0.1.0",
+    .fingerprint = 0xa426487c03454467,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        // Patched ziex materialized by setup-ziex.sh from patches/. Run build.sh, not `zig build`.
+        .ziex = .{ .path = ".ziex" },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "app",
+        "glue",
+    },
+}
