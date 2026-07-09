@@ -42,18 +42,6 @@ Handlebars.registerHelper('helperMissing', function () {
  */
 export class MacrosParser {
     /**
-     * A map of registered macros.
-     * @type {Map<string, string|MacroFunction>}
-     */
-    static #macros = new Map();
-
-    /**
-     * A map of macro descriptions.
-     * @type {Map<string, string>}
-     */
-    static #descriptions = new Map();
-
-    /**
      * Logs a deprecation warning for MacrosParser APIs, pointing callers to
      * the new macro engine registration surface.
      *
@@ -67,8 +55,7 @@ export class MacrosParser {
     }
 
     /**
-     * Bridges a legacy MacrosParser macro registration into the new macro
-     * engine when the experimental macro engine flag is enabled.
+     * Bridges a legacy MacrosParser macro registration into the new macro engine.
      *
      * This mirrors the simple "{{key}}" replacement behavior by registering
      * a 0-arg macro in MacroRegistry that does not take arguments and returns
@@ -80,10 +67,6 @@ export class MacrosParser {
      * @returns {void}
      */
     static #registerMacroInNewEngine(key, value, description) {
-        if (!power_user.experimental_macro_engine) {
-            return;
-        }
-
         // Like the old MacrosParser, we explicitly allow overriding macros, and only warn
         if (macroSystem.registry.hasMacro(key)) {
             log.prompt.warn(`Macro ${key} is already registered`);
@@ -118,17 +101,12 @@ export class MacrosParser {
     }
 
     /**
-     * Bridges a legacy MacrosParser macro unregistration into the new macro
-     * engine when the experimental macro engine flag is enabled.
+     * Bridges a legacy MacrosParser macro unregistration into the new macro engine.
      *
      * @param {string} key
      * @returns {void}
      */
     static #unregisterMacroInNewEngine(key) {
-        if (!power_user.experimental_macro_engine) {
-            return;
-        }
-
         macroSystem.registry.unregisterMacro(key);
     }
 
@@ -137,28 +115,20 @@ export class MacrosParser {
      * @returns {IterableIterator<CustomMacro>}
      */
     static [Symbol.iterator] = function* () {
-        // When experimental macro engine is active, yield from the new registry
-        if (power_user.experimental_macro_engine) {
-            // Exclude hidden aliases for consistency with autocomplete behavior
-            for (const def of macroSystem.registry.getAllMacros({ excludeHiddenAliases: true })) {
-                yield { key: def.name, description: def.description || '' };
-            }
-            return;
-        }
-
-        for (const macro of MacrosParser.#macros.keys()) {
-            yield { key: macro, description: MacrosParser.#descriptions.get(macro) };
+        // Exclude hidden aliases for consistency with autocomplete behavior
+        for (const def of macroSystem.registry.getAllMacros({ excludeHiddenAliases: true })) {
+            yield { key: def.name, description: def.description || '' };
         }
     };
 
     /**
      * Access a macro by its name.
      * @param {string} key Macro name (key)
-     * @returns {string|MacroFunction|undefined} The macro value
+     * @returns {MacroHandler|undefined} The macro's handler function
      */
     static get(key) {
         MacrosParser.#logDeprecated('get', 'macros.registry.getMacro (from scripts/macros/macro-system.js)', arguments);
-        return MacrosParser.#macros.get(key);
+        return macroSystem.registry.getMacro(key)?.handler;
     }
 
     /**
@@ -168,11 +138,7 @@ export class MacrosParser {
      */
     static has(key) {
         MacrosParser.#logDeprecated('has', 'macros.registry.hasMacro (from scripts/macros/macro-system.js)', arguments);
-        if (power_user.experimental_macro_engine) {
-            return macroSystem.registry.hasMacro(key);
-        }
-
-        return MacrosParser.#macros.has(key);
+        return macroSystem.registry.hasMacro(key);
     }
 
     /**
@@ -182,7 +148,6 @@ export class MacrosParser {
      * @param {string} [description] Optional description of the macro
      */
     static registerMacro(key, value, description = '') {
-        MacrosParser.#logDeprecated('registerMacro', 'macros.registry.registerMacro (from scripts/macros/macro-system.js) or substituteParams({ dynamicMacros })', arguments);
         if (typeof key !== 'string') {
             throw new Error('Macro key must be a string');
         }
@@ -198,25 +163,14 @@ export class MacrosParser {
             throw new Error('Macro key must not include the surrounding braces');
         }
 
+        MacrosParser.#logDeprecated('registerMacro', 'macros.registry.registerMacro (from scripts/macros/macro-system.js) or substituteParams({ dynamicMacros })', arguments);
+
         if (typeof value !== 'string' && typeof value !== 'function') {
             log.prompt.warn(`Macro value for "${key}" will be converted to a string`);
             value = this.sanitizeMacroValue(value);
         }
 
         MacrosParser.#registerMacroInNewEngine(key, value, description);
-        if (power_user.experimental_macro_engine) {
-            return;
-        }
-
-        if (this.#macros.has(key)) {
-            log.prompt.warn(`Macro ${key} is already registered`);
-        }
-
-        this.#macros.set(key, value);
-
-        if (typeof description === 'string' && description) {
-            this.#descriptions.set(key, description);
-        }
     }
 
     /**
@@ -225,7 +179,6 @@ export class MacrosParser {
      * @param {string} key Macro name (key)
      */
     static unregisterMacro(key) {
-        MacrosParser.#logDeprecated('unregisterMacro', 'macros.registry.unregisterMacro (from scripts/macros/macro-system.js)', arguments);
         if (typeof key !== 'string') {
             throw new Error('Macro key must be a string');
         }
@@ -237,18 +190,9 @@ export class MacrosParser {
             throw new Error('Macro key must not be empty or whitespace only');
         }
 
-        if (power_user.experimental_macro_engine) {
-            MacrosParser.#unregisterMacroInNewEngine(key);
-            return;
-        }
+        MacrosParser.#logDeprecated('unregisterMacro', 'macros.registry.unregisterMacro (from scripts/macros/macro-system.js)', arguments);
 
-        const deleted = this.#macros.delete(key);
-
-        if (!deleted) {
-            log.prompt.warn(`Macro ${key} was not registered`);
-        }
-
-        this.#descriptions.delete(key);
+        MacrosParser.#unregisterMacroInNewEngine(key);
     }
 
     /**
@@ -262,13 +206,11 @@ export class MacrosParser {
             return;
         }
 
-        // No macros are registered
-        if (this.#macros.size === 0) {
-            return;
-        }
-
-        for (const [key, value] of this.#macros) {
-            env[key] = value;
+        // Only legacy-bridged macros: built-ins already resolve via the modern engine's own evaluation path.
+        for (const def of macroSystem.registry.getAllMacros({ excludeAliases: true })) {
+            if (def.category === 'legacy') {
+                env[def.name] = def.handler;
+            }
         }
     }
 

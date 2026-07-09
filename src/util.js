@@ -711,13 +711,9 @@ export async function forwardFetchResponse(from, to) {
     let statusCode = from.status;
     let statusText = from.statusText;
 
-    // Avoid sending 401 responses as they reset the client Basic auth.
-    // This can produce an interesting artifact as "400 Unauthorized", but it's not out of spec.
-    // https://www.rfc-editor.org/rfc/rfc9110.html#name-overview-of-status-codes
-    // "The reason phrases listed here are only recommendations -- they can be replaced by local
-    //  equivalents or left out altogether without affecting the protocol."
+    // Never relay a 401: it resets the client's Basic auth. Taxonomy uses 403 for unauthorized.
     if (statusCode === 401) {
-        statusCode = 400;
+        statusCode = 403;
     }
 
     to.statusCode = statusCode;
@@ -739,17 +735,32 @@ export async function forwardFetchResponse(from, to) {
     }
 
     if (from.body && to.socket) {
+        let settled = false;
+        const finish = () => {
+            if (settled) return;
+            settled = true;
+            if (from.body instanceof Readable && !from.body.destroyed) from.body.destroy(); // Close the remote stream
+            if (!to.writableEnded) to.end(); // End the Express response
+        };
+
         from.body.pipe(to);
 
-        to.socket.on('close', function () {
-            if (from.body instanceof Readable) from.body.destroy(); // Close the remote stream
-
-            to.end(); // End the Express response
+        // Upstream connection drop mid-stream emits 'error' on from.body; without a listener
+        // this is an uncaught exception on the process. Surface it as an SSE error frame instead.
+        from.body.on('error', function (error) {
+            log.net.error('Streaming request failed mid-stream:', error);
+            if (!to.writableEnded) {
+                const frame = `data: ${JSON.stringify({ error: { type: 'upstream_error', message: 'Upstream connection failed during streaming.', retryable: true } })}\n\n`;
+                to.write(frame);
+            }
+            finish();
         });
+
+        to.socket.on('close', finish);
 
         from.body.on('end', function () {
             log.net.info('Streaming request finished');
-            to.end();
+            finish();
         });
     } else {
         to.end();

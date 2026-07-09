@@ -527,6 +527,9 @@ function switchReducedMotion() {
     $('body').toggleClass('reduced-motion', power_user.reduced_motion);
 }
 
+// Re-apply live when the OS reduced-motion preference changes, not only at load.
+window.matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', switchReducedMotion);
+
 function switchCompactInputArea() {
     $('#send_form').toggleClass('compact', power_user.compact_input_area);
     $('#compact_input_area').prop('checked', power_user.compact_input_area);

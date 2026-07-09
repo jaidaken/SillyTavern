@@ -74,6 +74,7 @@ import { redirectDeprecatedEndpoints, ServerStartup, setupPrivateEndpoints } fro
 import { diskCache } from './endpoints/characters.js';
 import { migrateFlatSecrets } from './endpoints/secrets.js';
 import { migrateGroupChatsMetadataFormat } from './endpoints/groups.js';
+import { backendErrorHandler } from './endpoints/backends/errors.js';
 
 // Unrestrict console logs display limit
 util.inspect.defaultOptions.maxArrayLength = null;
@@ -450,6 +451,13 @@ function apply404Middleware() {
 }
 
 /**
+ * Registers the typed backend error contract handler. Must run before the generic terminal error handler.
+ */
+function applyBackendErrorMiddleware() {
+    app.use(backendErrorHandler);
+}
+
+/**
  * Registers the terminal error handler. Should only be called after all other middlewares have been registered.
  */
 function applyErrorMiddleware() {
@@ -498,6 +506,7 @@ initUserStorage(globalThis.DATA_ROOT)
     .then(verifySecuritySettings)
     .then(preSetupTasks)
     .then(apply404Middleware)
+    .then(applyBackendErrorMiddleware)
     .then(applyErrorMiddleware)
     .then(() => new ServerStartup(app, cliArgs).start())
     .then(postSetupTasks);

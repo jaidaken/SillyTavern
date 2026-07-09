@@ -66,6 +66,7 @@ import {
 } from '../tokenizers.js';
 import { getVertexAIAuth, getProjectIdFromServiceAccount } from '../google.js';
 import { log } from '../../log.js';
+import { classifyFetchError } from './errors.js';
 
 const API_OPENAI = 'https://api.openai.com/v1';
 const API_CLAUDE = 'https://api.anthropic.com/v1';
@@ -410,6 +411,7 @@ async function sendClaudeRequest(request, response) {
         if (!response.headersSent) {
             return response.status(500).send({ error: true });
         }
+        if (!response.writableEnded) response.end();
     }
 }
 
@@ -704,6 +706,7 @@ async function sendMakerSuiteRequest(request, response) {
                 if (!response.headersSent) {
                     return response.status(500).send({ error: true });
                 }
+                if (!response.writableEnded) response.end();
             }
         } else {
             if (!generateResponse.ok) {
@@ -747,6 +750,7 @@ async function sendMakerSuiteRequest(request, response) {
         if (!response.headersSent) {
             return response.status(500).send({ error: true });
         }
+        if (!response.writableEnded) response.end();
     }
 }
 
@@ -1727,7 +1731,11 @@ async function sendAzureOpenAIRequest(request, response) {
         const message = error.name === 'AbortError'
             ? 'Request was aborted by the client.'
             : (error.message || 'An unknown network error occurred.');
-        return response.status(500).send({ error: { message, ...error } });
+        log.net.error('Error communicating with Azure OpenAI:', error);
+        if (!response.headersSent) {
+            return response.status(500).send({ error: { message } });
+        }
+        if (!response.writableEnded) response.end();
     }
 }
 
@@ -2155,7 +2163,7 @@ router.post('/bias', async function (request, response) {
     }
 });
 
-router.post('/generate', async function (request, response) {
+router.post('/generate', async function (request, response, next) {
     try {
         if (!request.body) return response.status(400).send({ error: true });
 
@@ -2618,15 +2626,11 @@ router.post('/generate', async function (request, response) {
         }
     } catch (error) {
         log.net.error('Generation failed', error);
-        const message = error.code === 'ECONNREFUSED'
-            ? `Connection refused: ${error.message}`
-            : error.message || 'Unknown error occurred';
-
-        if (!response.headersSent) {
-            response.status(502).send({ error: { message, ...error } });
-        } else {
-            response.end();
+        if (response.headersSent) {
+            if (!response.writableEnded) response.end();
+            return;
         }
+        return next(classifyFetchError(error));
     }
 });
 

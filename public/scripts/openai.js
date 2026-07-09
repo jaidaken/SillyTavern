@@ -9,6 +9,7 @@ import {
     abortStatusCheck,
     cancelStatusCheck,
     characters,
+    CONNECTION_STATES,
     event_types,
     eventSource,
     extension_prompt_roles,
@@ -23,8 +24,10 @@ import {
     main_api,
     name1,
     name2,
+    parseBackendError,
     resultCheckStatus,
     saveSettingsDebounced,
+    setConnectionState,
     setOnlineStatus,
     startStatusLoading,
     substituteParams,
@@ -4431,7 +4434,7 @@ async function getStatusOpen() {
 
     const canBypass = (oai_settings.chat_completion_source === chat_completion_sources.OPENAI && oai_settings.bypass_status_check) || oai_settings.chat_completion_source === chat_completion_sources.CUSTOM;
     if (canBypass) {
-        setOnlineStatus(t`Status check bypassed`);
+        setConnectionState(CONNECTION_STATES.OFFLINE);
     }
 
     try {
@@ -4444,7 +4447,14 @@ async function getStatusOpen() {
         });
 
         if (!response.ok) {
-            throw new Error(response.statusText);
+            const parsedError = await parseBackendError(response);
+            log.net.error(parsedError);
+            toastr.error(parsedError.message, t`Connection check failed`);
+            if (!canBypass) {
+                setOnlineStatus('no_connection');
+            }
+            updateFeatureSupportFlags();
+            return resultCheckStatus();
         }
 
         const responseData = await response.json();
@@ -4452,11 +4462,16 @@ async function getStatusOpen() {
         if ('data' in responseData && Array.isArray(responseData.data)) {
             saveModelList(responseData.data);
         }
-        if (!('error' in responseData)) {
+        if ('error' in responseData) {
+            log.net.error(responseData.error);
+            if (!canBypass) {
+                setOnlineStatus('no_connection');
+            }
+        } else {
             setOnlineStatus(t`Valid`);
         }
         if (responseData.bypass) {
-            setOnlineStatus(t`Status check bypassed`);
+            setConnectionState(CONNECTION_STATES.OFFLINE);
         }
     } catch (error) {
         log.net.openai.error(error);
@@ -5344,6 +5359,16 @@ function getNanoGptMaxContext(model, isUnlocked) {
     return max_128k;
 }
 
+function logModelSelected(provider, value) {
+    log.gen.info(`Model changed to '${value}'`);
+    log.net.openai.info(`${provider} model changed`);
+    log.net.openai.debug(`[${provider}] model set to '${value}'`);
+}
+
+function logModelSelectionIgnored(provider) {
+    log.net.openai.debug(`[${provider}] no model selected, ignoring`);
+}
+
 async function onModelChange() {
     biasCache = undefined;
     let value = String($(this).val() || '');
@@ -5357,23 +5382,23 @@ async function onModelChange() {
         } else if (value === '' || value === 'claude-2') {
             value = default_settings.claude_model;
         }
-        log.settings.info('Claude model changed to', value);
+        logModelSelected('Claude', value);
         oai_settings.claude_model = value;
         $('#model_claude_select').val(oai_settings.claude_model);
     }
 
     if ($(this).is('#model_openai_select')) {
-        log.settings.info('OpenAI model changed to', value);
+        logModelSelected('OpenAI', value);
         oai_settings.openai_model = value;
     }
 
     if ($(this).is('#model_openrouter_select')) {
         if (!value || !hasModelsLoaded) {
-            log.settings.debug('Null OR model selected. Ignoring.');
+            logModelSelectionIgnored('OpenRouter');
             return;
         }
 
-        log.settings.info('OpenRouter model changed to', value);
+        logModelSelected('OpenRouter', value);
         oai_settings.openrouter_model = value;
         syncOpenRouterProvidersForModel(value, '#openrouter_providers_chat');
     }
@@ -5384,186 +5409,187 @@ async function onModelChange() {
             $('#model_ai21_select').val(value);
         }
 
-        log.settings.info('AI21 model changed to', value);
+        logModelSelected('AI21', value);
         oai_settings.ai21_model = value;
     }
 
     if ($(this).is('#model_google_select')) {
         if (!value) {
-            log.settings.debug('Null Google model selected. Ignoring.');
+            logModelSelectionIgnored('Google');
             return;
         }
 
-        log.settings.info('Google model changed to', value);
+        logModelSelected('Google', value);
         oai_settings.google_model = value;
     }
 
     if ($(this).is('#model_vertexai_select')) {
-        log.settings.info('Vertex AI model changed to', value);
+        logModelSelected('Vertex AI', value);
         oai_settings.vertexai_model = value;
     }
 
     if ($(this).is('#model_mistralai_select')) {
         if (!value || !hasModelsLoaded) {
-            log.settings.debug('Null MistralAI model selected. Ignoring.');
+            logModelSelectionIgnored('MistralAI');
             return;
         }
-        log.settings.info('MistralAI model changed to', value);
+        logModelSelected('MistralAI', value);
         oai_settings.mistralai_model = value;
         $('#model_mistralai_select').val(oai_settings.mistralai_model);
     }
 
     if ($(this).is('#model_cohere_select')) {
-        log.settings.info('Cohere model changed to', value);
+        logModelSelected('Cohere', value);
         oai_settings.cohere_model = value;
     }
 
     if ($(this).is('#model_perplexity_select')) {
-        log.settings.info('Perplexity model changed to', value);
+        logModelSelected('Perplexity', value);
         oai_settings.perplexity_model = value;
     }
 
     if ($(this).is('#model_groq_select')) {
         if (!value || !hasModelsLoaded) {
-            log.settings.debug('Null Groq model selected. Ignoring.');
+            logModelSelectionIgnored('Groq');
             return;
         }
-        log.settings.info('Groq model changed to', value);
+        logModelSelected('Groq', value);
         oai_settings.groq_model = value;
     }
 
     if ($(this).is('#model_siliconflow_select')) {
         if (!value) {
-            log.settings.debug('Null SiliconFlow model selected. Ignoring.');
+            logModelSelectionIgnored('SiliconFlow');
             return;
         }
-        log.settings.info('SiliconFlow model changed to', value);
+        logModelSelected('SiliconFlow', value);
         oai_settings.siliconflow_model = value;
     }
 
     if ($(this).is('#model_minimax_select')) {
         if (!value) {
-            log.settings.debug('Null MiniMax model selected. Ignoring.');
+            logModelSelectionIgnored('MiniMax');
             return;
         }
-        log.settings.info('MiniMax model changed to', value);
+        logModelSelected('MiniMax', value);
         oai_settings.minimax_model = value;
     }
 
     if ($(this).is('#model_electronhub_select')) {
         if (!value || !hasModelsLoaded) {
-            log.settings.debug('Null ElectronHub model selected. Ignoring.');
+            logModelSelectionIgnored('ElectronHub');
             return;
         }
-        log.settings.info('ElectronHub model changed to', value);
+        logModelSelected('ElectronHub', value);
         oai_settings.electronhub_model = value;
     }
 
     if ($(this).is('#model_chutes_select')) {
         if (!value || !hasModelsLoaded) {
-            log.settings.debug('Null Chutes model selected. Ignoring.');
+            logModelSelectionIgnored('Chutes');
             return;
         }
-        log.settings.info('Chutes model changed to', value);
+        logModelSelected('Chutes', value);
         oai_settings.chutes_model = value;
     }
 
     if ($(this).is('#model_nanogpt_select')) {
         if (!value || !hasModelsLoaded) {
-            log.settings.debug('Null NanoGPT model selected. Ignoring.');
+            logModelSelectionIgnored('NanoGPT');
             return;
         }
 
-        log.settings.info('NanoGPT model changed to', value);
+        logModelSelected('NanoGPT', value);
         oai_settings.nanogpt_model = value;
         syncNanoGptProvidersForModel(value, '#nanogpt_provider');
     }
 
     if ($(this).is('#model_deepseek_select')) {
         if (!value) {
-            log.settings.debug('Null DeepSeek model selected. Ignoring.');
+            logModelSelectionIgnored('DeepSeek');
             return;
         }
 
-        log.settings.info('DeepSeek model changed to', value);
+        logModelSelected('DeepSeek', value);
         oai_settings.deepseek_model = value;
     }
 
     if (value && $(this).is('#model_custom_select')) {
-        log.settings.info('Custom model changed to', value);
+        logModelSelected('Custom', value);
         oai_settings.custom_model = value;
         $('#custom_model_id').val(value).trigger('input');
     }
 
     if (value && $(this).is('#model_pollinations_select')) {
-        log.settings.info('Pollinations model changed to', value);
+        logModelSelected('Pollinations', value);
         oai_settings.pollinations_model = value;
     }
 
     if ($(this).is('#model_aimlapi_select')) {
         if (!value || !hasModelsLoaded) {
-            log.settings.debug('Null AI/ML model selected. Ignoring.');
+            logModelSelectionIgnored('AI/ML');
             return;
         }
-        log.settings.info('AI/ML model changed to', value);
+        logModelSelected('AI/ML', value);
         oai_settings.aimlapi_model = value;
     }
 
     if ($(this).is('#model_xai_select')) {
         if (!value) {
-            log.settings.debug('Null XAI model selected. Ignoring.');
+            logModelSelectionIgnored('XAI');
             return;
         }
-        log.settings.info('XAI model changed to', value);
+        logModelSelected('XAI', value);
         oai_settings.xai_model = value;
     }
 
     if ($(this).is('#model_moonshot_select')) {
         if (!value || !hasModelsLoaded) {
-            log.settings.debug('Null Moonshot model selected. Ignoring.');
+            logModelSelectionIgnored('Moonshot');
             return;
         }
-        log.settings.info('Moonshot model changed to', value);
+        logModelSelected('Moonshot', value);
         oai_settings.moonshot_model = value;
     }
 
     if ($(this).is('#model_fireworks_select')) {
         if (!value || !hasModelsLoaded) {
-            log.settings.debug('Null Fireworks model selected. Ignoring.');
+            logModelSelectionIgnored('Fireworks');
             return;
         }
-        log.settings.info('Fireworks model changed to', value);
+        logModelSelected('Fireworks', value);
         oai_settings.fireworks_model = value;
     }
 
     if ($(this).is('#model_cometapi_select')) {
         if (!value) {
-            log.settings.debug('Null CometAPI model selected. Ignoring.');
+            logModelSelectionIgnored('CometAPI');
             return;
         }
-        log.settings.info('CometAPI model changed to', value);
+        logModelSelected('CometAPI', value);
         oai_settings.cometapi_model = value;
     }
 
     if ($(this).is('#azure_openai_model')) {
         if (!value) {
-            log.settings.debug('Null Azure OpenAI model selected. Ignoring.');
+            logModelSelectionIgnored('Azure OpenAI');
             return;
         }
+        logModelSelected('Azure OpenAI', value);
         oai_settings.azure_openai_model = value;
     }
 
     if ($(this).is('#model_zai_select')) {
-        log.settings.info('ZAI model changed to', value);
+        logModelSelected('ZAI', value);
         oai_settings.zai_model = value;
     }
 
     if ($(this).is('#model_workers_ai_select')) {
         if (!value || !hasModelsLoaded) {
-            log.settings.debug('Null Workers AI model selected. Ignoring.');
+            logModelSelectionIgnored('Workers AI');
             return;
         }
-        log.settings.info('Workers AI model changed to', value);
+        logModelSelected('Workers AI', value);
         oai_settings.workers_ai_model = value;
     }
 

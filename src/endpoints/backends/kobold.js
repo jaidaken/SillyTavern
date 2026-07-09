@@ -162,19 +162,19 @@ router.post('/status', async function (request, response) {
 
         // Kobold United API version
         fetch(`${api_server}/v1/info/version`).then(response => {
-            if (!response.ok) throw new Error(`Kobold API error: ${response.status, response.statusText}`);
+            if (!response.ok) throw new Error(`Kobold API error: ${response.status} ${response.statusText}`);
             return response.json();
         }).catch(() => ({ result: '0.0.0' })),
 
         // KoboldCpp version
         fetch(`${api_server}/extra/version`).then(response => {
-            if (!response.ok) throw new Error(`Kobold API error: ${response.status, response.statusText}`);
+            if (!response.ok) throw new Error(`Kobold API error: ${response.status} ${response.statusText}`);
             return response.json();
         }).catch(() => ({ version: '0.0' })),
 
         // Current model
         fetch(`${api_server}/v1/model`).then(response => {
-            if (!response.ok) throw new Error(`Kobold API error: ${response.status, response.statusText}`);
+            if (!response.ok) throw new Error(`Kobold API error: ${response.status} ${response.statusText}`);
             return response.json();
         }).catch(() => null),
     ]);

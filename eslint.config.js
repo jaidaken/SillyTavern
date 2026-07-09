@@ -35,6 +35,26 @@ export default [
             'jsdoc/no-undefined-types': ['warn', { disableReporting: true, markVariablesAsUsed: true }],
             // caughtErrors defaulted to 'none' before ESLint 9; kept explicit to preserve prior behavior.
             'no-unused-vars': ['error', { args: 'none', caughtErrors: 'none' }],
+            'no-console': 'error',
+            // warn (not error): MacrosParser is deprecated but ~8 first-party call sites still use it;
+            // the migration to macros.registry is a tracked follow-up. New usage is flagged, not blocked.
+            'no-restricted-properties': ['warn',
+                { object: 'document', property: 'write', message: 'document.write blocks parsing and can wipe the page. Render into the DOM instead.' },
+                { object: 'MacrosParser', property: 'registerMacro', message: 'MacrosParser is deprecated. Use macros.registry.registerMacro (scripts/macros/macro-system.js) or substituteParams({ dynamicMacros }) instead.' },
+                { object: 'MacrosParser', property: 'unregisterMacro', message: 'MacrosParser is deprecated. Use macros.registry.unregisterMacro (scripts/macros/macro-system.js) instead.' },
+                { object: 'MacrosParser', property: 'get', message: 'MacrosParser is deprecated. Use macros.registry.getMacro (scripts/macros/macro-system.js) instead.' },
+                { object: 'MacrosParser', property: 'has', message: 'MacrosParser is deprecated. Use macros.registry.hasMacro (scripts/macros/macro-system.js) instead.' },
+            ],
+            'no-restricted-syntax': ['error',
+                {
+                    selector: 'CallExpression[callee.property.name="open"][arguments.2.value=false]',
+                    message: 'Synchronous XMLHttpRequest blocks the main thread. Pass true (or omit the third argument) and use the callback/promise result instead.',
+                },
+                {
+                    selector: 'CallExpression[callee.property.name="ajax"] Property[key.name="async"][value.value=false]',
+                    message: 'jQuery.ajax with async:false blocks the main thread. Drop async:false and consume the returned promise instead.',
+                },
+            ],
             'no-control-regex': 'off',
             'no-constant-condition': ['error', { checkLoops: false }],
             'require-yield': 'off',
@@ -124,6 +144,58 @@ export default [
                 toastr: 'readonly',
                 SillyTavern: 'readonly',
             },
+        },
+    },
+    {
+        // The logging frameworks bind and call console directly by design; this is their one legitimate implementation.
+        files: ['public/scripts/log.js', 'src/log.js'],
+        rules: {
+            'no-console': 'off',
+        },
+    },
+    {
+        // registerDebugFunction dumps missing-translation data to console on explicit user command.
+        files: ['public/scripts/i18n.js'],
+        rules: {
+            'no-console': ['error', { allow: ['log', 'table'] }],
+        },
+    },
+    {
+        // Documented speechSynthesis onend GC workaround; the console.log call is load-bearing (see inline comment at the call site).
+        files: ['public/scripts/extensions/tts/system.js'],
+        rules: {
+            'no-console': ['error', { allow: ['log'] }],
+        },
+    },
+    {
+        // Two console.trace stack-capture diagnostics, plus setupLogLevel which reassigns
+        // console.debug/info/warn/error to gate log output (same role as the log frameworks).
+        files: ['src/util.js'],
+        rules: {
+            'no-console': ['error', { allow: ['trace', 'debug', 'info', 'warn', 'error'] }],
+        },
+    },
+    {
+        // The formatted startup banner is intentional operator-facing output, not application logging.
+        files: ['src/server-main.js'],
+        rules: {
+            'no-console': ['error', { allow: ['log'] }],
+        },
+    },
+    {
+        // Deprecated public sync-XHR extension APIs (getUrlSync, getTokenCount) kept for
+        // third-party extension compat; async replacements exist and are preferred.
+        files: ['public/scripts/templates.js', 'public/scripts/tokenizers.js'],
+        rules: {
+            'no-restricted-syntax': 'off',
+        },
+    },
+    {
+        // CLI entry points and build/dev tooling: console is the correct output channel,
+        // these run in a Node terminal context, not the application runtime.
+        files: ['server.js', 'recover.js', 'plugins.js', 'webpack.config.js', 'scripts/**/*.{js,mjs}', 'src/electron/index.js'],
+        rules: {
+            'no-console': 'off',
         },
     },
 ];

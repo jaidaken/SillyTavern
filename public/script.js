@@ -333,6 +333,14 @@ export {
     getMaxPromptTokens as getMaxContextSize,
 };
 
+window.addEventListener('unhandledrejection', (event) => {
+    log.sys.error('Unhandled promise rejection', event.reason);
+});
+
+window.addEventListener('error', (event) => {
+    log.sys.error('Uncaught error', event.error ?? event.message);
+});
+
 /**
  * Wait for page to load before continuing the app initialization.
  */
@@ -786,6 +794,7 @@ async function firstLoadInit() {
     await eventSource.emit(event_types.APP_INITIALIZED);
     await initLoaderHandle.hide();
     await fixViewport();
+    log.sys.info('App ready');
     await eventSource.emit(event_types.APP_READY);
 }
 
@@ -808,14 +817,56 @@ export function cancelStatusCheck(reason = 'Manually cancelled status check') {
     setOnlineStatus('no_connection');
 }
 
+export const CONNECTION_STATES = Object.freeze({
+    CONNECTED: 'connected',
+    ERROR: 'error',
+    OFFLINE: 'offline',
+});
+
+let connection_state = CONNECTION_STATES.ERROR;
+
+export function setConnectionState(state) {
+    connection_state = state;
+    displayOnlineStatus();
+}
+
 export function displayOnlineStatus() {
-    if (online_status == 'no_connection') {
-        $('.online_status_indicator').removeClass('success');
-        $('.online_status_text').text($('#API-status-top').attr('no_connection_text'));
-    } else {
-        $('.online_status_indicator').addClass('success');
-        $('.online_status_text').text(online_status);
+    const indicator = $('.online_status_indicator');
+    indicator.removeClass('success offline');
+    switch (connection_state) {
+        case CONNECTION_STATES.CONNECTED:
+            indicator.addClass('success');
+            $('.online_status_text').text(online_status);
+            break;
+        case CONNECTION_STATES.OFFLINE:
+            indicator.addClass('offline');
+            $('.online_status_text').text($('#API-status-top').attr('no_connection_text'));
+            break;
+        default:
+            $('.online_status_text').text($('#API-status-top').attr('no_connection_text'));
+            break;
     }
+}
+
+// Reads the {error:{type,message,status?,retryable?}} contract; never JSON.parse a non-JSON body.
+export async function parseBackendError(response) {
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+        try {
+            const body = await response.json();
+            if (body?.error?.type) {
+                return {
+                    type: body.error.type,
+                    message: body.error.message || response.statusText || String(response.status),
+                    status: body.error.status ?? response.status,
+                    retryable: body.error.retryable,
+                };
+            }
+        } catch (error) {
+            log.net.error('Failed to parse backend error body', error);
+        }
+    }
+    return { type: 'upstream_error', message: response.statusText || String(response.status), status: response.status };
 }
 
 /**
@@ -4223,6 +4274,9 @@ function removeLastMessage() {
  */
 export async function Generate(type, { automatic_trigger, force_name2, quiet_prompt, quietToLoud, skipWIAN, force_chid, signal, quietImage, quietName, jsonSchema = null, depth = 0 } = {}, dryRun = false) {
     log.gen.debug('Generate entered');
+    if (!dryRun && !depth) {
+        log.gen.info(`Generation started: ${getGeneratingModel()} (streaming: ${isStreamingEnabled()})`);
+    }
     setGenerationProgress(0);
     generation_started = new Date();
 
@@ -5506,6 +5560,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         await saveChatConditional();
         unblockGeneration(type);
         streamingProcessor = null;
+        log.gen.info(`Generation ended: ${getGeneratingModel()}`);
 
         if (type !== 'quiet') {
             triggerAutoContinue(messageChunk, isImpersonate);
@@ -7084,8 +7139,10 @@ export function setCharacterName(value) {
 export function setOnlineStatus(value) {
     const previousStatus = online_status;
     online_status = value;
+    connection_state = online_status == 'no_connection' ? CONNECTION_STATES.ERROR : CONNECTION_STATES.CONNECTED;
     displayOnlineStatus();
     if (previousStatus !== online_status) {
+        log.net.info(online_status == 'no_connection' ? 'Connection lost' : `Connected: ${online_status}`);
         eventSource.emitAndWait(event_types.ONLINE_STATUS_CHANGED, online_status);
     }
 }

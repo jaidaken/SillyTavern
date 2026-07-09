@@ -3949,6 +3949,10 @@ grammarly-extension {
     background-color: green;
 }
 
+.online_status_indicator.offline {
+    background-color: grey;
+}
+
 .online_status_indicator {
     border-radius: 100%;
     width: 14px;
@@ -6452,5 +6456,17 @@ body:not(.movingUI) .drawer-content.maximized {
     .menu_button,
     .popup {
         border-width: 2px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
     }
 }

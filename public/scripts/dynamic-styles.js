@@ -90,7 +90,7 @@ function applyDynamicFocusStyles(styleSheet, { fromExtension = false } = {}) {
             } else if (rule instanceof CSSSupportsRule) {
                 // Recursively process nested @supports rules
                 processRules(rule.cssRules, [...wrappers, { type: 'supports', conditionText: rule.conditionText }]);
-            } else if (rule instanceof window.CSSContainerRule) {
+            } else if (typeof CSSContainerRule !== 'undefined' && rule instanceof CSSContainerRule) {
                 // Recursively process nested @container rules (if supported by the browser)
                 // Note: conditionText contains the query like "(min-width: 300px)" or "style(color)"
                 // Using 'container' as the type ensures uniqueness separate from @media/@supports
@@ -105,12 +105,22 @@ function applyDynamicFocusStyles(styleSheet, { fromExtension = false } = {}) {
      * @param {WrapperCond[]} wrappers - Wrapper conditions inherited from (at)import media
      */
     function processImportedStylesheet(sheet, wrappers = []) {
-        if (sheet && sheet.cssRules) {
+        if (!sheet) {
+            return;
+        }
+        try {
             processRules(sheet.cssRules, wrappers);
+        } catch (e) {
+            log.ui.warn('Skipping cross-origin or inaccessible imported stylesheet:', e);
         }
     }
 
-    processRules(styleSheet.cssRules, []);
+    try {
+        processRules(styleSheet.cssRules, []);
+    } catch (e) {
+        log.ui.warn('Skipping cross-origin or inaccessible stylesheet:', e);
+        return;
+    }
 
     /** @type {CSSStyleSheet} */
     let targetStyleSheet = null;

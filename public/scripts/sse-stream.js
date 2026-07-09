@@ -112,6 +112,11 @@ function getDelay(s) {
  * @returns {AsyncGenerator<{data: object, chunk: string, reasoning?: boolean}>} The parsed data and the chunk to be sent.
  */
 async function* parseStreamData(json) {
+    if (json.error && typeof json.error.type === 'string') {
+        // Structured mid-stream backend error frame (src/util.js forwardFetchResponse). Surface it
+        // instead of silently ending the stream; the streaming consumer catches this throw.
+        throw new Error(json.error.message || `Upstream ${json.error.type}`);
+    }
     if (typeof json.delta === 'object' && typeof json.delta.message === 'object' && ['tool-plan-delta', 'content-delta'].includes(json.type)) {
         // Cohere
         const text = json?.delta?.message?.content?.text ?? '';
