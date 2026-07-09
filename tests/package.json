@@ -7,6 +7,7 @@
         "test:unit": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.json",
         "test:smoke": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.json server-smoke",
         "test:e2e": "playwright test",
+        "test:e2e:waifu": "playwright test frontend/waifu-mode-autoscroll.e2e.js",
         "lint": "eslint \"**/*.js\" ./*.js",
         "lint:fix": "eslint \"**/*.js\" ./*.js --fix"
     },

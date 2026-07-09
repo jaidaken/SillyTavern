@@ -1,3 +1,5 @@
+export const E2E_CHARACTER_NAME = 'WaifuScrollChar';
+
 /**
  * Builds a minimal Character Card V2 payload accepted by importFromJson.
  * @param {string} name Character name
