@@ -8037,7 +8037,7 @@ export async function getSettings(initLoaderHandle = null) {
 //MARK: saveSettings()
 export async function saveSettings(loopCounter = 0) {
     if (!settingsReady) {
-        log.settings.warn('Settings not ready, scheduling another save');
+        log.settings.debug('Settings not ready, scheduling another save');
         saveSettingsDebounced();
         return;
     }
@@ -8045,7 +8045,7 @@ export async function saveSettings(loopCounter = 0) {
     const MAX_RETRIES = 3;
     if (TempResponseLength.isCustomized()) {
         if (loopCounter < MAX_RETRIES) {
-            log.settings.warn('Response length is currently being overridden, scheduling another save');
+            log.settings.debug('Response length is currently being overridden, scheduling another save');
             saveSettingsDebounced(loopCounter + 1);
             return;
         }
