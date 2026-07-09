@@ -696,6 +696,12 @@ async function getStatusTextgen() {
 
         const data = await response.json();
 
+        if (data?.online === false) {
+            log.settings.debug('Text-completions backend not connected');
+            setOnlineStatus('no_connection');
+            return resultCheckStatus();
+        }
+
         if (textgenerationwebui_settings.type === textgen_types.MANCER) {
             loadMancerModels(data?.data);
             setOnlineStatus(textgenerationwebui_settings.mancer_model);

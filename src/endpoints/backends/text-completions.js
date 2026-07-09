@@ -227,6 +227,13 @@ router.post('/status', async function (request, response) {
 
         return response.send({ result, data: data.data });
     } catch (error) {
+        // An unreachable backend is not a server error; report it as a clean 200 status so the
+        // client shows "not connected" without a red 500 filling the console on every poll.
+        const code = error?.cause?.code ?? error?.code;
+        if (error?.name === 'TypeError' || code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'EAI_AGAIN' || code === 'ETIMEDOUT') {
+            log.net.debug('Text-completions backend unreachable:', request.body?.api_server);
+            return response.send({ online: false });
+        }
         log.net.error(error);
         return response.sendStatus(500);
     }
