@@ -5,6 +5,7 @@
     "scripts": {
         "test": "npm run test:unit && npm run test:e2e",
         "test:unit": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.json",
+        "test:smoke": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.json server-smoke",
         "test:e2e": "playwright test",
         "lint": "eslint \"**/*.js\" ./*.js",
         "lint:fix": "eslint \"**/*.js\" ./*.js --fix"
