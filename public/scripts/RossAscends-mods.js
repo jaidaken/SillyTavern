@@ -1,4 +1,5 @@
 import { DOMPurify, Bowser } from '../lib.js';
+import { log } from './log.js';
 
 import {
     characters,
@@ -282,13 +283,13 @@ async function RA_autoloadchat() {
         } else {
             setActiveCharacter(null);
             saveSettingsDebounced();
-            console.warn(`Currently active character with ID ${active_character} not found. Resetting to no active character.`);
+            log.ui.warn(`Currently active character with ID ${active_character} not found. Resetting to no active character.`);
         }
     }
 
     if (active_group !== null && active_group !== undefined) {
         if (active_character) {
-            console.warn('Active character and active group are both set. Only active character will be loaded. Resetting active group.');
+            log.ui.warn('Active character and active group are both set. Only active character will be loaded. Resetting active group.');
             setActiveGroup(null);
             saveSettingsDebounced();
         } else {
@@ -296,7 +297,7 @@ async function RA_autoloadchat() {
             if (!result) {
                 setActiveGroup(null);
                 saveSettingsDebounced();
-                console.warn(`Currently active group with ID ${active_group} not found. Resetting to no active group.`);
+                log.ui.warn(`Currently active group with ID ${active_group} not found. Resetting to no active group.`);
             }
         }
     }
@@ -419,7 +420,6 @@ function RA_autoconnect(PrevApi) {
 
         if (!connection_made) {
             retry_delay = Math.min(retry_delay * 2, 30000); // double retry delay up to to 30 secs
-            // console.log('connection attempts: ' + RA_AC_retries + ' delay: ' + (retry_delay / 1000) + 's');
             // setTimeout(RA_autoconnect, retry_delay);
         }
     }
@@ -429,19 +429,18 @@ function OpenNavPanels() {
     if (!isMobile()) {
         //auto-open R nav if locked and previously open
         if (accountStorage.getItem('NavLockOn') == 'true' && accountStorage.getItem('NavOpened') == 'true') {
-            //console.log("RA -- clicking right nav to open");
             $('#rightNavDrawerIcon').trigger('click');
         }
 
         //auto-open L nav if locked and previously open
         if (accountStorage.getItem('LNavLockOn') == 'true' && accountStorage.getItem('LNavOpened') == 'true') {
-            console.debug('RA -- clicking left nav to open');
+            log.ui.debug('RA -- clicking left nav to open');
             $('#leftNavDrawerIcon').trigger('click');
         }
 
         //auto-open WI if locked and previously open
         if (accountStorage.getItem('WINavLockOn') == 'true' && accountStorage.getItem('WINavOpened') == 'true') {
-            console.debug('RA -- clicking WI to open');
+            log.ui.debug('RA -- clicking WI to open');
             $('#WIDrawerIcon').trigger('click');
         }
     }
@@ -451,7 +450,7 @@ const getUserInputKey = () => getCurrentUserHandle() + '_userInput';
 
 function restoreUserInput() {
     if (!power_user.restore_user_input) {
-        console.debug('restoreUserInput disabled');
+        log.ui.debug('restoreUserInput disabled');
         return;
     }
 
@@ -464,7 +463,7 @@ function restoreUserInput() {
 function saveUserInput() {
     const userInput = String($('#send_textarea').val());
     localStorage.setItem(getUserInputKey(), userInput);
-    console.debug('User Input -- ', userInput);
+    log.ui.debug('User Input -- ', userInput);
 }
 const saveUserInputDebounced = debounce(saveUserInput);
 
@@ -656,7 +655,7 @@ export function dragElement($elmnt) {
 
 export async function initMovingUI() {
     if (!isMobile() && power_user.movingUI === true) {
-        console.debug('START MOVING UI');
+        log.ui.debug('START MOVING UI');
         dragElement($('#sheld'));
         dragElement($('#left-nav-panel'));
         dragElement($('#right-nav-panel'));
@@ -713,11 +712,9 @@ export function initRossMods() {
     $(RPanelPin).on('click', function () {
         accountStorage.setItem('NavLockOn', $(RPanelPin).prop('checked'));
         if ($(RPanelPin).prop('checked') == true) {
-            //console.log('adding pin class to right nav');
             $(RightNavPanel).addClass('pinnedOpen');
             $(RightNavDrawerIcon).addClass('drawerPinnedOpen');
         } else {
-            //console.log('removing pin class from right nav');
             $(RightNavPanel).removeClass('pinnedOpen');
             $(RightNavDrawerIcon).removeClass('drawerPinnedOpen');
 
@@ -730,11 +727,9 @@ export function initRossMods() {
     $(LPanelPin).on('click', function () {
         accountStorage.setItem('LNavLockOn', $(LPanelPin).prop('checked'));
         if ($(LPanelPin).prop('checked') == true) {
-            //console.log('adding pin class to Left nav');
             $(LeftNavPanel).addClass('pinnedOpen');
             $(LeftNavDrawerIcon).addClass('drawerPinnedOpen');
         } else {
-            //console.log('removing pin class from Left nav');
             $(LeftNavPanel).removeClass('pinnedOpen');
             $(LeftNavDrawerIcon).removeClass('drawerPinnedOpen');
 
@@ -748,16 +743,16 @@ export function initRossMods() {
     $(WIPanelPin).on('click', async function () {
         accountStorage.setItem('WINavLockOn', $(WIPanelPin).prop('checked'));
         if ($(WIPanelPin).prop('checked') == true) {
-            console.debug('adding pin class to WI');
+            log.ui.debug('adding pin class to WI');
             $(WorldInfo).addClass('pinnedOpen');
             $(WIDrawerIcon).addClass('drawerPinnedOpen');
         } else {
-            console.debug('removing pin class from WI');
+            log.ui.debug('removing pin class from WI');
             $(WorldInfo).removeClass('pinnedOpen');
             $(WIDrawerIcon).removeClass('drawerPinnedOpen');
 
             if ($(WorldInfo).hasClass('openDrawer') && $('.openDrawer').length > 1) {
-                console.debug('closing WI after lock removal');
+                log.ui.debug('closing WI after lock removal');
                 const toggle = $('#WI-SP-button>.drawer-toggle');
                 doNavbarIconClick.call(toggle);
             }
@@ -768,24 +763,22 @@ export function initRossMods() {
         // read the state of right Nav Lock and apply to rightnav classlist
         $(RPanelPin).prop('checked', accountStorage.getItem('NavLockOn') == 'true');
         if (accountStorage.getItem('NavLockOn') == 'true') {
-            //console.log('setting pin class via local var');
             $(RightNavPanel).addClass('pinnedOpen');
             $(RightNavDrawerIcon).addClass('drawerPinnedOpen');
         }
         if ($(RPanelPin).prop('checked')) {
-            console.debug('setting pin class via checkbox state');
+            log.ui.debug('setting pin class via checkbox state');
             $(RightNavPanel).addClass('pinnedOpen');
             $(RightNavDrawerIcon).addClass('drawerPinnedOpen');
         }
         // read the state of left Nav Lock and apply to leftnav classlist
         $(LPanelPin).prop('checked', accountStorage.getItem('LNavLockOn') === 'true');
         if (accountStorage.getItem('LNavLockOn') == 'true') {
-            //console.log('setting pin class via local var');
             $(LeftNavPanel).addClass('pinnedOpen');
             $(LeftNavDrawerIcon).addClass('drawerPinnedOpen');
         }
         if ($(LPanelPin).prop('checked')) {
-            console.debug('setting pin class via checkbox state');
+            log.ui.debug('setting pin class via checkbox state');
             $(LeftNavPanel).addClass('pinnedOpen');
             $(LeftNavDrawerIcon).addClass('drawerPinnedOpen');
         }
@@ -793,13 +786,12 @@ export function initRossMods() {
         // read the state of left Nav Lock and apply to leftnav classlist
         $(WIPanelPin).prop('checked', accountStorage.getItem('WINavLockOn') === 'true');
         if (accountStorage.getItem('WINavLockOn') == 'true') {
-            //console.log('setting pin class via local var');
             $(WorldInfo).addClass('pinnedOpen');
             $(WIDrawerIcon).addClass('drawerPinnedOpen');
         }
 
         if ($(WIPanelPin).prop('checked')) {
-            console.debug('setting pin class via checkbox state');
+            log.ui.debug('setting pin class via checkbox state');
             $(WorldInfo).addClass('pinnedOpen');
             $(WIDrawerIcon).addClass('drawerPinnedOpen');
         }
@@ -1034,7 +1026,7 @@ export function initRossMods() {
         // Alt+Enter or AltGr+Enter to Continue
         if ((event.altKey || (event.altKey && event.ctrlKey)) && event.key == 'Enter') {
             if (is_send_press == false) {
-                console.debug('Continuing with Alt+Enter');
+                log.ui.debug('Continuing with Alt+Enter');
                 $('#option_continue').trigger('click');
                 return;
             }
@@ -1045,12 +1037,12 @@ export function initRossMods() {
             const editMesDone = $('.mes_edit_done:visible');
             const reasoningMesDone = $('.mes_reasoning_edit_done:visible');
             if (editMesDone.length > 0) {
-                console.debug('Accepting edits with Ctrl+Enter');
+                log.ui.debug('Accepting edits with Ctrl+Enter');
                 $('#send_textarea').trigger('focus');
                 editMesDone.trigger('click');
                 return;
             } else if (reasoningMesDone.length > 0) {
-                console.debug('Accepting edits with Ctrl+Enter');
+                log.ui.debug('Accepting edits with Ctrl+Enter');
                 $('#send_textarea').trigger('focus');
                 reasoningMesDone.trigger('click');
                 return;
@@ -1058,7 +1050,7 @@ export function initRossMods() {
                 const skipConfirmKey = 'RegenerateWithCtrlEnter';
                 const skipConfirm = accountStorage.getItem(skipConfirmKey) === 'true';
                 function doRegenerate() {
-                    console.debug('Regenerating with Ctrl+Enter');
+                    log.ui.debug('Regenerating with Ctrl+Enter');
                     $('#option_regenerate').trigger('click');
                     $('#options').hide();
                 }
@@ -1066,11 +1058,11 @@ export function initRossMods() {
                 // If there is input text, we do not trigger a regenerate - we just send it
                 if ($('#send_textarea').val() !== '') {
                     if (shouldSendOnEnter()) {
-                        console.debug('Sending with Ctrl+Enter');
+                        log.ui.debug('Sending with Ctrl+Enter');
                         event.preventDefault();
                         sendTextareaMessage();
                     } else {
-                        console.debug('Text area is not empty, but send on enter is disabled');
+                        log.ui.debug('Text area is not empty, but send on enter is disabled');
                     }
                     return;
                 }
@@ -1094,7 +1086,7 @@ export function initRossMods() {
                 }
                 return;
             } else {
-                console.debug('Ctrl+Enter ignored');
+                log.ui.debug('Ctrl+Enter ignored');
             }
         }
 
@@ -1155,7 +1147,7 @@ export function initRossMods() {
         }
 
         if (event.key == 'ArrowUp') { //edits last message if chatbar is empty and focused
-            console.log('got uparrow input');
+            log.ui.debug('got uparrow input');
             if (
                 hotkeyTargets.send_textarea.value === '' &&
                 chatbarInFocus === true &&
@@ -1177,7 +1169,7 @@ export function initRossMods() {
             //dont override Escape hotkey functions from script.js
             //"close edit box" and "cancel stream generation".
             if ($('#curEditTextarea').is(':visible') || $('#mes_stop').is(':visible')) {
-                console.debug('escape key, but deferring to script.js routines');
+                log.ui.debug('escape key, but deferring to script.js routines');
                 return;
             }
 
@@ -1277,7 +1269,7 @@ export function initRossMods() {
         if (event.ctrlKey && /^[1-9]$/.test(event.key)) {
             // This will eventually be to trigger quick replies
             // event.preventDefault();
-            console.log('Ctrl +' + event.key + ' pressed!');
+            log.ui.debug('Ctrl +' + event.key + ' pressed!');
         }
     }
 }

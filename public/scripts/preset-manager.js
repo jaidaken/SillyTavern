@@ -1,4 +1,5 @@
 import { Fuse, lodash } from '../lib.js';
+import { log } from './log.js';
 
 import {
     amount_gen,
@@ -50,14 +51,14 @@ function autoSelectPreset() {
     const presetManager = getPresetManager();
 
     if (!presetManager) {
-        console.debug(`Preset Manager not found for API: ${main_api}`);
+        log.settings.debug(`Preset Manager not found for API: ${main_api}`);
         return;
     }
 
     const name = selected_group ? groups.find(x => x.id == selected_group)?.name : characters[this_chid]?.name;
 
     if (!name) {
-        console.debug(`Preset candidate not found for API: ${main_api}`);
+        log.settings.debug(`Preset candidate not found for API: ${main_api}`);
         return;
     }
 
@@ -65,12 +66,12 @@ function autoSelectPreset() {
     const selectedPreset = presetManager.getSelectedPreset();
 
     if (preset === selectedPreset) {
-        console.debug(`Preset already selected for API: ${main_api}, name: ${name}`);
+        log.settings.debug(`Preset already selected for API: ${main_api}, name: ${name}`);
         return;
     }
 
     if (preset !== undefined && preset !== null) {
-        console.log(`Preset found for API: ${main_api}, name: ${name}`);
+        log.settings.info(`Preset found for API: ${main_api}, name: ${name}`);
         presetManager.selectPreset(preset);
     }
 }
@@ -102,7 +103,7 @@ function registerPresetManagers() {
     $('select[data-preset-manager-for]').each((_, e) => {
         const forData = $(e).data('preset-manager-for');
         for (const apiId of forData.split(',')) {
-            console.debug(`Registering preset manager for API: ${apiId}`);
+            log.settings.debug(`Registering preset manager for API: ${apiId}`);
             presetManagers[apiId] = new PresetManager($(e), apiId);
         }
     });
@@ -423,7 +424,7 @@ class PresetManager {
      */
     async updatePreset(option = { skipUpdate: false }) {
         const selected = $(this.select).find('option:selected');
-        console.log(selected);
+        log.settings.debug(selected);
 
         if (selected.val() == 'gui') {
             toastr.info(t`Cannot update GUI preset`);
@@ -446,7 +447,7 @@ class PresetManager {
         const headerText = !this.isAdvancedFormatting() ? t`Preset name:` : t`Template name:`;
         const name = await Popup.show.input(headerText, popupText, inputValue);
         if (!name) {
-            console.log('Preset name not provided');
+            log.settings.debug('Preset name not provided');
             return;
         }
 
@@ -482,7 +483,7 @@ class PresetManager {
 
         if (!response.ok) {
             toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Preset could not be saved`);
-            console.error('Preset could not be saved', response);
+            log.settings.error('Preset could not be saved', response);
             throw new Error('Preset could not be saved');
         }
 
@@ -490,7 +491,7 @@ class PresetManager {
         name = data.name;
 
         if (skipUpdate) {
-            console.debug(`Preset ${name} saved, but not updating the list`);
+            log.settings.debug(`Preset ${name} saved, but not updating the list`);
             return;
         }
 
@@ -511,7 +512,7 @@ class PresetManager {
             await this.deletePreset(oldName);
         } catch (error) {
             toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Preset could not be renamed`);
-            console.error('Preset could not be renamed', error);
+            log.settings.error('Preset could not be renamed', error);
             throw new Error('Preset could not be renamed', { cause: error });
         }
     }
@@ -574,7 +575,7 @@ class PresetManager {
                 settings = power_user.reasoning;
                 break;
             default:
-                console.warn(`Unknown API ID ${api}`);
+                log.settings.warn(`Unknown API ID ${api}`);
         }
 
         return { presets, preset_names, settings };
@@ -668,7 +669,7 @@ class PresetManager {
                     return reasoning_preset;
                 }
                 default:
-                    console.warn(`Unknown API ID ${apiId}`);
+                    log.settings.warn(`Unknown API ID ${apiId}`);
                     return {};
             }
         }
@@ -764,7 +765,7 @@ class PresetManager {
         }
 
         if (preset === undefined) {
-            console.error(`Preset ${name} not found`);
+            log.settings.error(`Preset ${name} not found`);
         }
 
         // if the preset isn't found, returns undefined
@@ -914,17 +915,17 @@ async function presetCommandCallback(_, name) {
     const currentPreset = presetManager.getSelectedPresetName();
 
     if (!presetManager) {
-        console.debug(`Preset Manager not found for API: ${main_api}`);
+        log.settings.debug(`Preset Manager not found for API: ${main_api}`);
         return '';
     }
 
     if (!name) {
-        console.log('No name provided for /preset command, using current preset');
+        log.settings.info('No name provided for /preset command, using current preset');
         return currentPreset;
     }
 
     if (!Array.isArray(allPresets) || allPresets.length === 0) {
-        console.log(`No presets found for API: ${main_api}`);
+        log.settings.info(`No presets found for API: ${main_api}`);
         return currentPreset;
     }
 
@@ -932,7 +933,7 @@ async function presetCommandCallback(_, name) {
     const exactMatch = allPresets.find(p => p.toLowerCase().trim() === name.toLowerCase().trim());
 
     if (exactMatch) {
-        console.log('Found exact preset match', exactMatch);
+        log.settings.info('Found exact preset match', exactMatch);
 
         if (currentPreset !== exactMatch) {
             const presetValue = presetManager.findPreset(exactMatch);
@@ -950,7 +951,7 @@ async function presetCommandCallback(_, name) {
         const fuzzyMatch = fuse.search(name);
 
         if (!fuzzyMatch.length) {
-            console.warn(`WARN: Preset found with name ${name}`);
+            log.settings.warn(`WARN: Preset found with name ${name}`);
             return currentPreset;
         }
 
@@ -958,7 +959,7 @@ async function presetCommandCallback(_, name) {
         const fuzzyPresetValue = presetManager.findPreset(fuzzyPresetName);
 
         if (fuzzyPresetValue) {
-            console.log('Found fuzzy preset match', fuzzyPresetName);
+            log.settings.info('Found fuzzy preset match', fuzzyPresetName);
 
             if (currentPreset !== fuzzyPresetName) {
                 presetManager.selectPreset(fuzzyPresetValue);
@@ -977,7 +978,7 @@ async function waitForConnection() {
     try {
         await waitUntilCondition(() => online_status !== 'no_connection', 10000, 100);
     } catch {
-        console.log('Timeout waiting for API to connect');
+        log.settings.debug('Timeout waiting for API to connect');
     }
 }
 
@@ -1019,7 +1020,7 @@ export async function initPresetManager() {
         const presetManager = getPresetManager(apiId);
 
         if (!presetManager) {
-            console.warn(`Preset Manager not found for API: ${apiId}`);
+            log.settings.warn(`Preset Manager not found for API: ${apiId}`);
             return;
         }
 
@@ -1031,7 +1032,7 @@ export async function initPresetManager() {
         const presetManager = getPresetManager(apiId);
 
         if (!presetManager) {
-            console.warn(`Preset Manager not found for API: ${apiId}`);
+            log.settings.warn(`Preset Manager not found for API: ${apiId}`);
             return;
         }
 
@@ -1043,7 +1044,7 @@ export async function initPresetManager() {
         const presetManager = getPresetManager(apiId);
 
         if (!presetManager) {
-            console.warn(`Preset Manager not found for API: ${apiId}`);
+            log.settings.warn(`Preset Manager not found for API: ${apiId}`);
             return;
         }
 
@@ -1051,7 +1052,7 @@ export async function initPresetManager() {
         const oldName = presetManager.getSelectedPresetName();
         const newName = await getSanitizedFilename(await Popup.show.input(popupHeader, t`Enter a new name:`, oldName) || '');
         if (!newName || oldName === newName) {
-            console.debug(!presetManager.isAdvancedFormatting() ? 'Preset rename cancelled' : 'Template rename cancelled');
+            log.settings.debug(!presetManager.isAdvancedFormatting() ? 'Preset rename cancelled' : 'Template rename cancelled');
             return;
         }
         if (equalsIgnoreCaseAndAccents(oldName, newName)) {
@@ -1080,7 +1081,7 @@ export async function initPresetManager() {
         const presetManager = getPresetManager(apiId);
 
         if (!presetManager) {
-            console.warn(`Preset Manager not found for API: ${apiId}`);
+            log.settings.warn(`Preset Manager not found for API: ${apiId}`);
             return;
         }
 
@@ -1101,7 +1102,7 @@ export async function initPresetManager() {
         const presetManager = getPresetManager(apiId);
 
         if (!presetManager) {
-            console.warn(`Preset Manager not found for API: ${apiId}`);
+            log.settings.warn(`Preset Manager not found for API: ${apiId}`);
             return;
         }
 
@@ -1127,7 +1128,7 @@ export async function initPresetManager() {
         const presetManager = getPresetManager(apiId);
 
         if (!presetManager) {
-            console.warn(`Preset Manager not found for API: ${apiId}`);
+            log.settings.warn(`Preset Manager not found for API: ${apiId}`);
             return;
         }
 
@@ -1157,7 +1158,7 @@ export async function initPresetManager() {
         const presetManager = getPresetManager(apiId);
 
         if (!presetManager) {
-            console.warn(`Preset Manager not found for API: ${apiId}`);
+            log.settings.warn(`Preset Manager not found for API: ${apiId}`);
             return;
         }
 

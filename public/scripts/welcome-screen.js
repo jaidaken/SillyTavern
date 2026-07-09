@@ -28,6 +28,7 @@ import {
     unshallowCharacter,
     updateRemoteChatName,
 } from '../script.js';
+import { log } from './log.js';
 import { getRegexedString, regex_placement } from './extensions/regex/engine.js';
 import { deleteGroupChatByName, getGroupAvatar, groups, is_group_generating, openGroupById, openGroupChat } from './group-chats.js';
 import { t } from './i18n.js';
@@ -103,7 +104,7 @@ class PinnedChatsManager {
             try {
                 Object.assign(pinnedState, JSON.parse(value));
             } catch (error) {
-                console.warn('Failed to parse pinned chats from storage.', error);
+                log.ui.warn('Failed to parse pinned chats from storage.', error);
             }
         }
         return pinnedState;
@@ -232,12 +233,12 @@ export async function openWelcomeScreen({ force = false, expand = false } = {}) 
     const recentChats = await getRecentChats();
     const chatAfterFetch = getCurrentChatId();
     if (chatAfterFetch !== currentChatId) {
-        console.debug('Chat changed while fetching recent chats.');
+        log.ui.debug('Chat changed while fetching recent chats.');
         return;
     }
 
     if (chatAfterFetch === undefined && force) {
-        console.debug('Forcing welcome screen open.');
+        log.ui.debug('Forcing welcome screen open.');
         chat.splice(0, chat.length);
         $('#chat').empty();
     }
@@ -317,7 +318,7 @@ async function sendWelcomePanel(chats, expand = false) {
         const chatElement = document.getElementById('chat');
         const sendTextArea = document.getElementById('send_textarea');
         if (!chatElement) {
-            console.error('Chat element not found');
+            log.ui.error('Chat element not found');
             return;
         }
         const templateData = {
@@ -449,7 +450,7 @@ async function sendWelcomePanel(chats, expand = false) {
                 const fileName = chatItem.getAttribute('data-file');
                 const recentChat = chats.find(c => c.chat_name === fileName && ((c.is_group && c.group === groupId) || (!c.is_group && c.avatar === avatarId)));
                 if (!recentChat) {
-                    console.error('Recent chat not found for pinning.');
+                    log.ui.error('Recent chat not found for pinning.');
                     return;
                 }
                 const currentlyPinned = PinnedChatsManager.isPinned(recentChat);
@@ -466,7 +467,7 @@ async function sendWelcomePanel(chats, expand = false) {
             });
         }
     } catch (error) {
-        console.error('Welcome screen error:', error);
+        log.ui.error('Welcome screen error:', error);
     }
 }
 
@@ -478,7 +479,7 @@ async function sendWelcomePanel(chats, expand = false) {
 async function openRecentCharacterChat(avatarId, fileName) {
     const characterId = characters.findIndex(x => x.avatar === avatarId);
     if (characterId === -1) {
-        console.error(`Character not found for avatar ID: ${avatarId}`);
+        log.ui.error(`Character not found for avatar ID: ${avatarId}`);
         return;
     }
 
@@ -488,12 +489,12 @@ async function openRecentCharacterChat(avatarId, fileName) {
         saveSettingsDebounced();
         const currentChatId = getCurrentChatId();
         if (currentChatId === fileName) {
-            console.debug(`Chat ${fileName} is already open.`);
+            log.ui.debug(`Chat ${fileName} is already open.`);
             return;
         }
         await openCharacterChat(fileName);
     } catch (error) {
-        console.error('Error opening recent chat:', error);
+        log.ui.error('Error opening recent chat:', error);
         toastr.error(t`Failed to open recent chat. See console for details.`);
     }
 }
@@ -506,7 +507,7 @@ async function openRecentCharacterChat(avatarId, fileName) {
 async function openRecentGroupChat(groupId, fileName) {
     const group = groups.find(x => x.id === groupId);
     if (!group) {
-        console.error(`Group not found for ID: ${groupId}`);
+        log.ui.error(`Group not found for ID: ${groupId}`);
         return;
     }
 
@@ -516,12 +517,12 @@ async function openRecentGroupChat(groupId, fileName) {
         saveSettingsDebounced();
         const currentChatId = getCurrentChatId();
         if (currentChatId === fileName) {
-            console.debug(`Chat ${fileName} is already open.`);
+            log.ui.debug(`Chat ${fileName} is already open.`);
             return;
         }
         await openGroupChat(groupId, fileName);
     } catch (error) {
-        console.error('Error opening recent group chat:', error);
+        log.ui.error('Error opening recent group chat:', error);
         toastr.error(t`Failed to open recent group chat. See console for details.`);
     }
 }
@@ -534,14 +535,14 @@ async function openRecentGroupChat(groupId, fileName) {
 async function renameRecentCharacterChat(avatarId, fileName) {
     const characterId = characters.findIndex(x => x.avatar === avatarId);
     if (characterId === -1) {
-        console.error(`Character not found for avatar ID: ${avatarId}`);
+        log.ui.error(`Character not found for avatar ID: ${avatarId}`);
         return;
     }
     try {
         const popupText = await renderTemplateAsync('chatRename');
         const newName = await callGenericPopup(popupText, POPUP_TYPE.INPUT, fileName);
         if (!newName || typeof newName !== 'string' || newName === fileName) {
-            console.log('No new name provided, aborting');
+            log.ui.debug('No new name provided, aborting');
             return;
         }
         await renameGroupOrCharacterChat({
@@ -554,7 +555,7 @@ async function renameRecentCharacterChat(avatarId, fileName) {
         await refreshWelcomeScreen();
         toastr.success(t`Chat renamed.`);
     } catch (error) {
-        console.error('Error renaming recent character chat:', error);
+        log.ui.error('Error renaming recent character chat:', error);
         toastr.error(t`Failed to rename recent chat. See console for details.`);
     }
 }
@@ -567,14 +568,14 @@ async function renameRecentCharacterChat(avatarId, fileName) {
 async function renameRecentGroupChat(groupId, fileName) {
     const group = groups.find(x => x.id === groupId);
     if (!group) {
-        console.error(`Group not found for ID: ${groupId}`);
+        log.ui.error(`Group not found for ID: ${groupId}`);
         return;
     }
     try {
         const popupText = await renderTemplateAsync('chatRename');
         const newName = await callGenericPopup(popupText, POPUP_TYPE.INPUT, fileName);
         if (!newName || newName === fileName) {
-            console.log('No new name provided, aborting');
+            log.ui.debug('No new name provided, aborting');
             return;
         }
         await renameGroupOrCharacterChat({
@@ -586,7 +587,7 @@ async function renameRecentGroupChat(groupId, fileName) {
         await refreshWelcomeScreen();
         toastr.success(t`Group chat renamed.`);
     } catch (error) {
-        console.error('Error renaming recent group chat:', error);
+        log.ui.error('Error renaming recent group chat:', error);
         toastr.error(t`Failed to rename recent group chat. See console for details.`);
     }
 }
@@ -599,20 +600,20 @@ async function renameRecentGroupChat(groupId, fileName) {
 async function deleteRecentCharacterChat(avatarId, fileName) {
     const characterId = characters.findIndex(x => x.avatar === avatarId);
     if (characterId === -1) {
-        console.error(`Character not found for avatar ID: ${avatarId}`);
+        log.ui.error(`Character not found for avatar ID: ${avatarId}`);
         return;
     }
     try {
         const confirm = await callGenericPopup(t`Delete the Chat File?`, POPUP_TYPE.CONFIRM);
         if (!confirm) {
-            console.log('Deletion cancelled by user');
+            log.ui.debug('Deletion cancelled by user');
             return;
         }
         await deleteCharacterChatByName(String(characterId), fileName);
         await refreshWelcomeScreen();
         toastr.success(t`Chat deleted.`);
     } catch (error) {
-        console.error('Error deleting recent character chat:', error);
+        log.ui.error('Error deleting recent character chat:', error);
         toastr.error(t`Failed to delete recent chat. See console for details.`);
     }
 }
@@ -625,20 +626,20 @@ async function deleteRecentCharacterChat(avatarId, fileName) {
 async function deleteRecentGroupChat(groupId, fileName) {
     const group = groups.find(x => x.id === groupId);
     if (!group) {
-        console.error(`Group not found for ID: ${groupId}`);
+        log.ui.error(`Group not found for ID: ${groupId}`);
         return;
     }
     try {
         const confirm = await callGenericPopup(t`Delete the Chat File?`, POPUP_TYPE.CONFIRM);
         if (!confirm) {
-            console.log('Deletion cancelled by user');
+            log.ui.debug('Deletion cancelled by user');
             return;
         }
         await deleteGroupChatByName(groupId, fileName);
         await refreshWelcomeScreen();
         toastr.success(t`Group chat deleted.`);
     } catch (error) {
-        console.error('Error deleting recent group chat:', error);
+        log.ui.error('Error deleting recent group chat:', error);
         toastr.error(t`Failed to delete recent group chat. See console for details.`);
     }
 }
@@ -652,7 +653,7 @@ async function deleteRecentGroupChat(groupId, fileName) {
 async function refreshWelcomeScreen({ flashChat = null } = {}) {
     const chatElement = document.getElementById('chat');
     if (!chatElement) {
-        console.error('Chat element not found');
+        log.ui.error('Chat element not found');
         return;
     }
 
@@ -770,7 +771,7 @@ async function getRecentChats() {
     });
 
     if (!response.ok) {
-        console.warn('Failed to fetch recent character chats');
+        log.ui.warn('Failed to fetch recent character chats');
         return [];
     }
 
@@ -821,16 +822,16 @@ export async function openPermanentAssistantChat({ tryCreate = true, created = f
     const characterId = characters.findIndex(x => x.avatar === avatar);
     if (characterId === -1) {
         if (!tryCreate) {
-            console.error(`Character not found for avatar ID: ${avatar}. Cannot create.`);
+            log.ui.error(`Character not found for avatar ID: ${avatar}. Cannot create.`);
             return;
         }
 
         try {
-            console.log(`Character not found for avatar ID: ${avatar}. Creating new assistant.`);
+            log.ui.info(`Character not found for avatar ID: ${avatar}. Creating new assistant.`);
             await createPermanentAssistant();
             return openPermanentAssistantChat({ tryCreate: false, created: true });
         } catch (error) {
-            console.error('Error creating permanent assistant:', error);
+            log.ui.error('Error creating permanent assistant:', error);
             toastr.error(t`Failed to create ${neutralCharacterName}. See console for details.`);
             return;
         }
@@ -841,9 +842,9 @@ export async function openPermanentAssistantChat({ tryCreate = true, created = f
         if (!created) {
             await doNewChat({ deleteCurrentChat: false });
         }
-        console.log(`Opened permanent assistant chat for ${neutralCharacterName}.`, getCurrentChatId());
+        log.ui.info(`Opened permanent assistant chat for ${neutralCharacterName}.`, getCurrentChatId());
     } catch (error) {
-        console.error('Error opening permanent assistant chat:', error);
+        log.ui.error('Error opening permanent assistant chat:', error);
         toastr.error(t`Failed to open permanent assistant chat. See console for details.`);
     }
 }
@@ -863,7 +864,7 @@ async function createPermanentAssistant() {
         const avatarBlob = await avatarResponse.blob();
         formData.append('avatar', avatarBlob, defaultAssistantAvatar);
     } catch (error) {
-        console.warn('Error fetching system avatar. Fallback image will be used.', error);
+        log.ui.warn('Error fetching system avatar. Fallback image will be used.', error);
     }
 
     const fetchResult = await fetch('/api/characters/create', {

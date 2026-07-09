@@ -1,4 +1,5 @@
 import { Popper } from '../lib.js';
+import { log } from './log.js';
 
 import { eventSource, event_types, saveSettings, saveSettingsDebounced, getRequestHeaders, animation_duration, CLIENT_VERSION } from '../script.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from './popup.js';
@@ -80,7 +81,7 @@ let saveMetadataTimeout = null;
 
 export function cancelDebouncedMetadataSave() {
     if (saveMetadataTimeout) {
-        console.debug('Debounced metadata save cancelled');
+        log.ext.debug('Debounced metadata save cancelled');
         clearTimeout(saveMetadataTimeout);
         saveMetadataTimeout = null;
     }
@@ -97,18 +98,18 @@ export function saveMetadataDebounced() {
         const newContext = getContext();
 
         if (groupId !== newContext.groupId) {
-            console.warn('Group changed, not saving metadata');
+            log.ext.warn('Group changed, not saving metadata');
             return;
         }
 
         if (characterId !== newContext.characterId) {
-            console.warn('Character changed, not saving metadata');
+            log.ext.warn('Character changed, not saving metadata');
             return;
         }
 
-        console.debug('Saving metadata...');
+        log.ext.debug('Saving metadata...');
         await newContext.saveMetadata();
-        console.debug('Saved metadata...');
+        log.ext.debug('Saved metadata...');
     }, debounce_timeout.relaxed);
 }
 
@@ -306,7 +307,7 @@ async function discoverExtensions() {
             return [];
         }
     } catch (err) {
-        console.error(err);
+        log.ext.error(err);
         return [];
     }
 }
@@ -407,7 +408,7 @@ async function callExtensionHook(name, hookName) {
     const manifest = manifests[name];
 
     if (!manifest) {
-        console.debug(`callExtensionHook: Extension "${name}" has no manifest, skipping hook "${hookName}"`);
+        log.ext.debug(`callExtensionHook: Extension "${name}" has no manifest, skipping hook "${hookName}"`);
         return;
     }
 
@@ -422,23 +423,23 @@ async function callExtensionHook(name, hookName) {
     const hookFunctionName = manifest.hooks[hookName];
 
     if (typeof hookFunctionName !== 'string' || !hookFunctionName) {
-        console.warn(`callExtensionHook: Extension "${name}" hook "${hookName}" is not a valid string`);
+        log.ext.warn(`callExtensionHook: Extension "${name}" hook "${hookName}" is not a valid string`);
         return;
     }
 
     if (!manifest.js) {
-        console.warn(`callExtensionHook: Extension "${name}" has hook "${hookName}" but no JS entry point defined in manifest`);
+        log.ext.warn(`callExtensionHook: Extension "${name}" has hook "${hookName}" but no JS entry point defined in manifest`);
         return;
     }
 
     const url = `/scripts/extensions/${name}/${manifest.js}`;
-    console.debug(`callExtensionHook: Calling hook "${hookName}" (function "${hookFunctionName}") for extension "${name}"`);
+    log.ext.debug(`callExtensionHook: Calling hook "${hookName}" (function "${hookFunctionName}") for extension "${name}"`);
 
     try {
         const module = await import(url);
 
         if (typeof module[hookFunctionName] !== 'function') {
-            console.warn(`callExtensionHook: Extension "${name}" hook "${hookName}" references "${hookFunctionName}" which is not an exported function`);
+            log.ext.warn(`callExtensionHook: Extension "${name}" hook "${hookName}" references "${hookFunctionName}" which is not an exported function`);
             return;
         }
 
@@ -456,12 +457,12 @@ async function callExtensionHook(name, hookName) {
         ]);
 
         if (result === HOOK_RESULT.TIMEOUT) {
-            console.warn(`callExtensionHook: Hook "${hookName}" for extension "${name}" timed out after ${HOOK_TIMEOUT}ms`);
+            log.ext.warn(`callExtensionHook: Hook "${hookName}" for extension "${name}" timed out after ${HOOK_TIMEOUT}ms`);
         } else {
-            console.debug(`callExtensionHook: Hook "${hookName}" completed for extension "${name}"`);
+            log.ext.debug(`callExtensionHook: Hook "${hookName}" completed for extension "${name}"`);
         }
     } catch (error) {
-        console.error(`callExtensionHook: Error calling hook "${hookName}" for extension "${name}":`, error);
+        log.ext.error(`callExtensionHook: Error calling hook "${hookName}" for extension "${name}":`, error);
     }
 }
 
@@ -550,7 +551,7 @@ async function getManifests(names) {
                 }
             }).catch(err => {
                 reject();
-                console.log('Could not load manifest.json for ' + name, err);
+                log.ext.debug('Could not load manifest.json for ' + name, err);
             });
         });
 
@@ -597,7 +598,7 @@ async function activateExtensions() {
                 meetsModuleRequirements = isSubsetOf(modules, extrasRequirements);
                 missingModules = extrasRequirements.filter(req => !modules.includes(req));
             } else {
-                console.warn(`Extension ${name}: manifest.json 'requires' field is not an array. Loading allowed, but any intended requirements were not verified to exist.`);
+                log.ext.warn(`Extension ${name}: manifest.json 'requires' field is not an array. Loading allowed, but any intended requirements were not verified to exist.`);
             }
         }
 
@@ -619,7 +620,7 @@ async function activateExtensions() {
                     }
                 }
             } else {
-                console.warn(`Extension ${name}: manifest.json 'dependencies' field is not an array. Loading allowed, but any intended requirements were not verified to exist.`);
+                log.ext.warn(`Extension ${name}: manifest.json 'dependencies' field is not an array. Loading allowed, but any intended requirements were not verified to exist.`);
             }
         }
 
@@ -627,7 +628,7 @@ async function activateExtensions() {
 
         if (meetsModuleRequirements && meetsExtensionDeps && meetsClientMinimumVersion && !isDisabled) {
             try {
-                console.debug('Activating extension', name);
+                log.ext.debug('Activating extension', name);
                 const promise = addExtensionLocale(name, manifest).finally(() =>
                     Promise.all([addExtensionScript(name, manifest), addExtensionStyle(name, manifest)]),
                 );
@@ -637,26 +638,26 @@ async function activateExtensions() {
                         return callExtensionHook(name, 'activate');
                     })
                     .catch(err => {
-                        console.log('Could not activate extension', name, err);
+                        log.ext.debug('Could not activate extension', name, err);
                         extensionLoadErrors.add(t`Extension "${displayName}" failed to load: ${err}`);
                     });
                 promises.push(promise);
             } catch (error) {
-                console.error('Could not activate extension', name, error);
+                log.ext.error('Could not activate extension', name, error);
             }
         } else if (!meetsModuleRequirements && !isDisabled) {
-            console.warn(t`Extension "${name}" did not load. Missing required Extras module(s): "${missingModules.join(', ')}"`);
+            log.ext.warn(t`Extension "${name}" did not load. Missing required Extras module(s): "${missingModules.join(', ')}"`);
             extensionLoadErrors.add(t`Extension "${displayName}" did not load. Missing required Extras module(s): "${missingModules.join(', ')}"`);
         } else if (!meetsExtensionDeps && !isDisabled) {
             if (disabledDependencies.length > 0) {
-                console.warn(t`Extension "${name}" did not load. Required extensions exist but are disabled: "${disabledDependencies.join(', ')}". Enable them first, then reload.`);
+                log.ext.warn(t`Extension "${name}" did not load. Required extensions exist but are disabled: "${disabledDependencies.join(', ')}". Enable them first, then reload.`);
                 extensionLoadErrors.add(t`Extension "${displayName}" did not load. Required extensions exist but are disabled: "${disabledDependencies.join(', ')}". Enable them first, then reload.`);
             } else {
-                console.warn(t`Extension "${name}" did not load. Missing required extensions: "${missingDependencies.join(', ')}"`);
+                log.ext.warn(t`Extension "${name}" did not load. Missing required extensions: "${missingDependencies.join(', ')}"`);
                 extensionLoadErrors.add(t`Extension "${displayName}" did not load. Missing required extensions: "${missingDependencies.join(', ')}"`);
             }
         } else if (!meetsClientMinimumVersion && !isDisabled) {
-            console.warn(t`Extension "${name}" did not load. Requires ST client version ${minClientVersion}, but current version is ${clientVersion}.`);
+            log.ext.warn(t`Extension "${name}" did not load. Requires ST client version ${minClientVersion}, but current version is ${clientVersion}.`);
             extensionLoadErrors.add(t`Extension "${displayName}" did not load. Requires ST client version ${minClientVersion}, but current version is ${clientVersion}.`);
         }
     }
@@ -872,7 +873,7 @@ function addExtensionLocale(name, manifest) {
             }
         })
         .catch(err => {
-            console.log('Could not load extension locale data for ' + name, err);
+            log.ext.debug('Could not load extension locale data for ' + name, err);
         });
 }
 
@@ -1293,7 +1294,7 @@ async function showExtensionsDetails() {
 
                         await toggleHandler(name, false);
                     } catch (error) {
-                        console.error(`Could not toggle extension ${name}:`, error);
+                        log.ext.error(`Could not toggle extension ${name}:`, error);
                         toastr.error(t`Could not toggle extension ${name}. See console for details.`);
                     }
                 }
@@ -1315,7 +1316,7 @@ async function showExtensionsDetails() {
         checkForUpdatesManual(sortFn, abortController.signal).finally(() => loadingEl.remove());
     } catch (error) {
         toastr.error(t`Error loading extensions. See browser console for details.`);
-        console.error(error);
+        log.ext.error(error);
     }
     if (popupPromise) {
         await popupPromise;
@@ -1370,7 +1371,7 @@ async function updateExtension(extensionName, quiet, timeout = null) {
         if (!response.ok) {
             const text = await response.text();
             toastr.error(text || response.statusText, t`Extension update failed`, { timeOut: 5000 });
-            console.error('Extension update failed', response.status, response.statusText, text);
+            log.ext.error('Extension update failed', response.status, response.statusText, text);
             return;
         }
 
@@ -1390,7 +1391,7 @@ async function updateExtension(extensionName, quiet, timeout = null) {
             toastr.success(t`Extension ${extensionName} updated to ${data.shortCommitHash}`, t`Reload the page to apply updates`);
         }
     } catch (error) {
-        console.error('Extension update error:', error);
+        log.ext.error('Extension update error:', error);
     }
 }
 
@@ -1541,7 +1542,7 @@ async function moveExtension(extensionName, source, destination) {
         if (!result.ok) {
             const text = await result.text();
             toastr.error(text || result.statusText, t`Extension move failed`, { timeOut: 5000 });
-            console.error('Extension move failed', result.status, result.statusText, text);
+            log.ext.error('Extension move failed', result.status, result.statusText, text);
             return;
         }
 
@@ -1549,7 +1550,7 @@ async function moveExtension(extensionName, source, destination) {
         await loadExtensionSettings({}, false, false);
         void showExtensionsDetails();
     } catch (error) {
-        console.error('Error:', error);
+        log.ext.error('Error:', error);
     }
 }
 
@@ -1577,7 +1578,7 @@ export async function deleteExtension(extensionName, shouldClean = false) {
             }),
         });
     } catch (error) {
-        console.error('Error:', error);
+        log.ext.error('Error:', error);
     }
 
     // Delete or clean might have updated settings, which could race with the page reload, so we'll force save here
@@ -1614,7 +1615,7 @@ async function getExtensionVersion(extensionName, abortSignal) {
         if (error instanceof Error && error.name === 'AbortError') {
             return;
         }
-        console.error('Error:', error);
+        log.ext.error('Error:', error);
     }
 }
 
@@ -1643,13 +1644,13 @@ async function getExtensionBranches(extensionName, isGlobal) {
         if (!response.ok) {
             const text = await response.text();
             toastr.error(text || response.statusText, t`Extension branches fetch failed`);
-            console.error('Extension branches fetch failed', response.status, response.statusText, text);
+            log.ext.error('Extension branches fetch failed', response.status, response.statusText, text);
             return [];
         }
 
         return await response.json();
     } catch (error) {
-        console.error('Error:', error);
+        log.ext.error('Error:', error);
         return [];
     }
 }
@@ -1676,7 +1677,7 @@ async function switchExtensionBranch(extensionName, isGlobal, branch) {
         if (!response.ok) {
             const text = await response.text();
             toastr.error(text || response.statusText, t`Extension branch switch failed`);
-            console.error('Extension branch switch failed', response.status, response.statusText, text);
+            log.ext.error('Extension branch switch failed', response.status, response.statusText, text);
             return;
         }
 
@@ -1684,7 +1685,7 @@ async function switchExtensionBranch(extensionName, isGlobal, branch) {
         await loadExtensionSettings({}, false, false);
         void showExtensionsDetails();
     } catch (error) {
-        console.error('Error:', error);
+        log.ext.error('Error:', error);
     }
 }
 
@@ -1705,7 +1706,7 @@ export async function installExtension(url, global, branch = '') {
         // Normalize the URL (resolve relative paths, remove redundant segments, etc.)
         url = parsedUrl.href;
     } catch (error) {
-        console.error('Invalid URL:', error);
+        log.ext.error('Invalid URL:', error);
         toastr.error(t`Only valid HTTP and HTTPS URLs are allowed.`, t`Invalid URL`);
         return false;
     }
@@ -1713,7 +1714,7 @@ export async function installExtension(url, global, branch = '') {
     if (!isOfficialExtension(url)) {
         const extensionInstallationWarningKey = 'extensionInstallationWarningShown';
         if (accountStorage.getItem(extensionInstallationWarningKey)) {
-            console.debug('Bypassed URL check for third-party extension (account preference).', url);
+            log.ext.debug('Bypassed URL check for third-party extension (account preference).', url);
         } else {
             let dismissWarning = false;
             const confirmation = await Popup.show.confirm(
@@ -1739,7 +1740,7 @@ export async function installExtension(url, global, branch = '') {
         }
     }
 
-    console.debug('Extension installation started', url);
+    log.ext.debug('Extension installation started', url);
 
     toastr.info(t`Please wait...`, t`Installing extension`);
 
@@ -1756,13 +1757,13 @@ export async function installExtension(url, global, branch = '') {
     if (!request.ok) {
         const text = await request.text();
         toastr.warning(text || request.statusText, t`Extension installation failed`, { timeOut: 5000 });
-        console.error('Extension installation failed', request.status, request.statusText, text);
+        log.ext.error('Extension installation failed', request.status, request.statusText, text);
         return false;
     }
 
     const response = await request.json();
     toastr.success(t`Extension '${response.display_name}' has been installed successfully!`, t`Extension installation successful`);
-    console.debug(`Extension "${response.display_name}" has been installed successfully at ${response.extensionPath}`);
+    log.ext.debug(`Extension "${response.display_name}" has been installed successfully at ${response.extensionPath}`);
     await loadExtensionSettings({}, false, false);
     await eventSource.emit(event_types.EXTENSION_SETTINGS_LOADED, response);
 
@@ -1882,7 +1883,7 @@ async function checkForUpdatesManual(sortFn, abortSignal) {
                             originLink.target = '_blank';
                             originLink.rel = 'noopener noreferrer';
                         } catch (error) {
-                            console.log('Error setting origin link', originLink, error);
+                            log.ext.debug('Error setting origin link', originLink, error);
                         }
                     }
 
@@ -1904,7 +1905,7 @@ async function checkForUpdatesManual(sortFn, abortSignal) {
                     }
                 }
             } catch (error) {
-                console.error('Error checking for extension updates', error);
+                log.ext.error('Error checking for extension updates', error);
             }
         });
         promises.push(promise);
@@ -1937,12 +1938,12 @@ async function checkForExtensionUpdates(force) {
     for (const [id, manifest] of Object.entries(manifests)) {
         const isDisabled = extension_settings.disabledExtensions.includes(id);
         if (isDisabled) {
-            console.debug(`Skipping extension: ${manifest.display_name} (${id}) for non-admin user`);
+            log.ext.debug(`Skipping extension: ${manifest.display_name} (${id}) for non-admin user`);
             continue;
         }
         const isGlobal = getExtensionType(id) === 'global';
         if (isGlobal && !isCurrentUserAdmin) {
-            console.debug(`Skipping global extension: ${manifest.display_name} (${id}) for non-admin user`);
+            log.ext.debug(`Skipping global extension: ${manifest.display_name} (${id}) for non-admin user`);
             continue;
         }
 
@@ -1957,7 +1958,7 @@ async function checkForExtensionUpdates(force) {
                         updatesAvailable.push(manifest.display_name);
                     }
                 } catch (error) {
-                    console.error('Error checking for extension updates', error);
+                    log.ext.error('Error checking for extension updates', error);
                 }
             });
             promises.push(promise);
@@ -1988,16 +1989,16 @@ async function autoUpdateExtensions(forceAll) {
     for (const [id, manifest] of Object.entries(manifests)) {
         const isDisabled = extension_settings.disabledExtensions.includes(id);
         if (!forceAll && isDisabled) {
-            console.debug(`Skipping extension: ${manifest.display_name} (${id}) for non-admin user`);
+            log.ext.debug(`Skipping extension: ${manifest.display_name} (${id}) for non-admin user`);
             continue;
         }
         const isGlobal = getExtensionType(id) === 'global';
         if (isGlobal && !isCurrentUserAdmin) {
-            console.debug(`Skipping global extension: ${manifest.display_name} (${id}) for non-admin user`);
+            log.ext.debug(`Skipping global extension: ${manifest.display_name} (${id}) for non-admin user`);
             continue;
         }
         if ((forceAll || manifest.auto_update) && id.startsWith('third-party')) {
-            console.debug(`Auto-updating 3rd-party extension: ${manifest.display_name} (${id})`);
+            log.ext.debug(`Auto-updating 3rd-party extension: ${manifest.display_name} (${id})`);
             promises.push(updateExtension(id.replace('third-party', ''), true, autoUpdateTimeout));
         }
     }
@@ -2027,7 +2028,7 @@ export async function runGenerationInterceptors(chat, contextSize, type) {
             try {
                 await globalThis[interceptorKey](chat, contextSize, abort, type);
             } catch (e) {
-                console.error(`Failed running interceptor for ${manifest.display_name}`, e);
+                log.ext.error(`Failed running interceptor for ${manifest.display_name}`, e);
             }
         }
 
@@ -2062,7 +2063,7 @@ export async function writeExtensionField(characterId, key, value) {
     const context = getContext();
     const character = context.characters[characterId];
     if (!character) {
-        console.warn('Character not found', characterId);
+        log.ext.warn('Character not found', characterId);
         return;
     }
     const extensionPath = `data.extensions.${key}`;
@@ -2106,7 +2107,7 @@ export async function writeExtensionField(characterId, key, value) {
     });
 
     if (!mergeResponse.ok) {
-        console.error('Failed to save extension field', mergeResponse.statusText);
+        log.ext.error('Failed to save extension field', mergeResponse.statusText);
     }
 }
 
@@ -2170,7 +2171,7 @@ export async function writeExtensionFieldBulk(avatars, key, value, { filterPath 
     });
 
     if (!mergeResponse.ok) {
-        console.error('Bulk extension field update failed', mergeResponse.statusText);
+        log.ext.error('Bulk extension field update failed', mergeResponse.statusText);
         return { updated: [], skipped: [], failed: [] };
     }
 
@@ -2248,7 +2249,7 @@ export async function openThirdPartyExtensionMenu(suggestUrl = '') {
     const input = await popup.show();
 
     if (!input) {
-        console.debug('Extension install cancelled');
+        log.ext.debug('Extension install cancelled');
         return;
     }
 
@@ -2284,7 +2285,7 @@ export function getAuthorFromUrl(url) {
             result.url = `${parsedUrl.protocol}//${parsedUrl.hostname}/${result.name}`;
         }
     } catch (error) {
-        console.debug('Error parsing URL:', error);
+        log.ext.debug('Error parsing URL:', error);
     }
 
     return result;

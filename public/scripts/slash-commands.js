@@ -1,4 +1,5 @@
 import { Fuse, DOMPurify } from '../lib.js';
+import { log } from './log.js';
 import { canUseNegativeLookbehind, copyText, findPersona, flashHighlight, resolveAvatarData } from './utils.js';
 
 import {
@@ -122,7 +123,7 @@ function closureToFilter(closure) {
             const result = await localClosure.execute();
             return isTrueBoolean(result.pipe);
         } catch (e) {
-            console.error('Error executing filter closure', e);
+            log.slash.error('Error executing filter closure', e);
             return false;
         }
     };
@@ -261,7 +262,7 @@ export function initDefaultSlashCommands() {
                     return key;
                 }
 
-                console.error('FIXME: The current API is not in the API map');
+                log.slash.error('FIXME: The current API is not in the API map');
                 return '';
             }
 
@@ -302,9 +303,9 @@ export function initDefaultSlashCommands() {
                 if (connectionRequired) {
                     await waitUntilCondition(() => online_status !== 'no_connection', 5000, 100);
                 }
-                console.log('Connection successful');
+                log.slash.info('Connection successful');
             } catch {
-                console.log('Could not connect after 5 seconds, skipping.');
+                log.slash.info('Could not connect after 5 seconds, skipping.');
             }
 
             toastr.clear(toast);
@@ -348,7 +349,7 @@ export function initDefaultSlashCommands() {
                 try {
                     await waitUntilCondition(() => !is_send_press && !is_group_generating, 10000, 100);
                 } catch {
-                    console.warn('Timeout waiting for generation unlock');
+                    log.slash.warn('Timeout waiting for generation unlock');
                     toastr.warning(t`Cannot run /impersonate command while the reply is being generated.`);
                     return '';
                 }
@@ -3450,7 +3451,7 @@ export function initDefaultSlashCommands() {
 
             if (isNaN(messageIndex) || messageIndex < 0 || messageIndex >= chat.length) {
                 toastr.warning(t`Invalid message index: ${index}. Please enter a number between 0 and ${chat.length}.`);
-                console.warn(`WARN: Invalid message index provided for /chat-jump: ${index}. Max index: ${chat.length}`);
+                log.slash.warn(`WARN: Invalid message index provided for /chat-jump: ${index}. Max index: ${chat.length}`);
                 return '';
             }
 
@@ -3478,7 +3479,7 @@ export function initDefaultSlashCommands() {
                 flashHighlight($(messageElement), 2000);
             } else {
                 toastr.warning(t`Could not find element for message ${messageIndex}. It might not be rendered yet or the index is invalid.`);
-                console.warn(`WARN: Element not found for message index ${messageIndex} in /chat-jump.`);
+                log.slash.warn(`WARN: Element not found for message index ${messageIndex} in /chat-jump.`);
             }
 
             return '';
@@ -3514,7 +3515,7 @@ export function initDefaultSlashCommands() {
                 const text = await navigator.clipboard.readText();
                 return text;
             } catch (error) {
-                console.error('Error reading clipboard:', error);
+                log.slash.error('Error reading clipboard:', error);
                 toastr.warning(t`Failed to read clipboard text. Have you granted the permission?`);
                 return '';
             }
@@ -3828,7 +3829,7 @@ function injectCallback(args, value) {
             if (deleted) {
                 return;
             }
-            console.log('Removing ephemeral script injection', id);
+            log.slash.debug('Removing ephemeral script injection', id);
             delete chat_metadata.script_injects[id];
             setExtensionPrompt(prefixedId, '', position, depth, scan, role, filterFunction);
             saveMetadataDebounced();
@@ -3899,7 +3900,7 @@ export function processChatSlashCommands() {
             continue;
         }
 
-        console.log('Removing script injection', id);
+        log.slash.debug('Removing script injection', id);
         delete context.extensionPrompts[id];
     }
 
@@ -3916,7 +3917,7 @@ export function processChatSlashCommands() {
             try {
                 return new SlashCommandParser().parse(inject.filter, true);
             } catch (error) {
-                console.warn('Failed to revive filter closure for script injection', id, error);
+                log.slash.warn('Failed to revive filter closure for script injection', id, error);
                 return null;
             }
         }
@@ -3924,7 +3925,7 @@ export function processChatSlashCommands() {
         const prefixedId = `${SCRIPT_PROMPT_KEY}${id}`;
         const filterClosure = reviveFilterClosure();
         const filter = filterClosure ? closureToFilter(filterClosure) : null;
-        console.log('Adding script injection', id);
+        log.slash.debug('Adding script injection', id);
         setExtensionPrompt(prefixedId, inject.value, inject.position, inject.depth, inject.scan, inject.role, filter);
     }
 }
@@ -3952,14 +3953,14 @@ function trimEndCallback(_, value) {
 
 async function trimTokensCallback(arg, value) {
     if (!value) {
-        console.warn('WARN: No argument provided for /trimtokens command');
+        log.slash.warn('WARN: No argument provided for /trimtokens command');
         return '';
     }
 
     const limit = Number(resolveVariable(arg.limit));
 
     if (isNaN(limit)) {
-        console.warn(`WARN: Invalid limit provided for /trimtokens command: ${limit}`);
+        log.slash.warn(`WARN: Invalid limit provided for /trimtokens command: ${limit}`);
         return value;
     }
 
@@ -3976,13 +3977,13 @@ async function trimTokensCallback(arg, value) {
     }
 
     const { tokenizerName, tokenizerId } = getFriendlyTokenizerName(main_api);
-    console.debug('Requesting tokenization for /trimtokens command', tokenizerName);
+    log.tok.debug('Requesting tokenization for /trimtokens command', tokenizerName);
 
     try {
         const textTokens = getTextTokens(tokenizerId, value);
 
         if (!Array.isArray(textTokens) || !textTokens.length) {
-            console.warn('WARN: No tokens returned for /trimtokens command, falling back to estimation');
+            log.tok.warn('WARN: No tokens returned for /trimtokens command, falling back to estimation');
             const percentage = limit / tokenCount;
             const trimIndex = Math.floor(value.length * percentage);
             const trimmedText = direction === 'start' ? value.substring(trimIndex) : value.substring(0, value.length - trimIndex);
@@ -3993,7 +3994,7 @@ async function trimTokensCallback(arg, value) {
         const { text } = decodeTextTokens(tokenizerId, sliceTokens);
         return text;
     } catch (error) {
-        console.warn('WARN: Tokenization failed for /trimtokens command, returning original', error);
+        log.tok.warn('WARN: Tokenization failed for /trimtokens command, returning original', error);
         return value;
     }
 }
@@ -4021,7 +4022,7 @@ async function buttonsCallback(args, text) {
         const rawButtons = JSON.parse(resolveVariable(args?.labels));
 
         if (!Array.isArray(rawButtons) || !rawButtons.length) {
-            console.warn('WARN: Invalid labels provided for /buttons command');
+            log.slash.warn('WARN: Invalid labels provided for /buttons command');
             return '';
         }
 
@@ -4031,7 +4032,7 @@ async function buttonsCallback(args, text) {
 
         // Validate raw buttons: each entry must be a string or a non-null object with a string `text` field that has content
         if (!buttons.every(btn => typeof btn === 'object' && btn !== null && typeof btn.text === 'string' && btn.text)) {
-            console.warn('WARN: Invalid button label entry provided for /buttons command: each entry must be a string or an object with a "text" property');
+            log.slash.warn('WARN: Invalid button label entry provided for /buttons command: each entry must be a string or an object with a "text" property');
             return '';
         }
 
@@ -4154,7 +4155,7 @@ async function getMessagesCallback(args, value) {
     const range = stringToRange(value, 0, chat.length - 1);
 
     if (!range) {
-        console.warn(`WARN: Invalid range provided for /messages command: ${value}`);
+        log.slash.warn(`WARN: Invalid range provided for /messages command: ${value}`);
         return '';
     }
 
@@ -4183,17 +4184,17 @@ async function getMessagesCallback(args, value) {
     const processMessage = async (mesId) => {
         const msg = chat[mesId];
         if (!msg) {
-            console.warn(`WARN: No message found with ID ${mesId}`);
+            log.slash.warn(`WARN: No message found with ID ${mesId}`);
             return null;
         }
 
         if (role && !filterByRole(msg)) {
-            console.debug(`/messages: Skipping message with ID ${mesId} due to role filter`);
+            log.slash.debug(`/messages: Skipping message with ID ${mesId} due to role filter`);
             return null;
         }
 
         if (!includeHidden && msg.is_system) {
-            console.debug(`/messages: Skipping hidden message with ID ${mesId}`);
+            log.slash.debug(`/messages: Skipping hidden message with ID ${mesId}`);
             return null;
         }
 
@@ -4275,7 +4276,7 @@ function abortCallback({ _abortController, quiet }, reason) {
 
 async function delayCallback(_, amount) {
     if (!amount) {
-        console.warn('WARN: No amount provided for /delay command');
+        log.slash.warn('WARN: No amount provided for /delay command');
         return '';
     }
 
@@ -4338,19 +4339,19 @@ async function inputCallback(args, prompt) {
  */
 function fuzzyCallback(args, searchInValue) {
     if (!searchInValue) {
-        console.warn('WARN: No argument provided for /fuzzy command');
+        log.slash.warn('WARN: No argument provided for /fuzzy command');
         return '';
     }
 
     if (!args.list) {
-        console.warn('WARN: No list argument provided for /fuzzy command');
+        log.slash.warn('WARN: No list argument provided for /fuzzy command');
         return '';
     }
 
     try {
         const list = JSON.parse(resolveVariable(args.list));
         if (!Array.isArray(list)) {
-            console.warn('WARN: Invalid list argument provided for /fuzzy command');
+            log.slash.warn('WARN: Invalid list argument provided for /fuzzy command');
             return '';
         }
 
@@ -4364,7 +4365,7 @@ function fuzzyCallback(args, searchInValue) {
         if ('threshold' in args) {
             params.threshold = parseFloat(args.threshold);
             if (isNaN(params.threshold)) {
-                console.warn('WARN: \'threshold\' argument must be a float between 0.0 and 1.0 for /fuzzy command');
+                log.slash.warn('WARN: \'threshold\' argument must be a float between 0.0 and 1.0 for /fuzzy command');
                 return '';
             }
             if (params.threshold < 0) {
@@ -4380,27 +4381,27 @@ function fuzzyCallback(args, searchInValue) {
             // each item in the "list" is searched within "search_item", if any matches it returns the matched "item"
             for (const searchItem of list) {
                 const result = fuse.search(searchItem);
-                console.debug('/fuzzy: result', result);
+                log.slash.debug('/fuzzy: result', result);
                 if (result.length > 0) {
-                    console.info('/fuzzy: first matched', searchItem);
+                    log.slash.info('/fuzzy: first matched', searchItem);
                     return searchItem;
                 }
             }
 
-            console.info('/fuzzy: no match');
+            log.slash.info('/fuzzy: no match');
             return '';
         }
 
         function getBestMatch() {
             const fuse = new Fuse(list, params);
             const result = fuse.search(searchInValue);
-            console.debug('/fuzzy: result', result);
+            log.slash.debug('/fuzzy: result', result);
             if (result.length > 0) {
-                console.info('/fuzzy: best matched', result[0].item);
+                log.slash.info('/fuzzy: best matched', result[0].item);
                 return result[0].item;
             }
 
-            console.info('/fuzzy: no match');
+            log.slash.info('/fuzzy: no match');
             return '';
         }
 
@@ -4412,7 +4413,7 @@ function fuzzyCallback(args, searchInValue) {
                 return getFirstMatch();
         }
     } catch {
-        console.warn('WARN: Invalid list argument provided for /fuzzy command');
+        log.slash.warn('WARN: Invalid list argument provided for /fuzzy command');
         return '';
     }
 }
@@ -4432,7 +4433,7 @@ function setEphemeralStopStrings(value) {
 
 async function generateRawCallback(args, value) {
     if (!value) {
-        console.warn('WARN: No argument provided for /genraw command');
+        log.slash.warn('WARN: No argument provided for /genraw command');
         return '';
     }
 
@@ -4465,7 +4466,7 @@ async function generateRawCallback(args, value) {
         const result = await generateRaw(params);
         return result;
     } catch (err) {
-        console.error('Error on /genraw generation', err);
+        log.gen.error('Error on /genraw generation', err);
         toastr.error(err.message, t`API Error`, { preventDuplicates: true });
     } finally {
         if (lock) {
@@ -4511,7 +4512,7 @@ async function generateCallback(args, value) {
         const result = await generateQuietPrompt(params);
         return result;
     } catch (err) {
-        console.error('Error on /gen generation', err);
+        log.gen.error('Error on /gen generation', err);
         toastr.error(err.message, t`API Error`, { preventDuplicates: true });
     } finally {
         if (lock) {
@@ -4531,7 +4532,7 @@ async function generateCallback(args, value) {
 async function echoCallback(args, value) {
     // Note: We don't need to sanitize input, as toastr is set up by default to escape HTML via toastr options
     if (value === '') {
-        console.warn('WARN: No argument provided for /echo command');
+        log.slash.warn('WARN: No argument provided for /echo command');
         return '';
     }
 
@@ -4622,7 +4623,7 @@ async function addSwipeCallback(args, value) {
     }
 
     if (!value) {
-        console.warn('WARN: No argument provided for /addswipe command');
+        log.slash.warn('WARN: No argument provided for /addswipe command');
         return '';
     }
 
@@ -4755,7 +4756,7 @@ async function askCharacter(args, text) {
         askResult = await Generate('normal');
     } catch (error) {
         restoreCharacter();
-        console.error('Error running /ask command', error);
+        log.slash.error('Error running /ask command', error);
     } finally {
         if (String(this_chid) === String(prevChId)) {
             await saveChatConditional();
@@ -4773,7 +4774,7 @@ async function hideMessageCallback(args, value) {
     const range = value ? stringToRange(value, 0, chat.length - 1) : { start: chat.length - 1, end: chat.length - 1 };
 
     if (!range) {
-        console.warn(`WARN: Invalid range provided for /hide command: ${value}`);
+        log.slash.warn(`WARN: Invalid range provided for /hide command: ${value}`);
         return '';
     }
 
@@ -4786,7 +4787,7 @@ async function unhideMessageCallback(args, value) {
     const range = value ? stringToRange(value, 0, chat.length - 1) : { start: chat.length - 1, end: chat.length - 1 };
 
     if (!range) {
-        console.warn(`WARN: Invalid range provided for /unhide command: ${value}`);
+        log.slash.warn(`WARN: Invalid range provided for /unhide command: ${value}`);
         return '';
     }
 
@@ -4836,7 +4837,7 @@ async function disableGroupMemberCallback(_, arg) {
     const chid = findGroupMemberId(arg);
 
     if (chid === undefined) {
-        console.warn(`WARN: No group member found for argument ${arg}`);
+        log.slash.warn(`WARN: No group member found for argument ${arg}`);
         return '';
     }
 
@@ -4853,7 +4854,7 @@ async function enableGroupMemberCallback(_, arg) {
     const chid = findGroupMemberId(arg);
 
     if (chid === undefined) {
-        console.warn(`WARN: No group member found for argument ${arg}`);
+        log.slash.warn(`WARN: No group member found for argument ${arg}`);
         return '';
     }
 
@@ -4870,7 +4871,7 @@ async function moveGroupMemberUpCallback(_, arg) {
     const chid = findGroupMemberId(arg);
 
     if (chid === undefined) {
-        console.warn(`WARN: No group member found for argument ${arg}`);
+        log.slash.warn(`WARN: No group member found for argument ${arg}`);
         return '';
     }
 
@@ -4887,7 +4888,7 @@ async function moveGroupMemberDownCallback(_, arg) {
     const chid = findGroupMemberId(arg);
 
     if (chid === undefined) {
-        console.warn(`WARN: No group member found for argument ${arg}`);
+        log.slash.warn(`WARN: No group member found for argument ${arg}`);
         return '';
     }
 
@@ -4909,7 +4910,7 @@ async function peekCallback(_, arg) {
     const chid = findGroupMemberId(arg);
 
     if (chid === undefined) {
-        console.warn(`WARN: No group member found for argument ${arg}`);
+        log.slash.warn(`WARN: No group member found for argument ${arg}`);
         return '';
     }
 
@@ -4935,7 +4936,7 @@ async function removeGroupMemberCallback(_, arg) {
     const chid = findGroupMemberId(arg);
 
     if (chid === undefined) {
-        console.warn(`WARN: No group member found for argument ${arg}`);
+        log.slash.warn(`WARN: No group member found for argument ${arg}`);
         return '';
     }
 
@@ -4950,20 +4951,20 @@ async function addGroupMemberCallback(_, name) {
     }
 
     if (!name) {
-        console.warn('WARN: No argument provided for /memberadd command');
+        log.slash.warn('WARN: No argument provided for /memberadd command');
         return '';
     }
 
     const character = findChar({ name: name, preferCurrentChar: false });
     if (!character) {
-        console.warn(`WARN: No character found for argument ${name}`);
+        log.slash.warn(`WARN: No character found for argument ${name}`);
         return '';
     }
 
     const group = groups.find(x => x.id === selected_group);
 
     if (!group || !Array.isArray(group.members)) {
-        console.warn(`WARN: No group found for ID ${selected_group}`);
+        log.slash.warn(`WARN: No group found for ID ${selected_group}`);
         return '';
     }
 
@@ -4988,7 +4989,7 @@ async function triggerGenerationCallback(args, value) {
         try {
             await waitUntilCondition(() => !is_send_press && !is_group_generating, 10000, 100);
         } catch {
-            console.warn('Timeout waiting for generation unlock');
+            log.slash.warn('Timeout waiting for generation unlock');
             toastr.warning(t`Cannot run /trigger command while the reply is being generated.`);
             outerResolve(Promise.resolve(''));
             return '';
@@ -5003,7 +5004,7 @@ async function triggerGenerationCallback(args, value) {
             chid = findGroupMemberId(value);
 
             if (chid === undefined) {
-                console.warn(`WARN: No group member found for argument ${value}`);
+                log.slash.warn(`WARN: No group member found for argument ${value}`);
             }
         }
 
@@ -5045,7 +5046,7 @@ async function sendUserMessageCallback(args, text) {
 
 async function deleteMessagesByNameCallback(_, name) {
     if (!name) {
-        console.warn('WARN: No name provided for /delname command');
+        log.slash.warn('WARN: No name provided for /delname command');
         return;
     }
 
@@ -5061,14 +5062,14 @@ async function deleteMessagesByNameCallback(_, name) {
     });
 
     if (!messagesToDelete.length) {
-        console.debug('/delname: Nothing to delete');
+        log.slash.debug('/delname: Nothing to delete');
         return;
     }
 
     for (const message of messagesToDelete) {
         const index = chat.indexOf(message);
         if (index !== -1) {
-            console.debug(`/delname: Deleting message #${index}`, message);
+            log.slash.debug(`/delname: Deleting message #${index}`, message);
             chat.splice(index, 1);
         }
     }
@@ -5082,7 +5083,7 @@ async function deleteMessagesByNameCallback(_, name) {
 
 async function goToCharacterCallback(_, name) {
     if (!name) {
-        console.warn('WARN: No character name provided for /go command');
+        log.slash.warn('WARN: No character name provided for /go command');
         return;
     }
 
@@ -5101,7 +5102,7 @@ async function goToCharacterCallback(_, name) {
         setActiveGroup(group.id);
         return group.name;
     }
-    console.warn(`No matches found for name "${name}"`);
+    log.slash.warn(`No matches found for name "${name}"`);
     return '';
 }
 
@@ -5179,11 +5180,11 @@ async function uploadCharacterAvatar(avatarKey, base64Data, { resizePrompt = fal
                 img.src = originalSrc;
             }
         }
-        console.debug(`Refreshed ${avatarImages.length} avatar images for ${avatarKey}`);
+        log.chars.debug(`Refreshed ${avatarImages.length} avatar images for ${avatarKey}`);
 
         return true;
     } catch (error) {
-        console.error('Error uploading character avatar:', error);
+        log.chars.error('Error uploading character avatar:', error);
         toastr.warning(t`Failed to upload avatar: ${error.message}`);
         return false;
     }
@@ -5271,7 +5272,7 @@ async function createCharacterCallback(args) {
         toastr.success(t`Character "${name}" created successfully`);
         return avatarKey;
     } catch (error) {
-        console.error('Error creating character:', error);
+        log.chars.error('Error creating character:', error);
         toastr.error(t`Failed to create character: ${error.message}`);
         return '';
     }
@@ -5442,7 +5443,7 @@ async function updateCharacterCallback(args) {
         toastr.success(t`Character "${character.name}" updated successfully`);
         return character.avatar;
     } catch (error) {
-        console.error('Error updating character:', error);
+        log.chars.error('Error updating character:', error);
         toastr.error(t`Failed to update character: ${error.message}`);
         return '';
     }
@@ -5599,7 +5600,7 @@ async function deleteCharacterCallback(args) {
         const success = await deleteCharacter(character.avatar, { deleteChats });
         return success ? 'true' : 'false';
     } catch (error) {
-        console.error('Error deleting character:', error);
+        log.chars.error('Error deleting character:', error);
         toastr.error(t`Failed to delete character: ${error.message}`);
         return 'false';
     }
@@ -5612,7 +5613,7 @@ async function continueChatCallback(args, prompt) {
         try {
             await waitUntilCondition(() => !is_send_press && !is_group_generating, 10000, 100);
         } catch {
-            console.warn('Timeout waiting for generation unlock');
+            log.slash.warn('Timeout waiting for generation unlock');
             toastr.warning(t`Cannot run /continue command while the reply is being generated.`);
             return reject();
         }
@@ -5626,7 +5627,7 @@ async function continueChatCallback(args, prompt) {
 
             resolve();
         } catch (error) {
-            console.error('Error running /continue command:', error);
+            log.slash.error('Error running /continue command:', error);
             reject(error);
         }
     });
@@ -5645,7 +5646,7 @@ async function regenerateChatCallback(args) {
         try {
             await waitUntilCondition(() => !is_send_press && !is_group_generating, 10000, 100);
         } catch {
-            console.warn('Timeout waiting for generation unlock');
+            log.slash.warn('Timeout waiting for generation unlock');
             toastr.warning(t`Cannot run /regenerate command while the reply is being generated.`);
             outerResolve(Promise.resolve(''));
             return '';
@@ -5678,7 +5679,7 @@ async function swipeChatCallback(args) {
         try {
             await waitUntilCondition(() => !is_send_press && !is_group_generating, 10000, 100);
         } catch {
-            console.warn('Timeout waiting for generation unlock');
+            log.slash.warn('Timeout waiting for generation unlock');
             toastr.warning(t`Cannot run /swipe command while the reply is being generated.`);
             outerResolve(Promise.resolve(''));
             return '';
@@ -5700,7 +5701,7 @@ export async function generateSystemMessage(args, prompt) {
     $('#send_textarea').val('')[0].dispatchEvent(new Event('input', { bubbles: true }));
 
     if (!prompt) {
-        console.warn('WARN: No prompt provided for /sysgen command');
+        log.slash.warn('WARN: No prompt provided for /sysgen command');
         toastr.warning(t`You must provide a prompt for the system message`);
         return '';
     }
@@ -6205,7 +6206,7 @@ function setBackgroundCallback(_, bg) {
         return background_settings.name;
     }
 
-    console.log('Set background to ' + bg);
+    log.slash.info('Set background to ' + bg);
 
     const bgElements = Array.from(document.querySelectorAll('.bg_example')).map((x) => ({ element: x, bgfile: x.getAttribute('bgfile') }));
 
@@ -6347,7 +6348,7 @@ function modelCallback(args, model) {
         return modelSelectControl.value;
     }
 
-    console.log('Set model to ' + model);
+    log.slash.info('Set model to ' + model);
 
     if (modelSelectControl instanceof HTMLInputElement) {
         modelSelectControl.value = model;
@@ -7067,7 +7068,7 @@ async function executeSlashCommands(text, handleParserErrors = true, scope = nul
  */
 export async function setSlashCommandAutoComplete(textarea, isFloating = false) {
     if (!canUseNegativeLookbehind()) {
-        console.warn('Cannot use negative lookbehind in this browser');
+        log.slash.warn('Cannot use negative lookbehind in this browser');
         return;
     }
 

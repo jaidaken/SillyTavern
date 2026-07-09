@@ -1,4 +1,5 @@
 import { Fuse } from '../lib.js';
+import { log } from './log.js';
 
 import {
     shuffle,
@@ -225,7 +226,7 @@ async function validateGroup(group) {
         if (!character) {
             const msg = t`Warning: Listed member ${member} does not exist as a character. It will be removed from the group.`;
             toastr.warning(msg, t`Group Validation`);
-            console.warn(msg);
+            log.chat.warn(msg);
             dirty = true;
         }
         return character;
@@ -255,7 +256,7 @@ async function validateGroup(group) {
 export async function getGroupChat(groupId, reload = false) {
     const group = groups.find((x) => x.id === groupId);
     if (!group) {
-        console.warn('Group not found', groupId);
+        log.chat.warn('Group not found', groupId);
         return;
     }
 
@@ -354,14 +355,14 @@ export function findGroupMemberId(arg, full = false) {
     arg = arg?.toString()?.trim();
 
     if (!arg) {
-        console.warn('WARN: No argument provided for findGroupMemberId');
+        log.chat.warn('WARN: No argument provided for findGroupMemberId');
         return;
     }
 
     const group = groups.find(x => x.id == selected_group);
 
     if (!group || !Array.isArray(group.members)) {
-        console.warn('WARN: No group found for selected group ID');
+        log.chat.warn('WARN: No group found for selected group ID');
         return;
     }
 
@@ -378,36 +379,36 @@ export function findGroupMemberId(arg, full = false) {
         const result = fuse.search(arg);
 
         if (!result.length) {
-            console.warn(`WARN: No group member found using string ${arg}`);
+            log.chat.warn(`WARN: No group member found using string ${arg}`);
             return;
         }
 
         const chid = result[0].item.index;
 
         if (chid === -1) {
-            console.warn(`WARN: No character found for group member ${arg}`);
+            log.chat.warn(`WARN: No character found for group member ${arg}`);
             return;
         }
 
-        console.log(`Targeting group member ${chid} (${arg}) from search result`, result[0]);
+        log.chat.debug(`Targeting group member ${chid} (${arg}) from search result`, result[0]);
 
         return !full ? chid : { ...{ id: chid }, ...result[0].item };
     } else {
         const memberAvatar = group.members[index];
 
         if (memberAvatar === undefined) {
-            console.warn(`WARN: No group member found at index ${index}`);
+            log.chat.warn(`WARN: No group member found at index ${index}`);
             return;
         }
 
         const chid = characters.findIndex(x => x.avatar === memberAvatar);
 
         if (chid === -1) {
-            console.warn(`WARN: No character found for group member ${memberAvatar} at index ${index}`);
+            log.chat.warn(`WARN: No character found for group member ${memberAvatar} at index ${index}`);
             return;
         }
 
-        console.log(`Targeting group member ${memberAvatar} at index ${index}`);
+        log.chat.debug(`Targeting group member ${memberAvatar} at index ${index}`);
 
         return !full ? chid : {
             id: chid,
@@ -429,7 +430,7 @@ export function getGroupDepthPrompts(groupId, characterId) {
         return [];
     }
 
-    console.debug('getGroupDepthPrompts entered for group: ', groupId);
+    log.chat.debug('getGroupDepthPrompts entered for group: ', groupId);
     const group = groups.find(x => x.id === groupId);
 
     if (!group || !Array.isArray(group.members) || !group.members.length) {
@@ -447,12 +448,12 @@ export function getGroupDepthPrompts(groupId, characterId) {
         const character = characters[index];
 
         if (index === -1 || !character) {
-            console.debug(`Skipping missing member: ${member}`);
+            log.chat.debug(`Skipping missing member: ${member}`);
             continue;
         }
 
         if (group.disabled_members.includes(member) && characterId !== index) {
-            console.debug(`Skipping disabled group member: ${member}`);
+            log.chat.debug(`Skipping disabled group member: ${member}`);
             continue;
         }
 
@@ -623,7 +624,7 @@ function resetSelectedGroup() {
 async function saveGroupChat(groupId, shouldSaveGroup, force = false) {
     const group = groups.find(x => x.id == groupId);
     if (!group) {
-        console.warn('Group not found', groupId);
+        log.chat.warn('Group not found', groupId);
         return;
     }
     const chatId = group.chat_id;
@@ -646,7 +647,7 @@ async function saveGroupChat(groupId, shouldSaveGroup, force = false) {
         const isIntegrityError = errorData?.error === 'integrity' && !force;
         if (!isIntegrityError) {
             toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Group Chat could not be saved`);
-            console.error('Group chat could not be saved', response);
+            log.chat.error('Group chat could not be saved', response);
             return;
         }
 
@@ -661,7 +662,7 @@ async function saveGroupChat(groupId, shouldSaveGroup, force = false) {
         const forceSaveConfirmed = popupResult === 'OVERWRITE';
 
         if (!forceSaveConfirmed) {
-            console.warn('Chat integrity check failed, and user did not confirm the overwrite. Reloading the page.');
+            log.chat.warn('Chat integrity check failed, and user did not confirm the overwrite. Reloading the page.');
             window.location.reload();
             return;
         }
@@ -695,7 +696,7 @@ export async function renameGroupMember(oldAvatar, newAvatar, newName) {
             // Replace group member avatar id and save the changes
             group.members[memberIndex] = newAvatar;
             await editGroup(group.id, true, false);
-            console.log(`Renamed character ${newName} in group: ${group.name}`);
+            log.chat.info(`Renamed character ${newName} in group: ${group.name}`);
 
             // Load all chats from this group
             for (const chatId of group.chats) {
@@ -741,13 +742,13 @@ export async function renameGroupMember(oldAvatar, newAvatar, newName) {
                             throw new Error('Group member could not be renamed');
                         }
 
-                        console.log(`Renamed character ${newName} in group chat: ${chatId}`);
+                        log.chat.debug(`Renamed character ${newName} in group chat: ${chatId}`);
                     }
                 }
             }
         } catch (error) {
-            console.log(`An error during renaming the character ${newName} in group: ${group.name}`);
-            console.error(error);
+            log.chat.debug(`An error during renaming the character ${newName} in group: ${group.name}`);
+            log.chat.error(error);
         }
     }
 }
@@ -1773,7 +1774,7 @@ async function onHideMutedSpritesClick(value) {
     if (openGroupId) {
         let _thisGroup = groups.find((x) => x.id == openGroupId);
         _thisGroup.hideMutedSprites = value;
-        console.log(`_thisGroup.hideMutedSprites = ${_thisGroup.hideMutedSprites}`);
+        log.chat.debug(`_thisGroup.hideMutedSprites = ${_thisGroup.hideMutedSprites}`);
         await editGroup(openGroupId, false, false);
         await eventSource.emit(event_types.GROUP_UPDATED);
     }
@@ -2022,7 +2023,7 @@ export async function openGroupById(groupId) {
     }
 
     if (!groups.find(x => x.id === groupId)) {
-        console.log('Group not found', groupId);
+        log.chat.debug('Group not found', groupId);
         return false;
     }
 
@@ -2055,7 +2056,7 @@ export async function openGroupById(groupId) {
 async function openCharacterDefinition(characterSelect) {
     if (is_group_generating) {
         toastr.warning(t`Can't peek a character while group reply is being generated`);
-        console.warn('Can\'t peek a character def while group reply is being generated');
+        log.chat.warn('Can\'t peek a character def while group reply is being generated');
         return;
     }
 
@@ -2183,7 +2184,7 @@ export async function getGroupPastChats(groupId) {
             }
         }
     } catch (err) {
-        console.error(err);
+        log.chat.error(err);
     }
     return chats;
 }
@@ -2257,7 +2258,7 @@ export async function deleteGroupChatByName(groupId, chatName) {
 
     if (!response.ok) {
         toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Group chat could not be deleted`);
-        console.error('Group chat could not be deleted');
+        log.chat.error('Group chat could not be deleted');
         return;
     }
 
@@ -2392,7 +2393,7 @@ export async function saveGroupBookmarkChat(groupId, name, metadata, mesId, chat
 
     if (!response.ok) {
         toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Group chat could not be saved`);
-        console.error('Group chat could not be saved', response);
+        log.chat.error('Group chat could not be saved', response);
     }
 }
 
@@ -2416,7 +2417,7 @@ function stopAutoModeGeneration() {
 function doCurMemberListPopout() {
     //repurposes the zoomed avatar template to server as a floating group member list
     if ($('#groupMemberListPopout').length === 0) {
-        console.debug('did not see popout yet, creating');
+        log.chat.debug('did not see popout yet, creating');
         const memberListClone = $(this).parent().parent().find('.inline-drawer-content').html();
         const template = $('#zoomed_avatar_template').html();
         const controlBarHtml = `<div class="panelControlBar flex-container">
@@ -2446,7 +2447,7 @@ function doCurMemberListPopout() {
         // Re-add pagination not working in popout
         printGroupMembers();
     } else {
-        console.debug('saw existing popout, removing');
+        log.chat.debug('saw existing popout, removing');
         $('#groupMemberListPopout').fadeOut(animation_duration, () => { $('#groupMemberListPopout').remove(); });
     }
 }

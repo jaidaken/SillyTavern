@@ -1,4 +1,5 @@
 import { Fuse, localforage } from '../lib.js';
+import { log } from './log.js';
 import { characters, chat_metadata, eventSource, event_types, generateQuietPrompt, getCurrentChatId, getRequestHeaders, getThumbnailUrl, saveMetadata, saveSettingsDebounced, this_chid } from '../script.js';
 import { openThirdPartyExtensionMenu, saveMetadataDebounced } from './extensions.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
@@ -456,7 +457,7 @@ async function getThumbnailFromStorage(bg, isCustom) {
         THUMBNAIL_BLOBS.set(bg, blobUrl);
         return blobUrl;
     } catch (error) {
-        console.error('Error fetching thumbnail, fallback image will be used:', error);
+        log.ui.error('Error fetching thumbnail, fallback image will be used:', error);
         const fallbackBlob = PNG_PIXEL_BLOB;
         const fallbackBlobUrl = URL.createObjectURL(fallbackBlob);
         THUMBNAIL_BLOBS.set(bg, fallbackBlobUrl);
@@ -475,7 +476,7 @@ async function getNewBackgroundName(referenceElement) {
     const oldBg = exampleBlock.attr('bgfile');
 
     if (!oldBg) {
-        console.debug('no bgfile');
+        log.ui.debug('no bgfile');
         return;
     }
 
@@ -485,14 +486,14 @@ async function getNewBackgroundName(referenceElement) {
     const newBgExtensionless = await Popup.show.input(t`Enter new background name:`, null, oldBgExtensionless);
 
     if (!newBgExtensionless) {
-        console.debug('no new_bg_extensionless');
+        log.ui.debug('no new_bg_extensionless');
         return;
     }
 
     const newBg = `${newBgExtensionless}.${fileExtension}`;
 
     if (oldBgExtensionless === newBgExtensionless) {
-        console.debug('new_bg === old_bg');
+        log.ui.debug('new_bg === old_bg');
         return;
     }
 
@@ -639,7 +640,7 @@ async function autoBackgroundCommand() {
     if (bestMatch.length == 0) {
         for (const option of options) {
             if (String(reply).toLowerCase().includes(option.text.toLowerCase())) {
-                console.debug('Fallback choosing background:', option);
+                log.ui.debug('Fallback choosing background:', option);
                 option.element.click();
                 return '';
             }
@@ -649,7 +650,7 @@ async function autoBackgroundCommand() {
         return '';
     }
 
-    console.debug('Automatically choosing background:', bestMatch);
+    log.ui.debug('Automatically choosing background:', bestMatch);
     bestMatch[0].item.element.click();
     return '';
 }
@@ -754,7 +755,7 @@ async function preloadImageMetadata() {
             }
         }
     } catch (error) {
-        console.error('[ImageMetadata] Failed to preload metadata:', error);
+        log.ui.error('[ImageMetadata] Failed to preload metadata:', error);
     }
 }
 
@@ -794,13 +795,13 @@ async function loadFolders() {
                     method: 'POST',
                     headers: getRequestHeaders(),
                     body: JSON.stringify({ updates: thumbnailUpdates }),
-                }).catch(err => console.debug('Auto-thumbnail save failed:', err));
+                }).catch(err => log.ui.debug('Auto-thumbnail save failed:', err));
             }
 
             renderFolderGrid();
         }
     } catch (error) {
-        console.error('Error loading folders:', error);
+        log.ui.error('Error loading folders:', error);
     }
 }
 
@@ -1113,7 +1114,7 @@ async function onAddSelectedToFolder() {
             toastr.info(t`Selected backgrounds are already in the chosen folders`);
         }
     } catch (error) {
-        console.error('Error adding selected backgrounds to folder:', error);
+        log.ui.error('Error adding selected backgrounds to folder:', error);
         toastr.error(t`Failed to update folder assignment`);
     }
 }
@@ -1146,7 +1147,7 @@ async function onRemoveSelectedFromCurrentFolder() {
         setBackgroundSelectionMode(false);
         toastr.success(t`Removed ${bgFiles.length} background(s) from folder`);
     } catch (error) {
-        console.error('Error removing selected backgrounds from current folder:', error);
+        log.ui.error('Error removing selected backgrounds from current folder:', error);
         toastr.error(t`Failed to update folder assignment`);
     }
 }
@@ -1177,7 +1178,7 @@ async function onCreateFolder() {
             toastr.success(t`Folder created: ${folder.name}`);
         }
     } catch (error) {
-        console.error('Error creating folder:', error);
+        log.ui.error('Error creating folder:', error);
         toastr.error(t`Failed to create folder`);
     }
 }
@@ -1205,7 +1206,7 @@ async function onRenameFolder(folderId) {
             toastr.success(t`Folder renamed`);
         }
     } catch (error) {
-        console.error('Error renaming folder:', error);
+        log.ui.error('Error renaming folder:', error);
         toastr.error(t`Failed to rename folder`);
     }
 }
@@ -1242,7 +1243,7 @@ async function onDeleteFolder(folderId) {
             toastr.success(t`Folder deleted`);
         }
     } catch (error) {
-        console.error('Error deleting folder:', error);
+        log.ui.error('Error deleting folder:', error);
         toastr.error(t`Failed to delete folder`);
     }
 }
@@ -1317,7 +1318,7 @@ async function onAssignToFolder(bgFile) {
 
         toastr.success(t`Folder assignment updated`);
     } catch (error) {
-        console.error('Error assigning to folder:', error);
+        log.ui.error('Error assigning to folder:', error);
         toastr.error(t`Failed to update folder assignment`);
     }
 }
@@ -1349,7 +1350,7 @@ async function onSetFolderCover(bgFile) {
             toastr.success(t`Folder cover updated`);
         }
     } catch (error) {
-        console.error('Error setting folder cover:', error);
+        log.ui.error('Error setting folder cover:', error);
         toastr.error(t`Failed to set folder cover`);
     }
 }
@@ -1471,7 +1472,7 @@ async function onBackgroundUploadSelected(e) {
     const input = e.currentTarget;
 
     if (!(input instanceof HTMLInputElement)) {
-        console.error('Invalid input element for background upload');
+        log.ui.error('Invalid input element for background upload');
         return;
     }
 
@@ -1492,7 +1493,7 @@ async function onBackgroundUploadSelected(e) {
                 await uploadChatBackground(formData);
                 break;
             default:
-                console.error('Unknown background source type');
+                log.ui.error('Unknown background source type');
                 continue;
         }
     }
@@ -1535,7 +1536,7 @@ async function convertFileIfVideo(formData) {
     } catch (error) {
         formData.delete('avatar');
         toastMessage.remove();
-        console.error('Error converting video to animated webp:', error);
+        log.ui.error('Error converting video to animated webp:', error);
         toastr.error(t`Error converting video to animated webp`);
     }
 }
@@ -1547,7 +1548,7 @@ async function convertFileIfVideo(formData) {
 async function uploadBackground(formData) {
     try {
         if (!formData.has('avatar')) {
-            console.log('No file provided. Background upload cancelled.');
+            log.ui.debug('No file provided. Background upload cancelled.');
             return;
         }
 
@@ -1567,7 +1568,7 @@ async function uploadBackground(formData) {
         await getBackgrounds();
         highlightNewBackground(bg);
     } catch (error) {
-        console.error('Error uploading background:', error);
+        log.ui.error('Error uploading background:', error);
     }
 }
 
@@ -1583,13 +1584,13 @@ async function uploadChatBackground(formData) {
             return;
         }
         if (!formData.has('avatar')) {
-            console.log('No file provided. Chat background upload cancelled.');
+            log.ui.debug('No file provided. Chat background upload cancelled.');
             return;
         }
 
         const file = formData.get('avatar');
         if (!(file instanceof File)) {
-            console.error('Invalid file type for chat background upload');
+            log.ui.error('Invalid file type for chat background upload');
             return;
         }
 
@@ -1611,7 +1612,7 @@ async function uploadChatBackground(formData) {
         highlightLockedBackground();
         highlightSelectedBackground();
     } catch (error) {
-        console.error('Error uploading chat background:', error);
+        log.ui.error('Error uploading chat background:', error);
     }
 }
 
