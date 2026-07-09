@@ -25,6 +25,7 @@ import { getChatInfo } from './chats.js';
 import { ByafParser } from '../byaf.js';
 import { CharXParser, persistCharXAssets } from '../charx.js';
 import cacheBuster from '../middleware/cacheBuster.js';
+import { log } from '../log.js';
 
 // With 100 MB limit it would take roughly 3000 characters to reach this limit
 const memoryCacheCapacity = getConfigValue('performance.memoryCacheCapacity', '100mb');
@@ -92,7 +93,7 @@ class DiskCache {
 
             await this.verify(directories);
         } catch (error) {
-            console.error('Error while synchronizing cache entries:', error);
+            log.chars.error('Error while synchronizing cache entries:', error);
         }
     }
 
@@ -145,7 +146,7 @@ class DiskCache {
                 }
             }
         } catch (error) {
-            console.error('Error while verifying disk cache:', error);
+            log.chars.error('Error while verifying disk cache:', error);
         }
     }
 
@@ -191,7 +192,7 @@ async function readCharacterData(inputFile, inputFormat = 'png') {
                 return cachedData;
             }
         } catch (error) {
-            console.warn('Error while reading from disk cache:', error);
+            log.chars.warn('Error while reading from disk cache:', error);
         }
     }
 
@@ -202,7 +203,7 @@ async function readCharacterData(inputFile, inputFormat = 'png') {
             const cache = await diskCache.instance();
             await cache.setItem(cacheKey, result);
         } catch (error) {
-            console.warn('Error while writing to disk cache:', error);
+            log.chars.warn('Error while writing to disk cache:', error);
         }
     }
     return result;
@@ -245,7 +246,7 @@ async function writeCharacterData(inputFile, data, outputFile, request, crop = u
                 return await tryReadImage(inputFile, crop);
             } catch (error) {
                 const message = Buffer.isBuffer(inputFile) ? 'Failed to read image buffer.' : `Failed to read image: ${inputFile}.`;
-                console.warn(message, 'Using a fallback image.', error);
+                log.chars.warn(message, 'Using a fallback image.', error);
                 return await fs.promises.readFile(DEFAULT_AVATAR_PATH);
             }
         }
@@ -259,7 +260,7 @@ async function writeCharacterData(inputFile, data, outputFile, request, crop = u
         writeFileAtomicSync(outputImagePath, outputImage);
         return true;
     } catch (err) {
-        console.error(err);
+        log.chars.error(err);
         return false;
     }
 }
@@ -328,7 +329,7 @@ async function tryReadImage(imgPath, crop) {
         return await applyAvatarCropResize(rawImg, crop);
     } catch (error) {
         // If it's an unsupported type of image (APNG) - just read the file as buffer
-        console.error(`Failed to read image: ${imgPath}`, error);
+        log.chars.error(`Failed to read image: ${imgPath}`, error);
         return fs.readFileSync(imgPath);
     }
 }
@@ -424,12 +425,12 @@ const processCharacter = async (item, directories, { shallow }) => {
         character.data_size = calculateDataSize(jsonObject?.data);
         return shallow ? toShallow(character) : character;
     } catch (err) {
-        console.error(`Could not process character: ${item}`);
+        log.chars.error(`Could not process character: ${item}`);
 
         if (err instanceof SyntaxError) {
-            console.error(`${item} does not contain a valid JSON object.`);
+            log.chars.error(`${item} does not contain a valid JSON object.`);
         } else {
-            console.error('An unexpected error occurred: ', err);
+            log.chars.error('An unexpected error occurred: ', err);
         }
 
         return {
@@ -503,7 +504,7 @@ function unsetPrivateFields(char) {
 
 function readFromV2(char) {
     if (_.isUndefined(char.data)) {
-        console.warn(`Char ${char.name} has Spec v2 data missing`);
+        log.chars.warn(`Char ${char.name} has Spec v2 data missing`);
         return char;
     }
 
@@ -523,7 +524,6 @@ function readFromV2(char) {
     };
 
     _.forEach(fieldMappings, (v2Path, charField) => {
-        //console.info(`Migrating field: ${charField} from ${v2Path}`);
         const v2Value = _.get(char.data, v2Path);
         if (_.isUndefined(v2Value)) {
             let defaultValue = undefined;
@@ -538,15 +538,14 @@ function readFromV2(char) {
             }
 
             if (!_.isUndefined(defaultValue)) {
-                //console.warn(`Spec v2 extension data missing for field: ${charField}, using default value: ${defaultValue}`);
                 char[charField] = defaultValue;
             } else {
-                console.warn(`Char ${char.name} has Spec v2 data missing for unknown field: ${charField}`);
+                log.chars.warn(`Char ${char.name} has Spec v2 data missing for unknown field: ${charField}`);
                 return;
             }
         }
         if (!_.isUndefined(char[charField]) && !_.isUndefined(v2Value) && String(char[charField]) !== String(v2Value)) {
-            console.warn(`Char ${char.name} has Spec v2 data mismatch with Spec v1 for field: ${charField}`, char[charField], v2Value);
+            log.chars.warn(`Char ${char.name} has Spec v2 data mismatch with Spec v1 for field: ${charField}`, char[charField], v2Value);
         }
         char[charField] = v2Value;
     });
@@ -639,7 +638,7 @@ function charaFormatData(data, directories) {
                 _.set(char, 'data.character_book', convertWorldInfoToCharacterBook(data.world, file.entries));
             }
         } catch {
-            console.warn(`Failed to read world info file: ${data.world}. Character book will not be available.`);
+            log.wi.warn(`Failed to read world info file: ${data.world}. Character book will not be available.`);
         }
     }
 
@@ -649,7 +648,7 @@ function charaFormatData(data, directories) {
             // Deep merge the extensions object
             _.set(char, 'data.extensions', deepMerge(char.data.extensions, extensions));
         } catch {
-            console.warn(`Failed to parse extensions JSON: ${data.extensions}`);
+            log.chars.warn(`Failed to parse extensions JSON: ${data.extensions}`);
         }
     }
 
@@ -732,7 +731,7 @@ async function importFromYaml(uploadPath, context, preservedFileName) {
     const fileText = fs.readFileSync(uploadPath, 'utf8');
     fs.unlinkSync(uploadPath);
     const yamlData = yaml.parse(fileText);
-    console.info('Importing from YAML');
+    log.chars.info('Importing from YAML');
     yamlData.name = sanitize(yamlData.name);
     const fileName = preservedFileName || getPngName(yamlData.name, context.request.user.directories);
     let char = convertToV2({
@@ -789,10 +788,10 @@ async function importFromCharX(uploadPath, { request }, preservedFileName) {
         try {
             const summary = persistCharXAssets(auxiliaryAssets, extractedBuffers, request.user.directories, characterFolder);
             if (summary.sprites || summary.backgrounds || summary.misc) {
-                console.log(`CharX: Imported ${summary.sprites} sprite(s), ${summary.backgrounds} background(s), ${summary.misc} misc asset(s) for ${characterFolder}`);
+                log.chars.info(`CharX: Imported ${summary.sprites} sprite(s), ${summary.backgrounds} background(s), ${summary.misc} misc asset(s) for ${characterFolder}`);
             }
         } catch (error) {
-            console.warn(`CharX: Failed to persist auxiliary assets for ${characterFolder}`, error);
+            log.chars.warn(`CharX: Failed to persist auxiliary assets for ${characterFolder}`, error);
         }
     }
 
@@ -803,7 +802,7 @@ async function importFromCharX(uploadPath, { request }, preservedFileName) {
 async function importFromByaf(uploadPath, { request }, preservedFileName) {
     const data = (await fsPromises.readFile(uploadPath)).buffer;
     await fsPromises.unlink(uploadPath);
-    console.info('Importing from BYAF');
+    log.chars.info('Importing from BYAF');
 
     const byafData = await new ByafParser(data).parse();
     const card = readFromV2(byafData.card);
@@ -820,7 +819,7 @@ async function importFromByaf(uploadPath, { request }, preservedFileName) {
             const dir = path.dirname(filePath);
             if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
             writeFileAtomicSync(filePath, ByafParser.getChatFromScenario(scenario, request.body.user_name, card.name, byafData.chatBackgrounds), 'utf8');
-            console.log(`Created ${chatName} chat from BYAF import`);
+            log.chars.info(`Created ${chatName} chat from BYAF import`);
             return chatName;
         };
 
@@ -835,7 +834,7 @@ async function importFromByaf(uploadPath, { request }, preservedFileName) {
                 const newFile = `${file}${extension}`;
                 writeFileAtomicSync(path.join(filePath, newFile), bg.data);
                 bg.name = clientRelativePath(request.user.directories.root, path.join(filePath, newFile)); // Update background name to the new file
-                console.log(`Created ${newFile} background from BYAF import`);
+                log.chars.info(`Created ${newFile} background from BYAF import`);
             }
         }
 
@@ -863,7 +862,7 @@ async function importFromByaf(uploadPath, { request }, preservedFileName) {
             const file = getUniqueName(`${sanitize(icon.label, { replacement: sanitizeSafeCharacterReplacements }) || 'alt'}`, (name) => fs.existsSync(path.join(altImagesFolder, `${name}${extension}`)));
             if (Buffer.isBuffer(icon.image)) {
                 writeFileAtomicSync(path.join(altImagesFolder, `${file}${extension}`), icon.image);
-                console.log(`Created ${file}${extension} alternate icon from BYAF import`);
+                log.chars.info(`Created ${file}${extension} alternate icon from BYAF import`);
             }
         }
     }
@@ -887,7 +886,7 @@ async function importFromJson(uploadPath, { request }, preservedFileName) {
     let jsonData = JSON.parse(data);
 
     if (jsonData.spec !== undefined) {
-        console.info(`Importing from ${jsonData.spec} json`);
+        log.chars.info(`Importing from ${jsonData.spec} json`);
         importRisuSprites(request.user.directories, jsonData);
         unsetPrivateFields(jsonData);
         if (jsonData.data?.name) {
@@ -901,7 +900,7 @@ async function importFromJson(uploadPath, { request }, preservedFileName) {
         const result = await writeCharacterData(DEFAULT_AVATAR_PATH, char, pngName, request);
         return result ? pngName : '';
     } else if (jsonData.name !== undefined) {
-        console.info('Importing from v1 json');
+        log.chars.info('Importing from v1 json');
         jsonData.name = sanitize(jsonData.name);
         if (jsonData.creator_notes) {
             jsonData.creator_notes = jsonData.creator_notes.replace('Creator\'s notes go here.', '');
@@ -928,7 +927,7 @@ async function importFromJson(uploadPath, { request }, preservedFileName) {
         return result ? pngName : '';
     } else if (jsonData.char_name !== undefined) {
         //json Pygmalion notepad
-        console.info('Importing from gradio json');
+        log.chars.info('Importing from gradio json');
         jsonData.char_name = sanitize(jsonData.char_name);
         if (jsonData.creator_notes) {
             jsonData.creator_notes = jsonData.creator_notes.replace('Creator\'s notes go here.', '');
@@ -978,7 +977,7 @@ async function importFromPng(uploadPath, { request }, preservedFileName) {
     const pngName = preservedFileName || getPngName(jsonData.name, request.user.directories);
 
     if (jsonData.spec !== undefined) {
-        console.info(`Found a ${jsonData.spec} character file.`);
+        log.chars.info(`Found a ${jsonData.spec} character file.`);
         importRisuSprites(request.user.directories, jsonData);
         unsetPrivateFields(jsonData);
         jsonData = readFromV2(jsonData);
@@ -988,7 +987,7 @@ async function importFromPng(uploadPath, { request }, preservedFileName) {
         fs.unlinkSync(uploadPath);
         return result ? pngName : '';
     } else if (jsonData.name !== undefined) {
-        console.info('Found a v1 character file.');
+        log.chars.info('Found a v1 character file.');
 
         if (jsonData.creator_notes) {
             jsonData.creator_notes = jsonData.creator_notes.replace('Creator\'s notes go here.', '');
@@ -1045,7 +1044,7 @@ router.post('/create', getFileNameValidationFunction('file_name'), async functio
             return response.send(avatarName);
         }
     } catch (err) {
-        console.error(err);
+        log.chars.error(err);
         response.sendStatus(500);
     }
 });
@@ -1091,20 +1090,20 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
         // Return new avatar name to ST
         return response.send({ avatar: newAvatarName });
     } catch (err) {
-        console.error(err);
+        log.chars.error(err);
         return response.sendStatus(500);
     }
 });
 
 router.post('/edit', validateAvatarUrlMiddleware, async function (request, response) {
     if (!request.body) {
-        console.warn('Error: no response body detected');
+        log.chars.warn('Error: no response body detected');
         response.status(400).send('Error: no response body detected');
         return;
     }
 
     if (request.body.ch_name === '' || request.body.ch_name === undefined || request.body.ch_name === '.') {
-        console.warn('Error: invalid name.');
+        log.chars.warn('Error: invalid name.');
         response.status(400).send('Error: invalid name.');
         return;
     }
@@ -1132,7 +1131,7 @@ router.post('/edit', validateAvatarUrlMiddleware, async function (request, respo
 
         return response.sendStatus(200);
     } catch (err) {
-        console.error('An error occurred, character edit invalidated.', err);
+        log.chars.error('An error occurred, character edit invalidated.', err);
         return response.sendStatus(500);
     }
 });
@@ -1173,7 +1172,7 @@ router.post('/edit-avatar', validateAvatarUrlMiddleware, async function (request
 
         return response.sendStatus(200);
     } catch (err) {
-        console.error('An error occurred while editing avatar', err);
+        log.chars.error('An error occurred while editing avatar', err);
         return response.sendStatus(500);
     }
 });
@@ -1189,19 +1188,19 @@ router.post('/edit-avatar', validateAvatarUrlMiddleware, async function (request
  * @returns {void}
  */
 router.post('/edit-attribute', validateAvatarUrlMiddleware, async function (request, response) {
-    console.debug(request.body);
+    log.chars.debug(request.body);
     if (!request.body) {
-        console.warn('Error: no response body detected');
+        log.chars.warn('Error: no response body detected');
         return response.status(400).send('Error: no response body detected');
     }
 
     if (request.body.ch_name === '' || request.body.ch_name === undefined || request.body.ch_name === '.') {
-        console.warn('Error: invalid name.');
+        log.chars.warn('Error: invalid name.');
         return response.status(400).send('Error: invalid name.');
     }
 
     if (request.body.field === 'json_data') {
-        console.warn('Error: cannot edit json_data field.');
+        log.chars.warn('Error: cannot edit json_data field.');
         return response.status(400).send('Error: cannot edit json_data field.');
     }
 
@@ -1213,7 +1212,7 @@ router.post('/edit-attribute', validateAvatarUrlMiddleware, async function (requ
         const char = JSON.parse(charJSON);
         //check if the field exists
         if (char[request.body.field] === undefined && char.data[request.body.field] === undefined) {
-            console.warn('Error: invalid field.');
+            log.chars.warn('Error: invalid field.');
             response.status(400).send('Error: invalid field.');
             return;
         }
@@ -1224,7 +1223,7 @@ router.post('/edit-attribute', validateAvatarUrlMiddleware, async function (requ
         await writeCharacterData(avatarPath, newCharJSON, targetFile, request);
         return response.sendStatus(200);
     } catch (err) {
-        console.error('An error occurred, character edit invalidated.', err);
+        log.chars.error('An error occurred, character edit invalidated.', err);
         return response.sendStatus(500);
     }
 });
@@ -1377,11 +1376,11 @@ router.post('/merge-attributes', getFileNameValidationFunction('avatar'), async 
                     } else if (result.skipped) {
                         skipped.push(avatar);
                     } else {
-                        console.warn(`Bulk merge failed for ${avatar}:`, result.error);
+                        log.chars.warn(`Bulk merge failed for ${avatar}:`, result.error);
                         failed.push(avatar);
                     }
                 } catch (error) {
-                    console.error(`Bulk merge failed for ${avatar}:`, error);
+                    log.chars.error(`Bulk merge failed for ${avatar}:`, error);
                     failed.push(avatar);
                 }
             };
@@ -1403,7 +1402,7 @@ router.post('/merge-attributes', getFileNameValidationFunction('avatar'), async 
         if (result.ok) {
             response.sendStatus(200);
         } else {
-            console.warn(result.error);
+            log.chars.warn(result.error);
             response.status(400).send({ message: `Validation failed for ${update.avatar}`, error: result.error });
         }
     } catch (exception) {
@@ -1417,7 +1416,7 @@ router.post('/delete', validateAvatarUrlMiddleware, async function (request, res
     }
 
     if (request.body.avatar_url !== sanitize(request.body.avatar_url)) {
-        console.error('Malicious filename prevented');
+        log.chars.error('Malicious filename prevented');
         return response.sendStatus(403);
     }
 
@@ -1431,7 +1430,7 @@ router.post('/delete', validateAvatarUrlMiddleware, async function (request, res
     let dir_name = (request.body.avatar_url.replace('.png', ''));
 
     if (!dir_name.length) {
-        console.error('Malicious dirname prevented');
+        log.chars.error('Malicious dirname prevented');
         return response.sendStatus(403);
     }
 
@@ -1439,7 +1438,7 @@ router.post('/delete', validateAvatarUrlMiddleware, async function (request, res
         try {
             await fs.promises.rm(path.join(request.user.directories.chats, sanitize(dir_name)), { recursive: true, force: true });
         } catch (err) {
-            console.error(err);
+            log.chars.error(err);
             return response.sendStatus(500);
         }
     }
@@ -1469,7 +1468,7 @@ router.post('/all', async function (request, response) {
         const data = (await Promise.all(processingPromises)).filter(c => c.name);
         return response.send(data);
     } catch (err) {
-        console.error(err);
+        log.chars.error(err);
         const isRangeError = err instanceof RangeError;
         response.status(500).send({ overflow: isRangeError, error: true });
     }
@@ -1489,7 +1488,7 @@ router.post('/get', validateAvatarUrlMiddleware, async function (request, respon
 
         return response.send(data);
     } catch (err) {
-        console.error(err);
+        log.chars.error(err);
         response.sendStatus(500);
     }
 });
@@ -1527,7 +1526,7 @@ router.post('/chats', validateAvatarUrlMiddleware, async function (request, resp
 
         return response.send(validFiles);
     } catch (error) {
-        console.error(error);
+        log.chars.error(error);
         return response.send({ error: true });
     }
 });
@@ -1581,7 +1580,7 @@ router.post('/import', async function (request, response) {
         const fileName = await importFunction(uploadPath, { request, response }, preservedFileName);
 
         if (!fileName) {
-            console.warn('Failed to import character');
+            log.chars.warn('Failed to import character');
             return response.sendStatus(400);
         }
 
@@ -1591,7 +1590,7 @@ router.post('/import', async function (request, response) {
 
         response.send({ file_name: fileName });
     } catch (err) {
-        console.error(err);
+        log.chars.error(err);
         response.send({ error: true });
     }
 });
@@ -1599,13 +1598,13 @@ router.post('/import', async function (request, response) {
 router.post('/duplicate', validateAvatarUrlMiddleware, async function (request, response) {
     try {
         if (!request.body.avatar_url) {
-            console.warn('avatar URL not found in request body');
-            console.debug(request.body);
+            log.chars.warn('avatar URL not found in request body');
+            log.chars.debug(request.body);
             return response.sendStatus(400);
         }
         let filename = path.join(request.user.directories.characters, sanitize(request.body.avatar_url));
         if (!fs.existsSync(filename)) {
-            console.error('file for dupe not found', filename);
+            log.chars.error('file for dupe not found', filename);
             return response.sendStatus(404);
         }
         let suffix = 1;
@@ -1633,10 +1632,10 @@ router.post('/duplicate', validateAvatarUrlMiddleware, async function (request, 
         }
 
         fs.copyFileSync(filename, newFilename);
-        console.info(`${filename} was copied to ${newFilename}`);
+        log.chars.info(`${filename} was copied to ${newFilename}`);
         response.send({ path: path.parse(newFilename).base });
     } catch (error) {
-        console.error(error);
+        log.chars.error(error);
         return response.send({ error: true });
     }
 });
@@ -1679,7 +1678,7 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
 
         return response.sendStatus(400);
     } catch (err) {
-        console.error('Character export failed', err);
+        log.chars.error('Character export failed', err);
         response.sendStatus(500);
     }
 });

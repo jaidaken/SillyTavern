@@ -65,6 +65,7 @@ import {
     getWebTokenizer,
 } from '../tokenizers.js';
 import { getVertexAIAuth, getProjectIdFromServiceAccount } from '../google.js';
+import { log } from '../../log.js';
 
 const API_OPENAI = 'https://api.openai.com/v1';
 const API_CLAUDE = 'https://api.anthropic.com/v1';
@@ -131,7 +132,7 @@ async function isOpenRouterModelCacheable(modelId) {
         });
 
         if (!response.ok) {
-            console.warn(`OpenRouter models API returned ${response.status}: ${response.statusText}`);
+            log.net.warn(`OpenRouter models API returned ${response.status}: ${response.statusText}`);
             return false;
         }
 
@@ -139,7 +140,7 @@ async function isOpenRouterModelCacheable(modelId) {
         const data = await response.json();
 
         if (!Array.isArray(data?.data)) {
-            console.warn('OpenRouter API response format unexpected');
+            log.net.warn('OpenRouter API response format unexpected');
             return false;
         }
 
@@ -152,7 +153,7 @@ async function isOpenRouterModelCacheable(modelId) {
 
         return supportsCache;
     } catch (error) {
-        console.warn(`Failed to check OpenRouter cache support for ${modelId}:`, error.message);
+        log.net.warn(`Failed to check OpenRouter cache support for ${modelId}:`, error.message);
         return false;
     }
 }
@@ -216,7 +217,7 @@ async function sendClaudeRequest(request, response) {
     const divider = '-'.repeat(process.stdout.columns);
 
     if (!apiKey) {
-        console.warn(color.red(`Claude API key is missing.\n${divider}`));
+        log.net.warn(color.red(`Claude API key is missing.\n${divider}`));
         return response.status(400).send({ error: true });
     }
 
@@ -341,8 +342,8 @@ async function sendClaudeRequest(request, response) {
             const minThinkTokens = 1024;
             if (requestBody.max_tokens <= minThinkTokens) {
                 const newValue = requestBody.max_tokens + minThinkTokens;
-                console.warn(color.yellow(`Claude thinking requires a minimum of ${minThinkTokens} response tokens.`));
-                console.info(color.blue(`Increasing response length to ${newValue}.`));
+                log.net.warn(color.yellow(`Claude thinking requires a minimum of ${minThinkTokens} response tokens.`));
+                log.net.info(color.blue(`Increasing response length to ${newValue}.`));
                 requestBody.max_tokens = newValue;
             }
             requestBody.thinking = {
@@ -371,7 +372,7 @@ async function sendClaudeRequest(request, response) {
             additionalHeaders['anthropic-beta'] = betaHeaders.join(',');
         }
 
-        console.debug('Claude request:', requestBody);
+        log.net.debug('Claude request:', requestBody);
 
         const generateResponse = await fetch(apiUrl + '/messages', {
             method: 'POST',
@@ -391,21 +392,21 @@ async function sendClaudeRequest(request, response) {
         } else {
             if (!generateResponse.ok) {
                 const generateResponseText = await generateResponse.text();
-                console.warn(color.red(`Claude API returned error: ${generateResponse.status} ${generateResponse.statusText}\n${generateResponseText}\n${divider}`));
+                log.net.warn(color.red(`Claude API returned error: ${generateResponse.status} ${generateResponse.statusText}\n${generateResponseText}\n${divider}`));
                 return response.status(500).send({ error: true });
             }
 
             /** @type {any} */
             const generateResponseJson = await generateResponse.json();
             const responseText = generateResponseJson?.content?.[0]?.text || '';
-            console.debug('Claude response:', generateResponseJson);
+            log.net.debug('Claude response:', generateResponseJson);
 
             // Wrap it back to OAI format + save the original content
             const reply = { choices: [{ 'message': { 'content': responseText } }], content: generateResponseJson.content };
             return response.send(reply);
         }
     } catch (error) {
-        console.error(color.red(`Error communicating with Claude: ${error}\n${divider}`));
+        log.net.error(color.red(`Error communicating with Claude: ${error}\n${divider}`));
         if (!response.headersSent) {
             return response.status(500).send({ error: true });
         }
@@ -433,9 +434,9 @@ async function sendMakerSuiteRequest(request, response) {
             const auth = await getVertexAIAuth(request);
             authHeader = auth.authHeader;
             authType = auth.authType;
-            console.debug(`Using Vertex AI authentication type: ${authType}`);
+            log.net.debug(`Using Vertex AI authentication type: ${authType}`);
         } catch (error) {
-            console.warn(`${apiName} authentication failed: ${error.message}`);
+            log.net.warn(`${apiName} authentication failed: ${error.message}`);
             return response.status(400).send({ error: true, message: error.message });
         }
     } else {
@@ -443,7 +444,7 @@ async function sendMakerSuiteRequest(request, response) {
         apiKey = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.MAKERSUITE, request.body.secret_id);
 
         if (!request.body.reverse_proxy && !apiKey) {
-            console.warn(`${apiName} API key is missing.`);
+            log.net.warn(`${apiName} API key is missing.`);
             return response.status(400).send({ error: true });
         }
 
@@ -571,7 +572,7 @@ async function sendMakerSuiteRequest(request, response) {
 
             // Vertex doesn't allow mixing disabled thinking with includeThoughts
             if (useVertexAi && thinkingBudget === 0 && thinkingConfig.includeThoughts) {
-                console.info('Thinking budget is 0, but includeThoughts is true. Thoughts will not be included in the response.');
+                log.net.info('Thinking budget is 0, but includeThoughts is true. Thoughts will not be included in the response.');
                 thinkingConfig.includeThoughts = false;
             }
 
@@ -624,7 +625,7 @@ async function sendMakerSuiteRequest(request, response) {
     }
 
     const body = getGeminiBody();
-    console.debug(`${apiName} request:`, body);
+    log.net.debug(`${apiName} request:`, body);
 
     try {
         const controller = new AbortController();
@@ -658,7 +659,7 @@ async function sendMakerSuiteRequest(request, response) {
                 // Get project ID from Service Account JSON
                 const serviceAccountJson = readSecret(request.user.directories, SECRET_KEYS.VERTEXAI_SERVICE_ACCOUNT, request.body.secret_id);
                 if (!serviceAccountJson) {
-                    console.warn('Vertex AI Service Account JSON is missing.');
+                    log.net.warn('Vertex AI Service Account JSON is missing.');
                     return response.status(400).send({ error: true });
                 }
 
@@ -667,7 +668,7 @@ async function sendMakerSuiteRequest(request, response) {
                     const serviceAccount = JSON.parse(serviceAccountJson);
                     projectId = getProjectIdFromServiceAccount(serviceAccount);
                 } catch (error) {
-                    console.error('Failed to extract project ID from Service Account JSON:', error);
+                    log.net.error('Failed to extract project ID from Service Account JSON:', error);
                     return response.status(400).send({ error: true });
                 }
                 const region = request.body.vertexai_region || 'us-central1';
@@ -699,7 +700,7 @@ async function sendMakerSuiteRequest(request, response) {
                 // Pipe remote SSE stream to Express response
                 await forwardFetchResponse(generateResponse, response);
             } catch (error) {
-                console.error('Error forwarding streaming response:', error);
+                log.net.error('Error forwarding streaming response:', error);
                 if (!response.headersSent) {
                     return response.status(500).send({ error: true });
                 }
@@ -707,7 +708,7 @@ async function sendMakerSuiteRequest(request, response) {
         } else {
             if (!generateResponse.ok) {
                 const errorText = await generateResponse.text();
-                console.warn(`${apiName} API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
+                log.net.warn(`${apiName} API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
                 const errorJson = tryParse(errorText) ?? { error: true };
                 return response.status(500).send(errorJson);
             }
@@ -718,7 +719,7 @@ async function sendMakerSuiteRequest(request, response) {
             const candidates = generateResponseJson?.candidates;
             if (!candidates || candidates.length === 0) {
                 let message = `${apiName} API returned no candidate`;
-                console.warn(message, generateResponseJson);
+                log.net.warn(message, generateResponseJson);
                 if (generateResponseJson?.promptFeedback?.blockReason) {
                     message += `\nPrompt was blocked due to : ${generateResponseJson.promptFeedback.blockReason}`;
                 }
@@ -728,12 +729,12 @@ async function sendMakerSuiteRequest(request, response) {
             const responseContent = candidates[0].content ?? candidates[0].output;
             const functionCall = (candidates?.[0]?.content?.parts ?? []).some(part => part.functionCall);
             const inlineData = (candidates?.[0]?.content?.parts ?? []).some(part => part.inlineData);
-            console.debug(`${apiName} response:`, util.inspect(generateResponseJson, { depth: 5, colors: true }));
+            log.net.debug(`${apiName} response:`, util.inspect(generateResponseJson, { depth: 5, colors: true }));
 
             const responseText = typeof responseContent === 'string' ? responseContent : responseContent?.parts?.filter(part => !part.thought)?.map(part => part.text)?.join('\n\n');
             if (!responseText && !functionCall && !inlineData) {
                 let message = `${apiName} Candidate text empty`;
-                console.warn(message, generateResponseJson);
+                log.net.warn(message, generateResponseJson);
                 return response.send({ error: { message } });
             }
 
@@ -742,7 +743,7 @@ async function sendMakerSuiteRequest(request, response) {
             return response.send(reply);
         }
     } catch (error) {
-        console.error(`Error communicating with ${apiName} API:`, error);
+        log.net.error(`Error communicating with ${apiName} API:`, error);
         if (!response.headersSent) {
             return response.status(500).send({ error: true });
         }
@@ -759,7 +760,7 @@ async function sendAI21Request(request, response) {
 
     const apiKey = readSecret(request.user.directories, SECRET_KEYS.AI21, request.body.secret_id);
     if (!apiKey) {
-        console.warn('AI21 API key is missing.');
+        log.net.warn('AI21 API key is missing.');
         return response.status(400).send({ error: true });
     }
 
@@ -803,7 +804,7 @@ async function sendAI21Request(request, response) {
         signal: controller.signal,
     };
 
-    console.debug('AI21 request:', body);
+    log.net.debug('AI21 request:', body);
 
     try {
         const generateResponse = await fetch(API_AI21 + '/chat/completions', options);
@@ -812,16 +813,16 @@ async function sendAI21Request(request, response) {
         } else {
             if (!generateResponse.ok) {
                 const errorText = await generateResponse.text();
-                console.warn(`AI21 API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
+                log.net.warn(`AI21 API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
                 const errorJson = tryParse(errorText) ?? { error: true };
                 return response.status(500).send(errorJson);
             }
             const generateResponseJson = await generateResponse.json();
-            console.debug('AI21 response:', generateResponseJson);
+            log.net.debug('AI21 response:', generateResponseJson);
             return response.send(generateResponseJson);
         }
     } catch (error) {
-        console.error('Error communicating with AI21 API: ', error);
+        log.net.error('Error communicating with AI21 API: ', error);
         if (!response.headersSent) {
             response.send({ error: true });
         } else {
@@ -840,7 +841,7 @@ async function sendMistralAIRequest(request, response) {
     const apiKey = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.MISTRALAI, request.body.secret_id);
 
     if (!apiKey) {
-        console.warn('MistralAI API key is missing.');
+        log.net.warn('MistralAI API key is missing.');
         return response.status(400).send({ error: true });
     }
 
@@ -894,7 +895,7 @@ async function sendMistralAIRequest(request, response) {
             timeout: 0,
         };
 
-        console.debug('MisralAI request:', requestBody);
+        log.net.debug('MisralAI request:', requestBody);
 
         const generateResponse = await fetch(apiUrl + '/chat/completions', config);
         if (request.body.stream) {
@@ -902,16 +903,16 @@ async function sendMistralAIRequest(request, response) {
         } else {
             if (!generateResponse.ok) {
                 const errorText = await generateResponse.text();
-                console.warn(`MistralAI API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
+                log.net.warn(`MistralAI API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
                 const errorJson = tryParse(errorText) ?? { error: true };
                 return response.status(500).send(errorJson);
             }
             const generateResponseJson = await generateResponse.json();
-            console.debug('MistralAI response:', generateResponseJson);
+            log.net.debug('MistralAI response:', generateResponseJson);
             return response.send(generateResponseJson);
         }
     } catch (error) {
-        console.error('Error communicating with MistralAI API: ', error);
+        log.net.error('Error communicating with MistralAI API: ', error);
         if (!response.headersSent) {
             response.send({ error: true });
         } else {
@@ -934,7 +935,7 @@ async function sendCohereRequest(request, response) {
     });
 
     if (!apiKey) {
-        console.warn('Cohere API key is missing.');
+        log.net.warn('Cohere API key is missing.');
         return response.status(400).send({ error: true });
     }
 
@@ -980,7 +981,7 @@ async function sendCohereRequest(request, response) {
             };
         }
 
-        console.debug('Cohere request:', requestBody);
+        log.net.debug('Cohere request:', requestBody);
 
         const config = {
             method: 'POST',
@@ -1002,16 +1003,16 @@ async function sendCohereRequest(request, response) {
             const generateResponse = await fetch(apiUrl, config);
             if (!generateResponse.ok) {
                 const errorText = await generateResponse.text();
-                console.warn(`Cohere API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
+                log.net.warn(`Cohere API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
                 const errorJson = tryParse(errorText) ?? { error: true };
                 return response.status(500).send(errorJson);
             }
             const generateResponseJson = await generateResponse.json();
-            console.debug('Cohere response:', generateResponseJson);
+            log.net.debug('Cohere response:', generateResponseJson);
             return response.send(generateResponseJson);
         }
     } catch (error) {
-        console.error('Error communicating with Cohere API: ', error);
+        log.net.error('Error communicating with Cohere API: ', error);
         if (!response.headersSent) {
             response.send({ error: true });
         } else {
@@ -1030,7 +1031,7 @@ async function sendDeepSeekRequest(request, response) {
     const apiKey = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.DEEPSEEK, request.body.secret_id);
 
     if (!apiKey && !request.body.reverse_proxy) {
-        console.warn('DeepSeek API key is missing.');
+        log.net.warn('DeepSeek API key is missing.');
         return response.status(400).send({ error: true });
     }
 
@@ -1105,7 +1106,7 @@ async function sendDeepSeekRequest(request, response) {
             signal: controller.signal,
         };
 
-        console.debug('DeepSeek request:', requestBody);
+        log.net.debug('DeepSeek request:', requestBody);
 
         const generateResponse = await fetch(apiUrl + '/chat/completions', config);
 
@@ -1114,16 +1115,16 @@ async function sendDeepSeekRequest(request, response) {
         } else {
             if (!generateResponse.ok) {
                 const errorText = await generateResponse.text();
-                console.warn(`DeepSeek API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
+                log.net.warn(`DeepSeek API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
                 const errorJson = tryParse(errorText) ?? { error: true };
                 return response.status(500).send(errorJson);
             }
             const generateResponseJson = await generateResponse.json();
-            console.debug('DeepSeek response:', generateResponseJson);
+            log.net.debug('DeepSeek response:', generateResponseJson);
             return response.send(generateResponseJson);
         }
     } catch (error) {
-        console.error('Error communicating with DeepSeek API: ', error);
+        log.net.error('Error communicating with DeepSeek API: ', error);
         if (!response.headersSent) {
             response.send({ error: true });
         } else {
@@ -1142,7 +1143,7 @@ async function sendXaiRequest(request, response) {
     const apiKey = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.XAI, request.body.secret_id);
 
     if (!apiKey && !request.body.reverse_proxy) {
-        console.warn('xAI API key is missing.');
+        log.net.warn('xAI API key is missing.');
         return response.status(400).send({ error: true });
     }
 
@@ -1211,7 +1212,7 @@ async function sendXaiRequest(request, response) {
             signal: controller.signal,
         };
 
-        console.debug('xAI request:', requestBody);
+        log.net.debug('xAI request:', requestBody);
 
         const generateResponse = await fetch(apiUrl + '/chat/completions', config);
 
@@ -1220,16 +1221,16 @@ async function sendXaiRequest(request, response) {
         } else {
             if (!generateResponse.ok) {
                 const errorText = await generateResponse.text();
-                console.warn(`xAI API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
+                log.net.warn(`xAI API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
                 const errorJson = tryParse(errorText) ?? { error: true };
                 return response.status(500).send(errorJson);
             }
             const generateResponseJson = await generateResponse.json();
-            console.debug('xAI response:', generateResponseJson);
+            log.net.debug('xAI response:', generateResponseJson);
             return response.send(generateResponseJson);
         }
     } catch (error) {
-        console.error('Error communicating with xAI API: ', error);
+        log.net.error('Error communicating with xAI API: ', error);
         if (!response.headersSent) {
             response.send({ error: true });
         } else {
@@ -1248,7 +1249,7 @@ async function sendAimlapiRequest(request, response) {
     const apiKey = readSecret(request.user.directories, SECRET_KEYS.AIMLAPI, request.body.secret_id);
 
     if (!apiKey) {
-        console.warn('AI/ML API key is missing.');
+        log.net.warn('AI/ML API key is missing.');
         return response.status(400).send({ error: true });
     }
 
@@ -1316,7 +1317,7 @@ async function sendAimlapiRequest(request, response) {
             signal: controller.signal,
         };
 
-        console.debug('AI/ML API request:', requestBody);
+        log.net.debug('AI/ML API request:', requestBody);
 
         const generateResponse = await fetch(apiUrl + '/chat/completions', config);
 
@@ -1325,16 +1326,16 @@ async function sendAimlapiRequest(request, response) {
         } else {
             if (!generateResponse.ok) {
                 const errorText = await generateResponse.text();
-                console.warn(`AI/ML API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
+                log.net.warn(`AI/ML API returned error: ${generateResponse.status} ${generateResponse.statusText} ${errorText}`);
                 const errorJson = tryParse(errorText) ?? { error: true };
                 return response.status(500).send(errorJson);
             }
             const generateResponseJson = await generateResponse.json();
-            console.debug('AI/ML API response:', generateResponseJson);
+            log.net.debug('AI/ML API response:', generateResponseJson);
             return response.send(generateResponseJson);
         }
     } catch (error) {
-        console.error('Error communicating with AI/ML API: ', error);
+        log.net.error('Error communicating with AI/ML API: ', error);
         if (!response.headersSent) {
             response.send({ error: true });
         } else {
@@ -1353,7 +1354,7 @@ async function sendElectronHubRequest(request, response) {
     const apiKey = readSecret(request.user.directories, SECRET_KEYS.ELECTRONHUB, request.body.secret_id);
 
     if (!apiKey) {
-        console.warn('Electron Hub key is missing.');
+        log.net.warn('Electron Hub key is missing.');
         return response.status(400).send({ error: true });
     }
 
@@ -1428,7 +1429,7 @@ async function sendElectronHubRequest(request, response) {
             signal: controller.signal,
         };
 
-        console.debug('Electron Hub request:', requestBody);
+        log.net.debug('Electron Hub request:', requestBody);
 
         const generateResponse = await fetch(apiUrl + '/chat/completions', config);
 
@@ -1437,16 +1438,16 @@ async function sendElectronHubRequest(request, response) {
         } else {
             if (!generateResponse.ok) {
                 const errorText = await generateResponse.text();
-                console.warn('Electron Hub returned error: ', errorText);
+                log.net.warn('Electron Hub returned error: ', errorText);
                 const errorJson = tryParse(errorText) ?? { error: true };
                 return response.status(500).send(errorJson);
             }
             const generateResponseJson = await generateResponse.json();
-            console.debug('Electron Hub response:', generateResponseJson);
+            log.net.debug('Electron Hub response:', generateResponseJson);
             return response.send(generateResponseJson);
         }
     } catch (error) {
-        console.error('Error communicating with Electron Hub: ', error);
+        log.net.error('Error communicating with Electron Hub: ', error);
         if (!response.headersSent) {
             response.send({ error: true });
         } else {
@@ -1465,7 +1466,7 @@ async function sendChutesRequest(request, response) {
     const apiKey = readSecret(request.user.directories, SECRET_KEYS.CHUTES, request.body.secret_id);
 
     if (!apiKey) {
-        console.warn('Chutes key is missing.');
+        log.net.warn('Chutes key is missing.');
         return response.status(400).send({ error: true });
     }
 
@@ -1529,7 +1530,7 @@ async function sendChutesRequest(request, response) {
             signal: controller.signal,
         };
 
-        console.debug('Chutes request:', requestBody);
+        log.net.debug('Chutes request:', requestBody);
 
         const generateResponse = await fetch(apiUrl + '/chat/completions', config);
 
@@ -1538,16 +1539,16 @@ async function sendChutesRequest(request, response) {
         } else {
             if (!generateResponse.ok) {
                 const errorText = await generateResponse.text();
-                console.warn('Chutes returned error: ', errorText);
+                log.net.warn('Chutes returned error: ', errorText);
                 const errorJson = tryParse(errorText) ?? { error: true };
                 return response.status(500).send(errorJson);
             }
             const generateResponseJson = await generateResponse.json();
-            console.debug('Chutes response:', generateResponseJson);
+            log.net.debug('Chutes response:', generateResponseJson);
             return response.send(generateResponseJson);
         }
     } catch (error) {
-        console.error('Error communicating with Chutes: ', error);
+        log.net.error('Error communicating with Chutes: ', error);
         if (!response.headersSent) {
             response.send({ error: true });
         } else {
@@ -1567,7 +1568,7 @@ async function sendMinimaxRequest(request, response) {
     const apiKey = readSecret(request.user.directories, SECRET_KEYS.MINIMAX, request.body.secret_id);
 
     if (!apiKey) {
-        console.warn('MiniMax key is missing.');
+        log.net.warn('MiniMax key is missing.');
         return response.status(400).send({ error: true });
     }
 
@@ -1610,7 +1611,7 @@ async function sendMinimaxRequest(request, response) {
             signal: controller.signal,
         };
 
-        console.debug('MiniMax request:', requestBody);
+        log.net.debug('MiniMax request:', requestBody);
 
         const generateResponse = await fetch(apiUrl + '/chat/completions', config);
 
@@ -1619,16 +1620,16 @@ async function sendMinimaxRequest(request, response) {
         } else {
             if (!generateResponse.ok) {
                 const errorText = await generateResponse.text();
-                console.warn('MiniMax returned error: ', errorText);
+                log.net.warn('MiniMax returned error: ', errorText);
                 const errorJson = tryParse(errorText) ?? { error: true };
                 return response.status(500).send(errorJson);
             }
             const generateResponseJson = await generateResponse.json();
-            console.debug('MiniMax response:', generateResponseJson);
+            log.net.debug('MiniMax response:', generateResponseJson);
             return response.send(generateResponseJson);
         }
     } catch (error) {
-        console.error('Error communicating with MiniMax: ', error);
+        log.net.error('Error communicating with MiniMax: ', error);
         if (!response.headersSent) {
             response.send({ error: true });
         } else {
@@ -1703,8 +1704,8 @@ async function sendAzureOpenAIRequest(request, response) {
         signal: controller.signal,
     };
 
-    console.info(`Sending request to Azure OpenAI: ${endpointUrl}`);
-    console.debug('Azure OpenAI Request Body:', apiRequestBody);
+    log.net.info(`Sending request to Azure OpenAI: ${endpointUrl}`);
+    log.net.debug('Azure OpenAI Request Body:', apiRequestBody);
     try {
         const fetchResponse = await fetch(endpointUrl, config);
 
@@ -1715,7 +1716,7 @@ async function sendAzureOpenAIRequest(request, response) {
         if (fetchResponse.ok) {
             /** @type {any} */
             const json = await fetchResponse.json();
-            console.debug('Azure OpenAI response:', json);
+            log.net.debug('Azure OpenAI response:', json);
             return response.send(json);
         }
 
@@ -1818,7 +1819,7 @@ router.post('/status', async function (request, statusResponse) {
                 : `${apiUrl}/${apiVersion}/models?key=${apiKey}`;
 
             if (!apiKey && !request.body.reverse_proxy) {
-                console.warn('Google AI Studio API key is missing.');
+                log.net.warn('Google AI Studio API key is missing.');
                 return statusResponse.status(400).send({ error: true });
             }
 
@@ -1836,14 +1837,14 @@ router.post('/status', async function (request, statusResponse) {
                             id: model.name.replace('models/', ''),
                         })) || [];
 
-                    console.info('Available Google AI Studio models:', models.map(m => m.id));
+                    log.net.debug('Available Google AI Studio models:', models.map(m => m.id));
                     return statusResponse.send({ data: models });
                 } else {
-                    console.warn('Google AI Studio models endpoint failed:', response.status, response.statusText);
+                    log.net.warn('Google AI Studio models endpoint failed:', response.status, response.statusText);
                     return statusResponse.send({ error: true, bypass: true, data: { data: [] } });
                 }
             } catch (error) {
-                console.error('Error fetching Google AI Studio models:', error);
+                log.net.error('Error fetching Google AI Studio models:', error);
                 return statusResponse.send({ error: true, bypass: true, data: { data: [] } });
             }
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.AZURE_OPENAI) {
@@ -1852,7 +1853,7 @@ router.post('/status', async function (request, statusResponse) {
 
             // 1) Validate configuration from the frontend
             if (!apiKey || !azure_base_url || !azure_deployment_name || !azure_api_version) {
-                console.warn('Azure OpenAI status check failed: missing config from frontend.');
+                log.net.warn('Azure OpenAI status check failed: missing config from frontend.');
                 return statusResponse.status(400).send({ error: true, message: 'Azure configuration is incomplete.' });
             }
             // 2) Build URLs using the URL API for consistency and robustness.
@@ -1881,7 +1882,7 @@ router.post('/status', async function (request, statusResponse) {
                     let errText = '';
                     try { errText = await apiConfigTest.text(); } catch { /* response body may be empty */ }
 
-                    console.warn('Azure OpenAI GET /models failed:', apiConfigTest.status, apiConfigTest.statusText, errText || '');
+                    log.net.warn('Azure OpenAI GET /models failed:', apiConfigTest.status, apiConfigTest.statusText, errText || '');
 
                     const defaultMessage = `Azure Models endpoint error: ${apiConfigTest.statusText}`;
                     const message = azureStatusErrorMap[apiConfigTest.status] ?? defaultMessage;
@@ -1911,17 +1912,17 @@ router.post('/status', async function (request, statusResponse) {
 
                 const modelId = /** @type {any} */ (modelResponse)?.model;
                 if (!modelId) {
-                    console.warn('Azure status check succeeded but could not find a model ID in the response.');
-                    console.debug('Azure Response Body:', modelResponse);
+                    log.net.warn('Azure status check succeeded but could not find a model ID in the response.');
+                    log.net.debug('Azure Response Body:', modelResponse);
                     // Keep a benign success to avoid UX disruption in the UI
                     return statusResponse.send({ data: [] });
                 }
 
-                console.info(color.green('Azure OpenAI connection successful. Detected model:'), modelId);
+                log.net.info(color.green('Azure OpenAI connection successful. Detected model:'), modelId);
                 // Consistent response format: always an array of { id }
                 return statusResponse.send({ data: [{ id: modelId }] });
             } catch (error) {
-                console.error('Azure OpenAI status check connection error:', error);
+                log.net.error('Azure OpenAI status check connection error:', error);
                 return statusResponse.status(500).send({ error: true, message: 'Failed to connect to the Azure endpoint.' });
             }
         } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.SILICONFLOW) {
@@ -1935,14 +1936,14 @@ router.post('/status', async function (request, statusResponse) {
             apiKey = readSecret(request.user.directories, SECRET_KEYS.WORKERS_AI, request.body.secret_id);
 
             if (!apiKey) {
-                console.warn('Cloudflare Workers AI API key is missing.');
+                log.net.warn('Cloudflare Workers AI API key is missing.');
                 return statusResponse.status(400).send({ error: true });
             }
 
             try {
                 const accountId = String(request.body.workers_ai_account_id || '').trim();
                 if (!accountId) {
-                    console.warn('Cloudflare Workers AI Account ID is missing.');
+                    log.net.warn('Cloudflare Workers AI Account ID is missing.');
                     return statusResponse.status(400).send({ error: true });
                 }
 
@@ -1964,23 +1965,23 @@ router.post('/status', async function (request, statusResponse) {
                         ? data.result.map(model => ({ ...model, id: model.name }))
                         : [];
 
-                    console.debug('Available Cloudflare Workers AI models:', models.map(m => m.id));
+                    log.net.debug('Available Cloudflare Workers AI models:', models.map(m => m.id));
                     return statusResponse.send({ data: models });
                 } else {
-                    console.warn('Cloudflare Workers AI models endpoint failed:', response.status, response.statusText);
+                    log.net.warn('Cloudflare Workers AI models endpoint failed:', response.status, response.statusText);
                     return statusResponse.status(response.status).send({ error: true });
                 }
             } catch (error) {
-                console.error('Error fetching Cloudflare Workers AI models:', error);
+                log.net.error('Error fetching Cloudflare Workers AI models:', error);
                 return statusResponse.status(500).send({ error: true });
             }
         } else {
-            console.warn('This chat completion source is not supported yet.');
+            log.net.warn('This chat completion source is not supported yet.');
             return statusResponse.status(400).send({ error: true });
         }
 
         if (!apiKey && !request.body.reverse_proxy && request.body.chat_completion_source !== CHAT_COMPLETION_SOURCES.CUSTOM) {
-            console.warn('Chat Completion API key is missing.');
+            log.net.warn('Chat Completion API key is missing.');
             return statusResponse.status(400).send({ error: true });
         }
 
@@ -2041,26 +2042,26 @@ router.post('/status', async function (request, statusResponse) {
                     };
                 });
 
-                console.info('Available OpenRouter models:', models);
+                log.net.debug('Available OpenRouter models:', models);
             } else if (request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.MISTRALAI) {
                 const models = data?.data;
-                console.info(models);
+                log.net.debug(models);
             } else {
                 const models = data?.data;
 
                 if (Array.isArray(models)) {
                     const modelIds = models.filter(x => x && typeof x === 'object').map(x => x.id).sort();
-                    console.info('Available models:', modelIds);
+                    log.net.debug('Available models:', modelIds);
                 } else {
-                    console.warn('Chat Completion endpoint did not return a list of models.');
+                    log.net.warn('Chat Completion endpoint did not return a list of models.');
                 }
             }
         } else {
-            console.error('Chat Completion status check failed. Either Access Token is incorrect or API endpoint is down.');
+            log.net.error('Chat Completion status check failed. Either Access Token is incorrect or API endpoint is down.');
             statusResponse.send({ error: true, data: { data: [] } });
         }
     } catch (e) {
-        console.error(e);
+        log.net.error(e);
 
         if (!statusResponse.headersSent) {
             statusResponse.send({ error: true });
@@ -2089,7 +2090,7 @@ router.post('/bias', async function (request, response) {
             const tokenizer = getSentencepiceTokenizer(model);
             const instance = await tokenizer?.get();
             if (!instance) {
-                console.error('Tokenizer not initialized:', model);
+                log.net.error('Tokenizer not initialized:', model);
                 return response.send({});
             }
             encodeFunction = (text) => new Uint32Array(instance.encodeIds(text));
@@ -2097,7 +2098,7 @@ router.post('/bias', async function (request, response) {
             const tokenizer = getWebTokenizer(model);
             const instance = await tokenizer?.get();
             if (!instance) {
-                console.warn('Tokenizer not initialized:', model);
+                log.net.warn('Tokenizer not initialized:', model);
                 return response.send({});
             }
             encodeFunction = (text) => new Uint32Array(instance.encode(text));
@@ -2118,7 +2119,7 @@ router.post('/bias', async function (request, response) {
                     result[token] = entry.value;
                 }
             } catch {
-                console.warn('Tokenizer failed to encode:', entry.text);
+                log.net.warn('Tokenizer failed to encode:', entry.text);
             }
         }
 
@@ -2149,7 +2150,7 @@ router.post('/bias', async function (request, response) {
             return encode(text);
         }
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return response.send({});
     }
 });
@@ -2160,7 +2161,7 @@ router.post('/generate', async function (request, response) {
 
         const postProcessingType = request.body.custom_prompt_post_processing;
         if (Array.isArray(request.body.messages) && postProcessingType) {
-            console.info('Applying custom prompt post-processing of type', postProcessingType);
+            log.net.info('Applying custom prompt post-processing of type', postProcessingType);
             request.body.messages = postProcessPrompt(
                 request.body.messages,
                 postProcessingType,
@@ -2478,7 +2479,7 @@ router.post('/generate', async function (request, response) {
             apiKey = readSecret(request.user.directories, SECRET_KEYS.WORKERS_AI, request.body.secret_id);
             const accountId = String(request.body.workers_ai_account_id || '').trim();
             if (!accountId) {
-                console.warn('Cloudflare Workers AI Account ID is missing.');
+                log.net.warn('Cloudflare Workers AI Account ID is missing.');
                 return response.status(400).send({ error: true });
             }
             apiUrl = `${API_WORKERS_AI}/${encodeURIComponent(accountId)}/ai/v1`;
@@ -2493,7 +2494,7 @@ router.post('/generate', async function (request, response) {
                 };
             }
         } else {
-            console.warn('This chat completion source is not supported yet.');
+            log.net.warn('This chat completion source is not supported yet.');
             return response.status(400).send({ error: true });
         }
 
@@ -2514,7 +2515,7 @@ router.post('/generate', async function (request, response) {
         }
 
         if (!apiKey && !request.body.reverse_proxy && request.body.chat_completion_source !== CHAT_COMPLETION_SOURCES.CUSTOM) {
-            console.warn('OpenAI API key is missing.');
+            log.net.warn('OpenAI API key is missing.');
             return response.status(400).send({ error: true });
         }
 
@@ -2585,19 +2586,19 @@ router.post('/generate', async function (request, response) {
             signal: controller.signal,
         };
 
-        console.debug('Chat Completion request:', requestBody);
+        log.net.debug('Chat Completion request:', requestBody);
 
         const fetchResponse = await fetch(endpointUrl, config);
 
         if (request.body.stream) {
-            console.info('Streaming request in progress');
+            log.net.info('Streaming request in progress');
             return await forwardFetchResponse(fetchResponse, response);
         }
 
         if (fetchResponse.ok) {
             /** @type {any} */
             const json = await fetchResponse.json();
-            console.debug('Chat Completion response:', json);
+            log.net.debug('Chat Completion response:', json);
             return response.send(json);
         } else {
             const responseText = await fetchResponse.text();
@@ -2605,7 +2606,7 @@ router.post('/generate', async function (request, response) {
 
             const message = fetchResponse.statusText || 'Unknown error occurred';
             const quota_error = fetchResponse.status === 429 && errorData?.error?.type === 'insufficient_quota';
-            console.error('Chat completion request error: ', message, responseText);
+            log.net.error('Chat completion request error: ', message, responseText);
 
             if (!response.headersSent) {
                 response.send({ error: { message }, quota_error: quota_error });
@@ -2616,7 +2617,7 @@ router.post('/generate', async function (request, response) {
             }
         }
     } catch (error) {
-        console.error('Generation failed', error);
+        log.net.error('Generation failed', error);
         const message = error.code === 'ECONNREFUSED'
             ? `Connection refused: ${error.message}`
             : error.message || 'Unknown error occurred';
@@ -2652,7 +2653,7 @@ multimodalModels.post('/pollinations', async (_req, res) => {
             .map(m => m.name);
         return res.json(multimodalModels);
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return res.sendStatus(500);
     }
 });
@@ -2675,7 +2676,7 @@ multimodalModels.post('/aimlapi', async (_req, res) => {
         const multimodalModels = data.data.filter(m => m?.features?.includes('openai/chat-completion.vision')).map(m => m.id);
         return res.json(multimodalModels);
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return res.sendStatus(500);
     }
 });
@@ -2698,7 +2699,7 @@ multimodalModels.post('/nanogpt', async (_req, res) => {
         const multimodalModels = data.data.filter(m => m?.capabilities?.vision).map(m => m.id);
         return res.json(multimodalModels);
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return res.sendStatus(500);
     }
 });
@@ -2716,7 +2717,7 @@ multimodalModels.post('/electronhub', async (_req, res) => {
         const multimodalModels = data.data.filter(m => m.metadata?.vision).map(m => m.id);
         return res.json(multimodalModels);
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return res.sendStatus(500);
     }
 });
@@ -2747,7 +2748,7 @@ multimodalModels.post('/chutes', async (req, res) => {
             .map(m => m.id);
         return res.json(multimodalModels);
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return res.sendStatus(500);
     }
 });
@@ -2775,7 +2776,7 @@ multimodalModels.post('/mistral', async (req, res) => {
         const multimodalModels = data.data.filter(m => m.capabilities?.vision).map(m => m.id);
         return res.json(multimodalModels);
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return res.sendStatus(500);
     }
 });
@@ -2808,7 +2809,7 @@ multimodalModels.post('/xai', async (req, res) => {
         }
         return res.json(multimodalModels);
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return res.sendStatus(500);
     }
 });
@@ -2837,7 +2838,7 @@ multimodalModels.post('/moonshot', async (req, res) => {
         const multimodalModels = data.data.filter(m => m.supports_image_in).map(m => m.id);
         return res.json(multimodalModels);
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return res.sendStatus(500);
     }
 });
@@ -2870,7 +2871,7 @@ multimodalModels.post('/workers_ai', async (req, res) => {
             : [];
         return res.json(models);
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return res.sendStatus(500);
     }
 });
@@ -2890,7 +2891,7 @@ router.post('/process', async function (request, response) {
         const messages = postProcessPrompt(request.body.messages, request.body.type, getPromptNames(request));
         return response.send({ messages });
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return response.sendStatus(500);
     }
 });

@@ -16,6 +16,7 @@ import {
 import { forwardFetchResponse, trimV1, getConfigValue } from '../../util.js';
 import { setAdditionalHeaders } from '../../additional-headers.js';
 import { createHash } from 'node:crypto';
+import { log } from '../../log.js';
 
 export const router = express.Router();
 
@@ -57,12 +58,12 @@ async function parseOllamaStream(jsonStream, request, response) {
         });
 
         jsonStream.body.on('end', () => {
-            console.info('Streaming request finished');
+            log.net.info('Streaming request finished');
             response.write('data: [DONE]\n\n');
             response.end();
         });
     } catch (error) {
-        console.error('Error forwarding streaming response:', error);
+        log.net.error('Error forwarding streaming response:', error);
         if (!response.headersSent) {
             return response.status(500).send({ error: true });
         } else {
@@ -79,7 +80,7 @@ async function parseOllamaStream(jsonStream, request, response) {
  */
 async function abortKoboldCppRequest(request, url) {
     try {
-        console.info('Aborting Kobold generation...');
+        log.net.info('Aborting Kobold generation...');
         const args = {
             method: 'POST',
             headers: {},
@@ -89,10 +90,10 @@ async function abortKoboldCppRequest(request, url) {
         const abortResponse = await fetch(`${url}/api/extra/abort`, args);
 
         if (!abortResponse.ok) {
-            console.error('Error sending abort request to Kobold:', abortResponse.status, abortResponse.statusText);
+            log.net.error('Error sending abort request to Kobold:', abortResponse.status, abortResponse.statusText);
         }
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
     }
 }
 
@@ -105,7 +106,7 @@ router.post('/status', async function (request, response) {
             request.body.api_server = request.body.api_server.replace('localhost', '127.0.0.1');
         }
 
-        console.debug('Trying to connect to API', request.body);
+        log.net.debug('Trying to connect to API', request.body);
         const baseUrl = trimV1(request.body.api_server);
 
         const args = {
@@ -154,7 +155,7 @@ router.post('/status', async function (request, response) {
         const isPossiblyLmStudio = modelsReply.headers.get('x-powered-by') === 'Express';
 
         if (!modelsReply.ok) {
-            console.error('Models endpoint is offline.');
+            log.net.error('Models endpoint is offline.');
             return response.sendStatus(400);
         }
 
@@ -175,12 +176,12 @@ router.post('/status', async function (request, response) {
         }
 
         if (!Array.isArray(data.data)) {
-            console.error('Models response is not an array.');
+            log.net.error('Models response is not an array.');
             return response.sendStatus(400);
         }
 
         const modelIds = data.data.map(x => x.id);
-        console.info('Models available:', modelIds);
+        log.net.debug('Models available:', modelIds);
 
         // Set result to the first model ID
         result = modelIds[0] || 'Valid';
@@ -193,14 +194,14 @@ router.post('/status', async function (request, response) {
                 if (modelInfoReply.ok) {
                     /** @type {any} */
                     const modelInfo = await modelInfoReply.json();
-                    console.debug('Ooba model info:', modelInfo);
+                    log.net.debug('Ooba model info:', modelInfo);
 
                     const modelName = modelInfo?.model_name;
                     result = modelName || result;
                     response.setHeader('x-supports-tokenization', 'true');
                 }
             } catch (error) {
-                console.error(`Failed to get Ooba model info: ${error}`);
+                log.net.error(`Failed to get Ooba model info: ${error}`);
             }
         } else if (apiType === TEXTGEN_TYPES.TABBY) {
             try {
@@ -210,7 +211,7 @@ router.post('/status', async function (request, response) {
                 if (modelInfoReply.ok) {
                     /** @type {any} */
                     const modelInfo = await modelInfoReply.json();
-                    console.debug('Tabby model info:', modelInfo);
+                    log.net.debug('Tabby model info:', modelInfo);
 
                     const modelName = modelInfo?.id;
                     result = modelName || result;
@@ -220,13 +221,13 @@ router.post('/status', async function (request, response) {
                     result = 'None';
                 }
             } catch (error) {
-                console.error(`Failed to get TabbyAPI model info: ${error}`);
+                log.net.error(`Failed to get TabbyAPI model info: ${error}`);
             }
         }
 
         return response.send({ result, data: data.data });
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return response.sendStatus(500);
     }
 });
@@ -246,7 +247,7 @@ router.post('/props', async function (request, response) {
         let propsUrl = baseUrl + '/props';
         if (apiType === TEXTGEN_TYPES.LLAMACPP && request.body.model) {
             propsUrl += `?model=${encodeURIComponent(request.body.model)}`;
-            console.debug(`Querying llama-server props with model parameter: ${request.body.model}`);
+            log.net.debug(`Querying llama-server props with model parameter: ${request.body.model}`);
         }
         const propsReply = await fetch(propsUrl, args);
 
@@ -261,10 +262,10 @@ router.post('/props', async function (request, response) {
             props.chat_template = props.chat_template.slice(0, -1) + '\n';
         }
         props.chat_template_hash = createHash('sha256').update(props.chat_template).digest('hex');
-        console.debug(`Model properties: ${JSON.stringify(props)}`);
+        log.net.debug(`Model properties: ${JSON.stringify(props)}`);
         return response.send(props);
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return response.sendStatus(500);
     }
 });
@@ -279,7 +280,7 @@ router.post('/generate', async function (request, response) {
 
         const apiType = request.body.api_type;
         const baseUrl = request.body.api_server;
-        console.debug(request.body);
+        log.net.debug(request.body);
 
         const controller = new AbortController();
         request.socket.removeAllListeners('close');
@@ -411,7 +412,7 @@ router.post('/generate', async function (request, response) {
             if (completionsReply.ok) {
                 /** @type {any} */
                 const data = await completionsReply.json();
-                console.debug('Endpoint response:', data);
+                log.net.debug('Endpoint response:', data);
 
                 // Map InfermaticAI response to OAI completions format
                 if (apiType === TEXTGEN_TYPES.INFERMATICAI) {
@@ -432,7 +433,7 @@ router.post('/generate', async function (request, response) {
         const status = error?.status ?? error?.code ?? 'UNKNOWN';
         const text = error?.error ?? error?.statusText ?? error?.message ?? 'Unknown error on /generate endpoint';
         let value = { error: true, status: status, response: text };
-        console.error('Endpoint error:', error);
+        log.net.error('Endpoint error:', error);
 
         return !response.headersSent
             ? response.send(value)
@@ -448,7 +449,7 @@ ollama.post('/download', async function (request, response) {
 
         const name = request.body.name;
         const url = String(request.body.api_server).replace(/\/$/, '');
-        console.debug('Pulling Ollama model:', name);
+        log.net.debug('Pulling Ollama model:', name);
 
         const fetchResponse = await fetch(`${url}/api/pull`, {
             method: 'POST',
@@ -460,14 +461,14 @@ ollama.post('/download', async function (request, response) {
         });
 
         if (!fetchResponse.ok) {
-            console.error('Download error:', fetchResponse.status, fetchResponse.statusText);
+            log.net.error('Download error:', fetchResponse.status, fetchResponse.statusText);
             return response.status(500).send({ error: true });
         }
 
-        console.debug('Ollama pull response:', await fetchResponse.json());
+        log.net.debug('Ollama pull response:', await fetchResponse.json());
         return response.send({ ok: true });
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return response.sendStatus(500);
     }
 });
@@ -478,7 +479,7 @@ ollama.post('/caption-image', async function (request, response) {
             return response.sendStatus(400);
         }
 
-        console.debug('Ollama caption request:', request.body);
+        log.net.debug('Ollama caption request:', request.body);
         const baseUrl = trimV1(request.body.server_url);
 
         const fetchResponse = await fetch(`${baseUrl}/api/generate`, {
@@ -494,24 +495,24 @@ ollama.post('/caption-image', async function (request, response) {
 
         if (!fetchResponse.ok) {
             const errorText = await fetchResponse.text();
-            console.error('Ollama caption error:', fetchResponse.status, fetchResponse.statusText, errorText);
+            log.net.error('Ollama caption error:', fetchResponse.status, fetchResponse.statusText, errorText);
             return response.status(500).send({ error: true });
         }
 
         /** @type {any} */
         const data = await fetchResponse.json();
-        console.debug('Ollama caption response:', data);
+        log.net.debug('Ollama caption response:', data);
 
         const caption = data?.response || '';
 
         if (!caption) {
-            console.error('Ollama caption is empty.');
+            log.net.error('Ollama caption is empty.');
             return response.status(500).send({ error: true });
         }
 
         return response.send({ caption });
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return response.sendStatus(500);
     }
 });
@@ -524,7 +525,7 @@ llamacpp.post('/props', async function (request, response) {
             return response.sendStatus(400);
         }
 
-        console.debug('LlamaCpp props request:', request.body);
+        log.net.debug('LlamaCpp props request:', request.body);
         const baseUrl = trimV1(request.body.server_url);
 
         const fetchResponse = await fetch(`${baseUrl}/props`, {
@@ -532,16 +533,16 @@ llamacpp.post('/props', async function (request, response) {
         });
 
         if (!fetchResponse.ok) {
-            console.error('LlamaCpp props error:', fetchResponse.status, fetchResponse.statusText);
+            log.net.error('LlamaCpp props error:', fetchResponse.status, fetchResponse.statusText);
             return response.status(500).send({ error: true });
         }
 
         const data = await fetchResponse.json();
-        console.debug('LlamaCpp props response:', data);
+        log.net.debug('LlamaCpp props response:', data);
 
         return response.send(data);
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return response.sendStatus(500);
     }
 });
@@ -555,7 +556,7 @@ llamacpp.post('/slots', async function (request, response) {
             return response.sendStatus(400);
         }
 
-        console.debug('LlamaCpp slots request:', request.body);
+        log.net.debug('LlamaCpp slots request:', request.body);
         const baseUrl = trimV1(request.body.server_url);
 
         let fetchResponse;
@@ -581,16 +582,16 @@ llamacpp.post('/slots', async function (request, response) {
         }
 
         if (!fetchResponse.ok) {
-            console.error('LlamaCpp slots error:', fetchResponse.status, fetchResponse.statusText);
+            log.net.error('LlamaCpp slots error:', fetchResponse.status, fetchResponse.statusText);
             return response.status(500).send({ error: true });
         }
 
         const data = await fetchResponse.json();
-        console.debug('LlamaCpp slots response:', data);
+        log.net.debug('LlamaCpp slots response:', data);
 
         return response.send(data);
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return response.sendStatus(500);
     }
 });
@@ -623,20 +624,20 @@ tabby.post('/download', async function (request, response) {
                 return response.status(403).send({ error: true });
             }
         } else {
-            console.error('API Permission error:', permissionResponse.status, permissionResponse.statusText);
+            log.net.error('API Permission error:', permissionResponse.status, permissionResponse.statusText);
             return response.status(500).send({ error: true });
         }
 
         const fetchResponse = await fetch(`${baseUrl}/v1/download`, args);
 
         if (!fetchResponse.ok) {
-            console.error('Download error:', fetchResponse.status, fetchResponse.statusText);
+            log.net.error('Download error:', fetchResponse.status, fetchResponse.statusText);
             return response.status(500).send({ error: true });
         }
 
         return response.send({ ok: true });
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return response.sendStatus(500);
     }
 });

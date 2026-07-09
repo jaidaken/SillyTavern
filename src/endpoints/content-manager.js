@@ -13,6 +13,7 @@ import { write } from '../character-card-parser.js';
 import { serverDirectory } from '../server-directory.js';
 import { Jimp, JimpMime } from '../jimp.js';
 import { DEFAULT_AVATAR_PATH } from '../constants.js';
+import { log } from '../log.js';
 
 const contentDirectory = path.join(serverDirectory, 'default/content');
 const scaffoldDirectory = path.join(serverDirectory, 'default/scaffold');
@@ -98,7 +99,7 @@ export function getDefaultPresets(directories) {
 
         return presets;
     } catch (err) {
-        console.warn('Failed to get default presets', err);
+        log.content.warn('Failed to get default presets', err);
         return [];
     }
 }
@@ -119,7 +120,7 @@ export function getDefaultPresetFile(filename) {
         const fileContent = fs.readFileSync(contentPath, 'utf8');
         return JSON.parse(fileContent);
     } catch (err) {
-        console.warn(`Failed to get default file ${filename}`, err);
+        log.content.warn(`Failed to get default file ${filename}`, err);
         return null;
     }
 }
@@ -142,21 +143,21 @@ function seedContent(contentIndex, contentLogPath, resolveTarget, forceCategorie
         }
 
         if (!contentItem.folder) {
-            console.warn(`Content file ${contentItem.filename} has no parent folder`);
+            log.content.warn(`Content file ${contentItem.filename} has no parent folder`);
             continue;
         }
 
         const contentPath = path.join(contentItem.folder, contentItem.filename);
 
         if (!fs.existsSync(contentPath)) {
-            console.warn(`Content file ${contentItem.filename} is missing`);
+            log.content.warn(`Content file ${contentItem.filename} is missing`);
             continue;
         }
 
         const contentTarget = resolveTarget(contentItem.type);
 
         if (!contentTarget) {
-            console.warn(`Content file ${contentItem.filename} has unknown type ${contentItem.type}`);
+            log.content.warn(`Content file ${contentItem.filename} has unknown type ${contentItem.type}`);
             continue;
         }
 
@@ -165,14 +166,14 @@ function seedContent(contentIndex, contentLogPath, resolveTarget, forceCategorie
         contentLog.push(contentItem.filename);
 
         if (fs.existsSync(targetPath)) {
-            console.warn(`Content file ${contentItem.filename} already exists in ${contentTarget}`);
+            log.content.warn(`Content file ${contentItem.filename} already exists in ${contentTarget}`);
             continue;
         }
 
         fs.mkdirSync(contentTarget, { recursive: true });
         fs.cpSync(contentPath, targetPath, { recursive: true, force: false });
         setPermissionsSync(targetPath);
-        console.info(`Content file ${contentItem.filename} copied to ${contentTarget}`);
+        log.content.info(`Content file ${contentItem.filename} copied to ${contentTarget}`);
         anyContentAdded = true;
     }
 
@@ -237,12 +238,10 @@ export async function checkForNewContent(directoriesList, forceCategories = []) 
         }
 
         if (anyContentAdded && !contentCheckSkip && forceCategories?.length === 0) {
-            console.info();
-            console.info(`${color.blue('If you don\'t want to receive content updates in the future, set')} ${color.yellow('skipContentCheck')} ${color.blue('to true in the config.yaml file.')}`);
-            console.info();
+            log.content.info(`${color.blue('If you don\'t want to receive content updates in the future, set')} ${color.yellow('skipContentCheck')} ${color.blue('to true in the config.yaml file.')}`);
         }
     } catch (err) {
-        console.error('Content check failed', err);
+        log.content.error('Content check failed', err);
     }
 }
 
@@ -405,7 +404,7 @@ async function downloadChubLorebook(id) {
 
     if (!result.ok) {
         const text = await result.text();
-        console.error('Chub returned error', result.statusText, text);
+        log.content.error('Chub returned error', result.statusText, text);
         throw new Error('Failed to fetch lorebook metadata');
     }
 
@@ -425,7 +424,7 @@ async function downloadChubLorebook(id) {
 
     if (!downloadResult.ok) {
         const text = await downloadResult.text();
-        console.error('Chub returned error', downloadResult.statusText, text);
+        log.content.error('Chub returned error', downloadResult.statusText, text);
         throw new Error('Failed to download lorebook');
     }
 
@@ -446,7 +445,7 @@ async function downloadChubCharacter(id) {
 
     if (!result.ok) {
         const text = await result.text();
-        console.error('Chub returned error', result.statusText, text);
+        log.content.error('Chub returned error', result.statusText, text);
         throw new Error('Failed to fetch character metadata');
     }
 
@@ -508,7 +507,7 @@ async function downloadPygmalionCharacter(id) {
 
     if (!result.ok) {
         const text = await result.text();
-        console.error('Pygsite returned error', result.status, text);
+        log.content.error('Pygsite returned error', result.status, text);
         throw new Error('Failed to download character');
     }
 
@@ -517,7 +516,7 @@ async function downloadPygmalionCharacter(id) {
     const characterData = jsonData?.character;
 
     if (!characterData || typeof characterData !== 'object') {
-        console.error('Pygsite returned invalid character data', jsonData);
+        log.content.error('Pygsite returned invalid character data', jsonData);
         throw new Error('Failed to download character');
     }
 
@@ -525,7 +524,7 @@ async function downloadPygmalionCharacter(id) {
         const avatarUrl = characterData?.data?.avatar;
 
         if (!avatarUrl) {
-            console.error('Pygsite character does not have an avatar', characterData);
+            log.content.error('Pygsite character does not have an avatar', characterData);
             throw new Error('Failed to download avatar');
         }
 
@@ -540,7 +539,7 @@ async function downloadPygmalionCharacter(id) {
             fileType: 'image/png',
         };
     } catch (e) {
-        console.error('Failed to download avatar, using JSON instead', e);
+        log.content.error('Failed to download avatar, using JSON instead', e);
         return {
             buffer: Buffer.from(JSON.stringify(jsonData)),
             fileName: `${sanitize(id)}.json`,
@@ -615,10 +614,10 @@ async function downloadJannyCharacter(uuid) {
 
             return { buffer, fileName, fileType };
         } else {
-            console.error('Janny failed to download', downloadResult);
+            log.content.error('Janny failed to download', downloadResult);
         }
     } else {
-        console.error('Janny returned error', result.statusText, await result.text());
+        log.content.error('Janny returned error', result.statusText, await result.text());
     }
 
     throw new Error('Failed to download character');
@@ -643,7 +642,7 @@ async function downloadAICCCharacter(id) {
             fileType: contentType,
         };
     } catch (error) {
-        console.error('Error downloading character:', error);
+        log.content.error('Error downloading character:', error);
         throw error;
     }
 }
@@ -671,7 +670,7 @@ function parseAICC(url) {
             }
         }
     } catch (e) {
-        console.error('Error parsing AICC URL:', e);
+        log.content.error('Error parsing AICC URL:', e);
     }
     return null;
 }
@@ -708,7 +707,7 @@ async function downloadGenericPng(url) {
             };
         }
     } catch (error) {
-        console.error('Error downloading file: ', error);
+        log.content.error('Error downloading file: ', error);
         throw error;
     }
     return null;
@@ -737,7 +736,7 @@ async function downloadRisuCharacter(uuid) {
 
     if (!result.ok) {
         const text = await result.text();
-        console.error('RisuAI returned error', result.statusText, text);
+        log.content.error('RisuAI returned error', result.statusText, text);
         throw new Error('Failed to download character');
     }
 
@@ -787,7 +786,7 @@ async function downloadPerchanceCharacter(slug) {
 
     try {
         const charURL = `${perchanceBaseURL}/${slug}`;
-        console.log('Downloading Perchance character from URL:', charURL);
+        log.content.info('Downloading Perchance character from URL:', charURL);
         const result = await fetch(charURL, {
             headers: { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT },
         });
@@ -843,7 +842,7 @@ async function downloadPerchanceCharacter(slug) {
             return { buffer, fileName, fileType };
         }
     } catch (error) {
-        console.error('Error downloading character:', error);
+        log.content.error('Error downloading character:', error);
         throw error;
     }
     return null;
@@ -862,7 +861,7 @@ async function extractPerchanceCharacterFromGz(result) {
     // inside the gz file, there is a file of the same name without extensions, but it is a json file
 
     if (!decompressedBuffer || decompressedBuffer.length === 0) {
-        console.error('Perchance character data is empty or invalid');
+        log.content.error('Perchance character data is empty or invalid');
         throw new Error('Failed to download character: Invalid Perchance character data');
     }
 
@@ -870,7 +869,7 @@ async function extractPerchanceCharacterFromGz(result) {
     const perchanceCharData = JSON.parse(decompressedBuffer.toString());
 
     if (!perchanceCharData?.addCharacter) {
-        console.error('Perchance character data is missing addCharacter field', perchanceCharData);
+        log.content.error('Perchance character data is missing addCharacter field', perchanceCharData);
         throw new Error('Failed to download character: Invalid Perchance character data');
     }
 
@@ -887,7 +886,7 @@ async function fetchPerchanceAvatar(avatarUrl, isAvatarBase64) {
     const defaultAvatarBuffer = fs.readFileSync(defaultAvatarPath);
 
     if (!avatarUrl || (!isAvatarBase64 && !isValidUrl(avatarUrl))) {
-        console.warn('Perchance character does not have an avatar, it is not base64, or it is an invalid url, using default avatar');
+        log.content.warn('Perchance character does not have an avatar, it is not base64, or it is an invalid url, using default avatar');
         return defaultAvatarBuffer;
     }
 
@@ -901,13 +900,13 @@ async function fetchPerchanceAvatar(avatarUrl, isAvatarBase64) {
             return buffer;
         } else {
             // use jimp to convert the base64 to PNG if it's not PNG
-            console.debug('Perchance character avatar is not PNG, converting to PNG...');
+            log.content.debug('Perchance character avatar is not PNG, converting to PNG...');
             return await Jimp.read(buffer).then(image => image.getBuffer(JimpMime.png));
         }
     }
 
     // Fetch avatar from URL
-    console.log('Fetching Perchance avatar from URL:', avatarUrl);
+    log.content.info('Fetching Perchance avatar from URL:', avatarUrl);
     const avatarResponse = await fetch(avatarUrl, { headers: { 'User-Agent': USER_AGENT } });
 
     if (avatarResponse.ok) {
@@ -917,7 +916,7 @@ async function fetchPerchanceAvatar(avatarUrl, isAvatarBase64) {
         if (avatarContentType === 'image/png') {
             return avatarBuffer;
         } else {
-            console.debug(`Perchance character avatar is not PNG: ${avatarContentType}. Converting to PNG...`);
+            log.content.debug(`Perchance character avatar is not PNG: ${avatarContentType}. Converting to PNG...`);
 
             // use jimp to convert the image to PNG if it's not PNG
             return await Jimp.read(avatarBuffer)
@@ -925,14 +924,14 @@ async function fetchPerchanceAvatar(avatarUrl, isAvatarBase64) {
         }
     }
 
-    console.error('Failed to fetch Perchance avatar:', avatarResponse.statusText);
+    log.content.error('Failed to fetch Perchance avatar:', avatarResponse.statusText);
     const isPerchanceOrgFileUploader = avatarUrl.includes('https://user-uploads.perchance.org');
 
     if (isPerchanceOrgFileUploader) {
-        console.warn('Files from https://user-uploads.perchance.org are sometimes blocked by CloudFlare, try reuploading it in https://perchance.org/upload to get the new link from https://user-uploads.dev instead.');
+        log.content.warn('Files from https://user-uploads.perchance.org are sometimes blocked by CloudFlare, try reuploading it in https://perchance.org/upload to get the new link from https://user-uploads.dev instead.');
     }
 
-    console.warn('You can also download the avatar manually and assign it to the character:', avatarUrl);
+    log.content.warn('You can also download the avatar manually and assign it to the character:', avatarUrl);
     return defaultAvatarBuffer;
 }
 
@@ -1022,10 +1021,10 @@ router.post('/importURL', async (request, response) => {
             type = chubParsed?.type;
 
             if (chubParsed?.type === 'character') {
-                console.info('Downloading chub character:', chubParsed.id);
+                log.content.info('Downloading chub character:', chubParsed.id);
                 result = await downloadChubCharacter(chubParsed.id);
             } else if (chubParsed?.type === 'lorebook') {
-                console.info('Downloading chub lorebook:', chubParsed.id);
+                log.content.info('Downloading chub lorebook:', chubParsed.id);
                 result = await downloadChubLorebook(chubParsed.id);
             } else {
                 return response.sendStatus(404);
@@ -1046,11 +1045,11 @@ router.post('/importURL', async (request, response) => {
             type = 'character';
             result = await downloadPerchanceCharacter(perchanceSlug);
         } else if (isGeneric) {
-            console.info('Downloading from generic url:', url);
+            log.content.info('Downloading from generic url:', url);
             type = 'character';
             result = await downloadGenericPng(url);
         } else {
-            console.error(`Received an import for "${getHostFromUrl(url)}", but site is not whitelisted. This domain must be added to the config key "whitelistImportDomains" to allow import from this source.`);
+            log.content.error(`Received an import for "${getHostFromUrl(url)}", but site is not whitelisted. This domain must be added to the config key "whitelistImportDomains" to allow import from this source.`);
             return response.sendStatus(404);
         }
 
@@ -1063,7 +1062,7 @@ router.post('/importURL', async (request, response) => {
         response.set('X-Custom-Content-Type', type);
         return response.send(result.buffer);
     } catch (error) {
-        console.error('Importing custom content failed', error);
+        log.content.error('Importing custom content failed', error);
         return response.sendStatus(500);
     }
 });
@@ -1084,25 +1083,25 @@ router.post('/importUUID', async (request, response) => {
         const uuidType = uuid.includes('lorebook') ? 'lorebook' : 'character';
 
         if (isPygmalion) {
-            console.info('Downloading Pygmalion character:', uuid);
+            log.content.info('Downloading Pygmalion character:', uuid);
             result = await downloadPygmalionCharacter(uuid);
         } else if (isJannny) {
-            console.info('Downloading Janitor character:', uuid.split('_')[0]);
+            log.content.info('Downloading Janitor character:', uuid.split('_')[0]);
             result = await downloadJannyCharacter(uuid.split('_')[0]);
         } else if (isAICC) {
             const [, author, card] = uuid.split('/');
-            console.info('Downloading AICC character:', `${author}/${card}`);
+            log.content.info('Downloading AICC character:', `${author}/${card}`);
             result = await downloadAICCCharacter(`${author}/${card}`);
         } else if (isPerchance) {
-            console.info('Downloading Perchance character:', uuid);
+            log.content.info('Downloading Perchance character:', uuid);
             const parsedUuid = parsePerchanceSlug(uuid);
             result = await downloadPerchanceCharacter(parsedUuid);
         } else {
             if (uuidType === 'character') {
-                console.info('Downloading chub character:', uuid);
+                log.content.info('Downloading chub character:', uuid);
                 result = await downloadChubCharacter(uuid);
             } else if (uuidType === 'lorebook') {
-                console.info('Downloading chub lorebook:', uuid);
+                log.content.info('Downloading chub lorebook:', uuid);
                 result = await downloadChubLorebook(uuid);
             } else {
                 return response.sendStatus(404);
@@ -1118,7 +1117,7 @@ router.post('/importUUID', async (request, response) => {
         response.set('X-Custom-Content-Type', uuidType);
         return response.send(result.buffer);
     } catch (error) {
-        console.error('Importing custom content failed', error);
+        log.content.error('Importing custom content failed', error);
         return response.sendStatus(500);
     }
 });

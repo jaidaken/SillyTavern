@@ -9,6 +9,7 @@ import { getConfigValue, mergeObjectWithYaml, excludeKeysByYaml, trimV1, delay }
 import { setAdditionalHeaders } from '../additional-headers.js';
 import { readSecret, SECRET_KEYS } from './secrets.js';
 import { AIMLAPI_HEADERS, OPENROUTER_HEADERS, SILICONFLOW_ENDPOINT, ZAI_ENDPOINT } from '../constants.js';
+import { log } from '../log.js';
 
 // Despite the filename, this is a grab-bag proxy for caption/TTS/image/video/transcription
 // across many third-party providers, not OpenAI specifically.
@@ -110,7 +111,7 @@ router.post('/caption-image', async (request, response) => {
 
         const noKeyTypes = ['custom', 'ooba', 'koboldcpp', 'vllm', 'llamacpp'];
         if (!key && !request.body.reverse_proxy && !noKeyTypes.includes(request.body.api)) {
-            console.warn('No key found for API', request.body.api);
+            log.net.warn('No key found for API', request.body.api);
             return response.sendStatus(400);
         }
 
@@ -248,7 +249,7 @@ router.post('/caption-image', async (request, response) => {
         }
 
         setAdditionalHeaders(request, { headers }, apiUrl);
-        console.debug('Multimodal captioning request', body);
+        log.net.debug('Multimodal captioning request', body);
 
         const result = await fetch(apiUrl, {
             method: 'POST',
@@ -262,13 +263,13 @@ router.post('/caption-image', async (request, response) => {
 
         if (!result.ok) {
             const text = await result.text();
-            console.warn('Multimodal captioning request failed', result.statusText, text);
+            log.net.warn('Multimodal captioning request failed', result.statusText, text);
             return response.status(500).send(text);
         }
 
         /** @type {any} */
         const data = await result.json();
-        console.info('Multimodal captioning response', data);
+        log.net.debug('Multimodal captioning response', data);
         const caption = data?.choices?.[0]?.message?.content ?? data?.message?.content?.[0]?.text;
 
         if (!caption) {
@@ -277,7 +278,7 @@ router.post('/caption-image', async (request, response) => {
 
         return response.json({ caption });
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         response.status(500).send('Internal server error');
     }
 });
@@ -287,7 +288,7 @@ router.post('/generate-voice', async (request, response) => {
         const key = readSecret(request.user.directories, SECRET_KEYS.OPENAI);
 
         if (!key) {
-            console.warn('No OpenAI key found');
+            log.net.warn('No OpenAI key found');
             return response.sendStatus(400);
         }
 
@@ -303,7 +304,7 @@ router.post('/generate-voice', async (request, response) => {
             requestBody.instructions = request.body.instructions;
         }
 
-        console.debug('OpenAI TTS request', requestBody);
+        log.net.debug('OpenAI TTS request', requestBody);
 
         const result = await fetch('https://api.openai.com/v1/audio/speech', {
             method: 'POST',
@@ -316,7 +317,7 @@ router.post('/generate-voice', async (request, response) => {
 
         if (!result.ok) {
             const text = await result.text();
-            console.warn('OpenAI request failed', result.statusText, text);
+            log.net.warn('OpenAI request failed', result.statusText, text);
             return response.status(500).send(text);
         }
 
@@ -324,7 +325,7 @@ router.post('/generate-voice', async (request, response) => {
         response.setHeader('Content-Type', 'audio/mpeg');
         return response.send(Buffer.from(buffer));
     } catch (error) {
-        console.error('OpenAI TTS generation failed', error);
+        log.net.error('OpenAI TTS generation failed', error);
         response.status(500).send('Internal server error');
     }
 });
@@ -335,7 +336,7 @@ router.post('/electronhub/generate-voice', async (request, response) => {
         const key = readSecret(request.user.directories, SECRET_KEYS.ELECTRONHUB);
 
         if (!key) {
-            console.warn('No ElectronHub key found');
+            log.net.warn('No ElectronHub key found');
             return response.sendStatus(400);
         }
 
@@ -368,7 +369,7 @@ router.post('/electronhub/generate-voice', async (request, response) => {
         // Clean undefineds
         Object.keys(requestBody).forEach(k => requestBody[k] === undefined && delete requestBody[k]);
 
-        console.debug('ElectronHub TTS request', requestBody);
+        log.net.debug('ElectronHub TTS request', requestBody);
 
         const result = await fetch('https://api.electronhub.ai/v1/audio/speech', {
             method: 'POST',
@@ -381,7 +382,7 @@ router.post('/electronhub/generate-voice', async (request, response) => {
 
         if (!result.ok) {
             const text = await result.text();
-            console.warn('ElectronHub TTS request failed', result.statusText, text);
+            log.net.warn('ElectronHub TTS request failed', result.statusText, text);
             return response.status(500).send(text);
         }
 
@@ -390,7 +391,7 @@ router.post('/electronhub/generate-voice', async (request, response) => {
         response.setHeader('Content-Type', contentType);
         return response.send(Buffer.from(buffer));
     } catch (error) {
-        console.error('ElectronHub TTS generation failed', error);
+        log.net.error('ElectronHub TTS generation failed', error);
         response.status(500).send('Internal server error');
     }
 });
@@ -401,7 +402,7 @@ router.post('/electronhub/models', async (request, response) => {
         const key = readSecret(request.user.directories, SECRET_KEYS.ELECTRONHUB);
 
         if (!key) {
-            console.warn('No ElectronHub key found');
+            log.net.warn('No ElectronHub key found');
             return response.sendStatus(400);
         }
 
@@ -414,7 +415,7 @@ router.post('/electronhub/models', async (request, response) => {
 
         if (!result.ok) {
             const text = await result.text();
-            console.warn('ElectronHub models request failed', result.statusText, text);
+            log.net.warn('ElectronHub models request failed', result.statusText, text);
             return response.status(500).send(text);
         }
         /** @type {any} */
@@ -422,7 +423,7 @@ router.post('/electronhub/models', async (request, response) => {
         const models = data && Array.isArray(data.data) ? data.data : [];
         return response.json(models);
     } catch (error) {
-        console.error('ElectronHub models fetch failed', error);
+        log.net.error('ElectronHub models fetch failed', error);
         response.status(500).send('Internal server error');
     }
 });
@@ -433,7 +434,7 @@ router.post('/chutes/generate-voice', async (request, response) => {
         const key = readSecret(request.user.directories, SECRET_KEYS.CHUTES);
 
         if (!key) {
-            console.warn('No Chutes key found');
+            log.net.warn('No Chutes key found');
             return response.sendStatus(400);
         }
 
@@ -443,7 +444,7 @@ router.post('/chutes/generate-voice', async (request, response) => {
             speed: request.body.speed || 1,
         };
 
-        console.debug('Chutes TTS request', requestBody);
+        log.net.debug('Chutes TTS request', requestBody);
 
         const result = await fetch('https://chutes-kokoro.chutes.ai/speak', {
             method: 'POST',
@@ -456,7 +457,7 @@ router.post('/chutes/generate-voice', async (request, response) => {
 
         if (!result.ok) {
             const text = await result.text();
-            console.warn('Chutes TTS request failed', result.statusText, text);
+            log.net.warn('Chutes TTS request failed', result.statusText, text);
             return response.status(500).send(text);
         }
 
@@ -465,7 +466,7 @@ router.post('/chutes/generate-voice', async (request, response) => {
         response.setHeader('Content-Type', contentType);
         return response.send(Buffer.from(buffer));
     } catch (error) {
-        console.error('Chutes TTS generation failed', error);
+        log.net.error('Chutes TTS generation failed', error);
         response.status(500).send('Internal server error');
     }
 });
@@ -475,7 +476,7 @@ router.post('/chutes/models/embedding', async (request, response) => {
         const key = readSecret(request.user.directories, SECRET_KEYS.CHUTES);
 
         if (!key) {
-            console.warn('No Chutes key found');
+            log.net.warn('No Chutes key found');
             return response.sendStatus(400);
         }
 
@@ -488,7 +489,7 @@ router.post('/chutes/models/embedding', async (request, response) => {
 
         if (!result.ok) {
             const text = await result.text();
-            console.warn('Chutes embedding models request failed', result.statusText, text);
+            log.net.warn('Chutes embedding models request failed', result.statusText, text);
             return response.status(500).send(text);
         }
 
@@ -496,12 +497,12 @@ router.post('/chutes/models/embedding', async (request, response) => {
         const data = await result.json();
 
         if (!Array.isArray(data?.items)) {
-            console.warn('Chutes embedding models response invalid', data);
+            log.net.warn('Chutes embedding models response invalid', data);
             return response.sendStatus(500);
         }
         return response.json(data.items);
     } catch (error) {
-        console.error('Chutes embedding models fetch failed', error);
+        log.net.error('Chutes embedding models fetch failed', error);
         response.sendStatus(500);
     }
 });
@@ -511,7 +512,7 @@ router.post('/nanogpt/models/embedding', async (request, response) => {
         const key = readSecret(request.user.directories, SECRET_KEYS.NANOGPT);
 
         if (!key) {
-            console.warn('No NanoGPT key found');
+            log.net.warn('No NanoGPT key found');
             return response.sendStatus(400);
         }
 
@@ -525,7 +526,7 @@ router.post('/nanogpt/models/embedding', async (request, response) => {
 
         if (!result.ok) {
             const text = await result.text();
-            console.warn('NanoGPT embedding models request failed', result.statusText, text);
+            log.net.warn('NanoGPT embedding models request failed', result.statusText, text);
             return response.status(500).send(text);
         }
 
@@ -533,12 +534,12 @@ router.post('/nanogpt/models/embedding', async (request, response) => {
         const data = await result.json();
 
         if (!Array.isArray(data?.data)) {
-            console.warn('NanoGPT embedding models response invalid', data);
+            log.net.warn('NanoGPT embedding models response invalid', data);
             return response.sendStatus(500);
         }
         return response.json(data.data);
     } catch (error) {
-        console.error('NanoGPT embedding models fetch failed', error);
+        log.net.error('NanoGPT embedding models fetch failed', error);
         response.sendStatus(500);
     }
 });
@@ -548,7 +549,7 @@ router.post('/siliconflow/models/embedding', async (request, response) => {
         const key = readSecret(request.user.directories, SECRET_KEYS.SILICONFLOW);
 
         if (!key) {
-            console.warn('No SiliconFlow key found');
+            log.net.warn('No SiliconFlow key found');
             return response.sendStatus(400);
         }
 
@@ -565,7 +566,7 @@ router.post('/siliconflow/models/embedding', async (request, response) => {
 
         if (!result.ok) {
             const text = await result.text();
-            console.warn('SiliconFlow embedding models request failed', result.statusText, text);
+            log.net.warn('SiliconFlow embedding models request failed', result.statusText, text);
             return response.status(500).send(text);
         }
 
@@ -573,13 +574,13 @@ router.post('/siliconflow/models/embedding', async (request, response) => {
         const data = await result.json();
 
         if (!Array.isArray(data?.data)) {
-            console.warn('SiliconFlow embedding models response invalid', data);
+            log.net.warn('SiliconFlow embedding models response invalid', data);
             return response.sendStatus(500);
         }
 
         return response.json(data.data);
     } catch (error) {
-        console.error('SiliconFlow embedding models fetch failed', error);
+        log.net.error('SiliconFlow embedding models fetch failed', error);
         response.sendStatus(500);
     }
 });
@@ -589,13 +590,13 @@ router.post('/workers-ai/models/embedding', async (request, response) => {
         const key = readSecret(request.user.directories, SECRET_KEYS.WORKERS_AI);
 
         if (!key) {
-            console.warn('No Workers AI key found');
+            log.net.warn('No Workers AI key found');
             return response.sendStatus(400);
         }
 
         const accountId = String(request.body.workers_ai_account_id || '').trim();
         if (!accountId) {
-            console.warn('No Workers AI account ID found');
+            log.net.warn('No Workers AI account ID found');
             return response.sendStatus(400);
         }
 
@@ -609,7 +610,7 @@ router.post('/workers-ai/models/embedding', async (request, response) => {
 
         if (!result.ok) {
             const text = await result.text();
-            console.warn('Workers AI embedding models request failed', result.statusText, text);
+            log.net.warn('Workers AI embedding models request failed', result.statusText, text);
             return response.status(500).send(text);
         }
 
@@ -617,13 +618,13 @@ router.post('/workers-ai/models/embedding', async (request, response) => {
         const data = await result.json();
 
         if (!Array.isArray(data?.result)) {
-            console.warn('Workers AI embedding models response invalid', data);
+            log.net.warn('Workers AI embedding models response invalid', data);
             return response.sendStatus(500);
         }
 
         return response.json(data.result.map(m => ({ ...m, id: m.name })));
     } catch (error) {
-        console.error('Workers AI embedding models fetch failed', error);
+        log.net.error('Workers AI embedding models fetch failed', error);
         response.sendStatus(500);
     }
 });
@@ -633,11 +634,11 @@ router.post('/generate-image', async (request, response) => {
         const key = readSecret(request.user.directories, SECRET_KEYS.OPENAI);
 
         if (!key) {
-            console.warn('No OpenAI key found');
+            log.net.warn('No OpenAI key found');
             return response.sendStatus(400);
         }
 
-        console.debug('OpenAI request', request.body);
+        log.net.debug('OpenAI request', request.body);
 
         const result = await fetch('https://api.openai.com/v1/images/generations', {
             method: 'POST',
@@ -650,14 +651,14 @@ router.post('/generate-image', async (request, response) => {
 
         if (!result.ok) {
             const text = await result.text();
-            console.warn('OpenAI request failed', result.statusText, text);
+            log.net.warn('OpenAI request failed', result.statusText, text);
             return response.status(500).send(text);
         }
 
         const data = await result.json();
         return response.json(data);
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         response.status(500).send('Internal server error');
     }
 });
@@ -673,11 +674,11 @@ router.post('/generate-video', async (request, response) => {
         const key = readSecret(request.user.directories, SECRET_KEYS.OPENAI);
 
         if (!key) {
-            console.warn('No OpenAI key found');
+            log.net.warn('No OpenAI key found');
             return response.sendStatus(400);
         }
 
-        console.debug('OpenAI video generation request', request.body);
+        log.net.debug('OpenAI video generation request', request.body);
 
         const videoJobResponse = await fetch('https://api.openai.com/v1/videos', {
             method: 'POST',
@@ -695,7 +696,7 @@ router.post('/generate-video', async (request, response) => {
 
         if (!videoJobResponse.ok) {
             const text = await videoJobResponse.text();
-            console.warn('OpenAI video generation request failed', videoJobResponse.statusText, text);
+            log.net.warn('OpenAI video generation request failed', videoJobResponse.statusText, text);
             return response.status(500).send(text);
         }
 
@@ -703,19 +704,19 @@ router.post('/generate-video', async (request, response) => {
         const videoJob = await videoJobResponse.json();
 
         if (!videoJob || !videoJob.id) {
-            console.warn('OpenAI video generation returned no job ID', videoJob);
+            log.net.warn('OpenAI video generation returned no job ID', videoJob);
             return response.status(500).send('No video job ID returned');
         }
 
         // Poll for video generation completion
         for (let attempt = 0; attempt < 30; attempt++) {
             if (controller.signal.aborted) {
-                console.info('OpenAI video generation aborted by client');
+                log.net.info('OpenAI video generation aborted by client');
                 return response.status(500).send('Video generation aborted by client');
             }
 
             await delay(5000 + attempt * 1000);
-            console.debug(`Polling OpenAI video job ${videoJob.id}, attempt ${attempt + 1}`);
+            log.net.debug(`Polling OpenAI video job ${videoJob.id}, attempt ${attempt + 1}`);
 
             const pollResponse = await fetch(`https://api.openai.com/v1/videos/${videoJob.id}`, {
                 method: 'GET',
@@ -726,16 +727,16 @@ router.post('/generate-video', async (request, response) => {
 
             if (!pollResponse.ok) {
                 const text = await pollResponse.text();
-                console.warn('OpenAI video job polling failed', pollResponse.statusText, text);
+                log.net.warn('OpenAI video job polling failed', pollResponse.statusText, text);
                 return response.status(500).send(text);
             }
 
             /** @type {any} */
             const pollResult = await pollResponse.json();
-            console.debug(`OpenAI video job status: ${pollResult.status}, progress: ${pollResult.progress}`);
+            log.net.debug(`OpenAI video job status: ${pollResult.status}, progress: ${pollResult.progress}`);
 
             if (pollResult.status === 'failed') {
-                console.warn('OpenAI video generation failed', pollResult);
+                log.net.warn('OpenAI video generation failed', pollResult);
                 return response.status(500).send('Video generation failed');
             }
 
@@ -749,7 +750,7 @@ router.post('/generate-video', async (request, response) => {
 
                 if (!contentResponse.ok) {
                     const text = await contentResponse.text();
-                    console.warn('OpenAI video content fetch failed', contentResponse.statusText, text);
+                    log.net.warn('OpenAI video content fetch failed', contentResponse.statusText, text);
                     return response.status(500).send(text);
                 }
 
@@ -758,7 +759,7 @@ router.post('/generate-video', async (request, response) => {
             }
         }
     } catch (error) {
-        console.error('OpenAI video generation failed', error);
+        log.net.error('OpenAI video generation failed', error);
         response.status(500).send('Internal server error');
     }
 });
@@ -771,7 +772,7 @@ custom.post('/generate-voice', async (request, response) => {
         const { input, provider_endpoint, response_format, voice, speed, model } = request.body;
 
         if (!provider_endpoint) {
-            console.warn('No OpenAI-compatible TTS provider endpoint provided');
+            log.net.warn('No OpenAI-compatible TTS provider endpoint provided');
             return response.sendStatus(400);
         }
 
@@ -792,7 +793,7 @@ custom.post('/generate-voice', async (request, response) => {
 
         if (!result.ok) {
             const text = await result.text();
-            console.warn('OpenAI request failed', result.statusText, text);
+            log.net.warn('OpenAI request failed', result.statusText, text);
             return response.status(500).send(text);
         }
 
@@ -800,7 +801,7 @@ custom.post('/generate-voice', async (request, response) => {
         response.setHeader('Content-Type', 'audio/mpeg');
         return response.send(Buffer.from(buffer));
     } catch (error) {
-        console.error('OpenAI TTS generation failed', error);
+        log.net.error('OpenAI TTS generation failed', error);
         response.status(500).send('Internal server error');
     }
 });
@@ -821,16 +822,16 @@ function createTranscribeHandler({ secretKey, apiUrl, providerName }) {
             const key = readSecret(request.user.directories, secretKey);
 
             if (!key) {
-                console.warn(`No ${providerName} key found`);
+                log.net.warn(`No ${providerName} key found`);
                 return response.sendStatus(400);
             }
 
             if (!request.file) {
-                console.warn('No audio file found');
+                log.net.warn('No audio file found');
                 return response.sendStatus(400);
             }
 
-            console.info(`Processing audio file with ${providerName}`, request.file.path);
+            log.net.info(`Processing audio file with ${providerName}`, request.file.path);
             const formData = new FormData();
             formData.append('file', fs.createReadStream(request.file.path), { filename: 'audio.wav', contentType: 'audio/wav' });
             formData.append('model', request.body.model);
@@ -850,16 +851,16 @@ function createTranscribeHandler({ secretKey, apiUrl, providerName }) {
 
             if (!result.ok) {
                 const text = await result.text();
-                console.warn(`${providerName} request failed`, result.statusText, text);
+                log.net.warn(`${providerName} request failed`, result.statusText, text);
                 return response.status(500).send(text);
             }
 
             fs.unlinkSync(request.file.path);
             const data = await result.json();
-            console.debug(`${providerName} transcription response`, data);
+            log.net.debug(`${providerName} transcription response`, data);
             return response.json(data);
         } catch (error) {
-            console.error(`${providerName} transcription failed`, error);
+            log.net.error(`${providerName} transcription failed`, error);
             response.status(500).send('Internal server error');
         }
     };
@@ -894,16 +895,16 @@ router.post('/chutes/transcribe-audio', async (request, response) => {
         const key = readSecret(request.user.directories, SECRET_KEYS.CHUTES);
 
         if (!key) {
-            console.warn('No Chutes key found');
+            log.net.warn('No Chutes key found');
             return response.sendStatus(400);
         }
 
         if (!request.file) {
-            console.warn('No audio file found');
+            log.net.warn('No audio file found');
             return response.sendStatus(400);
         }
 
-        console.info('Processing audio file with Chutes', request.file.path);
+        log.net.info('Processing audio file with Chutes', request.file.path);
         const audioBase64 = fs.readFileSync(request.file.path).toString('base64');
 
         const result = await fetch(`https://${request.body.model}.chutes.ai/transcribe`, {
@@ -919,23 +920,23 @@ router.post('/chutes/transcribe-audio', async (request, response) => {
 
         if (!result.ok) {
             const text = await result.text();
-            console.warn('Chutes request failed', result.statusText, text);
+            log.net.warn('Chutes request failed', result.statusText, text);
             return response.status(500).send(text);
         }
 
         fs.unlinkSync(request.file.path);
         const data = await result.json();
-        console.debug('Chutes transcription response', data);
+        log.net.debug('Chutes transcription response', data);
 
         if (!Array.isArray(data)) {
-            console.warn('Chutes transcription response invalid', data);
+            log.net.warn('Chutes transcription response invalid', data);
             return response.sendStatus(500);
         }
 
         const fullText = data.map(chunk => chunk.text || '').join('').trim();
         return response.json({ text: fullText });
     } catch (error) {
-        console.error('Chutes transcription failed', error);
+        log.net.error('Chutes transcription failed', error);
         response.status(500).send('Internal server error');
     }
 });

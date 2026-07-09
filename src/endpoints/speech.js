@@ -8,6 +8,7 @@ import mime from 'mime-types';
 import { getPipeline } from '../transformers.js';
 import { forwardFetchResponse } from '../util.js';
 import { readSecret, SECRET_KEYS } from './secrets.js';
+import { log } from '../log.js';
 
 export const router = express.Router();
 
@@ -48,12 +49,12 @@ router.post('/recognize', async (req, res) => {
         const start = performance.now();
         const result = await pipe(wav, { language: lang || null, task: 'transcribe' });
         const end = performance.now();
-        console.info(`Execution duration: ${(end - start) / 1000} seconds`);
-        console.info('Transcribed audio:', result.text);
+        log.tts.debug(`Execution duration: ${(end - start) / 1000} seconds`);
+        log.tts.debug('Transcribed audio:', result.text);
 
         return res.json({ text: result.text });
     } catch (error) {
-        console.error(error);
+        log.tts.error(error);
         return res.sendStatus(500);
     }
 });
@@ -69,7 +70,7 @@ router.post('/synthesize', async (req, res) => {
         const start = performance.now();
         const result = await pipe(text, { speaker_embeddings: speaker_embeddings });
         const end = performance.now();
-        console.debug(`Execution duration: ${(end - start) / 1000} seconds`);
+        log.tts.debug(`Execution duration: ${(end - start) / 1000} seconds`);
 
         const wav = new wavefile.WaveFile();
         wav.fromScratch(1, result.sampling_rate, '32f', result.audio);
@@ -78,7 +79,7 @@ router.post('/synthesize', async (req, res) => {
         res.set('Content-Type', 'audio/wav');
         return res.send(Buffer.from(buffer));
     } catch (error) {
-        console.error(error);
+        log.tts.error(error);
         return res.sendStatus(500);
     }
 });
@@ -109,7 +110,7 @@ pollinations.post('/voices', async (req, res) => {
         const voices = audioModelData.voices;
         return res.json(voices);
     } catch (error) {
-        console.error(error);
+        log.tts.error(error);
         return res.sendStatus(500);
     }
 });
@@ -118,7 +119,7 @@ pollinations.post('/generate', async (req, res) => {
     try {
         const key = readSecret(req.user.directories, SECRET_KEYS.POLLINATIONS);
         if (!key) {
-            console.warn('No API key saved for Pollinations TTS.');
+            log.tts.warn('No API key saved for Pollinations TTS.');
             return res.sendStatus(400);
         }
 
@@ -126,7 +127,7 @@ pollinations.post('/generate', async (req, res) => {
         const model = req.body.model || 'openai-audio';
         const voice = req.body.voice || 'alloy';
 
-        console.debug('Pollinations TTS request', { text, model, voice });
+        log.tts.debug('Pollinations TTS request', { text, model, voice });
 
         const response = await fetch('https://gen.pollinations.ai/v1/chat/completions', {
             method: 'POST',
@@ -160,14 +161,14 @@ pollinations.post('/generate', async (req, res) => {
         const audioData = data?.choices?.[0]?.message?.audio?.data;
 
         if (!audioData) {
-            console.warn('Pollinations TTS audio data is missing from the response');
+            log.tts.warn('Pollinations TTS audio data is missing from the response');
             return res.sendStatus(500);
         }
 
         res.set('Content-Type', 'audio/mpeg');
         return res.send(Buffer.from(audioData, 'base64'));
     } catch (error) {
-        console.error(error);
+        log.tts.error(error);
         return res.sendStatus(500);
     }
 });
@@ -180,7 +181,7 @@ elevenlabs.post('/voices', async (req, res) => {
     try {
         const apiKey = readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
         if (!apiKey) {
-            console.warn('ElevenLabs API key not found');
+            log.tts.warn('ElevenLabs API key not found');
             return res.sendStatus(400);
         }
 
@@ -192,14 +193,14 @@ elevenlabs.post('/voices', async (req, res) => {
 
         if (!response.ok) {
             const text = await response.text();
-            console.warn(`ElevenLabs voices fetch failed: HTTP ${response.status} - ${text}`);
+            log.tts.warn(`ElevenLabs voices fetch failed: HTTP ${response.status} - ${text}`);
             return res.sendStatus(500);
         }
 
         const responseJson = await response.json();
         return res.json(responseJson);
     } catch (error) {
-        console.error(error);
+        log.tts.error(error);
         return res.sendStatus(500);
     }
 });
@@ -208,7 +209,7 @@ elevenlabs.post('/voice-settings', async (req, res) => {
     try {
         const apiKey = readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
         if (!apiKey) {
-            console.warn('ElevenLabs API key not found');
+            log.tts.warn('ElevenLabs API key not found');
             return res.sendStatus(400);
         }
 
@@ -220,13 +221,13 @@ elevenlabs.post('/voice-settings', async (req, res) => {
 
         if (!response.ok) {
             const text = await response.text();
-            console.warn(`ElevenLabs voice settings fetch failed: HTTP ${response.status} - ${text}`);
+            log.tts.warn(`ElevenLabs voice settings fetch failed: HTTP ${response.status} - ${text}`);
             return res.sendStatus(500);
         }
         const responseJson = await response.json();
         return res.json(responseJson);
     } catch (error) {
-        console.error(error);
+        log.tts.error(error);
         return res.sendStatus(500);
     }
 });
@@ -235,18 +236,18 @@ elevenlabs.post('/synthesize', async (req, res) => {
     try {
         const apiKey = readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
         if (!apiKey) {
-            console.warn('ElevenLabs API key not found');
+            log.tts.warn('ElevenLabs API key not found');
             return res.sendStatus(400);
         }
 
         const { voiceId, request } = req.body;
 
         if (!voiceId || !request) {
-            console.warn('ElevenLabs synthesis request missing voiceId or request body');
+            log.tts.warn('ElevenLabs synthesis request missing voiceId or request body');
             return res.sendStatus(400);
         }
 
-        console.debug('ElevenLabs TTS request:', request);
+        log.tts.debug('ElevenLabs TTS request:', request);
 
         const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
             method: 'POST',
@@ -259,14 +260,14 @@ elevenlabs.post('/synthesize', async (req, res) => {
 
         if (!response.ok) {
             const text = await response.text();
-            console.warn(`ElevenLabs synthesis failed: HTTP ${response.status} - ${text}`);
+            log.tts.warn(`ElevenLabs synthesis failed: HTTP ${response.status} - ${text}`);
             return res.sendStatus(500);
         }
 
         res.set('Content-Type', 'audio/mpeg');
         await forwardFetchResponse(response, res);
     } catch (error) {
-        console.error(error);
+        log.tts.error(error);
         return res.sendStatus(500);
     }
 });
@@ -275,7 +276,7 @@ elevenlabs.post('/history', async (req, res) => {
     try {
         const apiKey = readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
         if (!apiKey) {
-            console.warn('ElevenLabs API key not found');
+            log.tts.warn('ElevenLabs API key not found');
             return res.sendStatus(400);
         }
 
@@ -287,14 +288,14 @@ elevenlabs.post('/history', async (req, res) => {
 
         if (!response.ok) {
             const text = await response.text();
-            console.warn(`ElevenLabs history fetch failed: HTTP ${response.status} - ${text}`);
+            log.tts.warn(`ElevenLabs history fetch failed: HTTP ${response.status} - ${text}`);
             return res.sendStatus(500);
         }
 
         const responseJson = await response.json();
         return res.json(responseJson);
     } catch (error) {
-        console.error(error);
+        log.tts.error(error);
         return res.sendStatus(500);
     }
 });
@@ -303,17 +304,17 @@ elevenlabs.post('/history-audio', async (req, res) => {
     try {
         const apiKey = readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
         if (!apiKey) {
-            console.warn('ElevenLabs API key not found');
+            log.tts.warn('ElevenLabs API key not found');
             return res.sendStatus(400);
         }
 
         const { historyItemId } = req.body;
         if (!historyItemId) {
-            console.warn('ElevenLabs history audio request missing historyItemId');
+            log.tts.warn('ElevenLabs history audio request missing historyItemId');
             return res.sendStatus(400);
         }
 
-        console.debug('ElevenLabs history audio request for ID:', historyItemId);
+        log.tts.debug('ElevenLabs history audio request for ID:', historyItemId);
 
         const response = await fetch(`https://api.elevenlabs.io/v1/history/${historyItemId}/audio`, {
             headers: {
@@ -323,14 +324,14 @@ elevenlabs.post('/history-audio', async (req, res) => {
 
         if (!response.ok) {
             const text = await response.text();
-            console.warn(`ElevenLabs history audio fetch failed: HTTP ${response.status} - ${text}`);
+            log.tts.warn(`ElevenLabs history audio fetch failed: HTTP ${response.status} - ${text}`);
             return res.sendStatus(500);
         }
 
         res.set('Content-Type', 'audio/mpeg');
         await forwardFetchResponse(response, res);
     } catch (error) {
-        console.error(error);
+        log.tts.error(error);
         return res.sendStatus(500);
     }
 });
@@ -339,7 +340,7 @@ elevenlabs.post('/voices/add', async (req, res) => {
     try {
         const apiKey = readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
         if (!apiKey) {
-            console.warn('ElevenLabs API key not found');
+            log.tts.warn('ElevenLabs API key not found');
             return res.sendStatus(400);
         }
 
@@ -353,7 +354,7 @@ elevenlabs.post('/voices/add', async (req, res) => {
         for (const fileData of (files || [])) {
             const [mimeType, base64Data] = /^data:(.+);base64,(.+)$/.exec(fileData)?.slice(1) || [];
             if (!mimeType || !base64Data) {
-                console.warn('Invalid audio file data provided for ElevenLabs voice upload');
+                log.tts.warn('Invalid audio file data provided for ElevenLabs voice upload');
                 continue;
             }
             const buffer = Buffer.from(base64Data, 'base64');
@@ -363,7 +364,7 @@ elevenlabs.post('/voices/add', async (req, res) => {
             });
         }
 
-        console.debug('ElevenLabs voice upload request:', { name, description, labels, files: files?.length || 0 });
+        log.tts.debug('ElevenLabs voice upload request:', { name, description, labels, files: files?.length || 0 });
 
         const response = await fetch('https://api.elevenlabs.io/v1/voices/add', {
             method: 'POST',
@@ -375,14 +376,14 @@ elevenlabs.post('/voices/add', async (req, res) => {
 
         if (!response.ok) {
             const text = await response.text();
-            console.warn(`ElevenLabs voice upload failed: HTTP ${response.status} - ${text}`);
+            log.tts.warn(`ElevenLabs voice upload failed: HTTP ${response.status} - ${text}`);
             return res.sendStatus(500);
         }
 
         const responseJson = await response.json();
         return res.json(responseJson);
     } catch (error) {
-        console.error(error);
+        log.tts.error(error);
         return res.sendStatus(500);
     }
 });
@@ -391,16 +392,16 @@ elevenlabs.post('/recognize', async (req, res) => {
     try {
         const apiKey = readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
         if (!apiKey) {
-            console.warn('ElevenLabs API key not found');
+            log.tts.warn('ElevenLabs API key not found');
             return res.sendStatus(400);
         }
 
         if (!req.file) {
-            console.warn('No audio file found');
+            log.tts.warn('No audio file found');
             return res.sendStatus(400);
         }
 
-        console.info('Processing audio file with ElevenLabs', req.file.path);
+        log.tts.info('Processing audio file with ElevenLabs', req.file.path);
         const formData = new FormData();
         formData.append('file', fs.createReadStream(req.file.path), { filename: 'audio.wav', contentType: 'audio/wav' });
         formData.append('model_id', req.body.model);
@@ -415,16 +416,16 @@ elevenlabs.post('/recognize', async (req, res) => {
 
         if (!response.ok) {
             const text = await response.text();
-            console.warn(`ElevenLabs speech recognition failed: HTTP ${response.status} - ${text}`);
+            log.tts.warn(`ElevenLabs speech recognition failed: HTTP ${response.status} - ${text}`);
             return res.sendStatus(500);
         }
 
         fs.unlinkSync(req.file.path);
         const responseJson = await response.json();
-        console.debug('ElevenLabs speech recognition response:', responseJson);
+        log.tts.debug('ElevenLabs speech recognition response:', responseJson);
         return res.json(responseJson);
     } catch (error) {
-        console.error(error);
+        log.tts.error(error);
         return res.sendStatus(500);
     }
 });

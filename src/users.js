@@ -23,6 +23,7 @@ import { getContentOfType } from './endpoints/content-manager.js';
 import { serverDirectory } from './server-directory.js';
 import { filterValidIpPatterns, getIpFromRequest } from './express-common.js';
 import { extensionsEnabledFeatureGuard } from './endpoints/extensions.js';
+import { log } from './log.js';
 
 export const KEY_PREFIX = 'user:';
 const AVATAR_PREFIX = 'avatar:';
@@ -137,9 +138,9 @@ export async function ensurePublicDirectoriesExist() {
 function logSecurityAlert(message) {
     const { basicAuthMode, whitelistMode } = globalThis.COMMAND_LINE_ARGS;
     if (basicAuthMode || whitelistMode) return; // safe!
-    console.error(color.red(message));
+    log.users.error(color.red(message));
     if (getConfigValue('securityOverride', false, 'boolean')) {
-        console.warn(color.red('Security has been overridden. If it\'s not a trusted network, change the settings.'));
+        log.users.warn(color.red('Security has been overridden. If it\'s not a trusted network, change the settings.'));
         return;
     }
     process.exit(1);
@@ -166,11 +167,9 @@ export async function verifySecuritySettings() {
     const unprotectedAdminUsers = unprotectedUsers.filter(x => x.admin);
 
     if (unprotectedUsers.length > 0) {
-        console.warn(color.blue('A friendly reminder that the following users are not password protected:'));
-        unprotectedUsers.map(x => `${color.yellow(x.handle)} ${color.red(x.admin ? '(admin)' : '')}`).forEach(x => console.warn(x));
-        console.log();
-        console.warn(`Consider setting a password in the admin panel or by using the ${color.blue('recover.js')} script.`);
-        console.log();
+        log.users.warn(color.blue('A friendly reminder that the following users are not password protected:'));
+        unprotectedUsers.map(x => `${color.yellow(x.handle)} ${color.red(x.admin ? '(admin)' : '')}`).forEach(x => log.users.warn(x));
+        log.users.warn(`Consider setting a password in the admin panel or by using the ${color.blue('recover.js')} script.`);
 
         if (unprotectedAdminUsers.length > 0) {
             logSecurityAlert('If you are not using basic authentication or whitelisting, you should set a password for all admin users.');
@@ -180,14 +179,14 @@ export async function verifySecuritySettings() {
     if (basicAuthMode) {
         const perUserBasicAuth = getConfigValue('perUserBasicAuth', false, 'boolean');
         if (perUserBasicAuth && !ENABLE_ACCOUNTS) {
-            console.error(color.red(
+            log.users.error(color.red(
                 'Per-user basic authentication is enabled, but user accounts are disabled. This configuration may be insecure.',
             ));
         } else if (!perUserBasicAuth) {
             const basicAuthUserName = getConfigValue('basicAuthUser.username', '');
             const basicAuthUserPassword = getConfigValue('basicAuthUser.password', '');
             if (!basicAuthUserName || !basicAuthUserPassword) {
-                console.warn(color.yellow(
+                log.users.warn(color.yellow(
                     'Basic Authentication is enabled, but username or password is not set or empty!',
                 ));
             }
@@ -205,14 +204,14 @@ export function cleanUploads() {
                 return;
             }
 
-            console.debug(`Cleaning uploads folder (${uploads.length} files)`);
+            log.users.debug(`Cleaning uploads folder (${uploads.length} files)`);
             uploads.forEach(file => {
                 const pathToFile = path.join(uploadsPath, file);
                 fs.unlinkSync(pathToFile);
             });
         }
     } catch (err) {
-        console.error(err);
+        log.users.error(err);
     }
 }
 
@@ -239,19 +238,18 @@ export async function migrateUserData() {
 
     const TIMEOUT = 10;
 
-    console.log();
-    console.log(color.magenta('Preparing to migrate user data...'));
-    console.log(`All public data will be moved to the ${globalThis.DATA_ROOT} directory.`);
-    console.log('This process may take a while depending on the amount of data to move.');
-    console.log(`Backups will be placed in the ${PUBLIC_DIRECTORIES.backups} directory.`);
-    console.log(`The process will start in ${TIMEOUT} seconds. Press Ctrl+C to cancel.`);
+    log.users.info(color.magenta('Preparing to migrate user data...'));
+    log.users.info(`All public data will be moved to the ${globalThis.DATA_ROOT} directory.`);
+    log.users.info('This process may take a while depending on the amount of data to move.');
+    log.users.info(`Backups will be placed in the ${PUBLIC_DIRECTORIES.backups} directory.`);
+    log.users.info(`The process will start in ${TIMEOUT} seconds. Press Ctrl+C to cancel.`);
 
     for (let i = TIMEOUT; i > 0; i--) {
-        console.log(`${i}...`);
+        log.users.info(`${i}...`);
         await delay(1000);
     }
 
-    console.log(color.magenta('Starting migration... Do not interrupt the process!'));
+    log.users.info(color.magenta('Starting migration... Do not interrupt the process!'));
 
     const userDirectories = getUserDirectories(DEFAULT_USER.handle);
 
@@ -388,11 +386,11 @@ export async function migrateUserData() {
     const errors = [];
 
     for (const migration of dataMigrationMap) {
-        console.log(`Migrating ${migration.old} to ${migration.new}...`);
+        log.users.info(`Migrating ${migration.old} to ${migration.new}...`);
 
         try {
             if (!fs.existsSync(migration.old)) {
-                console.log(color.yellow(`Skipping migration of ${migration.old} as it does not exist.`));
+                log.users.info(color.yellow(`Skipping migration of ${migration.old} as it does not exist.`));
                 continue;
             }
 
@@ -418,17 +416,17 @@ export async function migrateUserData() {
                 fs.rmSync(migration.old, { recursive: true, force: true });
             }
         } catch (error) {
-            console.error(color.red(`Error migrating ${migration.old} to ${migration.new}:`), error.message);
+            log.users.error(color.red(`Error migrating ${migration.old} to ${migration.new}:`), error.message);
             errors.push(migration.old);
         }
     }
 
     if (errors.length > 0) {
-        console.log(color.red('Migration completed with errors. Move the following files manually:'));
-        errors.forEach(error => console.error(error));
+        log.users.info(color.red('Migration completed with errors. Move the following files manually:'));
+        errors.forEach(error => log.users.error(error));
     }
 
-    console.log(color.green('Migration completed!'));
+    log.users.info(color.green('Migration completed!'));
 }
 
 export async function migrateSystemPrompts() {
@@ -479,11 +477,11 @@ export async function migrateSystemPrompts() {
                 sysPromptData.name = `[Migrated] ${sysPromptData.name}`;
                 const syspromptPath = path.join(directory.sysprompt, `${sysPromptData.name}.json`);
                 writeFileAtomicSync(syspromptPath, JSON.stringify(sysPromptData, null, 4));
-                console.log(`Migrated system prompt ${sysPromptData.name} for ${directory.root.split(path.sep).pop()}`);
+                log.users.debug(`Migrated system prompt ${sysPromptData.name} for ${directory.root.split(path.sep).pop()}`);
             }
             writeFileAtomicSync(migrateMarker, '');
         } catch (error) {
-            console.error('Error migrating system prompts:', error);
+            log.users.error('Error migrating system prompts:', error);
         }
     }
 }
@@ -522,10 +520,10 @@ export async function migratePublicOverrides() {
                 fs.cpSync(oldPath, newPath, { force: true });
                 fs.unlinkSync(oldPath);
                 setPermissionsSync(newPath);
-                console.log(`Migrated ${path.basename(oldPath)} to data root.`);
+                log.users.debug(`Migrated ${path.basename(oldPath)} to data root.`);
             }
         } catch (error) {
-            console.error(`Error migrating ${oldPath} to ${newPath}:`, error);
+            log.users.error(`Error migrating ${oldPath} to ${newPath}:`, error);
         }
     }
 }
@@ -554,7 +552,7 @@ export function toAvatarKey(handle) {
  * @returns {Promise<void>}
  */
 export async function initUserStorage(dataRoot) {
-    console.log('Using data root:', color.green(dataRoot));
+    log.users.info('Using data root:', color.green(dataRoot));
     await storage.init({
         dir: path.join(dataRoot, '_storage'),
         ttl: false, // Never expire
@@ -586,12 +584,12 @@ export function getCookieSecret(dataRoot) {
 
     const oldSecret = getConfigValue(STORAGE_KEYS.cookieSecret);
     if (oldSecret) {
-        console.log('Migrating cookie secret from config.yaml...');
+        log.users.info('Migrating cookie secret from config.yaml...');
         writeFileAtomicSync(cookieSecretPath, oldSecret, { encoding: 'utf8' });
         return oldSecret;
     }
 
-    console.warn(color.yellow('Cookie secret is missing from data root. Generating a new one...'));
+    log.users.warn(color.yellow('Cookie secret is missing from data root. Generating a new one...'));
     const secret = crypto.randomBytes(64).toString('base64');
     writeFileAtomicSync(cookieSecretPath, secret, { encoding: 'utf8' });
     return secret;
@@ -823,13 +821,13 @@ async function authentikUserLogin(request) {
  */
 function isRequestFromTrustedProxy(ip) {
     if (!Array.isArray(TRUSTED_PROXIES)) {
-        console.warn(color.yellow('sso.trustedProxies is not an array. Please check your config.yaml. SSO auto-login will not work.'));
+        log.users.warn(color.yellow('sso.trustedProxies is not an array. Please check your config.yaml. SSO auto-login will not work.'));
         return false;
     }
 
     // Bypass magic value check if the user explicitly configured
     if (TRUSTED_PROXIES.length === 1 && TRUSTED_PROXIES[0] === '*') {
-        console.warn(color.yellow('sso.trustedProxies is set to accept all IPs. This is not recommended for production environments.'));
+        log.users.warn(color.yellow('sso.trustedProxies is set to accept all IPs. This is not recommended for production environments.'));
         return true;
     }
 
@@ -869,12 +867,12 @@ async function headerUserLogin(request, header = 'Remote-User') {
     if (!remoteUser) {
         return false;
     }
-    console.debug(`Attempting auto-login for user from header ${header}: ${remoteUser}`);
+    log.users.debug(`Attempting auto-login for user from header ${header}: ${remoteUser}`);
 
     const ip = getIpFromRequest(request);
     const isTrusted = isRequestFromTrustedProxy(ip);
     if (!isTrusted) {
-        console.warn(color.yellow(`Received ${header} header from untrusted IP ${ip}. Ignoring for auto-login.`));
+        log.users.warn(color.yellow(`Received ${header} header from untrusted IP ${ip}. Ignoring for auto-login.`));
         return false;
     }
 
@@ -965,7 +963,7 @@ export async function setUserDataMiddleware(request, response, next) {
     }
 
     if (!request.session) {
-        console.error('Session not available');
+        log.users.error('Session not available');
         return response.sendStatus(500);
     }
 
@@ -981,18 +979,18 @@ export async function setUserDataMiddleware(request, response, next) {
     const user = await storage.getItem(toKey(handle));
 
     if (!user) {
-        console.error('User not found:', handle);
+        log.users.error('User not found:', handle);
         return next();
     }
 
     if (!user.enabled) {
-        console.error('User is disabled:', handle);
+        log.users.error('User is disabled:', handle);
         return next();
     }
 
     if (Object.hasOwn(request.session, 'version')) {
         if (request.session.version !== getAccountVersion(user)) {
-            console.warn('User data has changed since the session was created. Invalidating session for user:', handle);
+            log.users.warn('User data has changed since the session was created. Invalidating session for user:', handle);
             request.session.handle = null;
             request.session.csrfToken = null;
             request.session.version = null;
@@ -1039,7 +1037,7 @@ export function requireLoginMiddleware(request, response, next) {
  */
 export async function loginPageMiddleware(request, response) {
     if (!ENABLE_ACCOUNTS) {
-        console.log('User accounts are disabled. Redirecting to index page.');
+        log.users.debug('User accounts are disabled. Redirecting to index page.');
         return response.redirect('/');
     }
 
@@ -1051,7 +1049,7 @@ export async function loginPageMiddleware(request, response) {
             return response.redirect('/');
         }
     } catch (error) {
-        console.error('Error during auto-login:', error);
+        log.users.error('Error during auto-login:', error);
     }
 
     return response.sendFile('login.html', { root: path.join(serverDirectory, 'public') });
@@ -1145,7 +1143,7 @@ export function requireAdminMiddleware(request, response, next) {
         return next();
     }
 
-    console.warn('Unauthorized access to admin endpoint:', request.originalUrl);
+    log.users.warn('Unauthorized access to admin endpoint:', request.originalUrl);
     return response.sendStatus(403);
 }
 
@@ -1158,7 +1156,7 @@ export function requireAdminMiddleware(request, response, next) {
 export async function createBackupArchive(handle, response) {
     const directories = getUserDirectories(handle);
 
-    console.info('Backup requested for', handle);
+    log.users.info('Backup requested for', handle);
     const archive = new ZipArchive();
 
     archive.on('error', function (err) {
@@ -1167,7 +1165,7 @@ export async function createBackupArchive(handle, response) {
 
     // On stream closed we can end the request
     archive.on('end', function () {
-        console.info('Archive wrote %d bytes', archive.pointer());
+        log.users.info('Archive wrote %d bytes', archive.pointer());
         response.end(); // End the Express response
     });
 
