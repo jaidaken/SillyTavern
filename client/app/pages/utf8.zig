@@ -83,11 +83,14 @@ pub const Decoder = struct {
         return out.toOwnedSlice(allocator);
     }
 
-    /// Ends the stream. A sequence still held here was truncated by the peer, never completed.
+    /// Ends the stream. A held sequence at its full length was completed but not emitted because an
+    /// allocation failure interrupted completeHeld's append, so emit the real codepoint; a shorter
+    /// held sequence was truncated by the peer, so replace it with U+FFFD.
     pub fn flush(self: *Decoder, allocator: Allocator) Allocator.Error![]u8 {
         if (self.partial_len == 0) return allocator.alloc(u8, 0);
+        const bytes = if (self.partial_len == self.lead.need) self.partial[0..self.partial_len] else replacement;
         self.partial_len = 0;
-        return allocator.dupe(u8, replacement);
+        return allocator.dupe(u8, bytes);
     }
 
     /// Extends the held sequence from `chunk`. Returns the index where ordinary scanning resumes.
@@ -221,6 +224,23 @@ test "decoder_flushes_a_dangling_partial_as_a_replacement" {
     const got = try feedAll(testing.allocator, &.{"\xf0\x9f"});
     defer testing.allocator.free(got);
     try testing.expectEqualStrings(replacement, got);
+}
+
+test "decoder_flushes_a_completed_codepoint_that_an_allocation_failure_left_unemitted" {
+    const euro = "\u{20AC}";
+    var d = Decoder{};
+
+    const held = try d.feed(testing.allocator, euro[0..2]);
+    testing.allocator.free(held);
+
+    // The final byte completes the codepoint, but its append fails, so it stays held unemitted.
+    var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
+    try testing.expectError(error.OutOfMemory, d.feed(failing.allocator(), euro[2..3]));
+
+    // Ending the stream must recover the real character, not replace a fully-received one with U+FFFD.
+    const tail = try d.flush(testing.allocator);
+    defer testing.allocator.free(tail);
+    try testing.expectEqualStrings(euro, tail);
 }
 
 test "decoder_output_never_depends_on_where_the_chunks_are_cut" {
