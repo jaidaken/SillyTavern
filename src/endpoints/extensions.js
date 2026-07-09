@@ -8,6 +8,7 @@ import { CheckRepoActions, default as simpleGit } from 'simple-git';
 import { PUBLIC_DIRECTORIES } from '../constants.js';
 import { getConfigValue, isValidUrl } from '../util.js';
 import { createGitClient } from '../git/client.js';
+import { log } from '../log.js';
 
 const gitBackend = getConfigValue('git.backend', 'auto');
 
@@ -43,7 +44,7 @@ async function checkIfRepoIsUpToDate(extensionPath) {
     await git.fetch('origin');
     const currentBranch = await git.branch();
     const currentCommitHash = await git.revparse(['HEAD']);
-    const log = await git.log({
+    const gitLog = await git.log({
         from: currentCommitHash,
         to: `origin/${currentBranch.current}`,
     });
@@ -58,7 +59,7 @@ async function checkIfRepoIsUpToDate(extensionPath) {
     }
 
     return {
-        isUpToDate: log.total === 0,
+        isUpToDate: gitLog.total === 0,
         remoteUrl: remotes[0].refs.fetch, // URL of the remote repository
     };
 }
@@ -94,7 +95,7 @@ router.post('/install', async (request, response) => {
         const { url, global, branch } = request.body;
 
         if (global && !request.user.profile.admin) {
-            console.error(`User ${request.user.profile.handle} does not have permission to install global extensions.`);
+            log.ext.error(`User ${request.user.profile.handle} does not have permission to install global extensions.`);
             return response.status(403).send('Forbidden: No permission to install global extensions.');
         }
 
@@ -136,7 +137,7 @@ router.post('/install', async (request, response) => {
             cloneOptions.branch = branch;
         }
         await git.clone(parsedUrl.href, extensionPath, cloneOptions);
-        console.info(`Extension has been cloned to ${extensionPath} from ${parsedUrl.href} at ${branch || '(default)'} branch`);
+        log.ext.info(`Extension has been cloned to ${extensionPath} from ${parsedUrl.href} at ${branch || '(default)'} branch`);
 
         try {
             const manifest = await getManifest(extensionPath);
@@ -150,7 +151,7 @@ router.post('/install', async (request, response) => {
             throw manifestError;
         }
     } catch (error) {
-        console.error('Importing extension failed', error);
+        log.ext.error('Importing extension failed', error);
         return response.status(500).send('Internal Server Error. Check the server logs for more details.');
     }
 });
@@ -179,7 +180,7 @@ router.post('/update', async (request, response) => {
         }
 
         if (global && !request.user.profile.admin) {
-            console.error(`User ${request.user.profile.handle} does not have permission to update global extensions.`);
+            log.ext.error(`User ${request.user.profile.handle} does not have permission to update global extensions.`);
             return response.status(403).send('Forbidden: No permission to update global extensions.');
         }
 
@@ -199,9 +200,9 @@ router.post('/update', async (request, response) => {
         const currentBranch = await git.branch();
         if (!isUpToDate) {
             await git.pull('origin', currentBranch.current);
-            console.info(`Extension has been updated at ${extensionPath}`);
+            log.ext.info(`Extension has been updated at ${extensionPath}`);
         } else {
-            console.info(`Extension is up to date at ${extensionPath}`);
+            log.ext.info(`Extension is up to date at ${extensionPath}`);
         }
         await git.fetch('origin');
         const fullCommitHash = await git.revparse(['HEAD']);
@@ -209,7 +210,7 @@ router.post('/update', async (request, response) => {
 
         return response.send({ shortCommitHash, extensionPath, isUpToDate, remoteUrl });
     } catch (error) {
-        console.error('Updating extension failed', error);
+        log.ext.error('Updating extension failed', error);
         return response.status(500).send('Internal Server Error. Check the server logs for more details.');
     }
 });
@@ -227,7 +228,7 @@ router.post('/branches', async (request, response) => {
         }
 
         if (global && !request.user.profile.admin) {
-            console.error(`User ${request.user.profile.handle} does not have permission to list branches of global extensions.`);
+            log.ext.error(`User ${request.user.profile.handle} does not have permission to list branches of global extensions.`);
             return response.status(403).send('Forbidden: No permission to list branches of global extensions.');
         }
 
@@ -242,7 +243,7 @@ router.post('/branches', async (request, response) => {
         // Unshallow the repository if it is shallow
         const isShallow = await git.revparse(['--is-shallow-repository']) === 'true';
         if (isShallow) {
-            console.info(`Unshallowing the repository at ${extensionPath}`);
+            log.ext.info(`Unshallowing the repository at ${extensionPath}`);
             await git.fetch('origin', ['--unshallow']);
         }
 
@@ -258,7 +259,7 @@ router.post('/branches', async (request, response) => {
 
         return response.send(result);
     } catch (error) {
-        console.error('Getting branches failed', error);
+        log.ext.error('Getting branches failed', error);
         return response.status(500).send('Internal Server Error. Check the server logs for more details.');
     }
 });
@@ -276,7 +277,7 @@ router.post('/switch', async (request, response) => {
         }
 
         if (global && !request.user.profile.admin) {
-            console.error(`User ${request.user.profile.handle} does not have permission to switch branches of global extensions.`);
+            log.ext.error(`User ${request.user.profile.handle} does not have permission to switch branches of global extensions.`);
             return response.status(403).send('Forbidden: No permission to switch branches of global extensions.');
         }
 
@@ -293,35 +294,35 @@ router.post('/switch', async (request, response) => {
         if (String(branch).startsWith('origin/')) {
             const localBranch = branch.replace('origin/', '');
             if (branches.all.includes(localBranch)) {
-                console.info(`Branch ${localBranch} already exists locally, checking it out`);
+                log.ext.info(`Branch ${localBranch} already exists locally, checking it out`);
                 await git.checkout(localBranch);
                 return response.sendStatus(204);
             }
 
-            console.info(`Branch ${localBranch} does not exist locally, creating it from ${branch}`);
+            log.ext.info(`Branch ${localBranch} does not exist locally, creating it from ${branch}`);
             await git.checkoutBranch(localBranch, branch);
             return response.sendStatus(204);
         }
 
         if (!branches.all.includes(branch)) {
-            console.error(`Branch ${branch} does not exist locally`);
+            log.ext.error(`Branch ${branch} does not exist locally`);
             return response.status(404).send(`Branch ${branch} does not exist locally`);
         }
 
         // Check if the branch is already checked out
         const currentBranch = await git.branch();
         if (currentBranch.current === branch) {
-            console.info(`Branch ${branch} is already checked out`);
+            log.ext.info(`Branch ${branch} is already checked out`);
             return response.sendStatus(204);
         }
 
         // Checkout the branch
         await git.checkout(branch);
-        console.info(`Checked out branch ${branch} at ${extensionPath}`);
+        log.ext.info(`Checked out branch ${branch} at ${extensionPath}`);
 
         return response.sendStatus(204);
     } catch (error) {
-        console.error('Switching branches failed', error);
+        log.ext.error('Switching branches failed', error);
         return response.status(500).send('Internal Server Error. Check the server logs for more details.');
     }
 });
@@ -339,7 +340,7 @@ router.post('/move', async (request, response) => {
         }
 
         if (!request.user.profile.admin) {
-            console.error(`User ${request.user.profile.handle} does not have permission to move extensions.`);
+            log.ext.error(`User ${request.user.profile.handle} does not have permission to move extensions.`);
             return response.status(403).send('Forbidden: No permission to move extensions.');
         }
 
@@ -349,27 +350,27 @@ router.post('/move', async (request, response) => {
         const destinationPath = path.join(destinationDirectory, extensionNameSanitized);
 
         if (!fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isDirectory()) {
-            console.error(`Source directory does not exist at ${sourcePath}`);
+            log.ext.error(`Source directory does not exist at ${sourcePath}`);
             return response.status(404).send('Source directory does not exist.');
         }
 
         if (fs.existsSync(destinationPath)) {
-            console.error(`Destination directory already exists at ${destinationPath}`);
+            log.ext.error(`Destination directory already exists at ${destinationPath}`);
             return response.status(409).send('Destination directory already exists.');
         }
 
         if (source === destination) {
-            console.error('Source and destination directories are the same');
+            log.ext.error('Source and destination directories are the same');
             return response.status(409).send('Source and destination directories are the same.');
         }
 
         fs.cpSync(sourcePath, destinationPath, { recursive: true, force: true });
         fs.rmSync(sourcePath, { recursive: true, force: true });
-        console.info(`Extension has been moved from ${sourcePath} to ${destinationPath}`);
+        log.ext.info(`Extension has been moved from ${sourcePath} to ${destinationPath}`);
 
         return response.sendStatus(204);
     } catch (error) {
-        console.error('Moving extension failed', error);
+        log.ext.error('Moving extension failed', error);
         return response.status(500).send('Internal Server Error. Check the server logs for more details.');
     }
 });
@@ -421,12 +422,12 @@ router.post('/version', async (request, response) => {
         // get only the working branch
         const currentBranchName = currentBranch.current;
         await git.fetch('origin');
-        console.debug(extensionNameSanitized, currentBranchName, currentCommitHash);
+        log.ext.debug(extensionNameSanitized, currentBranchName, currentCommitHash);
         const { isUpToDate, remoteUrl } = await checkIfRepoIsUpToDate(extensionPath);
 
         return response.send({ currentBranchName, currentCommitHash, isUpToDate, remoteUrl });
     } catch (error) {
-        console.error('Getting extension version failed', error);
+        log.ext.error('Getting extension version failed', error);
         return response.status(500).send('Internal Server Error. Check the server logs for more details.');
     }
 });
@@ -452,7 +453,7 @@ router.post('/delete', async (request, response) => {
         }
 
         if (global && !request.user.profile.admin) {
-            console.error(`User ${request.user.profile.handle} does not have permission to delete global extensions.`);
+            log.ext.error(`User ${request.user.profile.handle} does not have permission to delete global extensions.`);
             return response.status(403).send('Forbidden: No permission to delete global extensions.');
         }
 
@@ -464,11 +465,11 @@ router.post('/delete', async (request, response) => {
         }
 
         await fs.promises.rm(extensionPath, { recursive: true });
-        console.info(`Extension has been deleted at ${extensionPath}`);
+        log.ext.info(`Extension has been deleted at ${extensionPath}`);
 
         return response.send(`Extension has been deleted at ${extensionPath}`);
     } catch (error) {
-        console.error('Deleting extension failed', error);
+        log.ext.error('Deleting extension failed', error);
         return response.status(500).send('Internal Server Error. Check the server logs for more details.');
     }
 });
@@ -509,7 +510,7 @@ router.get('/discover', function (request, response) {
 
     // Combine all extensions
     const allExtensions = [...builtInExtensions, ...userExtensions, ...globalExtensions];
-    console.debug('Extensions available for', request.user.profile.handle, allExtensions);
+    log.ext.debug('Extensions available for', request.user.profile.handle, allExtensions);
 
     return response.send(allExtensions);
 });

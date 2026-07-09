@@ -7,6 +7,7 @@ import { getSettingsBackupFilePrefix } from './settings.js';
 import { CHAT_BACKUPS_PREFIX } from './chats.js';
 import { isPathUnderParent, tryParse } from '../util.js';
 import { SETTINGS_FILE } from '../constants.js';
+import { log } from '../log.js';
 
 const sha256 = str => crypto.createHash('sha256').update(str).digest('hex');
 
@@ -230,7 +231,7 @@ export class DataMaidService {
                 }
             }
         } catch (error) {
-            console.error('[Data Maid] Error collecting user images:', error);
+            log.sys.error('[Data Maid] Error collecting user images:', error);
         }
 
         return result;
@@ -295,7 +296,7 @@ export class DataMaidService {
                         }
                     }
                 } catch (error) {
-                    console.error('[Data Maid] Error reading settings file:', error);
+                    log.sys.error('[Data Maid] Error reading settings file:', error);
                 }
             }
             const knownFileFullPaths = new Set();
@@ -310,7 +311,7 @@ export class DataMaidService {
                 }
             }
         } catch (error) {
-            console.error('[Data Maid] Error collecting user files:', error);
+            log.sys.error('[Data Maid] Error collecting user files:', error);
         }
 
         return result;
@@ -344,7 +345,7 @@ export class DataMaidService {
                 }
             }
         } catch (error) {
-            console.error('[Data Maid] Error collecting character chats:', error);
+            log.sys.error('[Data Maid] Error collecting character chats:', error);
         }
 
         return result;
@@ -376,7 +377,7 @@ export class DataMaidService {
                             }
                         }
                     } catch (error) {
-                        console.error(`[Data Maid] Error parsing group chat file ${file.name}:`, error);
+                        log.sys.error(`[Data Maid] Error parsing group chat file ${file.name}:`, error);
                     }
                 }
             }
@@ -389,7 +390,7 @@ export class DataMaidService {
                 }
             }
         } catch (error) {
-            console.error('[Data Maid] Error collecting group chats:', error);
+            log.sys.error('[Data Maid] Error collecting group chats:', error);
         }
 
         return result;
@@ -417,7 +418,7 @@ export class DataMaidService {
                 }
             }
         } catch (error) {
-            console.error('[Data Maid] Error collecting avatar thumbnails:', error);
+            log.sys.error('[Data Maid] Error collecting avatar thumbnails:', error);
         }
 
         return result;
@@ -445,7 +446,7 @@ export class DataMaidService {
                 }
             }
         } catch (error) {
-            console.error('[Data Maid] Error collecting background thumbnails:', error);
+            log.sys.error('[Data Maid] Error collecting background thumbnails:', error);
         }
 
         return result;
@@ -473,7 +474,7 @@ export class DataMaidService {
                 }
             }
         } catch (error) {
-            console.error('[Data Maid] Error collecting persona thumbnails:', error);
+            log.sys.error('[Data Maid] Error collecting persona thumbnails:', error);
         }
 
         return result;
@@ -495,7 +496,7 @@ export class DataMaidService {
                 }
             }
         } catch (error) {
-            console.error('[Data Maid] Error collecting chat backups:', error);
+            log.sys.error('[Data Maid] Error collecting chat backups:', error);
         }
 
         return result;
@@ -517,7 +518,7 @@ export class DataMaidService {
                 }
             }
         } catch (error) {
-            console.error('[Data Maid] Error collecting settings backups:', error);
+            log.sys.error('[Data Maid] Error collecting settings backups:', error);
         }
 
         return result;
@@ -556,7 +557,7 @@ export class DataMaidService {
 
             return allChats;
         } catch (error) {
-            console.error('[Data Maid] Error parsing chats:', error);
+            log.sys.error('[Data Maid] Error parsing chats:', error);
             return [];
         }
     }
@@ -579,15 +580,15 @@ export class DataMaidService {
                         const fileContent = await fs.promises.readFile(pathToFile, 'utf-8');
                         const groupData = tryParse(fileContent);
                         if (groupData?.chat_metadata && filterFn(groupData.chat_metadata)) {
-                            console.warn('Found group chat metadata in group definition - this is deprecated behavior.');
+                            log.sys.warn('Found group chat metadata in group definition - this is deprecated behavior.');
                             allMetadata.push(groupData.chat_metadata);
                         }
                         if (groupData?.past_metadata) {
-                            console.warn('Found group past chat metadata in group definition - this is deprecated behavior.');
+                            log.sys.warn('Found group past chat metadata in group definition - this is deprecated behavior.');
                             allMetadata.push(...Object.values(groupData.past_metadata).filter(filterFn));
                         }
                     } catch (error) {
-                        console.error(`[Data Maid] Error parsing group chat file ${file.name}:`, error);
+                        log.sys.error(`[Data Maid] Error parsing group chat file ${file.name}:`, error);
                     }
                 }
             }
@@ -621,7 +622,7 @@ export class DataMaidService {
 
             return allMetadata;
         } catch (error) {
-            console.error('[Data Maid] Error parsing chats:', error);
+            log.sys.error('[Data Maid] Error parsing chats:', error);
             return [];
         }
     }
@@ -638,7 +639,7 @@ export class DataMaidService {
             const chatData = content.split('\n').map(tryParse).filter(Boolean);
             return chatData;
         } catch (error) {
-            console.error(`[Data Maid] Error reading chat file ${filePath}:`, error);
+            log.sys.error(`[Data Maid] Error reading chat file ${filePath}:`, error);
             return [];
         }
     }
@@ -684,7 +685,7 @@ router.post('/report', async (req, res) => {
 
         return res.json({ report, token });
     } catch (error) {
-        console.error('[Data Maid] Error generating data maid report:', error);
+        log.sys.error('[Data Maid] Error generating data maid report:', error);
         return res.sendStatus(500);
     }
 });
@@ -713,7 +714,7 @@ router.post('/finalize', async (req, res) => {
         DataMaidService.TOKENS.delete(token);
         return res.sendStatus(204);
     } catch (error) {
-        console.error('[Data Maid] Error finalizing the token:', error);
+        log.sys.error('[Data Maid] Error finalizing the token:', error);
         return res.sendStatus(500);
     }
 });
@@ -746,7 +747,7 @@ router.get('/view', async (req, res) => {
         }
 
         if (!isPathUnderParent(req.user.directories.root, fileEntry.path)) {
-            console.warn('[Data Maid] Attempted access to a file outside of the user directory:', fileEntry.path);
+            log.sys.warn('[Data Maid] Attempted access to a file outside of the user directory:', fileEntry.path);
             return res.sendStatus(403);
         }
 
@@ -762,7 +763,7 @@ router.get('/view', async (req, res) => {
         res.setHeader('Content-Type', mimeType);
         return res.send(fileBuffer);
     } catch (error) {
-        console.error('[Data Maid] Error viewing file:', error);
+        log.sys.error('[Data Maid] Error viewing file:', error);
         return res.sendStatus(500);
     }
 });
@@ -794,7 +795,7 @@ router.post('/delete', async (req, res) => {
             }
 
             if (!isPathUnderParent(req.user.directories.root, fileEntry.path)) {
-                console.warn('[Data Maid] Attempted deletion of a file outside of the user directory:', fileEntry.path);
+                log.sys.warn('[Data Maid] Attempted deletion of a file outside of the user directory:', fileEntry.path);
                 continue;
             }
 
@@ -810,7 +811,7 @@ router.post('/delete', async (req, res) => {
 
         return res.sendStatus(204);
     } catch (error) {
-        console.error('[Data Maid] Error deleting files:', error);
+        log.sys.error('[Data Maid] Error deleting files:', error);
         return res.sendStatus(500);
     }
 });

@@ -10,6 +10,7 @@ import lodash from 'lodash';
 import { readSecret, SECRET_KEYS } from './secrets.js';
 import { GEMINI_SAFETY, VERTEX_SAFETY } from '../constants.js';
 import { delay, getConfigValue, trimTrailingSlash } from '../util.js';
+import { log } from '../log.js';
 
 const API_MAKERSUITE = 'https://generativelanguage.googleapis.com';
 const API_VERTEX_AI = 'https://us-central1-aiplatform.googleapis.com';
@@ -71,7 +72,7 @@ export async function getVertexAIAuth(request) {
                     authType: 'full',
                 };
             } catch (error) {
-                console.error('Failed to authenticate with service account:', error);
+                log.net.google.error('Failed to authenticate with service account:', error);
                 throw new Error(`Service account authentication failed: ${error.message}`, { cause: error });
             }
         }
@@ -253,7 +254,7 @@ router.post('/caption-image', async (request, response) => {
             safetySettings: safetySettings,
         };
 
-        console.debug(`${apiName} captioning request`, model, body);
+        log.net.google.debug(`${apiName} captioning request`, model, body);
 
         const result = await fetch(url, {
             body: JSON.stringify(body),
@@ -263,13 +264,13 @@ router.post('/caption-image', async (request, response) => {
 
         if (!result.ok) {
             const error = await result.json();
-            console.error(`${apiName} API returned error: ${result.status} ${result.statusText}`, error);
+            log.net.google.error(`${apiName} API returned error: ${result.status} ${result.statusText}`, error);
             return response.status(500).send({ error: true });
         }
 
         /** @type {any} */
         const data = await result.json();
-        console.info(`${apiName} captioning response`, data);
+        log.net.google.debug(`${apiName} captioning response`, data);
 
         const candidates = data?.candidates;
         if (!candidates) {
@@ -283,7 +284,7 @@ router.post('/caption-image', async (request, response) => {
 
         return response.json({ caption });
     } catch (error) {
-        console.error(error);
+        log.net.google.error(error);
         response.status(500).send('Internal server error');
     }
 });
@@ -305,7 +306,7 @@ router.post('/generate-voice', async (request, response) => {
         response.setHeader('Content-Type', 'audio/mpeg');
         return response.send(buffer);
     } catch (error) {
-        console.error('Google Translate TTS generation failed', error);
+        log.net.google.error('Google Translate TTS generation failed', error);
         response.status(500).send('Internal server error');
     }
 });
@@ -348,7 +349,7 @@ router.post('/list-native-voices', async (_, response) => {
         ];
         return response.json({ voices });
     } catch (error) {
-        console.error('Failed to return Google TTS voices:', error);
+        log.net.google.error('Failed to return Google TTS voices:', error);
         response.sendStatus(500);
     }
 });
@@ -358,7 +359,7 @@ router.post('/generate-native-tts', async (request, response) => {
         const { text, voice, model } = request.body;
         const { url, headers, apiName, safetySettings } = await getGoogleApiConfig(request, model);
 
-        console.debug(`${apiName} TTS request`, { model, text, voice });
+        log.net.google.debug(`${apiName} TTS request`, { model, text, voice });
 
         const requestBody = {
             contents: [{
@@ -386,7 +387,7 @@ router.post('/generate-native-tts', async (request, response) => {
 
         if (!result.ok) {
             const errorText = await result.text();
-            console.error(`${apiName} TTS API error: ${result.status} ${result.statusText}`, errorText);
+            log.net.google.error(`${apiName} TTS API error: ${result.status} ${result.statusText}`, errorText);
             const errorMessage = JSON.parse(errorText).error?.message || 'TTS generation failed.';
             return response.status(result.status).json({ error: errorMessage });
         }
@@ -421,7 +422,7 @@ router.post('/generate-native-tts', async (request, response) => {
         response.setHeader('Content-Type', mimeType || 'application/octet-stream');
         response.send(audioBuffer);
     } catch (error) {
-        console.error('Google TTS generation failed:', error);
+        log.net.google.error('Google TTS generation failed:', error);
         if (!response.headersSent) {
             return response.status(500).json({ error: 'Internal server error during TTS generation' });
         }
@@ -462,7 +463,7 @@ router.post('/generate-image', async (request, response) => {
             },
         };
 
-        console.debug(`${apiName} image generation request:`, model, requestBody);
+        log.net.google.debug(`${apiName} image generation request:`, model, requestBody);
 
         const result = await fetch(url, {
             method: 'POST',
@@ -472,7 +473,7 @@ router.post('/generate-image', async (request, response) => {
 
         if (!result.ok) {
             const errorText = await result.text();
-            console.warn(`${apiName} image generation error: ${result.status} ${result.statusText}`, errorText);
+            log.net.google.warn(`${apiName} image generation error: ${result.status} ${result.statusText}`, errorText);
             return response.status(500).send('Image generation request failed');
         }
 
@@ -481,13 +482,13 @@ router.post('/generate-image', async (request, response) => {
         const imagePart = data?.predictions?.[0]?.bytesBase64Encoded;
 
         if (!imagePart) {
-            console.warn(`${apiName} image generation error: No image data found in response`);
+            log.net.google.warn(`${apiName} image generation error: No image data found in response`);
             return response.status(500).send('No image data found in response');
         }
 
         return response.send({ image: imagePart });
     } catch (error) {
-        console.error('Google Image generation failed:', error);
+        log.net.google.error('Google Image generation failed:', error);
         if (!response.headersSent) {
             return response.sendStatus(500);
         }
@@ -524,7 +525,7 @@ router.post('/generate-video', async (request, response) => {
             },
         };
 
-        console.debug(`${apiName} video generation request:`, model, requestBody);
+        log.net.google.debug(`${apiName} video generation request:`, model, requestBody);
         const videoJobResponse = await fetch(url, {
             method: 'POST',
             headers: headers,
@@ -533,7 +534,7 @@ router.post('/generate-video', async (request, response) => {
 
         if (!videoJobResponse.ok) {
             const errorText = await videoJobResponse.text();
-            console.warn(`${apiName} video generation error: ${videoJobResponse.status} ${videoJobResponse.statusText}`, errorText);
+            log.net.google.warn(`${apiName} video generation error: ${videoJobResponse.status} ${videoJobResponse.statusText}`, errorText);
             return response.status(500).send('Video generation request failed');
         }
 
@@ -542,15 +543,15 @@ router.post('/generate-video', async (request, response) => {
         const videoJobName = videoJobData?.name;
 
         if (!videoJobName) {
-            console.warn(`${apiName} video generation error: No job name found in response`);
+            log.net.google.warn(`${apiName} video generation error: No job name found in response`);
             return response.status(500).send('No video job name found in response');
         }
 
-        console.debug(`${apiName} video job name:`, videoJobName);
+        log.net.google.debug(`${apiName} video job name:`, videoJobName);
 
         for (let attempt = 0; attempt < 30; attempt++) {
             if (controller.signal.aborted) {
-                console.info(`${apiName} video generation aborted by client`);
+                log.net.google.info(`${apiName} video generation aborted by client`);
                 return response.status(500).send('Video generation aborted by client');
             }
 
@@ -567,20 +568,20 @@ router.post('/generate-video', async (request, response) => {
 
                 if (!pollResponse.ok) {
                     const errorText = await pollResponse.text();
-                    console.warn(`${apiName} video job status error: ${pollResponse.status} ${pollResponse.statusText}`, errorText);
+                    log.net.google.warn(`${apiName} video job status error: ${pollResponse.status} ${pollResponse.statusText}`, errorText);
                     return response.status(500).send('Video job status request failed');
                 }
 
                 /** @type {any} */
                 const pollData = await pollResponse.json();
                 const jobDone = pollData?.done;
-                console.debug(`${apiName} video job status attempt ${attempt + 1}: ${jobDone ? 'done' : 'running'}`);
+                log.net.google.debug(`${apiName} video job status attempt ${attempt + 1}: ${jobDone ? 'done' : 'running'}`);
 
                 if (jobDone) {
                     const videoData = pollData?.response?.videos?.[0]?.bytesBase64Encoded;
                     if (!videoData) {
                         const pollDataLog = util.inspect(pollData, { depth: 5, colors: true, maxStringLength: 500 });
-                        console.warn(`${apiName} video generation error: No video data found in response`, pollDataLog);
+                        log.net.google.warn(`${apiName} video generation error: No video data found in response`, pollDataLog);
                         return response.status(500).send('No video data found in response');
                     }
 
@@ -595,22 +596,22 @@ router.post('/generate-video', async (request, response) => {
 
                 if (!pollResponse.ok) {
                     const errorText = await pollResponse.text();
-                    console.warn(`${apiName} video job status error: ${pollResponse.status} ${pollResponse.statusText}`, errorText);
+                    log.net.google.warn(`${apiName} video job status error: ${pollResponse.status} ${pollResponse.statusText}`, errorText);
                     return response.status(500).send('Video job status request failed');
                 }
 
                 /** @type {any} */
                 const pollData = await pollResponse.json();
                 const jobDone = pollData?.done;
-                console.debug(`${apiName} video job status attempt ${attempt + 1}: ${jobDone ? 'done' : 'running'}`);
+                log.net.google.debug(`${apiName} video job status attempt ${attempt + 1}: ${jobDone ? 'done' : 'running'}`);
 
                 if (jobDone) {
                     const videoUri = pollData?.response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri;
-                    console.debug(`${apiName} video URI:`, videoUri);
+                    log.net.google.debug(`${apiName} video URI:`, videoUri);
 
                     if (!videoUri) {
                         const pollDataLog = util.inspect(pollData, { depth: 5, colors: true, maxStringLength: 500 });
-                        console.warn(`${apiName} video generation error: No video URI found in response`, pollDataLog);
+                        log.net.google.warn(`${apiName} video generation error: No video URI found in response`, pollDataLog);
                         return response.status(500).send('No video URI found in response');
                     }
 
@@ -620,7 +621,7 @@ router.post('/generate-video', async (request, response) => {
                     });
 
                     if (!videoResponse.ok) {
-                        console.warn(`${apiName} video fetch error: ${videoResponse.status} ${videoResponse.statusText}`);
+                        log.net.google.warn(`${apiName} video fetch error: ${videoResponse.status} ${videoResponse.statusText}`);
                         return response.status(500).send('Video fetch request failed');
                     }
 
@@ -632,10 +633,10 @@ router.post('/generate-video', async (request, response) => {
             }
         }
 
-        console.warn(`${apiName} video generation error: Job timed out after multiple attempts`);
+        log.net.google.warn(`${apiName} video generation error: Job timed out after multiple attempts`);
         return response.status(500).send('Video generation timed out');
     } catch (error) {
-        console.error('Google Video generation failed:', error);
+        log.net.google.error('Google Video generation failed:', error);
         return response.sendStatus(500);
     }
 });

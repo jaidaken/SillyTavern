@@ -10,6 +10,7 @@ import fetch from 'node-fetch';
 import { UNSAFE_EXTENSIONS } from '../constants.js';
 import { clientRelativePath, isValidUrl } from '../util.js';
 import { getHostFromUrl, isHostWhitelisted } from './content-manager.js';
+import { log } from '../log.js';
 
 const VALID_CATEGORIES = ['bgm', 'ambient', 'blip', 'live2d', 'vrm', 'character', 'temp'];
 
@@ -125,10 +126,8 @@ router.post('/get', async (request, response) => {
                     output[folder] = [];
                     const live2d_folder = path.normalize(path.join(folderPath, folder));
                     const files = getFiles(live2d_folder);
-                    //console.debug("FILE FOUND:",files)
                     for (let file of files) {
                         if (file.includes('model') && file.endsWith('.json')) {
-                            //console.debug("Asset live2d model found:",file)
                             output[folder].push(clientRelativePath(request.user.directories.root, file));
                         }
                     }
@@ -141,10 +140,8 @@ router.post('/get', async (request, response) => {
                     // Extract models
                     const vrm_model_folder = path.normalize(path.join(folderPath, 'vrm', 'model'));
                     let files = getFiles(vrm_model_folder);
-                    //console.debug("FILE FOUND:",files)
                     for (let file of files) {
                         if (!file.endsWith('.placeholder')) {
-                            //console.debug("Asset VRM model found:",file)
                             output.vrm.model.push(clientRelativePath(request.user.directories.root, file));
                         }
                     }
@@ -152,10 +149,8 @@ router.post('/get', async (request, response) => {
                     // Extract models
                     const vrm_animation_folder = path.normalize(path.join(folderPath, 'vrm', 'animation'));
                     files = getFiles(vrm_animation_folder);
-                    //console.debug("FILE FOUND:",files)
                     for (let file of files) {
                         if (!file.endsWith('.placeholder')) {
-                            //console.debug("Asset VRM animation found:",file)
                             output.vrm.animation.push(clientRelativePath(request.user.directories.root, file));
                         }
                     }
@@ -174,7 +169,7 @@ router.post('/get', async (request, response) => {
             }
         }
     } catch (err) {
-        console.error(err);
+        log.content.error(err);
     }
     return response.send(output);
 });
@@ -190,7 +185,7 @@ router.post('/get', async (request, response) => {
 router.post('/download', async (request, response) => {
     try {
         if (!isValidUrl(request.body.url)) {
-            console.warn('Asset download failed: Must be a valid URL');
+            log.content.warn('Asset download failed: Must be a valid URL');
             return response.sendStatus(400);
         }
 
@@ -199,7 +194,7 @@ router.post('/download', async (request, response) => {
 
         const host = getHostFromUrl(url);
         if (!isHostWhitelisted(host)) {
-            console.error(`Received an import for "${host}", but site is not whitelisted. This domain must be added to the config key "whitelistImportDomains" to allow import from this source.`);
+            log.content.error(`Received an import for "${host}", but site is not whitelisted. This domain must be added to the config key "whitelistImportDomains" to allow import from this source.`);
             return response.sendStatus(404);
         }
 
@@ -210,7 +205,7 @@ router.post('/download', async (request, response) => {
                 category = i;
 
         if (category === null) {
-            console.error('Bad request: unsupported asset category.');
+            log.content.error('Bad request: unsupported asset category.');
             return response.sendStatus(400);
         }
 
@@ -222,7 +217,7 @@ router.post('/download', async (request, response) => {
 
         const temp_path = path.join(request.user.directories.assets, 'temp', request.body.filename);
         const file_path = path.join(request.user.directories.assets, category, request.body.filename);
-        console.info('Request received to download', url, 'to', file_path);
+        log.content.info('Request received to download', url, 'to', file_path);
 
         // Download to temp
         const res = await fetch(url);
@@ -248,12 +243,12 @@ router.post('/download', async (request, response) => {
         }
 
         // Move into asset place
-        console.info('Download finished, moving file from', temp_path, 'to', file_path);
+        log.content.info('Download finished, moving file from', temp_path, 'to', file_path);
         fs.copyFileSync(temp_path, file_path);
         fs.unlinkSync(temp_path);
         response.sendStatus(200);
     } catch (error) {
-        console.error(error);
+        log.content.error(error);
         response.sendStatus(500);
     }
 });
@@ -276,7 +271,7 @@ router.post('/delete', async (request, response) => {
             category = i;
 
     if (category === null) {
-        console.error('Bad request: unsupported asset category.');
+        log.content.error('Bad request: unsupported asset category.');
         return response.sendStatus(400);
     }
 
@@ -286,19 +281,19 @@ router.post('/delete', async (request, response) => {
         return response.status(400).send(validation.message);
 
     const file_path = path.join(request.user.directories.assets, category, request.body.filename);
-    console.info('Request received to delete', category, file_path);
+    log.content.info('Request received to delete', category, file_path);
 
     try {
         if (!fs.existsSync(file_path)) {
-            console.error('Asset not found.');
+            log.content.error('Asset not found.');
             return response.sendStatus(400);
         }
 
         await fs.promises.unlink(file_path);
-        console.info('Asset deleted.');
+        log.content.info('Asset deleted.');
         return response.sendStatus(200);
     } catch (error) {
-        console.error(error);
+        log.content.error(error);
         return response.sendStatus(500);
     }
 });
@@ -326,7 +321,7 @@ router.post('/character', async (request, response) => {
             category = i;
 
     if (category === null) {
-        console.error('Bad request: unsupported asset category.');
+        log.content.error('Bad request: unsupported asset category.');
         return response.sendStatus(400);
     }
 
@@ -344,7 +339,6 @@ router.post('/character', async (request, response) => {
                     const modelFolder = folderInfo.name;
                     const live2dModelPath = path.join(folderPath, modelFolder);
                     for (let file of fs.readdirSync(live2dModelPath)) {
-                        //console.debug("Character live2d model found:", file)
                         if (file.includes('model') && file.endsWith('.json'))
                             output.push(path.join('characters', name, category, modelFolder, file));
                     }
@@ -363,7 +357,7 @@ router.post('/character', async (request, response) => {
         }
         return response.send(output);
     } catch (err) {
-        console.error(err);
+        log.content.error(err);
         return response.sendStatus(500);
     }
 });

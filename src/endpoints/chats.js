@@ -22,6 +22,7 @@ import {
     readFirstLine,
     isPathUnderParent,
 } from '../util.js';
+import { log } from '../log.js';
 
 const isBackupEnabled = !!getConfigValue('backups.chat.enabled', true, 'boolean');
 const maxTotalChatBackups = Number(getConfigValue('backups.chat.maxTotalBackups', -1, 'number'));
@@ -42,7 +43,7 @@ function backupChat(directory, name, data, backupPrefix = CHAT_BACKUPS_PREFIX) {
     try {
         if (!isBackupEnabled) { return; }
         if (!fs.existsSync(directory)) {
-            console.error(`The chat couldn't be backed up because no directory exists at ${directory}!`);
+            log.chat.error(`The chat couldn't be backed up because no directory exists at ${directory}!`);
         }
         // replace non-alphanumeric characters with underscores
         name = sanitize(name).replace(/[^a-z0-9]/gi, '_').toLowerCase();
@@ -56,7 +57,7 @@ function backupChat(directory, name, data, backupPrefix = CHAT_BACKUPS_PREFIX) {
         }
         removeOldBackups(directory, backupPrefix, maxTotalChatBackups);
     } catch (err) {
-        console.error(`Could not backup chat for ${name}`, err);
+        log.chat.error(`Could not backup chat for ${name}`, err);
     }
 }
 
@@ -326,7 +327,7 @@ async function checkChatIntegrity(filePath, integritySlug) {
 
     // If the chat has no integrity metadata, assume it's intact
     if (!chatIntegrity) {
-        console.debug(`File "${filePath}" does not have integrity metadata matching "${integritySlug}". The integrity validation has been skipped.`);
+        log.chat.debug(`File "${filePath}" does not have integrity metadata matching "${integritySlug}". The integrity validation has been skipped.`);
         return true;
     }
 
@@ -422,7 +423,7 @@ export async function getChatInfo(pathToFile, additionalData = {}, withMetadata 
 
                     res(chatData);
                 } else {
-                    console.warn('Found an invalid or corrupted chat file:', pathToFile);
+                    log.chat.warn('Found an invalid or corrupted chat file:', pathToFile);
                     res({});
                 }
             }
@@ -486,10 +487,10 @@ router.post('/save', validateAvatarUrlMiddleware, async function (request, respo
         }
     } catch (error) {
         if (error instanceof IntegrityMismatchError) {
-            console.error(error.message);
+            log.chat.error(error.message);
             return response.status(400).send({ error: 'integrity' });
         }
-        console.error(error);
+        log.chat.error(error);
         return response.status(500).send({ error: 'An error has occurred, see the console logs for more information.' });
     }
 });
@@ -508,7 +509,7 @@ export function getChatData(chatFilePath) {
         // Iterate through the array of strings and parse each line as JSON
         chatData = lines.map(line => tryParse(line)).filter(x => x);
     } else {
-        console.warn(`File not found: ${chatFilePath}. The chat does not exist or is empty.`);
+        log.chat.warn(`File not found: ${chatFilePath}. The chat does not exist or is empty.`);
     }
 
     return chatData;
@@ -538,7 +539,7 @@ router.post('/get', validateAvatarUrlMiddleware, function (request, response) {
 
         return response.send(getChatData(chatFilePath));
     } catch (error) {
-        console.error(error);
+        log.chat.error(error);
         return response.send({});
     }
 });
@@ -558,20 +559,20 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
         const pathToOriginalFile = path.join(pathToFolder, sanitize(request.body.original_file));
         const pathToRenamedFile = path.join(pathToFolder, sanitize(request.body.renamed_file));
         const sanitizedFileName = path.parse(pathToRenamedFile).name;
-        console.debug('Old chat name', pathToOriginalFile);
-        console.debug('New chat name', pathToRenamedFile);
+        log.chat.debug('Old chat name', pathToOriginalFile);
+        log.chat.debug('New chat name', pathToRenamedFile);
 
         if (!fs.existsSync(pathToOriginalFile) || fs.existsSync(pathToRenamedFile)) {
-            console.error('Either Source or Destination files are not available');
+            log.chat.error('Either Source or Destination files are not available');
             return response.status(400).send({ error: true });
         }
 
         fs.copyFileSync(pathToOriginalFile, pathToRenamedFile);
         fs.unlinkSync(pathToOriginalFile);
-        console.info('Successfully renamed chat file.');
+        log.chat.info('Successfully renamed chat file.');
         return response.send({ ok: true, sanitizedFileName });
     } catch (error) {
-        console.error('Error renaming chat file:', error);
+        log.chat.error('Error renaming chat file:', error);
         return response.status(500).send({ error: true });
     }
 });
@@ -592,11 +593,11 @@ router.post('/delete', validateAvatarUrlMiddleware, function (request, response)
         if (tryDeleteFile(chatFilePath)) {
             return response.send({ ok: true });
         } else {
-            console.error('The chat file was not deleted.');
+            log.chat.error('The chat file was not deleted.');
             return response.sendStatus(400);
         }
     } catch (error) {
-        console.error(error);
+        log.chat.error(error);
         return response.sendStatus(500);
     }
 });
@@ -617,7 +618,7 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
         const errorMessage = {
             message: `Could not find JSONL file to export. Source chat file: ${filename}.`,
         };
-        console.error(errorMessage.message);
+        log.chat.error(errorMessage.message);
         return response.status(404).json(errorMessage);
     }
     try {
@@ -630,14 +631,14 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
                     result: rawFile,
                 };
 
-                console.info(`Chat exported as ${exportfilename}`);
+                log.chat.info(`Chat exported as ${exportfilename}`);
                 return response.status(200).json(successMessage);
             } catch (err) {
-                console.error(err);
+                log.chat.error(err);
                 const errorMessage = {
                     message: `Could not read JSONL file to export. Source chat file: ${filename}.`,
                 };
-                console.error(errorMessage.message);
+                log.chat.error(errorMessage.message);
                 return response.status(500).json(errorMessage);
             }
         }
@@ -664,11 +665,11 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
                 message: `Chat saved to ${exportfilename}`,
                 result: buffer,
             };
-            console.info(`Chat exported as ${exportfilename}`);
+            log.chat.info(`Chat exported as ${exportfilename}`);
             return response.status(200).json(successMessage);
         });
     } catch (err) {
-        console.error('chat export failed.', err);
+        log.chat.error('chat export failed.', err);
         return response.sendStatus(400);
     }
 });
@@ -688,7 +689,7 @@ router.post('/group/import', function (request, response) {
         fs.unlinkSync(pathToUpload);
         return response.send({ res: chatname });
     } catch (error) {
-        console.error(error);
+        log.chat.error(error);
         return response.send({ error: true });
     }
 });
@@ -733,7 +734,7 @@ router.post('/import', validateAvatarUrlMiddleware, function (request, response)
             } else if (jsonData.type === 'risuChat') { // RisuAI format
                 importFunc = importRisuChat;
             } else { // Unknown format
-                console.error('Incorrect chat format .json');
+                log.chat.error('Incorrect chat format .json');
                 return response.send({ error: true });
             }
 
@@ -762,7 +763,7 @@ router.post('/import', validateAvatarUrlMiddleware, function (request, response)
             const jsonData = JSON.parse(header);
 
             if (!(jsonData.user_name !== undefined || jsonData.name !== undefined || jsonData.chat_metadata !== undefined)) {
-                console.error('Incorrect chat format .jsonl');
+                log.chat.error('Incorrect chat format .jsonl');
                 return response.send({ error: true });
             }
 
@@ -774,7 +775,7 @@ router.post('/import', validateAvatarUrlMiddleware, function (request, response)
                 // import normal chats in an attempt to import a Chub chat
                 flattenedChat = flattenChubChat(userName, characterName, lines);
             } catch (error) {
-                console.warn('Failed to flatten Chub Chat data: ', error);
+                log.chat.warn('Failed to flatten Chub Chat data: ', error);
             }
 
             const fileName = `${characterName} - ${humanizedDateTime()} imported.jsonl`;
@@ -789,7 +790,7 @@ router.post('/import', validateAvatarUrlMiddleware, function (request, response)
             response.send({ res: true, fileNames });
         }
     } catch (error) {
-        console.error(error);
+        log.chat.error(error);
         return response.send({ error: true });
     }
 });
@@ -817,7 +818,7 @@ router.post('/group/info', async (request, response) => {
         const chatInfo = await getChatInfo(chatFilePath);
         return response.send(chatInfo);
     } catch (error) {
-        console.error(error);
+        log.chat.error(error);
         return response.sendStatus(500);
     }
 });
@@ -835,11 +836,11 @@ router.post('/group/delete', (request, response) => {
         if (tryDeleteFile(chatFilePath)) {
             return response.send({ ok: true });
         } else {
-            console.error('The group chat file was not deleted.');
+            log.chat.error('The group chat file was not deleted.');
             return response.sendStatus(400);
         }
     } catch (error) {
-        console.error(error);
+        log.chat.error(error);
         return response.sendStatus(500);
     }
 });
@@ -863,10 +864,10 @@ router.post('/group/save', async function (request, response) {
         }
     } catch (error) {
         if (error instanceof IntegrityMismatchError) {
-            console.error(error.message);
+            log.chat.error(error.message);
             return response.status(400).send({ error: 'integrity' });
         }
-        console.error(error);
+        log.chat.error(error);
         return response.status(500).send({ error: 'An error has occurred, see the console logs for more information.' });
     }
 });
@@ -893,7 +894,7 @@ router.post('/search', validateAvatarUrlMiddleware, async function (request, res
                         break;
                     }
                 } catch (error) {
-                    console.warn(groupFile, 'group file is corrupted:', error);
+                    log.chat.warn(groupFile, 'group file is corrupted:', error);
                 }
             }
 
@@ -971,7 +972,7 @@ router.post('/search', validateAvatarUrlMiddleware, async function (request, res
 
         return response.send(results);
     } catch (error) {
-        console.error('Chat search error:', error);
+        log.chat.error('Chat search error:', error);
         return response.status(500).json({ error: 'Search failed' });
     }
 });
@@ -1073,7 +1074,7 @@ router.post('/recent', async function (request, response) {
 
         return response.send(validFiles);
     } catch (error) {
-        console.error(error);
+        log.chat.error(error);
         return response.sendStatus(500);
     }
 });

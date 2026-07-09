@@ -6,6 +6,7 @@ import express from 'express';
 
 import { readSecret, SECRET_KEYS } from './secrets.js';
 import { readAllChunks, extractFileFromZipBuffer, forwardFetchResponse } from '../util.js';
+import { log } from '../log.js';
 
 const API_NOVELAI = 'https://api.novelai.net';
 const TEXT_NOVELAI = 'https://text.novelai.net';
@@ -135,7 +136,7 @@ router.post('/status', async function (req, res) {
     const api_key_novel = readSecret(req.user.directories, SECRET_KEYS.NOVEL);
 
     if (!api_key_novel) {
-        console.warn('NovelAI Access Token is missing.');
+        log.net.warn('NovelAI Access Token is missing.');
         return res.sendStatus(400);
     }
 
@@ -152,14 +153,14 @@ router.post('/status', async function (req, res) {
             const data = await response.json();
             return res.send(data);
         } else if (response.status == 401) {
-            console.error('NovelAI Access Token is incorrect.');
+            log.net.error('NovelAI Access Token is incorrect.');
             return res.send({ error: true });
         } else {
-            console.warn('NovelAI returned an error:', response.statusText);
+            log.net.warn('NovelAI returned an error:', response.statusText);
             return res.send({ error: true });
         }
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return res.send({ error: true });
     }
 });
@@ -170,7 +171,7 @@ router.post('/generate', async function (req, res) {
     const api_key_novel = readSecret(req.user.directories, SECRET_KEYS.NOVEL);
 
     if (!api_key_novel) {
-        console.warn('NovelAI Access Token is missing.');
+        log.net.warn('NovelAI Access Token is missing.');
         return res.sendStatus(400);
     }
 
@@ -255,7 +256,7 @@ router.post('/generate', async function (req, res) {
         }
     }
 
-    console.debug(util.inspect(data, { depth: 4 }));
+    log.net.debug(util.inspect(data, { depth: 4 }));
 
     const args = {
         body: JSON.stringify(data),
@@ -275,7 +276,7 @@ router.post('/generate', async function (req, res) {
             if (!response.ok) {
                 const text = await response.text();
                 let message = text;
-                console.warn(`Novel API returned error: ${response.status} ${response.statusText} ${text}`);
+                log.net.warn(`Novel API returned error: ${response.status} ${response.statusText} ${text}`);
 
                 try {
                     const data = JSON.parse(text);
@@ -289,7 +290,7 @@ router.post('/generate', async function (req, res) {
 
             /** @type {any} */
             const data = await response.json();
-            console.info('NovelAI Output', data?.output);
+            log.net.debug('NovelAI Output', data?.output);
             return res.send(data);
         }
     } catch (error) {
@@ -305,12 +306,12 @@ router.post('/generate-image', async (request, response) => {
     const key = readSecret(request.user.directories, SECRET_KEYS.NOVEL);
 
     if (!key) {
-        console.warn('NovelAI Access Token is missing.');
+        log.net.warn('NovelAI Access Token is missing.');
         return response.sendStatus(400);
     }
 
     try {
-        console.debug('NAI Diffusion request:', request.body);
+        log.net.debug('NAI Diffusion request:', request.body);
         const generateUrl = `${IMAGE_NOVELAI}/ai/generate-image`;
         const generateResult = await fetch(generateUrl, {
             method: 'POST',
@@ -378,7 +379,7 @@ router.post('/generate-image', async (request, response) => {
 
         if (!generateResult.ok) {
             const text = await generateResult.text();
-            console.warn('NovelAI returned an error.', generateResult.statusText, text);
+            log.net.warn('NovelAI returned an error.', generateResult.statusText, text);
             return response.sendStatus(500);
         }
 
@@ -386,7 +387,7 @@ router.post('/generate-image', async (request, response) => {
         const imageBuffer = await extractFileFromZipBuffer(archiveBuffer, '.png');
 
         if (!imageBuffer) {
-            console.error('NovelAI generated an image, but the PNG file was not found.');
+            log.net.error('NovelAI generated an image, but the PNG file was not found.');
             return response.sendStatus(500);
         }
 
@@ -398,7 +399,7 @@ router.post('/generate-image', async (request, response) => {
         }
 
         try {
-            console.info('Upscaling image...');
+            log.net.info('Upscaling image...');
             const upscaleUrl = `${API_NOVELAI}/ai/upscale`;
             const upscaleResult = await fetch(upscaleUrl, {
                 method: 'POST',
@@ -430,11 +431,11 @@ router.post('/generate-image', async (request, response) => {
 
             return response.send(upscaledBase64);
         } catch (error) {
-            console.warn('NovelAI generated an image, but upscaling failed. Returning original image.', error);
+            log.net.warn('NovelAI generated an image, but upscaling failed. Returning original image.', error);
             return response.send(originalBase64);
         }
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return response.sendStatus(500);
     }
 });
@@ -443,7 +444,7 @@ router.post('/generate-voice', async (request, response) => {
     const token = readSecret(request.user.directories, SECRET_KEYS.NOVEL);
 
     if (!token) {
-        console.error('NovelAI Access Token is missing.');
+        log.net.error('NovelAI Access Token is missing.');
         return response.sendStatus(400);
     }
 
@@ -466,7 +467,7 @@ router.post('/generate-voice', async (request, response) => {
 
         if (!result.ok) {
             const errorText = await result.text();
-            console.error('NovelAI returned an error.', result.statusText, errorText);
+            log.net.error('NovelAI returned an error.', result.statusText, errorText);
             return response.sendStatus(500);
         }
 
@@ -475,7 +476,7 @@ router.post('/generate-voice', async (request, response) => {
         response.setHeader('Content-Type', 'audio/mpeg');
         return response.send(buffer);
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return response.sendStatus(500);
     }
 });
