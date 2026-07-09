@@ -2,10 +2,7 @@
 //! client props are serialized into the SSR `<!--$id ...-->` marker and would otherwise appear
 //! verbatim in the served HTML.
 
-pub const Message = struct {
-    name: []const u8,
-    body: []const u8,
-};
+pub const Message = @import("./store.zig").Message;
 
 pub const Section = struct {
     title: []const u8,

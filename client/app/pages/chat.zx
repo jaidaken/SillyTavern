@@ -2,6 +2,8 @@
 // rerender() resolves to exactly this component and never falls back across the page.
 // Messages are plain elements in this vtree; none of them holds state.
 pub fn ChatView(ctx: *zx.ComponentCtx(void)) zx.Component {
+    // Retires the streaming HTML this render's diff no longer reads. Must precede every renderMessage.
+    sanitized.renderTick();
     return (
         <div @allocator={ctx.allocator} id="chat">
             {for (sections) |s| (
@@ -25,7 +27,7 @@ pub fn ChatView(ctx: *zx.ComponentCtx(void)) zx.Component {
                     <button class="btn" onclick={onStream}>Stream 200 tokens</button>
                 </div>
                 {for (store.slice(), 0..) |m, i| (
-                    <MessageView msg={m} cacheable={!store.isStreamingTail(i)} />
+                    <MessageView msg={m} cacheable={!store.isStreaming(i)} />
                 )}
             </section>
         </div>
@@ -33,7 +35,8 @@ pub fn ChatView(ctx: *zx.ComponentCtx(void)) zx.Component {
 }
 
 fn onAppend(_: zx.client.Event) void {
-    store.append("Seraphina", "Appended at runtime. **No marker** existed for this message.") catch return;
+    // appendCopy, not append: the store owns and later frees every body, and this one is a literal.
+    store.appendCopy("Seraphina", "Appended at runtime. **No marker** existed for this message.") catch return;
     zx.client.rerender();
 }
 
@@ -48,3 +51,9 @@ const sections: []const fixtures.Section = &fixtures.sections;
 const sanitized = @import("./sanitized.zig");
 const store = @import("./store.zig");
 pub const MessageView = @import("./message.zx").MessageView;
+
+// ziex transpiles app/pages into a cache dir, so only an import from THIS graph reaches the same
+// store instance ChatView reads. Nothing else references bridge.zig; this forces its wasm @exports.
+comptime {
+    _ = @import("./bridge.zig");
+}
