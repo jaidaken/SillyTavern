@@ -10,6 +10,8 @@ import { setAdditionalHeaders } from '../additional-headers.js';
 import { readSecret, SECRET_KEYS } from './secrets.js';
 import { AIMLAPI_HEADERS, OPENROUTER_HEADERS, SILICONFLOW_ENDPOINT, ZAI_ENDPOINT } from '../constants.js';
 
+// Despite the filename, this is a grab-bag proxy for caption/TTS/image/video/transcription
+// across many third-party providers, not OpenAI specifically.
 export const router = express.Router();
 
 router.post('/caption-image', async (request, response) => {

@@ -6,6 +6,7 @@ import { decode } from 'html-entities';
 import { readSecret, SECRET_KEYS } from './secrets.js';
 import { trimV1 } from '../util.js';
 import { setAdditionalHeaders } from '../additional-headers.js';
+import { log } from '../log.js';
 
 export const router = express.Router();
 
@@ -96,26 +97,26 @@ router.post('/serpapi', async (request, response) => {
         const key = readSecret(request.user.directories, SECRET_KEYS.SERPAPI);
 
         if (!key) {
-            console.error('No SerpApi key found');
+            log.search.error('No SerpApi key found');
             return response.sendStatus(400);
         }
 
         const { query } = request.body;
         const result = await fetch(`https://serpapi.com/search.json?q=${encodeURIComponent(query)}&api_key=${key}`);
 
-        console.debug('SerpApi query', query);
+        log.search.debug('SerpApi query', query);
 
         if (!result.ok) {
             const text = await result.text();
-            console.error('SerpApi request failed', result.statusText, text);
+            log.search.error('SerpApi request failed', result.statusText, text);
             return response.status(500).send(text);
         }
 
         const data = await result.json();
-        console.debug('SerpApi response', data);
+        log.search.debug('SerpApi response', data);
         return response.json(data);
     } catch (error) {
-        console.error(error);
+        log.search.error(error);
         return response.sendStatus(500);
     }
 });
@@ -131,7 +132,7 @@ router.post('/transcript', async (request, response) => {
         const json = request.body.json;
 
         if (!id) {
-            console.error('Id is required for /transcript');
+            log.search.error('Id is required for /transcript');
             return response.sendStatus(400);
         }
 
@@ -156,7 +157,7 @@ router.post('/transcript', async (request, response) => {
             throw error;
         }
     } catch (error) {
-        console.error(error);
+        log.search.error(error);
         return response.sendStatus(500);
     }
 });
@@ -166,17 +167,17 @@ router.post('/searxng', async (request, response) => {
         const { baseUrl, query, preferences, categories } = request.body;
 
         if (!baseUrl || !query) {
-            console.error('Missing required parameters for /searxng');
+            log.search.error('Missing required parameters for /searxng');
             return response.sendStatus(400);
         }
 
-        console.debug('SearXNG query', baseUrl, query);
+        log.search.debug('SearXNG query', baseUrl, query);
 
         const mainPageUrl = new URL(baseUrl);
         const mainPageRequest = await fetch(mainPageUrl, { headers: visitHeaders });
 
         if (!mainPageRequest.ok) {
-            console.error('SearXNG request failed', mainPageRequest.statusText);
+            log.search.error('SearXNG request failed', mainPageRequest.statusText);
             return response.sendStatus(500);
         }
 
@@ -203,14 +204,14 @@ router.post('/searxng', async (request, response) => {
 
         if (!searchResult.ok) {
             const text = await searchResult.text();
-            console.error('SearXNG request failed', searchResult.statusText, text);
+            log.search.error('SearXNG request failed', searchResult.statusText, text);
             return response.sendStatus(500);
         }
 
         const data = await searchResult.text();
         return response.send(data);
     } catch (error) {
-        console.error('SearXNG request failed', error);
+        log.search.error('SearXNG request failed', error);
         return response.sendStatus(500);
     }
 });
@@ -220,7 +221,7 @@ router.post('/tavily', async (request, response) => {
         const apiKey = readSecret(request.user.directories, SECRET_KEYS.TAVILY);
 
         if (!apiKey) {
-            console.error('No Tavily key found');
+            log.search.error('No Tavily key found');
             return response.sendStatus(400);
         }
 
@@ -247,19 +248,19 @@ router.post('/tavily', async (request, response) => {
             body: JSON.stringify(body),
         });
 
-        console.debug('Tavily query', query);
+        log.search.debug('Tavily query', query);
 
         if (!result.ok) {
             const text = await result.text();
-            console.error('Tavily request failed', result.statusText, text);
+            log.search.error('Tavily request failed', result.statusText, text);
             return response.status(500).send(text);
         }
 
         const data = await result.json();
-        console.debug('Tavily response', data);
+        log.search.debug('Tavily response', data);
         return response.json(data);
     } catch (error) {
-        console.error(error);
+        log.search.error(error);
         return response.sendStatus(500);
     }
 });
@@ -269,11 +270,11 @@ router.post('/koboldcpp', async (request, response) => {
         const { query, url } = request.body;
 
         if (!url) {
-            console.error('No URL provided for KoboldCpp search');
+            log.search.error('No URL provided for KoboldCpp search');
             return response.sendStatus(400);
         }
 
-        console.debug('KoboldCpp search query', query);
+        log.search.debug('KoboldCpp search query', query);
 
         const baseUrl = trimV1(url);
         const args = {
@@ -287,15 +288,15 @@ router.post('/koboldcpp', async (request, response) => {
 
         if (!result.ok) {
             const text = await result.text();
-            console.error('KoboldCpp request failed', result.statusText, text);
+            log.search.error('KoboldCpp request failed', result.statusText, text);
             return response.status(500).send(text);
         }
 
         const data = await result.json();
-        console.debug('KoboldCpp search response', data);
+        log.search.debug('KoboldCpp search response', data);
         return response.json(data);
     } catch (error) {
-        console.error(error);
+        log.search.error(error);
         return response.sendStatus(500);
     }
 });
@@ -305,7 +306,7 @@ router.post('/serper', async (request, response) => {
         const key = readSecret(request.user.directories, SECRET_KEYS.SERPER);
 
         if (!key) {
-            console.error('No Serper key found');
+            log.search.error('No Serper key found');
             return response.sendStatus(400);
         }
 
@@ -325,19 +326,19 @@ router.post('/serper', async (request, response) => {
             body: JSON.stringify({ q: query }),
         });
 
-        console.debug('Serper query', query);
+        log.search.debug('Serper query', query);
 
         if (!result.ok) {
             const text = await result.text();
-            console.warn('Serper request failed', result.statusText, text);
+            log.search.warn('Serper request failed', result.statusText, text);
             return response.status(500).send(text);
         }
 
         const data = await result.json();
-        console.debug('Serper response', data);
+        log.search.debug('Serper response', data);
         return response.json(data);
     } catch (error) {
-        console.error(error);
+        log.search.error(error);
         return response.sendStatus(500);
     }
 });
@@ -347,18 +348,18 @@ router.post('/zai', async (request, response) => {
         const key = readSecret(request.user.directories, SECRET_KEYS.ZAI);
 
         if (!key) {
-            console.error('No Z.AI key found');
+            log.search.error('No Z.AI key found');
             return response.sendStatus(400);
         }
 
         const { query } = request.body;
 
         if (!query) {
-            console.error('No query provided for /zai');
+            log.search.error('No query provided for /zai');
             return response.sendStatus(400);
         }
 
-        console.debug('Z.AI web search query', query);
+        log.search.debug('Z.AI web search query', query);
 
         const result = await fetch('https://api.z.ai/api/paas/v4/web_search', {
             method: 'POST',
@@ -375,15 +376,15 @@ router.post('/zai', async (request, response) => {
 
         if (!result.ok) {
             const text = await result.text();
-            console.error('Z.AI request failed', result.statusText, text);
+            log.search.error('Z.AI request failed', result.statusText, text);
             return response.status(500).send(text);
         }
 
         const data = await result.json();
-        console.debug('Z.AI web search response', data);
+        log.search.debug('Z.AI web search response', data);
         return response.json(data);
     } catch (error) {
-        console.error(error);
+        log.search.error(error);
         return response.sendStatus(500);
     }
 });
@@ -394,7 +395,7 @@ router.post('/visit', async (request, response) => {
         const html = Boolean(request.body.html ?? true);
 
         if (!url) {
-            console.error('No url provided for /visit');
+            log.search.error('No url provided for /visit');
             return response.sendStatus(400);
         }
 
@@ -421,16 +422,16 @@ router.post('/visit', async (request, response) => {
                 throw new Error('Invalid hostname');
             }
         } catch (error) {
-            console.error('Invalid url provided for /visit', url);
+            log.search.error('Invalid url provided for /visit', url);
             return response.sendStatus(400);
         }
 
-        console.info('Visiting web URL', url);
+        log.search.info('Visiting web URL', url);
 
         const result = await fetch(url, { headers: visitHeaders });
 
         if (!result.ok) {
-            console.error(`Visit failed ${result.status} ${result.statusText}`);
+            log.search.error(`Visit failed ${result.status} ${result.statusText}`);
             return response.sendStatus(500);
         }
 
@@ -438,7 +439,7 @@ router.post('/visit', async (request, response) => {
 
         if (html) {
             if (!contentType.includes('text/html')) {
-                console.error(`Visit failed, content-type is ${contentType}, expected text/html`);
+                log.search.error(`Visit failed, content-type is ${contentType}, expected text/html`);
                 return response.sendStatus(500);
             }
 
@@ -450,7 +451,7 @@ router.post('/visit', async (request, response) => {
         const buffer = await result.arrayBuffer();
         return response.send(Buffer.from(buffer));
     } catch (error) {
-        console.error(error);
+        log.search.error(error);
         return response.sendStatus(500);
     }
 });

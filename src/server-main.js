@@ -435,7 +435,6 @@ async function postSetupTasks(result) {
     console.log(goToLog);
     console.log('\n' + getSeparator(plainGoToLog.length) + '\n');
 
-    setupLogLevel();
     serverEvents.emit(EVENT_NAMES.SERVER_STARTED, { url: browserLaunchUrl });
 }
 
@@ -482,6 +481,9 @@ function setDnsResolutionOrder() {
         console.warn('Failed to set DNS resolution order. Possibly unsupported in this Node version.');
     }
 }
+
+// Resolve log level gating before any other startup step logs (plugin loading, migrations, etc).
+setupLogLevel();
 
 // User storage module needs to be initialized before starting the server
 initUserStorage(globalThis.DATA_ROOT)

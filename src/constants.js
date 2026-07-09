@@ -510,10 +510,12 @@ export const NANOGPT_REASONING_EFFORT_MAP = {
 };
 
 export const LOG_LEVELS = {
+    TRACE: -1,
     DEBUG: 0,
     INFO: 1,
     WARN: 2,
     ERROR: 3,
+    SILENT: 100,
 };
 
 /**
