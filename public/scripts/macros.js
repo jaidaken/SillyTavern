@@ -1,13 +1,11 @@
 import { Handlebars, moment, seedrandom, droll } from '../lib.js';
-import { chat, chat_metadata, main_api, getMaxPromptTokens, getMaxContextTokens, getMaxResponseTokens, getCurrentChatId, substituteParams, eventSource, event_types, extension_prompts } from '../script.js';
+import { chat, chat_metadata, main_api, getMaxPromptTokens, getMaxContextTokens, getMaxResponseTokens, getCurrentChatId, substituteParams, extension_prompts } from '../script.js';
 import { timestampToMoment, isDigitsOnly, getStringHash, escapeRegex, uuidv4 } from './utils.js';
 import { textgenerationwebui_banned_in_macros } from './textgen-settings.js';
 import { getInstructMacros } from './instruct-mode.js';
 import { getVariableMacros } from './variables.js';
-import { isMobile } from './RossAscends-mods.js';
 import { inject_ids } from './constants.js';
 import { initRegisterMacros, macros as macroSystem } from './macros/macro-system.js';
-import { power_user } from './power-user.js';
 import { log } from './log.js';
 
 /**
@@ -50,8 +48,14 @@ export class MacrosParser {
      * @param {IArguments} [methodArgs=null]
      * @returns {void}
      */
+    static #deprecationLogged = new Set();
+
     static #logDeprecated(method, replacement, methodArgs = null) {
-        log.prompt.warn(`[DEPRECATED] MacrosParser.${method} is deprecated and will be removed in a future version. Use ${replacement} instead. Arguments:`, (methodArgs ?? 'none'));
+        const macroName = methodArgs?.[0] ?? method;
+        const key = `${method}:${macroName}`;
+        if (MacrosParser.#deprecationLogged.has(key)) return;
+        MacrosParser.#deprecationLogged.add(key);
+        log.prompt.debug(`[DEPRECATED] MacrosParser.${method}('${macroName}'): use ${replacement}`);
     }
 
     /**
@@ -658,33 +662,7 @@ export function evaluateMacros(content, env, postProcessFn) {
 }
 
 export function initMacros() {
-    // Only manually register those is new macro engine is not on. In the new one, they are already registered automatically
-    if (!power_user.experimental_macro_engine) {
-        function initLastGenerationType() {
-            let lastGenerationType = '';
-
-            MacrosParser.registerMacro('lastGenerationType',
-                () => lastGenerationType,
-                'Returns the type of the last generation (e.g., "normal", "swipe", "continue", "impersonate", "quiet").',
-            );
-
-            eventSource.on(event_types.GENERATION_STARTED, (type, _params, isDryRun) => {
-                if (isDryRun) return;
-                lastGenerationType = type || 'normal';
-            });
-
-            eventSource.on(event_types.CHAT_CHANGED, () => {
-                lastGenerationType = '';
-            });
-        }
-
-        MacrosParser.registerMacro('isMobile',
-            () => String(isMobile()),
-            'Returns "true" if the user is on a mobile device, "false" otherwise.',
-        );
-        initLastGenerationType();
-    }
-
-    // TODO: Needs to be moved once old macros are deprecated and removed
+    // isMobile and lastGenerationType are registered by the modern engine (env-macros / state-macros);
+    // the legacy manual registration here double-registered them, so it was removed.
     initRegisterMacros();
 }

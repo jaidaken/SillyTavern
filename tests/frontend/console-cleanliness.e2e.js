@@ -20,7 +20,15 @@ test.describe('console cleanliness', () => {
             messages.push(String((error && error.message) || error));
         });
     });
-    test.beforeEach(testSetup.awaitST);
+    // Robust load: multi-user configs show a select screen; single-user loads straight to main.
+    test.beforeEach(async ({ page }) => {
+        await page.goto('/');
+        const userSelect = page.locator('#userList .userSelect:last-child');
+        if (await userSelect.count() > 0) {
+            await userSelect.click().catch(() => { });
+        }
+        await page.waitForFunction('document.getElementById("preloader") === null', { timeout: 30000 });
+    });
 
     test('page_load_and_settle_produces_no_console_errors_or_page_errors', async () => {
         const matchedEntries = new Set();
