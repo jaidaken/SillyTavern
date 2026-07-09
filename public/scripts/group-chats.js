@@ -1509,7 +1509,8 @@ async function onGroupGenerationModeInput(e) {
 async function onGroupAutoModeDelayInput(e) {
     if (openGroupId) {
         let _thisGroup = groups.find((x) => x.id == openGroupId);
-        _thisGroup.auto_mode_delay = Number(e.target.value);
+        const delayValue = Number(e.target.value);
+        _thisGroup.auto_mode_delay = (e.target.value === '' || !Number.isFinite(delayValue)) ? DEFAULT_AUTO_MODE_DELAY : delayValue;
         await editGroup(openGroupId, false, false);
         setAutoModeWorker();
     }
@@ -2088,7 +2089,9 @@ async function createGroup() {
     let allowSelfResponses = !!$('#rm_group_allow_self_responses').prop('checked');
     let activationStrategy = Number($('#rm_group_activation_strategy').find(':selected').val());
     let generationMode = Number($('#rm_group_generation_mode').find(':selected').val());
-    let autoModeDelay = Number($('#rm_group_automode_delay').val());
+    const autoModeDelayValue = $('#rm_group_automode_delay').val();
+    let autoModeDelay = Number(autoModeDelayValue);
+    if (autoModeDelayValue === '' || !Number.isFinite(autoModeDelay)) autoModeDelay = DEFAULT_AUTO_MODE_DELAY;
     const members = newGroupMembers;
     const memberNames = characters.filter(x => members.includes(x.avatar)).map(x => x.name).join(', ');
 
