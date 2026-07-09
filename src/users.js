@@ -10,7 +10,7 @@ import { Buffer } from 'node:buffer';
 import storage from 'node-persist';
 import express from 'express';
 import mime from 'mime-types';
-import archiver from 'archiver';
+import { ZipArchive } from 'archiver';
 import _ from 'lodash';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import sanitize from 'sanitize-filename';
@@ -1159,7 +1159,7 @@ export async function createBackupArchive(handle, response) {
     const directories = getUserDirectories(handle);
 
     console.info('Backup requested for', handle);
-    const archive = archiver('zip');
+    const archive = new ZipArchive();
 
     archive.on('error', function (err) {
         response.status(500).send({ error: err.message });
