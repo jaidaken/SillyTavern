@@ -10,6 +10,7 @@ import { setting_names as TGsamplerNames, showTGSamplerControls, textgenerationw
 import { renderTemplateAsync } from './templates.js';
 import { Popup, POPUP_TYPE } from './popup.js';
 import { localforage } from '../lib.js';
+import { log } from './log.js';
 
 const forcedOnColoring = 'color: #89db35;';
 const forcedOffColoring = 'color: #e84f62;';
@@ -39,7 +40,7 @@ async function showSamplerSelectPopup() {
     setSamplerListListeners();
 
     $('#resetSelectedSamplers').off('click').on('click', async function () {
-        console.log('saw sampler select reset click');
+        log.settings.debug('saw sampler select reset click');
 
         if (main_api === 'textgenerationwebui') {
             $('#prioritizeManuallySelectedSamplers').toggleClass('toggleEnabled', false);
@@ -174,21 +175,21 @@ function setSamplerListListeners() {
 
         if (isChecked === false) {
             if (previousState === SELECT_SAMPLER.SHOWN) {
-                console.log('saw previously custom shown sampler => new state:', isChecked, samplerName);
+                log.settings.debug('saw previously custom shown sampler => new state:', isChecked, samplerName);
                 relatedDOMElement.removeData(SELECT_SAMPLER.DATA);
                 popupInputLabel.removeAttr('style');
             } else {
-                console.log('saw previous untouched sampler => new state:', isChecked, samplerName);
+                log.settings.debug('saw previous untouched sampler => new state:', isChecked, samplerName);
                 relatedDOMElement.data(SELECT_SAMPLER.DATA, SELECT_SAMPLER.HIDDEN);
                 popupInputLabel.attr('style', forcedOffColoring);
             }
         } else {
             if (previousState === SELECT_SAMPLER.HIDDEN) {
-                console.log('saw previously custom hidden sampler => new state:', isChecked, samplerName);
+                log.settings.debug('saw previously custom hidden sampler => new state:', isChecked, samplerName);
                 relatedDOMElement.removeData(SELECT_SAMPLER.DATA);
                 popupInputLabel.removeAttr('style');
             } else {
-                console.log('saw previous untouched sampler => new state:', isChecked, samplerName);
+                log.settings.debug('saw previous untouched sampler => new state:', isChecked, samplerName);
                 relatedDOMElement.data(SELECT_SAMPLER.DATA, SELECT_SAMPLER.SHOWN);
                 popupInputLabel.attr('style', forcedOnColoring);
             }
@@ -201,7 +202,7 @@ function setSamplerListListeners() {
 
         if (main_api === 'textgenerationwebui') setApiSamplersState(samplerName, shouldDisplay !== 'none');
 
-        console.log(samplerName, relatedDOMElement.data(SELECT_SAMPLER.DATA), shouldDisplay);
+        log.settings.debug(samplerName, relatedDOMElement.data(SELECT_SAMPLER.DATA), shouldDisplay);
     });
 }
 
@@ -226,7 +227,7 @@ async function listSamplers(main_api, arrayOnly = false) {
     }
 
     if (arrayOnly) {
-        console.debug('returning full samplers array');
+        log.settings.debug('returning full samplers array');
         return availableSamplers;
     }
 
@@ -254,7 +255,7 @@ async function listSamplers(main_api, arrayOnly = false) {
             return finalState;
         };
 
-        console.log(sampler, relatedDOMElement.prop('id'), isInDefaultState, shouldBeChecked());
+        log.settings.debug(sampler, relatedDOMElement.prop('id'), isInDefaultState, shouldBeChecked());
 
         if (displayname === undefined) displayname = sampler;
         if (main_api === 'textgenerationwebui') setApiSamplersState(sampler, shouldBeChecked());
@@ -315,10 +316,10 @@ export async function validateDisabledSamplers(redraw = false) {
  */
 export async function loadApiSelectedSamplers() {
     try {
-        console.debug('Text Completions: loading selected samplers');
+        log.settings.debug('Text Completions: loading selected samplers');
         selectedSamplers = await textGenObjectStore.getItem('selectedSamplers') || {};
     } catch (error) {
-        console.log('Text Completions: unable to load selected samplers, using default samplers', error);
+        log.settings.error('Text Completions: unable to load selected samplers, using default samplers', error);
         selectedSamplers = {};
     }
 }
@@ -329,10 +330,10 @@ export async function loadApiSelectedSamplers() {
  */
 export async function saveApiSelectedSamplers() {
     try {
-        console.debug('Text Completions: saving selected samplers');
+        log.settings.debug('Text Completions: saving selected samplers');
         await textGenObjectStore.setItem('selectedSamplers', selectedSamplers);
     } catch (error) {
-        console.log('Text Completions: unable to save selected samplers', error);
+        log.settings.error('Text Completions: unable to save selected samplers', error);
     }
 }
 
@@ -348,12 +349,12 @@ export async function resetApiSelectedSamplers(tcApiType = '', silent = false) {
         if (!tcApiType) tcApiType = textgenerationwebui_settings.type;
         if (!selectedSamplers[tcApiType]) return;
 
-        console.debug('Text Completions: resetting selected samplers');
+        log.settings.debug('Text Completions: resetting selected samplers');
         delete selectedSamplers[tcApiType];
         await saveApiSelectedSamplers();
         if (!silent) toastr.success('Selected samplers cleared.');
     } catch (error) {
-        console.log('Text Completions: unable to reset selected preset samplers', error);
+        log.settings.error('Text Completions: unable to reset selected preset samplers', error);
     }
 }
 
@@ -403,7 +404,7 @@ export function getActiveManualApiSamplers(tcApiType = '') {
             .filter(([key, val]) => val === true && key !== 'st_manual_priority')
             .map(([key, val]) => key);
     } catch (error) {
-        console.log('Text Completions: unable to fetch active preset samplers', error);
+        log.settings.error('Text Completions: unable to fetch active preset samplers', error);
         return [];
     }
 }

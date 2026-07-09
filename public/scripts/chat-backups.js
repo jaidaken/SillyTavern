@@ -3,6 +3,7 @@ import { callGenericPopup, Popup, POPUP_TYPE } from './popup.js';
 import { getFileExtension, sortMoments, timestampToMoment } from './utils.js';
 import { displayPastChats, getRequestHeaders, importCharacterChat } from '/script.js';
 import { importGroupChat } from './group-chats.js';
+import { log } from './log.js';
 
 class BackupsBrowser {
     /** @type {HTMLElement} */
@@ -34,7 +35,7 @@ class BackupsBrowser {
 
         if (!response.ok) {
             toastr.error(t`Failed to download backup, try again later.`);
-            console.error('Failed to download chat backup:', response.statusText);
+            log.chat.error('Failed to download chat backup:', response.statusText);
             return;
         }
 
@@ -50,7 +51,7 @@ class BackupsBrowser {
                         parsedLines.push(lineData);
                     }
                 } catch (error) {
-                    console.error('Failed to parse chat backup line:', error);
+                    log.chat.error('Failed to parse chat backup line:', error);
                 }
             });
             const textArea = document.createElement('textarea');
@@ -59,7 +60,7 @@ class BackupsBrowser {
             textArea.value = parsedLines.map(l => `${l.name} [${timestampToMoment(l.send_date).format('lll')}]\n${l.mes}`).join('\n\n\n');
             await callGenericPopup(textArea, POPUP_TYPE.TEXT, '', { allowVerticalScrolling: true, large: true, wide: true });
         } catch (error) {
-            console.error('Failed to parse chat backup content:', error);
+            log.chat.error('Failed to parse chat backup content:', error);
             toastr.error(t`Failed to parse backup content.`);
             return;
         }
@@ -79,7 +80,7 @@ class BackupsBrowser {
 
         if (!response.ok) {
             toastr.error(t`Failed to download backup, try again later.`);
-            console.error('Failed to download chat backup:', response.statusText);
+            log.chat.error('Failed to download chat backup:', response.statusText);
             return;
         }
 
@@ -133,7 +134,7 @@ class BackupsBrowser {
 
         if (!response.ok) {
             toastr.error(t`Failed to delete backup, try again later.`);
-            console.error('Failed to delete chat backup:', response.statusText);
+            log.chat.error('Failed to delete chat backup:', response.statusText);
             return false;
         }
 
@@ -160,7 +161,7 @@ class BackupsBrowser {
         });
 
         if (!response.ok) {
-            console.error('Failed to load chat backups list:', response.statusText);
+            log.chat.error('Failed to load chat backups list:', response.statusText);
             return;
         }
 
@@ -267,7 +268,7 @@ class BackupsBrowser {
 
         const sibling = document.getElementById('select_chat_search');
         if (!sibling) {
-            console.error('Could not find sibling element for BackupsBrowser button');
+            log.chat.error('Could not find sibling element for BackupsBrowser button');
             return;
         }
 
@@ -309,7 +310,7 @@ class BackupsBrowser {
 
         const sibling = document.getElementById('select_chat_div');
         if (!sibling) {
-            console.error('Could not find sibling element for BackupsBrowser list');
+            log.chat.error('Could not find sibling element for BackupsBrowser list');
             return;
         }
 

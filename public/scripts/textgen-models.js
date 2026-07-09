@@ -8,6 +8,7 @@ import { POPUP_TYPE, callGenericPopup } from './popup.js';
 import { t } from './i18n.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { localizePagination, PAGINATION_TEMPLATE, textValueMatcher } from './utils.js';
+import { log } from './log.js';
 
 let mancerModels = [];
 let togetherModels = [];
@@ -390,7 +391,7 @@ export async function syncOpenRouterProvidersForModel(modelId, providersSelector
         $providers.trigger('change.select2');
         refreshWarningState();
     } catch (error) {
-        console.error('Failed to fetch OpenRouter providers for model', error);
+        log.net.error('Failed to fetch OpenRouter providers for model', error);
         refreshWarningState();
     }
 }
@@ -442,7 +443,7 @@ export async function syncNanoGptProvidersForModel(modelId, providersSelector) {
         $providers.trigger('change.select2');
         refreshWarningState();
     } catch (error) {
-        console.error('Failed to fetch NanoGPT providers for model', error);
+        log.net.error('Failed to fetch NanoGPT providers for model', error);
         refreshWarningState();
     }
 }
@@ -463,7 +464,7 @@ export function updateNanoGptProvidersWarning(providersSelector) {
 
 export async function loadOllamaModels(data) {
     if (!Array.isArray(data)) {
-        console.error('Invalid Ollama models data', data);
+        log.net.error('Invalid Ollama models data', data);
         return;
     }
 
@@ -483,7 +484,7 @@ export async function loadOllamaModels(data) {
 
 export async function loadTabbyModels(data) {
     if (!Array.isArray(data)) {
-        console.error('Invalid Tabby models data', data);
+        log.net.error('Invalid Tabby models data', data);
         return;
     }
 
@@ -507,7 +508,7 @@ export async function loadTabbyModels(data) {
 
 export async function loadLlamaCppModels(data) {
     if (!Array.isArray(data)) {
-        console.error('Invalid llama.cpp models data', data);
+        log.net.error('Invalid llama.cpp models data', data);
         return;
     }
 
@@ -531,7 +532,7 @@ export async function loadLlamaCppModels(data) {
 
 export async function loadTogetherAIModels(data) {
     if (!Array.isArray(data)) {
-        console.error('Invalid Together AI models data', data);
+        log.net.error('Invalid Together AI models data', data);
         return;
     }
 
@@ -559,7 +560,7 @@ export async function loadTogetherAIModels(data) {
 
 export async function loadInfermaticAIModels(data) {
     if (!Array.isArray(data)) {
-        console.error('Invalid Infermatic AI models data', data);
+        log.net.error('Invalid Infermatic AI models data', data);
         return;
     }
 
@@ -586,7 +587,7 @@ export async function loadInfermaticAIModels(data) {
 
 export function loadGenericModels(data) {
     if (!Array.isArray(data)) {
-        console.error('Invalid Generic models data', data);
+        log.net.error('Invalid Generic models data', data);
         return;
     }
 
@@ -604,7 +605,7 @@ export function loadGenericModels(data) {
 
 export async function loadDreamGenModels(data) {
     if (!Array.isArray(data)) {
-        console.error('Invalid DreamGen models data', data);
+        log.net.error('Invalid DreamGen models data', data);
         return;
     }
 
@@ -630,7 +631,7 @@ export async function loadDreamGenModels(data) {
 
 export async function loadMancerModels(data) {
     if (!Array.isArray(data)) {
-        console.error('Invalid Mancer models data', data);
+        log.net.error('Invalid Mancer models data', data);
         return;
     }
 
@@ -653,7 +654,7 @@ export async function loadMancerModels(data) {
 
 export async function loadOpenRouterModels(data) {
     if (!Array.isArray(data)) {
-        console.error('Invalid OpenRouter models data', data);
+        log.net.error('Invalid OpenRouter models data', data);
         return;
     }
 
@@ -680,7 +681,7 @@ export async function loadOpenRouterModels(data) {
 
 export async function loadVllmModels(data) {
     if (!Array.isArray(data)) {
-        console.error('Invalid vLLM models data', data);
+        log.net.error('Invalid vLLM models data', data);
         return;
     }
 
@@ -702,7 +703,7 @@ export async function loadVllmModels(data) {
 
 export async function loadAphroditeModels(data) {
     if (!Array.isArray(data)) {
-        console.error('Invalid Aphrodite models data', data);
+        log.net.error('Invalid Aphrodite models data', data);
         return;
     }
 
@@ -736,7 +737,7 @@ export async function loadFeatherlessModels(data) {
     let originalModels = [];
 
     if (!Array.isArray(data)) {
-        console.error('Invalid Featherless models data', data);
+        log.net.error('Invalid Featherless models data', data);
         return;
     }
 
@@ -1196,7 +1197,7 @@ async function downloadOllamaModel() {
         toastr.success('Download complete. Please select the model from the dropdown.');
         $('#api_button_textgenerationwebui').trigger('click');
     } catch (err) {
-        console.error(err);
+        log.net.error(err);
         toastr.error('Failed to download Ollama model. Please try again.');
     }
 }
@@ -1264,7 +1265,7 @@ async function downloadTabbyModel() {
 
         toastr.success('Download complete.');
     } catch (err) {
-        console.error(err);
+        log.net.error(err);
         toastr.error('Failed to download HuggingFace model in TabbyAPI. Please try again.');
     }
 }

@@ -17,6 +17,7 @@ import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { textgen_types, textgenerationwebui_settings } from './textgen-settings.js';
 import { applyStreamFadeIn } from './util/stream-fadein.js';
 import { copyText, escapeRegex, isFalseBoolean, isTrueBoolean, setDatasetProperty, stringToRange, trimSpaces } from './utils.js';
+import { log } from './log.js';
 
 /**
  * @typedef {object} ReasoningTemplate
@@ -1444,7 +1445,7 @@ export function parseReasoningFromString(str, { strict = true } = {}, template =
 
         return { reasoning, content };
     } catch (error) {
-        console.error('[Reasoning] Error parsing reasoning block', error);
+        log.gen.error('[Reasoning] Error parsing reasoning block', error);
         return null;
     }
 }
@@ -1517,22 +1518,22 @@ function registerReasoningAppEvents() {
             return;
         }
 
-        console.debug('[Reasoning] Auto-parsing reasoning block for message', idx);
+        log.gen.debug('[Reasoning] Auto-parsing reasoning block for message', idx);
         const prefix = type === event_types.MESSAGE_RECEIVED ? PromptReasoning.getLatestPrefix() : '';
         const message = chat[idx];
 
         if (!message) {
-            console.warn('[Reasoning] Message not found', idx);
+            log.gen.warn('[Reasoning] Message not found', idx);
             return null;
         }
 
         if (!message.mes || message.mes === '...') {
-            console.debug('[Reasoning] Message content is empty or a placeholder', idx);
+            log.gen.debug('[Reasoning] Message content is empty or a placeholder', idx);
             return null;
         }
 
         if (message.extra?.reasoning && !prefix) {
-            console.debug('[Reasoning] Message already has reasoning', idx);
+            log.gen.debug('[Reasoning] Message already has reasoning', idx);
             return null;
         }
 
@@ -1568,7 +1569,7 @@ function registerReasoningAppEvents() {
             // Find if a message already exists in DOM and must be updated
             const messageRendered = document.querySelector(`.mes[mesid="${idx}"]`) !== null;
             if (messageRendered) {
-                console.debug('[Reasoning] Updating message block', idx);
+                log.gen.debug('[Reasoning] Updating message block', idx);
                 updateMessageBlock(idx, message);
             }
         }
@@ -1590,14 +1591,14 @@ function registerReasoningAppEvents() {
         const sendTextArea = /** @type {HTMLTextAreaElement} */ (document.getElementById('send_textarea'));
 
         if (!sendTextArea) {
-            console.warn('[Reasoning] Send textarea not found');
+            log.gen.warn('[Reasoning] Send textarea not found');
             return;
         }
 
-        console.debug('[Reasoning] Auto-parsing reasoning block for impersonation');
+        log.gen.debug('[Reasoning] Auto-parsing reasoning block for impersonation');
 
         if (!sendTextArea.value) {
-            console.debug('[Reasoning] Reasoning is empty, skipping');
+            log.gen.debug('[Reasoning] Reasoning is empty, skipping');
             return;
         }
 

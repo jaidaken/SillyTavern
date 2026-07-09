@@ -12,6 +12,7 @@ import { renderTemplateAsync } from './templates.js';
 import { Popup } from './popup.js';
 import { t } from './i18n.js';
 import { isMobile } from './RossAscends-mods.js';
+import { log } from './log.js';
 
 function debouncePromise(func, delay) {
     let timeoutId;
@@ -47,7 +48,7 @@ const registerPromptManagerMigration = () => {
         if ('Default' === presetName) return;
 
         if (settings.main_prompt || settings.nsfw_prompt || settings.jailbreak_prompt) {
-            console.log('Running prompt manager configuration migration');
+            log.prompt.info('Running prompt manager configuration migration');
             if (settings.prompts === undefined || settings.prompts.length === 0) settings.prompts = structuredClone(chatCompletionDefaultPrompts.prompts);
 
             const findPrompt = (identifier) => settings.prompts.find(prompt => identifier === prompt.identifier);
@@ -696,8 +697,8 @@ class PromptManager {
                                 this.import(data);
                             } catch (err) {
                                 toastr.error(t`An error occurred while importing prompts. More info available in console.`);
-                                console.log('An error occurred while importing prompts');
-                                console.log(err.toString());
+                                log.prompt.error('An error occurred while importing prompts');
+                                log.prompt.error(err.toString());
                             }
                         };
 
@@ -890,7 +891,7 @@ class PromptManager {
                 this.profileEnd('render');
             }
         }).catch(() => {
-            console.log('Timeout while waiting for send press to be false');
+            log.prompt.debug('Timeout while waiting for send press to be false');
         });
     }
 
@@ -1131,7 +1132,6 @@ class PromptManager {
         if ('global' === this.configuration.promptOrder.strategy) {
             this.activeCharacter = { id: this.configuration.promptOrder.dummyId };
         } else if ('character' === this.configuration.promptOrder.strategy) {
-            console.log('FOO');
             this.activeCharacter = { id: event.detail.id, ...event.detail.character };
             const promptOrder = this.getPromptOrderForCharacter(this.activeCharacter);
 
@@ -1973,7 +1973,7 @@ class PromptManager {
      * @param output
      */
     log(output) {
-        if (power_user.console_log_prompts) console.log('[PromptManager] ' + output);
+        if (power_user.console_log_prompts) log.prompt.debug('[PromptManager] ' + output);
     }
 
     /**
@@ -1982,7 +1982,7 @@ class PromptManager {
      * @param identifier
      */
     profileStart(identifier) {
-        if (power_user.console_log_prompts) console.time(identifier);
+        if (power_user.console_log_prompts) log.prompt.time(identifier);
     }
 
     /**
@@ -1993,7 +1993,7 @@ class PromptManager {
     profileEnd(identifier) {
         if (power_user.console_log_prompts) {
             this.log('Profiling of "' + identifier + '" finished. Result below.');
-            console.timeEnd(identifier);
+            log.prompt.timeEnd(identifier);
         }
     }
 }

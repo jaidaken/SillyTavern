@@ -27,6 +27,7 @@ import { debounce_timeout } from './constants.js';
 import { INTERACTABLE_CONTROL_CLASS } from './keyboard.js';
 import { commonEnumProviders } from './slash-commands/SlashCommandCommonEnumsProvider.js';
 import { renderTemplateAsync } from './templates.js';
+import { log } from './log.js';
 import { t, translate } from './i18n.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { enumTypes, SlashCommandEnumValue } from './slash-commands/SlashCommandEnumValue.js';
@@ -137,7 +138,7 @@ function getVisibleAvatarsForGroupContext(type, currentGroup) {
                 .filter(c => !currentGroup.members.includes(c.avatar))
                 .map(c => c.avatar);
         default:
-            console.warn('getVisibleAvatarsForGroupContext got invalid type, expected 1 or 2, got ', type);
+            log.ui.warn('getVisibleAvatarsForGroupContext got invalid type, expected 1 or 2, got ', type);
             return [];
     }
 }
@@ -971,7 +972,7 @@ async function importTags(character, { importSetting = null } = {}) {
     // Gather the tags to import based on the selected setting
     const tagNamesToImport = await handleTagImport(character, { importSetting });
     if (!tagNamesToImport?.length) {
-        console.debug('No tags to import');
+        log.ui.debug('No tags to import');
         return;
     }
 
@@ -1071,7 +1072,7 @@ async function showTagImportPopup(character, existingTags, newTags, folderTags) 
             power_user.tag_import_setting = setting;
             $('#tag_import_setting').val(power_user.tag_import_setting);
             saveSettingsDebounced();
-            console.log('Remembered tag import setting:', Object.entries(tag_import_setting).find(x => x[1] === setting)[0], setting);
+            log.ui.info('Remembered tag import setting:', Object.entries(tag_import_setting).find(x => x[1] === setting)[0], setting);
         }
     }
 
@@ -1131,7 +1132,7 @@ function createNewTag(tagName) {
 
     const tag = newTag(tagName);
     tags.push(tag);
-    console.debug('Created new tag', tag.name, 'with id', tag.id);
+    log.ui.debug('Created new tag', tag.name, 'with id', tag.id);
     return tag;
 }
 
@@ -1237,7 +1238,7 @@ function printTagList(element, { tags = undefined, addTag = undefined, forEntity
         if (customAction) {
             const action = customAction(tag);
             if (action && typeof action !== 'function') {
-                console.error('The action parameter must return a function for tag.', tag);
+                log.ui.error('The action parameter must return a function for tag.', tag);
             } else {
                 tagOptions.action = action;
             }
@@ -1261,7 +1262,7 @@ function printTagList(element, { tags = undefined, addTag = undefined, forEntity
         // Add click event
         const showHiddenTags = (_, event) => {
             const elementKey = key ?? getTagKeyForEntityElement($element);
-            console.log(`Hidden tags shown for element ${elementKey}`);
+            log.ui.info(`Hidden tags shown for element ${elementKey}`);
 
             // Mark the current char/group as expanded if we were in any. This will be kept in memory until reload
             $element.addClass('tags-expanded');
@@ -1474,7 +1475,7 @@ function toggleTagThreeState(element, { stateOverride = undefined, simulateClick
             $(element).trigger('click');
         }
 
-        console.debug('manually click-toggle three-way filter from', states[currentStateIndex], 'to', states[targetStateIndex], 'on', element);
+        log.ui.debug('manually click-toggle three-way filter from', states[currentStateIndex], 'to', states[targetStateIndex], 'on', element);
     } else {
         element.attr('data-toggle-state', states[targetStateIndex]);
 
@@ -1484,7 +1485,7 @@ function toggleTagThreeState(element, { stateOverride = undefined, simulateClick
         });
 
         if (states[currentStateIndex] !== states[targetStateIndex]) {
-            console.debug('toggle three-way filter from', states[currentStateIndex], 'to', states[targetStateIndex], 'on', element);
+            log.ui.debug('toggle three-way filter from', states[currentStateIndex], 'to', states[targetStateIndex], 'on', element);
         }
     }
 
@@ -1619,13 +1620,13 @@ function onTagRemoveClick(event) {
 
     // If we have a custom remove action, we are not executing anything here in the default handler
     if (tagElement.attr('custom-remove-action')) {
-        console.debug('Custom remove action', tagId);
+        log.ui.debug('Custom remove action', tagId);
         return;
     }
 
     // Check if we are inside the drilldown. If so, we call remove on the bogus folder
     if ($(this).closest('.rm_tag_bogus_drilldown').length > 0) {
-        console.debug('Bogus drilldown remove', tagId);
+        log.ui.debug('Bogus drilldown remove', tagId);
         chooseBogusFolder($(this), tagId, true);
         return;
     }
@@ -1812,7 +1813,7 @@ async function onTagRestoreFileSelect(e) {
     const file = e.target.files[0];
 
     if (!file) {
-        console.log('Tag restore: No file selected.');
+        log.ui.debug('Tag restore: No file selected.');
         return;
     }
 
@@ -1820,13 +1821,13 @@ async function onTagRestoreFileSelect(e) {
 
     if (!data) {
         toastr.warning('Empty file data', 'Tag Restore');
-        console.log('Tag restore: File data empty.');
+        log.ui.debug('Tag restore: File data empty.');
         return;
     }
 
     if (!data.tags || !data.tag_map || !Array.isArray(data.tags) || typeof data.tag_map !== 'object') {
         toastr.warning('Invalid file format', 'Tag Restore');
-        console.log('Tag restore: Invalid file format.');
+        log.ui.debug('Tag restore: Invalid file format.');
         return;
     }
 
@@ -1910,7 +1911,7 @@ async function onTagRestoreFileSelect(e) {
             timeOut: toastr.options.timeOut * 2, // Display double the time
             onclick: () => Popup.show.text('Tag Restore Warnings', `<samp class="justifyLeft">${DOMPurify.sanitize(warnings.join('\n'))}<samp>`, { allowVerticalScrolling: true }),
         });
-        console.warn(`TAG RESTORE REPORT\n====================\n${warnings.join('\n')}`);
+        log.ui.warn(`TAG RESTORE REPORT\n====================\n${warnings.join('\n')}`);
     } else {
         toastr.success('Tags restored successfully.', 'Tag Restore');
     }
@@ -2230,7 +2231,7 @@ function onTagListHintClick() {
 
     const isSelected = $(this).hasClass('selected');
     setTagFilterVisibility(filterType, isSelected);
-    console.debug('show_tag_filters for type', filterType, ':', isSelected);
+    log.ui.debug('show_tag_filters for type', filterType, ':', isSelected);
 }
 
 /**
@@ -2238,11 +2239,11 @@ function onTagListHintClick() {
  * @param {FilterHelper} filterHelper - The filter helper for the current context
  */
 function onClearAllFiltersClick(filterHelper) {
-    console.debug('clear all filters clicked');
+    log.ui.debug('clear all filters clicked');
 
     const context = getFilterContext(filterHelper);
     if (!context) {
-        console.warn('Unknown filter helper in onClearAllFiltersClick');
+        log.ui.warn('Unknown filter helper in onClearAllFiltersClick');
         return;
     }
 
@@ -2670,7 +2671,7 @@ export function applyCharacterTagsToMessageDivs({ mesIds = [] } = {}) {
             }
         });
     } catch (error) {
-        console.error('Error applying character tags to message divs:', error);
+        log.ui.error('Error applying character tags to message divs:', error);
     }
 }
 
@@ -2756,7 +2757,7 @@ function extractCharacterAvatar(avatarSrc) {
         const url = new URL(avatarSrc, window.location.origin);
         return url?.searchParams.get('file');
     } catch (error) {
-        console.error('Unable to parse character avatar using avatarSrc', avatarSrc, error);
+        log.ui.error('Unable to parse character avatar using avatarSrc', avatarSrc, error);
         return null;
     }
 }
@@ -2768,7 +2769,7 @@ function restoreSavedTagFilters() {
         loadFilterStatesForContext(groupCandidatesFilter, 'GroupCandidates');
         loadFilterStatesForContext(groupMembersFilter, 'GroupMembers');
     } catch (e) {
-        console.warn('Failed to restore actionable filter states from account storage', e);
+        log.ui.warn('Failed to restore actionable filter states from account storage', e);
     }
 }
 

@@ -8,6 +8,7 @@ import { isMobile } from './RossAscends-mods.js';
 import { inject_ids } from './constants.js';
 import { initRegisterMacros, macros as macroSystem } from './macros/macro-system.js';
 import { power_user } from './power-user.js';
+import { log } from './log.js';
 
 /**
  * @typedef Macro
@@ -62,7 +63,7 @@ export class MacrosParser {
      * @returns {void}
      */
     static #logDeprecated(method, replacement, methodArgs = null) {
-        console.warn(`[DEPRECATED] MacrosParser.${method} is deprecated and will be removed in a future version. Use ${replacement} instead. Arguments:`, (methodArgs ?? 'none'));
+        log.prompt.warn(`[DEPRECATED] MacrosParser.${method} is deprecated and will be removed in a future version. Use ${replacement} instead. Arguments:`, (methodArgs ?? 'none'));
     }
 
     /**
@@ -85,7 +86,7 @@ export class MacrosParser {
 
         // Like the old MacrosParser, we explicitly allow overriding macros, and only warn
         if (macroSystem.registry.hasMacro(key)) {
-            console.warn(`Macro ${key} is already registered`);
+            log.prompt.warn(`Macro ${key} is already registered`);
         }
 
         const legacyValue = value;
@@ -104,7 +105,7 @@ export class MacrosParser {
                         const nonce = uuidv4();
                         stored = stored(nonce);
                     } catch (e) {
-                        console.warn(`Macro "${key}" function threw an error.`, e);
+                        log.prompt.warn(`Macro "${key}" function threw an error.`, e);
                         stored = '';
                     }
                 }
@@ -198,7 +199,7 @@ export class MacrosParser {
         }
 
         if (typeof value !== 'string' && typeof value !== 'function') {
-            console.warn(`Macro value for "${key}" will be converted to a string`);
+            log.prompt.warn(`Macro value for "${key}" will be converted to a string`);
             value = this.sanitizeMacroValue(value);
         }
 
@@ -208,7 +209,7 @@ export class MacrosParser {
         }
 
         if (this.#macros.has(key)) {
-            console.warn(`Macro ${key} is already registered`);
+            log.prompt.warn(`Macro ${key} is already registered`);
         }
 
         this.#macros.set(key, value);
@@ -244,7 +245,7 @@ export class MacrosParser {
         const deleted = this.#macros.delete(key);
 
         if (!deleted) {
-            console.warn(`Macro ${key} was not registered`);
+            log.prompt.warn(`Macro ${key} was not registered`);
         }
 
         this.#descriptions.delete(key);
@@ -257,7 +258,7 @@ export class MacrosParser {
      */
     static populateEnv(env) {
         if (!env || typeof env !== 'object') {
-            console.warn('Env object is not provided');
+            log.prompt.warn('Env object is not provided');
             return;
         }
 
@@ -286,12 +287,12 @@ export class MacrosParser {
         }
 
         if (value instanceof Promise) {
-            console.warn('Promises are not supported as macro values');
+            log.prompt.warn('Promises are not supported as macro values');
             return '';
         }
 
         if (typeof value === 'function') {
-            console.warn('Functions are not supported as macro values');
+            log.prompt.warn('Functions are not supported as macro values');
             return '';
         }
 
@@ -443,7 +444,7 @@ function getBannedWordsMacro() {
     const banPattern = /{{banned "(.*)"}}/gi;
     const banReplace = (match, bannedWord) => {
         if (main_api == 'textgenerationwebui') {
-            console.log('Found banned word in macros: ' + bannedWord);
+            log.prompt.debug('Found banned word in macros: ' + bannedWord);
             textgenerationwebui_banned_in_macros.push(bannedWord);
         }
         return '';
@@ -559,7 +560,7 @@ function getDiceRollMacro() {
         const isValid = droll.validate(formula);
 
         if (!isValid) {
-            console.debug(`Invalid roll formula: ${formula}`);
+            log.prompt.debug(`Invalid roll formula: ${formula}`);
             return '';
         }
 
@@ -707,7 +708,7 @@ export function evaluateMacros(content, env, postProcessFn) {
         try {
             content = content.replace(macro.regex, (...args) => postProcessFn(macro.replace(...args)));
         } catch (e) {
-            console.warn(`Macro content can't be replaced: ${macro.regex} in ${content}`, e);
+            log.prompt.warn(`Macro content can't be replaced: ${macro.regex} in ${content}`, e);
         }
     }
 

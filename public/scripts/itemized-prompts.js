@@ -8,6 +8,7 @@ import { isMobile } from './RossAscends-mods.js';
 import { renderTemplateAsync } from './templates.js';
 import { getFriendlyTokenizerName, getTokenCountAsync } from './tokenizers.js';
 import { copyText } from './utils.js';
+import { log } from './log.js';
 
 let PromptArrayItemForRawPromptDisplay;
 let priorPromptArrayItemForRawPromptDisplay;
@@ -34,7 +35,7 @@ export async function loadItemizedPrompts(chatId) {
 
         await eventSource.emit(event_types.ITEMIZED_PROMPTS_LOADED, { chatId: chatId });
     } catch {
-        console.log('Error loading itemized prompts for chat', chatId);
+        log.prompt.error('Error loading itemized prompts for chat', chatId);
         itemizedPrompts = [];
     }
 }
@@ -52,7 +53,7 @@ export async function saveItemizedPrompts(chatId) {
         await promptStorage.setItem(chatId, itemizedPrompts);
         await eventSource.emit(event_types.ITEMIZED_PROMPTS_SAVED, { chatId: chatId });
     } catch {
-        console.log('Error saving itemized prompts for chat', chatId);
+        log.prompt.error('Error saving itemized prompts for chat', chatId);
     }
 }
 
@@ -89,7 +90,7 @@ export async function deleteItemizedPrompts(chatId) {
         await promptStorage.removeItem(chatId);
         await eventSource.emit(event_types.ITEMIZED_PROMPTS_DELETED, { chatId: chatId, all: false });
     } catch {
-        console.log('Error deleting itemized prompts for chat', chatId);
+        log.prompt.error('Error deleting itemized prompts for chat', chatId);
     }
 }
 
@@ -102,7 +103,7 @@ export async function clearItemizedPrompts() {
         itemizedPrompts = [];
         await eventSource.emit(event_types.ITEMIZED_PROMPTS_DELETED, { all: true });
     } catch {
-        console.log('Error clearing itemized prompts');
+        log.prompt.error('Error clearing itemized prompts');
     }
 }
 
@@ -148,7 +149,6 @@ export async function itemizedParams(itemizedPrompts, thisPromptSet, incomingMes
 
     if (params.this_main_api == 'openai') {
         //for OAI API
-        //console.log('-- Counting OAI Tokens');
 
         //params.finalPromptTokens = itemizedPrompts[thisPromptSet].oaiTotalTokens;
         params.oaiMainTokens = itemizedPrompts[thisPromptSet].oaiMainTokens;
@@ -180,7 +180,6 @@ export async function itemizedParams(itemizedPrompts, thisPromptSet, incomingMes
         // Max context size - max completion tokens
         params.thisPrompt_max_context = (oai_settings.openai_max_context - oai_settings.openai_max_tokens);
 
-        //console.log('-- applying % on OAI tokens');
         params.oaiStartTokensPercentage = ((params.oaiStartTokens / (params.finalPromptTokens)) * 100).toFixed(2);
         params.storyStringTokensPercentage = (((params.afterScenarioAnchorTokens + params.beforeScenarioAnchorTokens + params.oaiPromptTokens) / (params.finalPromptTokens)) * 100).toFixed(2);
         params.ActualChatHistoryTokensPercentage = ((params.ActualChatHistoryTokens / (params.finalPromptTokens)) * 100).toFixed(2);
@@ -192,7 +191,6 @@ export async function itemizedParams(itemizedPrompts, thisPromptSet, incomingMes
         params.oaiSystemTokensPercentage = ((params.oaiSystemTokens / (params.finalPromptTokens)) * 100).toFixed(2);
     } else {
         //for non-OAI APIs
-        //console.log('-- Counting non-OAI Tokens');
         params.finalPromptTokens = await getTokenCountAsync(itemizedPrompts[thisPromptSet].finalPrompt);
         params.storyStringTokens = await getTokenCountAsync(itemizedPrompts[thisPromptSet].storyString) - params.worldInfoStringTokens;
         params.examplesStringTokens = await getTokenCountAsync(itemizedPrompts[thisPromptSet].examplesString);
@@ -214,7 +212,6 @@ export async function itemizedParams(itemizedPrompts, thisPromptSet, incomingMes
         params.thisPrompt_max_context = itemizedPrompts[thisPromptSet].this_max_context;
         params.thisPrompt_actual = params.thisPrompt_max_context - params.thisPrompt_padding;
 
-        //console.log('-- applying % on non-OAI tokens');
         params.storyStringTokensPercentage = ((params.storyStringTokens / (params.totalTokensInPrompt)) * 100).toFixed(2);
         params.ActualChatHistoryTokensPercentage = ((params.ActualChatHistoryTokens / (params.totalTokensInPrompt)) * 100).toFixed(2);
         params.promptBiasTokensPercentage = ((params.promptBiasTokens / (params.totalTokensInPrompt)) * 100).toFixed(2);
@@ -230,13 +227,13 @@ export function findItemizedPromptSet(itemizedPrompts, incomingMesId) {
     priorPromptArrayItemForRawPromptDisplay = -1;
 
     for (let i = 0; i < itemizedPrompts.length; i++) {
-        console.log(`looking for ${incomingMesId} vs ${itemizedPrompts[i].mesId}`);
+        log.prompt.debug(`looking for ${incomingMesId} vs ${itemizedPrompts[i].mesId}`);
         if (itemizedPrompts[i].mesId === incomingMesId) {
-            console.log(`found matching mesID ${i}`);
+            log.prompt.debug(`found matching mesID ${i}`);
             thisPromptSet = i;
             PromptArrayItemForRawPromptDisplay = i;
-            console.log(`wanting to raw display of ArrayItem: ${PromptArrayItemForRawPromptDisplay} which is mesID ${incomingMesId}`);
-            console.log(itemizedPrompts[thisPromptSet]);
+            log.prompt.debug(`wanting to raw display of ArrayItem: ${PromptArrayItemForRawPromptDisplay} which is mesID ${incomingMesId}`);
+            log.prompt.debug(itemizedPrompts[thisPromptSet]);
             break;
         } else if (itemizedPrompts[i].rawPrompt) {
             priorPromptArrayItemForRawPromptDisplay = i;
@@ -246,14 +243,14 @@ export function findItemizedPromptSet(itemizedPrompts, incomingMesId) {
 }
 
 export async function promptItemize(itemizedPrompts, requestedMesId) {
-    console.log('PROMPT ITEMIZE ENTERED');
+    log.prompt.debug('PROMPT ITEMIZE ENTERED');
     var incomingMesId = Number(requestedMesId);
-    console.debug(`looking for MesId ${incomingMesId}`);
+    log.prompt.debug(`looking for MesId ${incomingMesId}`);
     var thisPromptSet = findItemizedPromptSet(itemizedPrompts, incomingMesId);
 
     if (thisPromptSet === undefined) {
-        console.log(`couldnt find the right mesId. looked for ${incomingMesId}`);
-        console.log(itemizedPrompts);
+        log.prompt.debug(`couldnt find the right mesId. looked for ${incomingMesId}`);
+        log.prompt.debug(itemizedPrompts);
         return null;
     }
 
@@ -305,10 +302,9 @@ export async function promptItemize(itemizedPrompts, requestedMesId) {
     });
 
     popup.dlg.querySelector('#showRawPrompt').addEventListener('click', async function () {
-        //console.log(itemizedPrompts[PromptArrayItemForRawPromptDisplay].rawPrompt);
-        console.log(PromptArrayItemForRawPromptDisplay);
-        console.log(itemizedPrompts);
-        console.log(itemizedPrompts[PromptArrayItemForRawPromptDisplay].rawPrompt);
+        log.prompt.debug(PromptArrayItemForRawPromptDisplay);
+        log.prompt.debug(itemizedPrompts);
+        log.prompt.debug(itemizedPrompts[PromptArrayItemForRawPromptDisplay].rawPrompt);
 
         const rawPrompt = flatten(itemizedPrompts[PromptArrayItemForRawPromptDisplay].rawPrompt);
 
@@ -343,7 +339,7 @@ export function initItemizedPrompts() {
 
     $(document).on('pointerup', '.mes_prompt', async function () {
         let mesIdForItemization = $(this).closest('.mes').attr('mesId');
-        console.log(`looking for mesID: ${mesIdForItemization}`);
+        log.prompt.debug(`looking for mesID: ${mesIdForItemization}`);
         if (itemizedPrompts.length !== undefined && itemizedPrompts.length !== 0) {
             await promptItemize(itemizedPrompts, mesIdForItemization);
         }

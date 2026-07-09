@@ -11,6 +11,7 @@ import { enumTypes, SlashCommandEnumValue } from './slash-commands/SlashCommandE
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { slashCommandReturnHelper } from './slash-commands/SlashCommandReturnHelper.js';
 import { isTrueBoolean } from './utils.js';
+import { log } from './log.js';
 
 /**
  * @typedef {object} ToolInvocation
@@ -273,7 +274,7 @@ export class ToolManager {
         }
 
         if (this.#tools.has(name)) {
-            console.warn(`[ToolManager] A tool with the name "${name}" has already been registered. The definition will be overwritten.`);
+            log.gen.warn(`[ToolManager] A tool with the name "${name}" has already been registered. The definition will be overwritten.`);
         }
 
         const definition = new ToolDefinition(
@@ -287,7 +288,7 @@ export class ToolManager {
             stealth,
         );
         this.#tools.set(name, definition);
-        console.log('[ToolManager] Registered function tool:', definition);
+        log.gen.info('[ToolManager] Registered function tool:', definition);
     }
 
     /**
@@ -300,7 +301,7 @@ export class ToolManager {
         }
 
         this.#tools.delete(name);
-        console.log(`[ToolManager] Unregistered function tool: ${name}`);
+        log.gen.info(`[ToolManager] Unregistered function tool: ${name}`);
     }
 
     /**
@@ -333,7 +334,7 @@ export class ToolManager {
             const result = await tool.invoke(invokeParameters);
             return typeof result === 'string' ? result : JSON.stringify(result);
         } catch (error) {
-            console.error(`[ToolManager] An error occurred while invoking the tool "${name}":`, error);
+            log.gen.error(`[ToolManager] An error occurred while invoking the tool "${name}":`, error);
 
             if (error instanceof Error) {
                 error.cause = name;
@@ -374,7 +375,7 @@ export class ToolManager {
             const formatParameters = this.#parseParameters(parameters);
             return await tool.formatMessage(formatParameters);
         } catch (error) {
-            console.error(`[ToolManager] An error occurred while formatting the tool call message for "${name}":`, error);
+            log.gen.error(`[ToolManager] An error occurred while formatting the tool call message for "${name}":`, error);
             return `Invoking tool: ${name}`;
         }
     }
@@ -403,14 +404,14 @@ export class ToolManager {
         for (const tool of ToolManager.tools) {
             const register = await tool.shouldRegister();
             if (!register) {
-                console.log('[ToolManager] Skipping tool registration:', tool);
+                log.gen.debug('[ToolManager] Skipping tool registration:', tool);
                 continue;
             }
             tools.push(tool.toFunctionOpenAI());
         }
 
         if (tools.length) {
-            console.log('[ToolManager] Registered function tools:', tools);
+            log.gen.info('[ToolManager] Registered function tools:', tools);
 
             data.tools = tools;
             data.tool_choice = 'auto';
@@ -526,7 +527,7 @@ export class ToolManager {
                         delete targetToolCall[this.#INPUT_DELTA_KEY];
                         ToolManager.#applyToolCallDelta(targetToolCall, jsonDelta);
                     } catch (error) {
-                        console.warn('[ToolManager] Failed to apply input JSON delta:', error);
+                        log.gen.warn('[ToolManager] Failed to apply input JSON delta:', error);
                     }
                 }
             }
@@ -789,7 +790,7 @@ export class ToolManager {
                 continue;
             }
 
-            console.log('[ToolManager] Function tool call:', toolCall);
+            log.gen.debug('[ToolManager] Function tool call:', toolCall);
             const id = toolCall.id;
             const parameters = toolCall.function.arguments;
             const name = toolCall.function.name;
@@ -799,7 +800,7 @@ export class ToolManager {
             const toast = message && toastr.info(message, 'Tool Calling', { timeOut: 0 });
             const toolResult = await ToolManager.invokeFunctionTool(name, parameters);
             toastr.clear(toast);
-            console.log('[ToolManager] Function tool result:', result);
+            log.gen.debug('[ToolManager] Function tool result:', result);
 
             // Handle tool errors — still create an invocation so the LLM sees the failure
             if (toolResult instanceof Error) {

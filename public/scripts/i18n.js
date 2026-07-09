@@ -1,5 +1,6 @@
 import { registerDebugFunction } from './power-user.js';
 import { updateSecretDisplay } from './secrets.js';
+import { log } from './log.js';
 
 const storageKey = 'language';
 const overrideLanguage = localStorage.getItem(storageKey);
@@ -20,12 +21,12 @@ export const getCurrentLocale = () => localeFile;
  */
 export function addLocaleData(localeId, data) {
     if (!localeData) {
-        console.warn('Localization data not loaded yet. Additional data will not be added.');
+        log.ui.warn('Localization data not loaded yet. Additional data will not be added.');
         return;
     }
 
     if (localeId !== localeFile) {
-        console.debug('Ignoring addLocaleData call for different locale', localeId);
+        log.ui.debug('Ignoring addLocaleData call for different locale', localeId);
         return;
     }
 
@@ -100,7 +101,7 @@ export function t(strings, ...values) {
 export function translate(text, key = null) {
     const translationKey = key || text;
     if (translationKey === null || translationKey === undefined) {
-        console.trace('WARN: No translation key provided');
+        log.ui.error('WARN: No translation key provided');
         return '';
     }
     if (trackMissingDynamicTranslate && localeData && !Object.hasOwn(localeData, translationKey)) {
@@ -121,7 +122,7 @@ async function getLocaleData(language) {
     }
 
     const data = await fetch(`./locales/${language}.json`).then(response => {
-        console.log(`Loading locale data from ./locales/${language}.json`);
+        log.ui.debug(`Loading locale data from ./locales/${language}.json`);
         if (!response.ok) {
             return {};
         }
@@ -140,7 +141,7 @@ function findLang(language) {
 
     const isEn = language.startsWith('en'); // includes 'en', and more specific locales like 'en-us', 'en-au', etc
     if (!supportedLang && !isEn) {
-        console.warn(`Unsupported language: ${language}`);
+        log.ui.warn(`Unsupported language: ${language}`);
     }
     return supportedLang;
 }

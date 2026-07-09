@@ -7,6 +7,7 @@ import { getStringHash } from './utils.js';
 import { kai_flags, kai_settings } from './kai-settings.js';
 import { textgen_types, textgenerationwebui_settings as textgen_settings, getTextGenServer, getTextGenModel } from './textgen-settings.js';
 import { getCurrentDreamGenModelTokenizer, getCurrentOpenRouterModelTokenizer, openRouterModels } from './textgen-models.js';
+import { log } from './log.js';
 export { BYTES_PER_TOKEN as CHARACTERS_PER_TOKEN_RATIO };
 
 export const BYTES_PER_TOKEN = 3.35;
@@ -170,31 +171,31 @@ export function guesstimate(str) {
 
 async function loadTokenCache() {
     try {
-        console.debug('Chat Completions: loading token cache');
+        log.tok.debug('Chat Completions: loading token cache');
         tokenCache = await objectStore.getItem('tokenCache') || {};
     } catch (e) {
-        console.log('Chat Completions: unable to load token cache, using default value', e);
+        log.tok.error('Chat Completions: unable to load token cache, using default value', e);
         tokenCache = {};
     }
 }
 
 export async function saveTokenCache() {
     try {
-        console.debug('Chat Completions: saving token cache');
+        log.tok.debug('Chat Completions: saving token cache');
         await objectStore.setItem('tokenCache', tokenCache);
     } catch (e) {
-        console.log('Chat Completions: unable to save token cache', e);
+        log.tok.error('Chat Completions: unable to save token cache', e);
     }
 }
 
 async function resetTokenCache() {
     try {
-        console.debug('Chat Completions: resetting token cache');
+        log.tok.debug('Chat Completions: resetting token cache');
         Object.keys(tokenCache).forEach(key => delete tokenCache[key]);
         await objectStore.removeItem('tokenCache');
         toastr.success('Token cache cleared. Please reload the chat to re-tokenize it.');
     } catch (e) {
-        console.log('Chat Completions: unable to reset token cache', e);
+        log.tok.error('Chat Completions: unable to reset token cache', e);
     }
 }
 
@@ -226,7 +227,7 @@ export function selectTokenizer(tokenizerId) {
     if (tokenizerId !== power_user.tokenizer) {
         const tokenizer = getAvailableTokenizers().find(tokenizer => tokenizer.tokenizerId === tokenizerId);
         if (!tokenizer) {
-            console.warn('Failed to find tokenizer with id', tokenizerId);
+            log.tok.warn('Failed to find tokenizer with id', tokenizerId);
             return;
         }
         $('#tokenizer').val(tokenizer.tokenizerId).trigger('change');
@@ -395,7 +396,7 @@ function callTokenizer(type, str) {
         default: {
             const endpointUrl = TOKENIZER_URLS[type]?.count;
             if (!endpointUrl) {
-                console.warn('Unknown tokenizer type', type);
+                log.tok.warn('Unknown tokenizer type', type);
                 return apiFailureTokenCount(str);
             }
             return countTokensFromServer(endpointUrl, str);
@@ -425,7 +426,7 @@ function callTokenizerAsync(type, str) {
             default: {
                 const endpointUrl = TOKENIZER_URLS[type]?.count;
                 if (!endpointUrl) {
-                    console.warn('Unknown tokenizer type', type);
+                    log.tok.warn('Unknown tokenizer type', type);
                     return resolve(apiFailureTokenCount(str));
                 }
                 return countTokensFromServer(endpointUrl, str, resolve);
@@ -481,7 +482,7 @@ export async function getTokenCountAsync(str, padding = undefined) {
     const result = (await callTokenizerAsync(tokenizerType, str)) + padding;
 
     if (isNaN(result)) {
-        console.warn('Token count calculation returned NaN');
+        log.tok.warn('Token count calculation returned NaN');
         return 0;
     }
 
@@ -537,7 +538,7 @@ export function getTokenCount(str, padding = undefined) {
     const result = callTokenizer(tokenizerType, str) + padding;
 
     if (isNaN(result)) {
-        console.warn('Token count calculation returned NaN');
+        log.tok.warn('Token count calculation returned NaN');
         return 0;
     }
 
@@ -900,7 +901,7 @@ function getTokenCacheObject() {
             chatId = characters[this_chid].chat;
         }
     } catch {
-        console.log('No character / group selected. Using default cache item');
+        log.tok.debug('No character / group selected. Using default cache item');
     }
 
     if (typeof tokenCache[chatId] !== 'object') {
@@ -1017,7 +1018,7 @@ function countTokensFromTextgenAPI(str, resolve) {
 }
 
 function apiFailureTokenCount(str) {
-    console.error('Error counting tokens');
+    log.tok.error('Error counting tokens');
     let shouldTryAgain = false;
 
     if (!sessionStorage.getItem(TOKENIZER_WARNING_KEY)) {
@@ -1166,13 +1167,13 @@ export function getTextTokens(tokenizerType, str) {
             const tokenizerEndpoints = TOKENIZER_URLS[tokenizerType];
             if (!tokenizerEndpoints) {
                 apiFailureTokenCount(str);
-                console.warn('Unknown tokenizer type', tokenizerType);
+                log.tok.warn('Unknown tokenizer type', tokenizerType);
                 return [];
             }
             let endpointUrl = tokenizerEndpoints.encode;
             if (!endpointUrl) {
                 apiFailureTokenCount(str);
-                console.warn('This tokenizer type does not support encoding', tokenizerType);
+                log.tok.warn('This tokenizer type does not support encoding', tokenizerType);
                 return [];
             }
             if (tokenizerType === tokenizers.OPENAI) {
@@ -1196,12 +1197,12 @@ export function decodeTextTokens(tokenizerType, ids) {
     }
     const tokenizerEndpoints = TOKENIZER_URLS[tokenizerType];
     if (!tokenizerEndpoints) {
-        console.warn('Unknown tokenizer type', tokenizerType);
+        log.tok.warn('Unknown tokenizer type', tokenizerType);
         return { text: '', chunks: [] };
     }
     let endpointUrl = tokenizerEndpoints.decode;
     if (!endpointUrl) {
-        console.warn('This tokenizer type does not support decoding', tokenizerType);
+        log.tok.warn('This tokenizer type does not support decoding', tokenizerType);
         return { text: '', chunks: [] };
     }
     if (tokenizerType === tokenizers.OPENAI) {

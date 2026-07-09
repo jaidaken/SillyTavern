@@ -57,6 +57,7 @@ import { t } from './i18n.js';
 import { humanizedDateTime } from './RossAscends-mods.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, SCROLL_BEHAVIOR, SWIPE_DIRECTION } from './constants.js';
+import { log } from './log.js';
 
 /**
  * @typedef {Object} FileAttachment
@@ -235,7 +236,7 @@ export async function populateFileAttachment(message, inputId = 'file_form_input
                         base64Data = convertTextToBase64(fileText);
                     } catch (error) {
                         toastr.error(String(error), t`Could not convert file`);
-                        console.error('Could not convert file', error);
+                        log.chat.error('Could not convert file', error);
                     }
                 }
 
@@ -258,7 +259,7 @@ export async function populateFileAttachment(message, inputId = 'file_form_input
             }
         }
     } catch (error) {
-        console.error('Could not upload file', error);
+        log.chat.error('Could not upload file', error);
         toastr.error(t`Either the file is corrupted or its format is not supported.`, t`Could not upload the file`);
     } finally {
         $('#file_form').trigger('reset');
@@ -291,7 +292,7 @@ export async function uploadFileAttachment(fileName, base64Data) {
         return responseData.path;
     } catch (error) {
         toastr.error(String(error), t`Could not upload file`);
-        console.error('Could not upload file', error);
+        log.chat.error('Could not upload file', error);
     }
 }
 
@@ -317,7 +318,7 @@ export async function getFileAttachment(url) {
         return text;
     } catch (error) {
         toastr.error(error, t`Could not download file`);
-        console.error('Could not download file', error);
+        log.chat.error('Could not download file', error);
     }
 }
 
@@ -394,26 +395,26 @@ async function onFileAttach(fileList) {
  */
 async function deleteMessageFile(messageBlock, messageId, fileIndex) {
     if (isNaN(messageId) || isNaN(fileIndex)) {
-        console.warn('Invalid message ID or file index');
+        log.chat.warn('Invalid message ID or file index');
         return;
     }
 
     const confirm = await callGenericPopup('Are you sure you want to delete this file?', POPUP_TYPE.CONFIRM);
 
     if (confirm !== POPUP_RESULT.AFFIRMATIVE) {
-        console.debug('Delete file cancelled');
+        log.chat.debug('Delete file cancelled');
         return;
     }
 
     const message = chat[messageId];
 
     if (!Array.isArray(message?.extra?.files)) {
-        console.debug('Message has no files');
+        log.chat.debug('Message has no files');
         return;
     }
 
     if (fileIndex < 0 || fileIndex >= message.extra.files.length) {
-        console.warn('Invalid file index for message');
+        log.chat.warn('Invalid file index for message');
         return;
     }
 
@@ -433,26 +434,26 @@ async function deleteMessageFile(messageBlock, messageId, fileIndex) {
  */
 async function viewMessageFile(messageId, fileIndex) {
     if (isNaN(messageId) || isNaN(fileIndex)) {
-        console.warn('Invalid message ID or file index');
+        log.chat.warn('Invalid message ID or file index');
         return;
     }
 
     const message = chat[messageId];
 
     if (!Array.isArray(message?.extra?.files)) {
-        console.debug('Message has no files');
+        log.chat.debug('Message has no files');
         return;
     }
 
     if (fileIndex < 0 || fileIndex >= message.extra.files.length) {
-        console.warn('Invalid file index for message');
+        log.chat.warn('Invalid file index for message');
         return;
     }
 
     const messageFile = message.extra.files[fileIndex];
 
     if (!messageFile) {
-        console.debug('Message has no file or it is empty');
+        log.chat.debug('Message has no file or it is empty');
         return;
     }
 
@@ -469,7 +470,7 @@ function embedMessageFile(messageId, messageBlock) {
     const message = chat[messageId];
 
     if (!message) {
-        console.warn('Failed to find message with id', messageId);
+        log.chat.warn('Failed to find message with id', messageId);
         return;
     }
 
@@ -874,7 +875,7 @@ export function isExternalMediaAllowed() {
  */
 function expandMessageMedia(messageId, mediaIndex) {
     if (isNaN(messageId) || isNaN(mediaIndex)) {
-        console.warn('Invalid message ID or media index');
+        log.chat.warn('Invalid message ID or media index');
         return;
     }
 
@@ -882,7 +883,7 @@ function expandMessageMedia(messageId, mediaIndex) {
     const message = chat[messageId];
 
     if (!Array.isArray(message?.extra?.media) || message.extra.media.length === 0) {
-        console.warn('Message has no media to expand');
+        log.chat.warn('Message has no media to expand');
         return;
     }
 
@@ -894,7 +895,7 @@ function expandMessageMedia(messageId, mediaIndex) {
     }
 
     if (mediaAttachment.type === MEDIA_TYPE.AUDIO) {
-        console.warn('Audio media cannot be expanded');
+        log.chat.warn('Audio media cannot be expanded');
         return;
     }
 
@@ -926,7 +927,7 @@ function expandMessageMedia(messageId, mediaIndex) {
                 return getVideoElement();
         }
 
-        console.warn('Unsupported media type for enlargement:', mediaAttachment.type);
+        log.chat.warn('Unsupported media type for enlargement:', mediaAttachment.type);
         return getImageElement();
     }
 
@@ -977,7 +978,7 @@ function expandMessageMedia(messageId, mediaIndex) {
  */
 async function deleteMessageMedia(messageId, mediaIndex, messageBlock) {
     if (isNaN(messageId) || isNaN(mediaIndex)) {
-        console.warn('Invalid message ID or media index');
+        log.chat.warn('Invalid message ID or media index');
         return;
     }
 
@@ -1021,12 +1022,12 @@ async function deleteMessageMedia(messageId, mediaIndex, messageBlock) {
     const message = chat[messageId];
 
     if (!Array.isArray(message?.extra?.media)) {
-        console.debug('Message has no media');
+        log.chat.debug('Message has no media');
         return;
     }
 
     if (mediaIndex < 0 || mediaIndex >= message.extra.media.length) {
-        console.warn('Invalid media index for message');
+        log.chat.warn('Invalid media index for message');
         return;
     }
 
@@ -1067,7 +1068,7 @@ async function deleteMessageMedia(messageId, mediaIndex, messageBlock) {
  */
 async function switchMessageMediaDisplay(messageId, messageBlock, targetDisplay) {
     if (isNaN(messageId)) {
-        console.warn('Invalid message ID');
+        log.chat.warn('Invalid message ID');
         return;
     }
 
@@ -1075,7 +1076,7 @@ async function switchMessageMediaDisplay(messageId, messageBlock, targetDisplay)
     const message = chat[messageId];
 
     if (!message) {
-        console.warn('Message not found for ID', messageId);
+        log.chat.warn('Message not found for ID', messageId);
         return;
     }
 
@@ -1114,7 +1115,7 @@ export async function deleteMediaFromServer(url, silent = false) {
         return true;
     } catch (error) {
         toastr.error(String(error), t`Could not delete image`);
-        console.error('Could not delete image', error);
+        log.chat.error('Could not delete image', error);
         return false;
     }
 }
@@ -1145,7 +1146,7 @@ export async function deleteFileFromServer(url, silent = false) {
         return true;
     } catch (error) {
         toastr.error(String(error), t`Could not delete file`);
-        console.error('Could not delete file', error);
+        log.chat.error('Could not delete file', error);
         return false;
     }
 }
@@ -1260,12 +1261,12 @@ async function moveAttachment(attachment, source, callback) {
     const result = await callGenericPopup(template, POPUP_TYPE.CONFIRM, '', { wide: false, large: false, okButton: 'Move', cancelButton: 'Cancel' });
 
     if (result !== POPUP_RESULT.AFFIRMATIVE) {
-        console.debug('Move attachment cancelled');
+        log.chat.debug('Move attachment cancelled');
         return;
     }
 
     if (selectedTarget === source) {
-        console.debug('Move attachment cancelled: same source and target');
+        log.chat.debug('Move attachment cancelled: same source and target');
         return;
     }
 
@@ -1517,7 +1518,7 @@ async function openAttachmentManager() {
         });
         const result = await callGenericPopup(targetSelectTemplate, POPUP_TYPE.CONFIRM, '', { wide: false, large: false, okButton: 'Upload', cancelButton: 'Cancel' });
         if (result !== POPUP_RESULT.AFFIRMATIVE) {
-            console.log('File upload cancelled');
+            log.chat.debug('File upload cancelled');
             return;
         }
         for (const file of files) {
@@ -1656,16 +1657,16 @@ function getAvailableTargets() {
  */
 async function runScraper(scraperId, target, callback) {
     try {
-        console.log(`Running scraper ${scraperId} for ${target}`);
+        log.chat.debug(`Running scraper ${scraperId} for ${target}`);
         const files = await ScraperManager.runDataBankScraper(scraperId);
 
         if (!Array.isArray(files)) {
-            console.warn('Scraping returned nothing');
+            log.chat.warn('Scraping returned nothing');
             return;
         }
 
         if (files.length === 0) {
-            console.warn('Scraping returned no files');
+            log.chat.warn('Scraping returned no files');
             toastr.info(t`No files were scraped.`, t`Data Bank`);
             return;
         }
@@ -1677,7 +1678,7 @@ async function runScraper(scraperId, target, callback) {
         toastr.success(t`Scraped ${files.length} files from ${scraperId} to ${target}.`, t`Data Bank`);
         callback();
     } catch (error) {
-        console.error('Scraping failed', error);
+        log.chat.error('Scraping failed', error);
         toastr.error(t`Check browser console for details.`, t`Scraping failed`);
     }
 }
@@ -1706,7 +1707,7 @@ export async function uploadFileAttachmentToServer(file, target) {
             base64Data = convertTextToBase64(fileText);
         } catch (error) {
             toastr.error(String(error), t`Could not convert file`);
-            console.error('Could not convert file', error);
+            log.chat.error('Could not convert file', error);
         }
     } else {
         const fileText = await file.text();
@@ -1843,12 +1844,12 @@ async function verifyAttachmentsForSource(source) {
         const verifiedUrls = await response.json();
         for (const attachment of attachments) {
             if (verifiedUrls[attachment.url] === false) {
-                console.log('Deleting orphaned attachment', attachment);
+                log.chat.debug('Deleting orphaned attachment', attachment);
                 await deleteAttachment(attachment, source, () => { }, false);
             }
         }
     } catch (error) {
-        console.error('Attachment verification failed', error);
+        log.chat.error('Attachment verification failed', error);
     }
 }
 
@@ -1886,12 +1887,12 @@ export function restoreNeutralChat() {
  */
 export function registerFileConverter(mimeType, converter) {
     if (typeof mimeType !== 'string' || typeof converter !== 'function') {
-        console.error('Invalid converter registration');
+        log.chat.error('Invalid converter registration');
         return;
     }
 
     if (Object.keys(converters).includes(mimeType)) {
-        console.error('Converter already registered');
+        log.chat.error('Converter already registered');
         return;
     }
 
@@ -2002,7 +2003,7 @@ export function addDOMPurifyHooks() {
                         const [url] = srcsetUrl.trim().split(' ');
 
                         if (isExternalUrl(url)) {
-                            console.warn('External media blocked', url);
+                            log.chat.warn('External media blocked', url);
                             node.remove();
                             mediaBlocked = true;
                             break;
@@ -2011,13 +2012,13 @@ export function addDOMPurifyHooks() {
                 }
 
                 if (src && isExternalUrl(src)) {
-                    console.warn('External media blocked', src);
+                    log.chat.warn('External media blocked', src);
                     mediaBlocked = true;
                     node.remove();
                 }
 
                 if (data && isExternalUrl(data)) {
-                    console.warn('External media blocked', data);
+                    log.chat.warn('External media blocked', data);
                     mediaBlocked = true;
                     node.remove();
                 }
@@ -2071,7 +2072,7 @@ async function onImageSwiped(messageId, element, direction) {
     const media = message?.extra?.media;
 
     if (!message || !Array.isArray(media) || media.length === 0) {
-        console.warn('No media found in the message');
+        log.chat.warn('No media found in the message');
         return;
     }
 
@@ -2079,14 +2080,14 @@ async function onImageSwiped(messageId, element, direction) {
     const mediaDisplay = getMediaDisplay(message);
 
     if (mediaDisplay !== MEDIA_DISPLAY.GALLERY) {
-        console.warn('Image swiping is only supported for gallery media display');
+        log.chat.warn('Image swiping is only supported for gallery media display');
         return;
     }
 
     await eventSource.emit(event_types.IMAGE_SWIPED, { message, element, direction });
 
     if (media.length === 1) {
-        console.warn('Only one media item in the message, swiping is not applicable');
+        log.chat.warn('Only one media item in the message, swiping is not applicable');
         return;
     }
 
@@ -2168,7 +2169,7 @@ export function initChatUtilities() {
                 updateChatMetadata(metadata, true);
                 await printMessages();
             } catch (error) {
-                console.error('Error importing assistant chat:', error);
+                log.chat.error('Error importing assistant chat:', error);
                 toastr.error(t`It's either corrupted or not a valid JSONL file.`, t`Failed to import chat`);
             }
         };
@@ -2227,7 +2228,7 @@ export function initChatUtilities() {
         const withTab = $(this).attr('data-tab');
 
         if (!bro.length) {
-            console.error('Could not find editor with id', broId);
+            log.chat.error('Could not find editor with id', broId);
             return;
         }
 

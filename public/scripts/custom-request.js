@@ -5,6 +5,7 @@ import { extractReasoningFromData } from './reasoning.js';
 import { formatInstructModeChat, formatInstructModePrompt, getInstructStoppingSequences } from './instruct-mode.js';
 import { getStreamingReply, tryParseStreamingError, createGenerationParameters, settingsToUpdate, oai_settings } from './openai.js';
 import EventSourceStream from './sse-stream.js';
+import { log } from './log.js';
 
 // #region Type Definitions
 /**
@@ -300,7 +301,7 @@ export class TextCompletionService {
                     requestData.stop = stoppingStrings;
                     requestData.stopping_strings = stoppingStrings;
                 } else {
-                    console.warn(`Instruct preset "${instructName}" not found, using basic formatting`);
+                    log.net.warn(`Instruct preset "${instructName}" not found, using basic formatting`);
                     requestData.prompt = prompt.map(x => x.content).join('\n\n');
                 }
             } else {
@@ -319,10 +320,10 @@ export class TextCompletionService {
                     // Convert preset to payload and merge with custom data
                     requestData = this.presetToGeneratePayload(preset, {}, requestData);
                 } else {
-                    console.warn(`Preset "${presetName}" not found, continuing with default settings`);
+                    log.net.warn(`Preset "${presetName}" not found, continuing with default settings`);
                 }
             } else {
-                console.warn('Preset manager not found, continuing with default settings');
+                log.net.warn('Preset manager not found, continuing with default settings');
             }
         }
 
@@ -554,10 +555,10 @@ export class ChatCompletionService {
                     // Convert preset to payload and merge with custom parameters
                     requestData = await this.presetToGeneratePayload(preset, {}, requestData);
                 } else {
-                    console.warn(`Preset "${presetName}" not found, continuing with default settings`);
+                    log.net.warn(`Preset "${presetName}" not found, continuing with default settings`);
                 }
             } else {
-                console.warn('Preset manager not found, continuing with default settings');
+                log.net.warn('Preset manager not found, continuing with default settings');
             }
         }
 

@@ -15,6 +15,7 @@ import { textgen_types } from './textgen-settings.js';
 import { getCurrentUserHandle } from './user.js';
 import { copyText, isTrueBoolean, uuidv4 } from './utils.js';
 import { accountStorage } from './util/AccountStorage.js';
+import { log } from './log.js';
 
 export const SECRET_KEYS = {
     HORDE: 'api_key_horde',
@@ -300,7 +301,7 @@ export async function canViewSecrets() {
         const data = await response.json();
         return data?.allowKeysExposure === true;
     } catch (error) {
-        console.error('Error getting secrets settings:', error);
+        log.settings.error('Error getting secrets settings:', error);
         return null;
     }
 }
@@ -349,7 +350,7 @@ export let secret_state = {};
 export async function writeSecret(key, value, label, { allowEmpty } = {}) {
     try {
         if (!value && !allowEmpty) {
-            console.warn(`No value provided for ${key} in writeSecret, redirecting to deleteSecret`);
+            log.settings.warn(`No value provided for ${key} in writeSecret, redirecting to deleteSecret`);
             await deleteSecret(key);
             return null;
         }
@@ -375,7 +376,7 @@ export async function writeSecret(key, value, label, { allowEmpty } = {}) {
         await eventSource.emit(event_types.SECRET_WRITTEN, key);
         return id;
     } catch (error) {
-        console.error(`Could not write secret value: ${key}`, error);
+        log.settings.error(`Could not write secret value: ${key}`, error);
         return null;
     }
 }
@@ -400,7 +401,7 @@ export async function deleteSecret(key, id) {
             await eventSource.emit(event_types.SECRET_DELETED, key);
         }
     } catch (error) {
-        console.error(`Could not delete secret value: ${key}`, error);
+        log.settings.error(`Could not delete secret value: ${key}`, error);
     }
 }
 
@@ -421,7 +422,7 @@ export async function readSecretState() {
             updateInputDataLists();
         }
     } catch {
-        console.error('Could not read secrets file');
+        log.settings.error('Could not read secrets file');
     }
 }
 
@@ -446,7 +447,7 @@ export async function findSecret(key, id) {
         const data = await response.json();
         return data.value;
     } catch {
-        console.error('Could not find secret value: ', key);
+        log.settings.error('Could not find secret value: ', key);
         return null;
     }
 }
@@ -471,7 +472,7 @@ export async function rotateSecret(key, id) {
             await eventSource.emit(event_types.SECRET_ROTATED, key);
         }
     } catch (error) {
-        console.error(`Could not rotate secret value: ${key}`, error);
+        log.settings.error(`Could not rotate secret value: ${key}`, error);
     }
 }
 
@@ -494,7 +495,7 @@ export async function renameSecret(key, id, label) {
             await eventSource.emit(event_types.SECRET_EDITED, key);
         }
     } catch (error) {
-        console.error(`Could not rename secret value: ${key}`, error);
+        log.settings.error(`Could not rename secret value: ${key}`, error);
     }
 }
 
@@ -590,7 +591,7 @@ export async function checkOpenRouterAuth() {
             }
         } catch (err) {
             toastr.error('Could not verify OpenRouter token. Please try again.');
-            console.error('OpenRouter OAuth error:', err);
+            log.settings.error('OpenRouter OAuth error:', err);
         } finally {
             // Remove the code from the URL
             const currentUrl = window.location.href;
@@ -618,7 +619,7 @@ function updateInputDataLists() {
     for (const [key, inputSelector] of Object.entries(INPUT_MAP)) {
         const inputElements = document.querySelectorAll(inputSelector);
         if (inputElements.length === 0) {
-            console.warn(`No input elements found for key: ${key}`);
+            log.settings.warn(`No input elements found for key: ${key}`);
             continue;
         }
 
@@ -1139,7 +1140,7 @@ export async function initSecrets() {
     $(document).on('click', '.manage-api-keys', async function () {
         const key = $(this).data('key');
         if (!key || !Object.values(SECRET_KEYS).includes(key)) {
-            console.error('Invalid key for manage-api-keys:', key);
+            log.settings.error('Invalid key for manage-api-keys:', key);
             return;
         }
         await openKeyManagerDialog(key);
@@ -1186,7 +1187,7 @@ export async function initSecrets() {
             }
             display.text(`$${data.remaining.toFixed(2)}`);
         } catch (error) {
-            console.error('Failed to fetch OpenRouter credits:', error);
+            log.settings.error('Failed to fetch OpenRouter credits:', error);
             display.text('');
             toastr.error(t`Could not fetch OpenRouter credits. Please try again.`);
         }
@@ -1277,7 +1278,7 @@ export async function initSecrets() {
             });
             display.append(infoBtn);
         } catch (error) {
-            console.error('Failed to fetch NanoGPT credits:', error);
+            log.settings.error('Failed to fetch NanoGPT credits:', error);
             display.empty().text('');
             toastr.error(t`Could not fetch NanoGPT credits. Please try again.`);
         }

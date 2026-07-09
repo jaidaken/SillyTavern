@@ -3,6 +3,7 @@ import { POPUP_RESULT, POPUP_TYPE, callGenericPopup } from './popup.js';
 import { canViewSecrets } from './secrets.js';
 import { renderTemplateAsync } from './templates.js';
 import { ensureImageFormatSupported, getBase64Async, humanFileSize } from './utils.js';
+import { log } from './log.js';
 
 /**
  * @type {import('../../src/users.js').UserViewModel} Logged in user
@@ -72,7 +73,7 @@ async function getCurrentUser() {
         currentUser = await response.json();
         $('#admin_button').toggle(accountsEnabled && isAdmin());
     } catch (error) {
-        console.error('Error getting current user:', error);
+        log.users.error('Error getting current user:', error);
     }
 }
 
@@ -93,7 +94,7 @@ async function getUsers() {
 
         return response.json();
     } catch (error) {
-        console.error('Error getting users:', error);
+        log.users.error('Error getting users:', error);
     }
 }
 
@@ -119,7 +120,7 @@ async function enableUser(handle, callback) {
 
         callback();
     } catch (error) {
-        console.error('Error enabling user:', error);
+        log.users.error('Error enabling user:', error);
     }
 }
 
@@ -139,7 +140,7 @@ async function disableUser(handle, callback) {
 
         callback();
     } catch (error) {
-        console.error('Error disabling user:', error);
+        log.users.error('Error disabling user:', error);
     }
 }
 
@@ -165,7 +166,7 @@ async function promoteUser(handle, callback) {
 
         callback();
     } catch (error) {
-        console.error('Error promoting user:', error);
+        log.users.error('Error promoting user:', error);
     }
 }
 
@@ -190,7 +191,7 @@ async function demoteUser(handle, callback) {
 
         callback();
     } catch (error) {
-        console.error('Error demoting user:', error);
+        log.users.error('Error demoting user:', error);
     }
 }
 
@@ -242,7 +243,7 @@ async function createUser(form, callback) {
         form.reset();
         callback();
     } catch (error) {
-        console.error('Error creating user:', error);
+        log.users.error('Error creating user:', error);
     }
 }
 
@@ -284,7 +285,7 @@ async function backupUserData(handle, callback) {
         URL.revokeObjectURL(url);
         callback();
     } catch (error) {
-        console.error('Error backing up user data:', error);
+        log.users.error('Error backing up user data:', error);
     }
 }
 
@@ -334,7 +335,7 @@ async function changePassword(handle, callback) {
         toastr.success('Password changed successfully', 'Password Changed');
         callback();
     } catch (error) {
-        console.error('Error changing password:', error);
+        log.users.error('Error changing password:', error);
     }
 }
 
@@ -388,7 +389,7 @@ async function deleteUser(handle, callback) {
         toastr.success('User deleted successfully', 'User Deleted');
         callback();
     } catch (error) {
-        console.error('Error deleting user:', error);
+        log.users.error('Error deleting user:', error);
     }
 }
 
@@ -425,7 +426,7 @@ async function resetSettings(handle, callback) {
         toastr.success('Settings reset successfully', 'Settings Reset');
         callback();
     } catch (error) {
-        console.error('Error resetting settings:', error);
+        log.users.error('Error resetting settings:', error);
     }
 }
 
@@ -461,7 +462,7 @@ async function changeName(handle, name, callback) {
         toastr.success('Name changed successfully', 'Name Changed');
         callback();
     } catch (error) {
-        console.error('Error changing name:', error);
+        log.users.error('Error changing name:', error);
     }
 }
 
@@ -497,7 +498,7 @@ async function restoreSnapshot(name, callback) {
 
         callback();
     } catch (error) {
-        console.error('Error restoring snapshot:', error);
+        log.users.error('Error restoring snapshot:', error);
     }
 }
 
@@ -522,7 +523,7 @@ async function loadSnapshotContent(name) {
 
         return response.text();
     } catch (error) {
-        console.error('Error loading snapshot content:', error);
+        log.users.error('Error loading snapshot content:', error);
     }
 }
 
@@ -550,7 +551,7 @@ async function getSnapshots() {
         const snapshots = await response.json();
         return snapshots;
     } catch (error) {
-        console.error('Error getting settings snapshots:', error);
+        log.users.error('Error getting settings snapshots:', error);
         return [];
     }
 }
@@ -576,7 +577,7 @@ async function makeSnapshot(callback) {
         toastr.success('Snapshot created successfully', 'Snapshot Created');
         callback();
     } catch (error) {
-        console.error('Error making snapshot:', error);
+        log.users.error('Error making snapshot:', error);
     }
 }
 
@@ -667,7 +668,7 @@ async function resetEverything(callback) {
         toastr.success('Everything reset successfully', 'Reset Everything');
         callback();
     } catch (error) {
-        console.error('Error resetting everything:', error);
+        log.users.error('Error resetting everything:', error);
     }
 }
 
@@ -773,7 +774,7 @@ async function changeAvatar(handle, avatar) {
             return;
         }
     } catch (error) {
-        console.error('Error changing avatar:', error);
+        log.users.error('Error changing avatar:', error);
     }
 }
 
@@ -893,7 +894,7 @@ async function slugify(text) {
 
         return response.text();
     } catch (error) {
-        console.error('Error slugifying text:', error);
+        log.users.error('Error slugifying text:', error);
         return text;
     }
 }
@@ -912,7 +913,7 @@ async function extendUserSession() {
             throw new Error('Ping did not succeed', { cause: response.status });
         }
     } catch (error) {
-        console.error('Failed to extend user session', error);
+        log.users.error('Failed to extend user session', error);
     }
 }
 

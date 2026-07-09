@@ -20,6 +20,7 @@ import {
 } from './utils.js';
 import { BIAS_CACHE, createNewLogitBiasEntry, displayLogitBias, getLogitBiasListResult } from './logit-bias.js';
 import { SECRET_KEYS, secret_state, writeSecret } from './secrets.js';
+import { log } from './log.js';
 
 const default_preamble = '[ Style: chat, complex, sensory, visceral ]';
 const default_order = [1, 5, 0, 2, 3, 4];
@@ -439,7 +440,7 @@ function getBadWordIds(banned_tokens, tokenizerType) {
     const cacheKey = `${getStringHash(banned_tokens)}-${tokenizerType}`;
 
     if (cacheKey in badWordsCache && Array.isArray(badWordsCache[cacheKey])) {
-        console.debug(`Bad words ids cache hit for "${banned_tokens}"`, badWordsCache[cacheKey]);
+        log.net.debug(`Bad words ids cache hit for "${banned_tokens}"`, badWordsCache[cacheKey]);
         return badWordsCache[cacheKey];
     }
 
@@ -469,7 +470,7 @@ function getBadWordIds(banned_tokens, tokenizerType) {
                     throw new Error('Not an array of integers');
                 }
             } catch (err) {
-                console.log(`Failed to parse bad word token list: ${trimmed}`, err);
+                log.net.error(`Failed to parse bad word token list: ${trimmed}`, err);
             }
         } else {
             // Apply permutations
@@ -479,7 +480,7 @@ function getBadWordIds(banned_tokens, tokenizerType) {
     }
 
     // Cache the result
-    console.debug(`Bad words ids for "${banned_tokens}"`, result);
+    log.net.debug(`Bad words ids for "${banned_tokens}"`, result);
     badWordsCache[cacheKey] = result;
 
     return result;
@@ -513,7 +514,7 @@ function getBadWordPermutations(text) {
 }
 
 export function getNovelGenerationData(finalPrompt, settings, maxLength, isImpersonate, isContinue, _cfgValues, type) {
-    console.debug('NovelAI generation data for', type);
+    log.net.debug('NovelAI generation data for', type);
     const isKayra = nai_settings.model_novel.includes('kayra');
     const isErato = nai_settings.model_novel.includes('erato');
 
@@ -560,7 +561,7 @@ export function getNovelGenerationData(finalPrompt, settings, maxLength, isImper
     }
 
     if (power_user.console_log_prompts) {
-        console.log(finalPrompt);
+        log.net.debug(finalPrompt);
     }
 
 
@@ -638,7 +639,7 @@ function getTokenizerTypeForModel(model) {
 
 // Sort the samplers by the order array
 function sortItemsByOrder(orderArray) {
-    console.debug('Preset samplers order: ' + orderArray);
+    log.net.debug('Preset samplers order: ' + orderArray);
     const $draggableItems = $('#novel_order');
 
     // Sort the items by the order array
@@ -670,7 +671,7 @@ function saveSamplingOrder() {
         }
     });
     nai_settings.order = order;
-    console.log('Samplers reordered:', nai_settings.order);
+    log.net.info('Samplers reordered:', nai_settings.order);
     saveSettingsDebounced();
 }
 
@@ -877,7 +878,7 @@ export function initNovelAISettings() {
         }
 
         if (!secret_state[SECRET_KEYS.NOVEL]) {
-            console.log('No secret key saved for NovelAI');
+            log.net.debug('No secret key saved for NovelAI');
             return;
         }
 
@@ -929,7 +930,7 @@ export function initNovelAISettings() {
         const $item = $(this).closest('[data-id]');
         const isEnabled = !$item.hasClass('disabled');
         $item.toggleClass('disabled', isEnabled);
-        console.log('Sampler toggled:', $item.data('id'), !isEnabled);
+        log.net.info('Sampler toggled:', $item.data('id'), !isEnabled);
         saveSamplingOrder();
     });
 

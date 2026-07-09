@@ -27,6 +27,7 @@ import { getCurrentDreamGenModelTokenizer, getCurrentOpenRouterModelTokenizer, l
 import { ENCODE_TOKENIZERS, TEXTGEN_TOKENIZERS, TOKENIZER_SUPPORTED_KEY, getTextTokens, getTokenizerBestMatch, tokenizers } from './tokenizers.js';
 import { AbortReason } from './util/AbortReason.js';
 import { getSortableDelay, onlyUnique, arraysEqual, isObject } from './utils.js';
+import { log } from './log.js';
 
 export const textgen_types = {
     OOBA: 'ooba',
@@ -458,7 +459,7 @@ function getCustomTokenBans(settings = null) {
 
     //debug
     if (textgenerationwebui_banned_in_macros.length) {
-        console.log('=== Found banned word sequences in the macros:', textgenerationwebui_banned_in_macros, 'Resulting array of banned sequences (will be used this generation turn):', sequences);
+        log.settings.debug('=== Found banned word sequences in the macros:', textgenerationwebui_banned_in_macros, 'Resulting array of banned sequences (will be used this generation turn):', sequences);
     }
 
     //clean old temporary bans found in macros before, for the next generation turn.
@@ -476,7 +477,7 @@ function getCustomTokenBans(settings = null) {
                     throw new Error('Not an array of integers');
                 }
             } catch (err) {
-                console.log(`Failed to parse bad word token list: ${line}`, err);
+                log.settings.error(`Failed to parse bad word token list: ${line}`, err);
             }
         } else if (line.startsWith('"') && line.endsWith('"')) {
             // Remove the enclosing quotes
@@ -487,7 +488,7 @@ function getCustomTokenBans(settings = null) {
                 const tokens = getTextTokens(tokenizer, line);
                 banned_tokens.push(...tokens);
             } catch {
-                console.log(`Could not tokenize raw text: ${line}`);
+                log.settings.error(`Could not tokenize raw text: ${line}`);
             }
         }
     }
@@ -612,7 +613,7 @@ export async function loadTextGenSettings(data, loadedSettings) {
  * @param {any[]} orderArray Sampler order array.
  */
 function sortKoboldItemsByOrder(orderArray) {
-    console.debug('Preset samplers order: ' + orderArray);
+    log.settings.debug('Preset samplers order: ' + orderArray);
     const $draggableItems = $('#koboldcpp_order');
 
     for (let i = 0; i < orderArray.length; i++) {
@@ -623,7 +624,7 @@ function sortKoboldItemsByOrder(orderArray) {
 }
 
 function sortLlamacppItemsByOrder(orderArray) {
-    console.debug('Preset samplers order: ', orderArray);
+    log.settings.debug('Preset samplers order: ', orderArray);
     const $container = $('#llamacpp_samplers_sortable');
 
     orderArray.forEach((name) => {
@@ -633,7 +634,7 @@ function sortLlamacppItemsByOrder(orderArray) {
 }
 
 function sortOobaItemsByOrder(orderArray) {
-    console.debug('Preset samplers order: ', orderArray);
+    log.settings.debug('Preset samplers order: ', orderArray);
     const $container = $('#sampler_priority_container');
 
     orderArray.forEach((name) => {
@@ -647,7 +648,7 @@ function sortOobaItemsByOrder(orderArray) {
  * @param {string[]} orderArray Sampler order array.
  */
 function sortAphroditeItemsByOrder(orderArray) {
-    console.debug('Preset samplers order: ', orderArray);
+    log.settings.debug('Preset samplers order: ', orderArray);
     const $container = $('#sampler_priority_container_aphrodite');
 
     orderArray.forEach((name) => {
@@ -662,7 +663,7 @@ async function getStatusTextgen() {
     const endpoint = getTextGenServer();
 
     if (!endpoint) {
-        console.warn('No endpoint for status check');
+        log.settings.warn('No endpoint for status check');
         setOnlineStatus('no_connection');
         return resultCheckStatus();
     }
@@ -774,12 +775,12 @@ async function getStatusTextgen() {
                                 setGenerationParamsFromPreset({ max_length: backend_max_context });
                             }
                             if (old_value !== max_context) {
-                                console.log(`Auto-switched max context from ${old_value} to ${max_context}`);
+                                log.settings.info(`Auto-switched max context from ${old_value} to ${max_context}`);
                                 toastr.info(`${old_value} ⇒ ${max_context}`, 'Context Size Changed');
                             }
                         }
                     }
-                    console.log(`We have chat template ${chat_template.split('\n')[0]}...`);
+                    log.settings.debug(`We have chat template ${chat_template.split('\n')[0]}...`);
                     const savedTemplate = power_user.model_templates_mappings[chat_template_hash];
                     const derivedTemplate = await deriveTemplatesFromChatTemplate(chat_template, chat_template_hash);
                     const { context, instruct } = savedTemplate ?? derivedTemplate;
@@ -800,9 +801,9 @@ async function getStatusTextgen() {
         }
     } catch (err) {
         if (err instanceof AbortReason) {
-            console.info('Status check aborted.', err.reason);
+            log.settings.info('Status check aborted.', err.reason);
         } else {
-            console.error('Error getting status', err);
+            log.settings.error('Error getting status', err);
         }
         setOnlineStatus('no_connection');
     }
@@ -827,7 +828,7 @@ export function initTextGenSettings() {
                 order.push($(this).data('id'));
             });
             textgenerationwebui_settings.sampler_order = order;
-            console.log('Samplers reordered:', textgenerationwebui_settings.sampler_order);
+            log.settings.info('Samplers reordered:', textgenerationwebui_settings.sampler_order);
             saveSettingsDebounced();
         },
     });
@@ -846,7 +847,7 @@ export function initTextGenSettings() {
                 order.push($(this).data('name'));
             });
             textgenerationwebui_settings.samplers = order;
-            console.log('Samplers reordered:', textgenerationwebui_settings.samplers);
+            log.settings.info('Samplers reordered:', textgenerationwebui_settings.samplers);
             saveSettingsDebounced();
         },
     });
@@ -854,7 +855,7 @@ export function initTextGenSettings() {
     $('#llamacpp_samplers_default_order').on('click', function () {
         sortLlamacppItemsByOrder(LLAMACPP_DEFAULT_ORDER);
         textgenerationwebui_settings.samplers = LLAMACPP_DEFAULT_ORDER;
-        console.log('Default samplers order loaded:', textgenerationwebui_settings.samplers);
+        log.settings.info('Default samplers order loaded:', textgenerationwebui_settings.samplers);
         saveSettingsDebounced();
     });
 
@@ -866,7 +867,7 @@ export function initTextGenSettings() {
                 order.push($(this).data('name'));
             });
             textgenerationwebui_settings.sampler_priority = order;
-            console.log('Samplers reordered:', textgenerationwebui_settings.sampler_priority);
+            log.settings.info('Samplers reordered:', textgenerationwebui_settings.sampler_priority);
             saveSettingsDebounced();
         },
     });
@@ -879,7 +880,7 @@ export function initTextGenSettings() {
                 order.push($(this).data('name'));
             });
             textgenerationwebui_settings.samplers_priorities = order;
-            console.log('Samplers reordered:', textgenerationwebui_settings.samplers_priorities);
+            log.settings.info('Samplers reordered:', textgenerationwebui_settings.samplers_priorities);
             saveSettingsDebounced();
         },
     });
@@ -903,14 +904,14 @@ export function initTextGenSettings() {
     $('#textgenerationwebui_default_order').on('click', function () {
         sortOobaItemsByOrder(OOBA_DEFAULT_ORDER);
         textgenerationwebui_settings.sampler_priority = OOBA_DEFAULT_ORDER;
-        console.log('Default samplers order loaded:', textgenerationwebui_settings.sampler_priority);
+        log.settings.info('Default samplers order loaded:', textgenerationwebui_settings.sampler_priority);
         saveSettingsDebounced();
     });
 
     $('#aphrodite_default_order').on('click', function () {
         sortAphroditeItemsByOrder(APHRODITE_DEFAULT_ORDER);
         textgenerationwebui_settings.samplers_priorities = APHRODITE_DEFAULT_ORDER;
-        console.log('Default samplers order loaded:', textgenerationwebui_settings.samplers_priorities);
+        log.settings.info('Default samplers order loaded:', textgenerationwebui_settings.samplers_priorities);
         saveSettingsDebounced();
     });
 
@@ -1019,7 +1020,7 @@ export function initTextGenSettings() {
                 inputElement.val(valueToSet).trigger('input');
                 if (power_user.enableZenSliders) {
                     let masterElementID = inputElement.prop('id');
-                    console.log(masterElementID);
+                    log.settings.debug(masterElementID);
                     let zenSlider = $(`#${masterElementID}_zenslider`).slider();
                     zenSlider.slider('option', 'value', value);
                     zenSlider.slider('option', 'slide')
