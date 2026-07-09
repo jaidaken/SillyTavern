@@ -4,6 +4,7 @@ import { callGenericPopup, POPUP_TYPE } from '../popup.js';
 import { escapeHtml } from '../utils.js';
 import { enumIcons } from './SlashCommandCommonEnumsProvider.js';
 import { enumTypes, SlashCommandEnumValue } from './SlashCommandEnumValue.js';
+import { log } from '../log.js';
 
 /** @typedef {'pipe'|'object'|'chat-html'|'chat-text'|'popup-html'|'popup-text'|'toast-html'|'toast-text'|'console'|'none'} SlashCommandReturnType */
 
@@ -70,7 +71,7 @@ export const slashCommandReturnHelper = {
             case 'object':
                 return JSON.stringify(value);
             case 'console':
-                console.info(value);
+                log.slash.info(value);
                 return '';
             case 'none':
                 return '';

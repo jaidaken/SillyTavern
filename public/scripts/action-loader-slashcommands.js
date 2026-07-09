@@ -8,6 +8,7 @@ import { SlashCommandEnumValue, enumTypes } from './slash-commands/SlashCommandE
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { isFalseBoolean } from './utils.js';
 import { DOMPurify } from '../lib.js';
+import { log } from './log.js';
 
 /**
  * Registers slash commands for the action loader module.
@@ -36,7 +37,7 @@ export function registerActionLoaderSlashCommands() {
                 localClosure.onProgress = () => { };
                 await localClosure.execute();
             } catch (e) {
-                console.error('Error executing closure handler', e);
+                log.slash.error('Error executing closure handler', e);
             }
         };
     }

@@ -7,6 +7,7 @@ import { MacroRegistry, MacroCategory, MacroValueType } from '../engine/MacroReg
 import { MACRO_VARIABLE_SHORTHAND_PATTERN } from '../engine/MacroLexer.js';
 import { MacroParser } from '../engine/MacroParser.js';
 import { MacroCstWalker } from '../engine/MacroCstWalker.js';
+import { log } from '../../log.js';
 
 /**
  * Marker used by {{else}} to split content in {{if}} blocks.
@@ -439,7 +440,7 @@ export function registerCoreMacros() {
             // Strip quotes via regex, which were allowed in legacy syntax
             bannedWord = bannedWord.replace(/^"|"$/g, '');
             if (main_api === 'textgenerationwebui') {
-                console.log('Found banned word in macros: ' + bannedWord);
+                log.prompt.info('Found banned word in macros: ' + bannedWord);
                 textgenerationwebui_banned_in_macros.push(bannedWord);
             }
             return '';

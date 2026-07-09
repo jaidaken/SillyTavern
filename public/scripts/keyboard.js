@@ -1,3 +1,5 @@
+import { log } from './log.js';
+
 /* All selectors that should act as interactables / keyboard buttons by default */
 const interactableSelectors = [
     '.interactable', // Main interactable class for ALL interactable controls (can also be manually added in code, so that's why its listed here)
@@ -227,7 +229,7 @@ function handleGlobalKeyDown(event) {
 
         // Trigger click if a valid interactable is found and it's not disabled
         if (target && !target.classList.contains(DISABLED_CONTROL_CLASS)) {
-            console.debug('Triggering click on keyboard-focused interactable control via Enter', target);
+            log.ui.debug('Triggering click on keyboard-focused interactable control via Enter', target);
             target.click();
         }
     }

@@ -12,6 +12,7 @@ import {
     printCharactersDebounced,
     deleteCharacter,
 } from '../script.js';
+import { log } from './log.js';
 
 import { favsToHotswap } from './RossAscends-mods.js';
 import { loader } from './action-loader.js';
@@ -240,7 +241,7 @@ class BulkTagPopupHandler {
         this.characterIds = characterIds.slice();
 
         if (this.characterIds.length == 0) {
-            console.log('No characters selected for bulk edit tags.');
+            log.chat.debug('No characters selected for bulk edit tags.');
             return;
         }
 

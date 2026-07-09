@@ -14,6 +14,7 @@
 import { power_user } from '../power-user.js';
 import { AutoComplete, AUTOCOMPLETE_STATE } from './AutoComplete.js';
 import { findMacroAtCursor, findUnclosedScopes, getMacroAutoCompleteAt } from './MacroAutoCompleteHelper.js';
+import { log } from '../log.js';
 
 /** Custom attribute name used to mark elements that support macro autocomplete */
 export const MACRO_AUTOCOMPLETE_ATTRIBUTE = 'data-macros';
@@ -298,7 +299,7 @@ export function enableMacroAutoCompleteById(elementId) {
     );
 
     if (!element || !(element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement)) {
-        console.warn(`[MacroAutoComplete] Element not found or invalid: ${elementId}`);
+        log.prompt.warn(`[MacroAutoComplete] Element not found or invalid: ${elementId}`);
         return null;
     }
 

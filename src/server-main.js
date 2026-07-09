@@ -62,7 +62,7 @@ import {
     setWindowTitle,
     getConfigValue,
 } from './util.js';
-import { resolveLogConfig } from './log.js';
+import { log, resolveLogConfig } from './log.js';
 import { UPLOADS_DIRECTORY } from './constants.js';
 
 // Routers
@@ -84,7 +84,7 @@ util.inspect.defaultOptions.depth = 4;
 const cliArgs = globalThis.COMMAND_LINE_ARGS;
 
 if (!cliArgs.enableIPv6 && !cliArgs.enableIPv4) {
-    console.error('error: You can\'t disable all internet protocols: at least IPv6 or IPv4 must be enabled.');
+    log.sys.error('error: You can\'t disable all internet protocols: at least IPv6 or IPv4 must be enabled.');
     process.exit(1);
 }
 
@@ -160,7 +160,7 @@ if (!cliArgs.disableCsrf) {
     const csrfSyncProtection = csrfSync({
         getTokenFromState: (req) => {
             if (!req.session) {
-                console.error('(CSRF error) getTokenFromState: Session object not initialized');
+                log.sys.error('(CSRF error) getTokenFromState: Session object not initialized');
                 return;
             }
             return req.session.csrfToken;
@@ -170,7 +170,7 @@ if (!cliArgs.disableCsrf) {
         },
         storeTokenInState: (req, token) => {
             if (!req.session) {
-                console.error('(CSRF error) storeTokenInState: Session object not initialized');
+                log.sys.error('(CSRF error) storeTokenInState: Session object not initialized');
                 return;
             }
             req.session.csrfToken = token;
@@ -193,7 +193,7 @@ if (!cliArgs.disableCsrf) {
 
     app.use(csrfSyncProtection.csrfSynchronisedProtection);
 } else {
-    console.warn('\nCSRF protection is disabled. This will make your server vulnerable to CSRF attacks.\n');
+    log.sys.warn('\nCSRF protection is disabled. This will make your server vulnerable to CSRF attacks.\n');
     app.get('/csrf-token', (req, res) => {
         res.json({
             'token': 'disabled',
@@ -251,7 +251,7 @@ if (cliArgs.enableCorsProxy) {
 } else {
     app.use('/proxy/*url', async (_, res) => {
         const message = 'CORS proxy is disabled. Enable it in config.yaml or use the --corsProxy flag.';
-        console.log(message);
+        log.sys.warn(message);
         res.status(404).send(message);
     });
 }
@@ -322,7 +322,7 @@ async function preSetupTasks() {
     process.on('SIGINT', exitProcess);
     process.on('SIGTERM', exitProcess);
     process.on('uncaughtException', (err) => {
-        console.error('Uncaught exception:', err);
+        log.sys.error('Uncaught exception:', err);
         exitProcess();
     });
 
@@ -378,10 +378,10 @@ async function postSetupTasks(result) {
             const appName = validBrowsers[browserLaunchApp.trim().toLowerCase()];
             const openOptions = appName ? { app: { name: appName } } : {};
 
-            console.log(`Launching in a browser: ${browserLaunchApp}...`);
+            log.sys.info(`Launching in a browser: ${browserLaunchApp}...`);
             await open(browserLaunchUrl.toString(), openOptions);
         } catch (error) {
-            console.error('Failed to launch the browser. Open the URL manually.', error);
+            log.sys.error('Failed to launch the browser. Open the URL manually.', error);
         }
     }
 
@@ -390,13 +390,13 @@ async function postSetupTasks(result) {
         const intervalMs = cliArgs.heartbeatInterval * 1000;
         const heartbeatPath = path.join(globalThis.DATA_ROOT, 'heartbeat.json');
 
-        console.log(`Heartbeat enabled. Updating ${color.green(heartbeatPath)} every ${cliArgs.heartbeatInterval} seconds`);
+        log.sys.info(`Heartbeat enabled. Updating ${color.green(heartbeatPath)} every ${cliArgs.heartbeatInterval} seconds`);
 
         const writeHeartbeat = () => {
             try {
                 fs.writeFileSync(heartbeatPath, JSON.stringify({ timestamp: Date.now() }));
             } catch (err) {
-                console.error(`Failed to write heartbeat file at ${color.green(heartbeatPath)}:`, err.message);
+                log.sys.error(`Failed to write heartbeat file at ${color.green(heartbeatPath)}:`, err.message);
             }
         };
 
@@ -454,7 +454,7 @@ function apply404Middleware() {
  */
 function applyErrorMiddleware() {
     app.use((err, req, res, next) => {
-        console.error(color.red(`Unhandled error while serving ${req.method} ${req.originalUrl}`), err);
+        log.sys.error(color.red(`Unhandled error while serving ${req.method} ${req.originalUrl}`), err);
 
         if (res.headersSent) {
             return next(err);
@@ -473,13 +473,13 @@ function setDnsResolutionOrder() {
     try {
         if (cliArgs.dnsPreferIPv6) {
             dns.setDefaultResultOrder('ipv6first');
-            console.log('Preferring IPv6 for DNS resolution');
+            log.sys.info('Preferring IPv6 for DNS resolution');
         } else {
             dns.setDefaultResultOrder('ipv4first');
-            console.log('Preferring IPv4 for DNS resolution');
+            log.sys.info('Preferring IPv4 for DNS resolution');
         }
     } catch (error) {
-        console.warn('Failed to set DNS resolution order. Possibly unsupported in this Node version.');
+        log.sys.warn('Failed to set DNS resolution order. Possibly unsupported in this Node version.');
     }
 }
 

@@ -1,3 +1,5 @@
+import { log } from '../../../../../log.js';
+
 /**
  * @typedef {import('./MenuItem.js').MenuItem} MenuItem
  */
@@ -34,7 +36,7 @@ export class SubMenu {
         parent.append(this.root);
         requestAnimationFrame(() => {
             const rect = this.root.getBoundingClientRect();
-            console.log(window.innerHeight, rect);
+            log.ext.debug(window.innerHeight, rect);
             if (rect.bottom > window.innerHeight - 5) {
                 this.root.style.top = `${window.innerHeight - 5 - rect.bottom}px`;
             }

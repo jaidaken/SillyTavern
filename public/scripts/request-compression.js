@@ -1,4 +1,5 @@
 import { gzip } from '/lib.js';
+import { log } from './log.js';
 
 /**
  * @type {RequestCompressionConfig}
@@ -125,7 +126,7 @@ export async function compressRequest(request) {
         };
     } catch (error) {
         terminate();
-        console.warn('Failed to compress request body, using plain request.', error);
+        log.net.warn('Failed to compress request body, using plain request.', error);
         return plainRequest;
     }
 }

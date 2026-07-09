@@ -22,6 +22,7 @@ import { LOG_LEVELS, CHAT_COMPLETION_SOURCES, MEDIA_REQUEST_TYPE } from './const
 import { serverDirectory } from './server-directory.js';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { isFirefox } from './express-common.js';
+import { log } from './log.js';
 
 /**
  * Parsed config object.
@@ -43,7 +44,7 @@ export const keyToEnv = (key) => 'SILLYTAVERN_' + String(key).toUpperCase().repl
  */
 export function setConfigFilePath(configFilePath) {
     if (CONFIG_PATH !== null) {
-        console.error(color.red('Config file path already set. Please restart the server to change the config file path.'));
+        log.sys.error(color.red('Config file path already set. Please restart the server to change the config file path.'));
     }
     CONFIG_PATH = path.resolve(configFilePath);
 }
@@ -54,16 +55,16 @@ export function setConfigFilePath(configFilePath) {
  */
 export function getConfig() {
     if (CONFIG_PATH === null) {
-        console.trace();
-        console.error(color.red('No config file path set. Please set the config file path using setConfigFilePath().'));
+        console.trace(); // stack-to-caller diagnostic; log.js has no stack-capturing level
+        log.sys.error(color.red('No config file path set. Please set the config file path using setConfigFilePath().'));
         process.exit(1);
     }
     if (CACHED_CONFIG) {
         return CACHED_CONFIG;
     }
     if (!fs.existsSync(CONFIG_PATH)) {
-        console.error(color.red('No config file found. Please create a config.yaml file. The default config file can be found in the /default folder.'));
-        console.error(color.red('The program will now exit.'));
+        log.sys.error(color.red('No config file found. Please create a config.yaml file. The default config file can be found in the /default folder.'));
+        log.sys.error(color.red('The program will now exit.'));
         process.exit(1);
     }
 
@@ -72,8 +73,8 @@ export function getConfig() {
         CACHED_CONFIG = config;
         return config;
     } catch (error) {
-        console.error(color.red('FATAL: Failed to read config.yaml. Please check the file for syntax errors.'));
-        console.error(error.message);
+        log.sys.error(color.red('FATAL: Failed to read config.yaml. Please check the file for syntax errors.'));
+        log.sys.error(error.message);
         process.exit(1);
     }
 }
@@ -115,7 +116,7 @@ export function getConfigValue(key, defaultValue = null, typeConverter = null) {
  * @deprecated Configs are read-only. Use environment variables instead.
  */
 export function setConfigValue(_key, _value) {
-    console.trace(color.yellow('setConfigValue is deprecated and should not be used.'));
+    console.trace(color.yellow('setConfigValue is deprecated and should not be used.')); // stack shows the deprecated caller
 }
 
 /**
@@ -209,7 +210,7 @@ export async function extractFileFromZipBuffer(archiveBuffer, fileExtension) {
         try {
             yauzl.fromBuffer(Buffer.from(archiveBuffer), { lazyEntries: true }, (err, zipfile) => {
                 if (err) {
-                    console.warn(`Error opening ZIP file: ${err.message}`);
+                    log.content.warn(`Error opening ZIP file: ${err.message}`);
                     return resolve(null);
                 }
 
@@ -219,7 +220,7 @@ export async function extractFileFromZipBuffer(archiveBuffer, fileExtension) {
                     if (entry.fileName.endsWith(fileExtension) && !entry.fileName.startsWith('__MACOSX')) {
                         zipfile.openReadStream(entry, (err, readStream) => {
                             if (err) {
-                                console.warn(`Error opening read stream: ${err.message}`);
+                                log.content.warn(`Error opening read stream: ${err.message}`);
                                 return zipfile.readEntry();
                             } else {
                                 const chunks = [];
@@ -234,7 +235,7 @@ export async function extractFileFromZipBuffer(archiveBuffer, fileExtension) {
                                 });
 
                                 readStream.on('error', (err) => {
-                                    console.warn(`Error reading stream: ${err.message}`);
+                                    log.content.warn(`Error reading stream: ${err.message}`);
                                     zipfile.readEntry();
                                 });
                             }
@@ -245,14 +246,14 @@ export async function extractFileFromZipBuffer(archiveBuffer, fileExtension) {
                 });
 
                 zipfile.on('error', (err) => {
-                    console.warn('ZIP processing error', err);
+                    log.content.warn('ZIP processing error', err);
                     resolve(null);
                 });
 
                 zipfile.on('end', () => resolve(null));
             });
         } catch (error) {
-            console.warn('Failed to process ZIP buffer', error);
+            log.content.warn('Failed to process ZIP buffer', error);
             resolve(null);
         }
     });
@@ -316,7 +317,7 @@ export async function extractFilesFromZipBuffer(archiveBuffer, fileNames) {
         try {
             yauzl.fromBuffer(Buffer.from(archiveBuffer), { lazyEntries: true }, (err, zipfile) => {
                 if (err) {
-                    console.warn(`Error opening ZIP file: ${err.message}`);
+                    log.content.warn(`Error opening ZIP file: ${err.message}`);
                     return resolve(results);
                 }
 
@@ -339,7 +340,7 @@ export async function extractFilesFromZipBuffer(archiveBuffer, fileNames) {
 
                     zipfile.openReadStream(entry, (streamErr, readStream) => {
                         if (streamErr) {
-                            console.warn(`Error opening read stream: ${streamErr.message}`);
+                            log.content.warn(`Error opening read stream: ${streamErr.message}`);
                             return zipfile.readEntry();
                         }
 
@@ -360,14 +361,14 @@ export async function extractFilesFromZipBuffer(archiveBuffer, fileNames) {
                         });
 
                         readStream.on('error', (streamError) => {
-                            console.warn(`Error reading stream: ${streamError.message}`);
+                            log.content.warn(`Error reading stream: ${streamError.message}`);
                             zipfile.readEntry();
                         });
                     });
                 });
 
                 zipfile.on('error', (zipError) => {
-                    console.warn('ZIP processing error', zipError);
+                    log.content.warn('ZIP processing error', zipError);
                     finalize();
                 });
 
@@ -380,7 +381,7 @@ export async function extractFilesFromZipBuffer(archiveBuffer, fileNames) {
                 });
             });
         } catch (error) {
-            console.warn('Failed to process ZIP buffer', error);
+            log.content.warn('Failed to process ZIP buffer', error);
             resolve(results);
         }
     });
@@ -396,12 +397,12 @@ export function ensureDirectory(dirPath) {
         if (!fs.existsSync(dirPath)) {
             fs.mkdirSync(dirPath, { recursive: true });
         } else if (!fs.statSync(dirPath).isDirectory()) {
-            console.warn(`ensureDirectory: Path ${dirPath} exists and is not a directory.`);
+            log.sys.warn(`ensureDirectory: Path ${dirPath} exists and is not a directory.`);
             return false;
         }
         return true;
     } catch (error) {
-        console.error(`ensureDirectory: Failed to prepare directory ${dirPath}`, error);
+        log.sys.error(`ensureDirectory: Failed to prepare directory ${dirPath}`, error);
         return false;
     }
 }
@@ -480,7 +481,7 @@ export async function readAllChunks(readableStream) {
         });
 
         readableStream.on('error', (error) => {
-            console.error('Error while reading the stream:', error);
+            log.content.error('Error while reading the stream:', error);
             reject();
         });
     });
@@ -727,10 +728,10 @@ export async function forwardFetchResponse(from, to) {
             const rawErrorText = await from.text();
             const detail = rawErrorText || 'Unknown error occurred';
 
-            console.warn(`Streaming request failed with status ${from.status} ${statusText}: ${detail}`);
+            log.net.warn(`Streaming request failed with status ${from.status} ${statusText}: ${detail}`);
             to.end(rawErrorText, 'utf-8');
         } catch {
-            console.warn(`Streaming request failed with status ${from.status} ${statusText}: Unknown error occurred`);
+            log.net.warn(`Streaming request failed with status ${from.status} ${statusText}: Unknown error occurred`);
             to.end();
         }
 
@@ -747,7 +748,7 @@ export async function forwardFetchResponse(from, to) {
         });
 
         from.body.on('end', function () {
-            console.info('Streaming request finished');
+            log.net.info('Streaming request finished');
             to.end();
         });
     } else {
@@ -792,7 +793,7 @@ export function makeHttp2Request(endpoint, method, body, headers) {
                 });
 
                 req.on('end', () => {
-                    console.debug(data);
+                    log.net.debug(data);
                     resolve(data);
                 });
             });
@@ -1334,7 +1335,7 @@ export function mutateJsonString(jsonString, mutation) {
         mutation(json);
         return JSON.stringify(json);
     } catch (error) {
-        console.error('Error parsing or mutating JSON:', error);
+        log.sys.error('Error parsing or mutating JSON:', error);
         return jsonString;
     }
 }
@@ -1371,7 +1372,7 @@ export function setPermissionsSync(targetPath) {
             appendWritablePermission(targetPath, stats);
         }
     } catch (error) {
-        console.error(`Error setting write permissions for ${targetPath}:`, error);
+        log.sys.error(`Error setting write permissions for ${targetPath}:`, error);
     }
 }
 
@@ -1508,7 +1509,7 @@ export function tryReadFileSync(filePath) {
             return fs.readFileSync(filePath, 'utf8');
         }
     } catch (error) {
-        console.error(`Error reading ${filePath}: ${error.message}`);
+        log.content.error(`Error reading ${filePath}: ${error.message}`);
     }
     return null;
 }
@@ -1521,10 +1522,10 @@ export function tryReadFileSync(filePath) {
 export function tryDeleteFile(filePath) {
     if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);
-        console.info(`Deleted file: ${filePath}`);
+        log.content.info(`Deleted file: ${filePath}`);
         return true;
     } else {
-        console.error(`File not found '${filePath}'`);
+        log.content.error(`File not found '${filePath}'`);
         return false;
     }
 }

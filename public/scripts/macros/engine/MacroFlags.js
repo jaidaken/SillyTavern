@@ -7,6 +7,8 @@
  * Multiple flags can be combined: `{{!?myMacro}}` or `{{ ! ? myMacro }}`
  */
 
+import { log } from '../../log.js';
+
 /**
  * @typedef {Object} MacroFlags
  * @property {boolean} immediate - Whether the immediate (`!`) flag is set.
@@ -189,7 +191,7 @@ export function parseFlags(flagSymbols) {
                 flags.preserveWhitespace = true;
                 break;
             default:
-                console.warn(`Can't parse unknown macro flag: ${symbol}`);
+                log.prompt.warn(`Can't parse unknown macro flag: ${symbol}`);
         }
         flags.raw.push(symbol);
     }

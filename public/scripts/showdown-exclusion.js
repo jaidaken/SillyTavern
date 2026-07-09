@@ -1,5 +1,6 @@
 import { power_user } from './power-user.js';
 import { substituteParams } from '../script.js';
+import { log } from './log.js';
 
 /**
  * Showdown extension to make chat separators (dinkuses) ignore markdown formatting
@@ -7,7 +8,7 @@ import { substituteParams } from '../script.js';
  */
 export const markdownExclusionExt = () => {
     if (!power_user) {
-        console.log('Showdown-dinkus extension: power_user wasn\'t found! Returning.');
+        log.ui.debug('Showdown-dinkus extension: power_user wasn\'t found! Returning.');
         return [];
     }
 

@@ -1,4 +1,5 @@
 import { loader } from './action-loader.js';
+import { log } from './log.js';
 
 /**
  * Handle for the legacy loader created by showLoader().
@@ -51,7 +52,7 @@ export function showLoader() {
  */
 export async function hideLoader() {
     if (!legacyLoaderHandle || !legacyLoaderHandle.isActive) {
-        console.warn('There is no loader showing to hide');
+        log.ui.debug('There is no loader showing to hide');
         return Promise.resolve();
     }
 

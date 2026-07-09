@@ -8,6 +8,7 @@ import { debounce_timeout } from '../../constants.js';
 import { POPUP_TYPE, callGenericPopup } from '../../popup.js';
 import { renderExtensionTemplateAsync } from '../../extensions.js';
 import { t } from '../../i18n.js';
+import { log } from '../../log.js';
 
 async function doTokenCounter() {
     const { tokenizerName, tokenizerId } = getFriendlyTokenizerName(main_api);
@@ -93,7 +94,7 @@ async function doCount() {
     //concat all the messages into a single string
     const allMessages = messages.join(' ');
 
-    console.debug('All messages:', allMessages);
+    log.tok.debug('All messages:', allMessages);
 
     //toastr success with the token count of the chat
     const count = await getTokenCountAsync(allMessages);

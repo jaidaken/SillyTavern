@@ -2,6 +2,7 @@
  * Shared module between login and main app.
  * Be careful what you import!
  */
+import { log } from './log.js';
 
 const buttonSelectors = [
     '.menu_button',
@@ -99,7 +100,7 @@ function applyA11yRules(element) {
             element.querySelectorAll(selector).forEach(rule);
         }
     } catch (error) {
-        console.error('Error applying accessibility rules to element:', element, error);
+        log.ui.error('Error applying accessibility rules to element:', element, error);
     }
 }
 

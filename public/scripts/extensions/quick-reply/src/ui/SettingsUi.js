@@ -1,6 +1,7 @@
 import { Popup } from '../../../../popup.js';
 import { getSortableDelay } from '../../../../utils.js';
 import { log, warn } from '../../index.js';
+import { log as stLog } from '../../../../log.js';
 import { QuickReply } from '../QuickReply.js';
 import { QuickReplySet } from '../QuickReplySet.js';
 import { QuickReplySettings } from '../QuickReplySettings.js';
@@ -372,7 +373,7 @@ export class SettingsUi {
             this.prepareChatSetList();
             this.prepareCharacterSetList();
 
-            console.info(`Quick Reply Set renamed from ""${oldName}" to "${newName}".`);
+            stLog.ext.info(`Quick Reply Set renamed from ""${oldName}" to "${newName}".`);
         }
     }
 

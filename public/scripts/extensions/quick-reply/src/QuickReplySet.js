@@ -5,6 +5,7 @@ import { SlashCommandScope } from '../../../slash-commands/SlashCommandScope.js'
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { debounceAsync, warn } from '../index.js';
 import { QuickReply } from './QuickReply.js';
+import { log as stLog } from '../../../log.js';
 
 export class QuickReplySet {
     /**@type {QuickReplySet[]}*/ static list = [];
@@ -384,7 +385,7 @@ export class QuickReplySet {
             this.rerender();
         } else {
             warn(`Failed to save Quick Reply Set: ${this.name}`);
-            console.error('QR could not be saved', response);
+            stLog.ext.error('QR could not be saved', response);
         }
     }
 
