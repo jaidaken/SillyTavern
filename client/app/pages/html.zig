@@ -44,6 +44,8 @@ pub fn sink(html: SanitizedHtml) []const u8 {
 /// The door packs its result as `(ptr << 32) | len`, and returns 0 for an empty result, having
 /// allocated nothing. `__zx_alloc` draws from `std.heap.wasm_allocator`, so the door buffer is
 /// released here once its bytes are copied. Without this, streaming leaks one buffer per token.
+///
+/// A failed dupe yields no bytes, which `Cache.put` refuses to store, so the next render retries.
 fn adopt(allocator: std.mem.Allocator, packed_result: u64) []const u8 {
     const addr: usize = @intCast(packed_result >> 32);
     if (addr == 0) return "";
@@ -63,25 +65,56 @@ pub fn sanitizeHtml(allocator: std.mem.Allocator, raw: []const u8) SanitizedHtml
 /// Rendered HTML keyed by a hash of the source body, with the source retained so a hash collision
 /// is detected rather than silently serving another message's HTML.
 ///
-/// Entries are never evicted. ziex keeps the previous vtree to diff against and those vnodes hold
-/// these exact pointers, so freeing an entry would dangle. The cache is bounded by the number of
-/// distinct message bodies; the streaming tail is not cached at all.
+/// A hit is never evicted while its key is unique. ziex keeps the previous vtree to diff against
+/// and those vnodes hold these exact pointers, so freeing an entry outright would dangle; the two
+/// paths that do drop bytes (a colliding overwrite, a failed insert) hand them to the retire ring
+/// instead. The cache is bounded by the number of distinct message bodies; the streaming tail is
+/// not cached at all.
 const Entry = struct { src: []const u8, html: SanitizedHtml };
-var cache: std.HashMapUnmanaged(u64, Entry, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage) = .empty;
+
+const Cache = struct {
+    allocator: std.mem.Allocator,
+    ring: *RetireRing,
+    map: std.HashMapUnmanaged(u64, Entry, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage) = .empty,
+
+    fn deinit(self: *Cache) void {
+        self.map.deinit(self.allocator);
+        self.* = undefined;
+    }
+
+    fn get(self: *const Cache, body: []const u8) ?SanitizedHtml {
+        const entry = self.map.get(key(body)) orelse return null;
+        if (!std.mem.eql(u8, entry.src, body)) return null;
+        return entry.html;
+    }
+
+    /// `k` is `key(body)` in production; a test passes it directly to stage a hash collision.
+    fn put(self: *Cache, k: u64, body: []const u8, html: SanitizedHtml) void {
+        // Entries never expire, so caching a failed sanitize would blank this message for the life
+        // of the page; skipping the insert lets the next render produce the real HTML.
+        if (html.bytes.len == 0) return;
+
+        const gop = self.map.getOrPut(self.allocator, k) catch {
+            self.ring.retain(html.bytes);
+            return;
+        };
+        // A colliding key displaces another body's bytes, which the live vtree may still point at.
+        if (gop.found_existing) self.ring.retain(gop.value_ptr.html.bytes);
+        gop.value_ptr.* = .{ .src = body, .html = html };
+    }
+};
 
 fn key(body: []const u8) u64 {
     return std.hash.Wyhash.hash(0, body);
 }
 
 pub fn cacheGet(body: []const u8) ?SanitizedHtml {
-    const entry = cache.get(key(body)) orelse return null;
-    if (!std.mem.eql(u8, entry.src, body)) return null;
-    return entry.html;
+    return cache.get(body);
 }
 
 /// `body` must be owned by the store for the life of the page: the entry retains this pointer.
 pub fn cachePut(body: []const u8, html: SanitizedHtml) void {
-    cache.put(std.heap.wasm_allocator, key(body), .{ .src = body, .html = html }) catch retain(html);
+    cache.put(key(body), body, html);
 }
 
 /// The streaming tail renders fresh HTML every frame, and ziex adopts that pointer into the vtree,
@@ -113,8 +146,10 @@ pub const RetireRing = struct {
     }
 };
 
-const ring_gpa = if (is_wasm) std.heap.wasm_allocator else std.heap.page_allocator;
-var ring: RetireRing = .{ .allocator = ring_gpa };
+/// Both hold bytes for the life of the page, so neither draws from the per-render allocator.
+const static_gpa = if (is_wasm) std.heap.wasm_allocator else std.heap.page_allocator;
+var ring: RetireRing = .{ .allocator = static_gpa };
+var cache: Cache = .{ .allocator = static_gpa, .ring = &ring };
 
 /// Call once at the top of the render, before any `sanitizeHtml`.
 pub fn renderTick() void {
@@ -141,16 +176,46 @@ test "sink_accepts_only_the_sanitized_witness_type" {
     try testing.expectEqual(SanitizedHtml, params[0].type.?);
 }
 
+/// A witness reaches a caller through an optional or an error union just as well as bare, so the
+/// producer scan has to see through both or a `fn f() ?SanitizedHtml` mint would go uncounted.
+fn yieldsSanitizedHtml(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .optional => |opt| yieldsSanitizedHtml(opt.child),
+        .error_union => |eu| yieldsSanitizedHtml(eu.payload),
+        else => T == SanitizedHtml,
+    };
+}
+
+test "yields_sanitized_html_sees_through_optionals_and_error_unions" {
+    try testing.expect(yieldsSanitizedHtml(SanitizedHtml));
+    try testing.expect(yieldsSanitizedHtml(?SanitizedHtml));
+    try testing.expect(yieldsSanitizedHtml(error{Oom}!SanitizedHtml));
+    try testing.expect(yieldsSanitizedHtml(error{Oom}!?SanitizedHtml));
+    try testing.expect(!yieldsSanitizedHtml([]const u8));
+    try testing.expect(!yieldsSanitizedHtml(?[]const u8));
+    try testing.expect(!yieldsSanitizedHtml(void));
+}
+
 test "sanitize_html_is_the_only_public_producer_of_sanitized_html" {
     comptime var producers: []const []const u8 = &.{};
     inline for (@typeInfo(@This()).@"struct".decls) |decl| {
         const T = @TypeOf(@field(@This(), decl.name));
         if (@typeInfo(T) != .@"fn") continue;
-        if (@typeInfo(T).@"fn".return_type != SanitizedHtml) continue;
+        const ret = @typeInfo(T).@"fn".return_type orelse continue;
+        if (comptime !yieldsSanitizedHtml(ret)) continue;
         producers = producers ++ [_][]const u8{decl.name};
     }
-    try testing.expectEqual(@as(usize, 1), producers.len);
-    try testing.expectEqualStrings("sanitizeHtml", producers[0]);
+
+    // `cacheGet` relays a witness `sanitizeHtml` already minted; it cannot build one, and no other
+    // public function may hand one out, whatever it wraps it in.
+    try testing.expectEqual(@as(usize, 2), producers.len);
+    for (producers) |name| {
+        const expected = std.mem.eql(u8, name, "sanitizeHtml") or std.mem.eql(u8, name, "cacheGet");
+        if (!expected) {
+            std.debug.print("\nunexpected producer of SanitizedHtml: {s}\n", .{name});
+            return error.UnexpectedSanitizedHtmlProducer;
+        }
+    }
 }
 
 test "the_witness_type_is_unnameable_outside_this_file" {
@@ -243,4 +308,88 @@ test "retire_ring_frees_every_outstanding_generation_at_deinit" {
 
     // Two generations plus the two ArrayList backing buffers.
     try testing.expectEqual(@as(usize, 4), counting.frees);
+}
+
+/// A sanitize the door could not fulfil, as `adopt` returns it when the dupe fails.
+fn failedSanitize() SanitizedHtml {
+    return .{ .bytes = "", .witness_token = witness() };
+}
+
+test "a_failed_sanitize_is_not_cached_so_a_later_render_still_produces_the_real_html" {
+    var r = RetireRing{ .allocator = testing.allocator };
+    defer r.deinit();
+    var c = Cache{ .allocator = testing.allocator, .ring = &r };
+    defer c.deinit();
+
+    const body = "a message body";
+    c.put(key(body), body, failedSanitize());
+    try testing.expect(c.get(body) == null);
+
+    const real = try testing.allocator.dupe(u8, "<p>a message body</p>");
+    defer testing.allocator.free(real);
+    c.put(key(body), body, .{ .bytes = real, .witness_token = witness() });
+    try testing.expectEqualStrings("<p>a message body</p>", sink(c.get(body).?));
+}
+
+test "a_cached_entry_survives_a_later_failed_sanitize_of_the_same_body" {
+    var r = RetireRing{ .allocator = testing.allocator };
+    defer r.deinit();
+    var c = Cache{ .allocator = testing.allocator, .ring = &r };
+    defer c.deinit();
+
+    const body = "a message body";
+    const real = try testing.allocator.dupe(u8, "<p>a message body</p>");
+    defer testing.allocator.free(real);
+    c.put(key(body), body, .{ .bytes = real, .witness_token = witness() });
+
+    c.put(key(body), body, failedSanitize());
+    try testing.expectEqualStrings("<p>a message body</p>", sink(c.get(body).?));
+}
+
+test "a_colliding_key_retires_the_displaced_bytes_instead_of_leaking_them" {
+    var counting = Counting{ .child = testing.allocator };
+    const gpa = counting.allocator();
+
+    var r = RetireRing{ .allocator = gpa };
+    defer r.deinit();
+    var c = Cache{ .allocator = testing.allocator, .ring = &r };
+    defer c.deinit();
+
+    // One forced key for two distinct bodies: what a 64-bit Wyhash collision does to the cache.
+    const collision: u64 = 0x5171_5EED_5171_5EED;
+    const first = try gpa.dupe(u8, "<p>first</p>");
+    c.put(collision, "first body", .{ .bytes = first, .witness_token = witness() });
+
+    const second = try gpa.dupe(u8, "<p>second</p>");
+    defer gpa.free(second);
+    c.put(collision, "second body", .{ .bytes = second, .witness_token = witness() });
+
+    // The displaced bytes may still sit in the vtree this render, so they retire, they do not vanish.
+    try testing.expectEqual(@as(usize, 0), counting.frees);
+    r.tick();
+    r.tick();
+    try testing.expectEqual(@as(usize, 1), counting.frees);
+
+    const entry = c.map.get(collision).?;
+    try testing.expectEqualStrings("second body", entry.src);
+    try testing.expectEqualStrings("<p>second</p>", sink(entry.html));
+}
+
+test "a_cache_insert_that_cannot_allocate_retires_the_bytes_it_was_handed" {
+    var counting = Counting{ .child = testing.allocator };
+    const gpa = counting.allocator();
+
+    var r = RetireRing{ .allocator = gpa };
+    defer r.deinit();
+    var c = Cache{ .allocator = testing.failing_allocator, .ring = &r };
+    defer c.deinit();
+
+    const body = "a message body";
+    const orphan = try gpa.dupe(u8, "<p>a message body</p>");
+    c.put(key(body), body, .{ .bytes = orphan, .witness_token = witness() });
+
+    try testing.expect(c.get(body) == null);
+    r.tick();
+    r.tick();
+    try testing.expectEqual(@as(usize, 1), counting.frees);
 }
