@@ -187,4 +187,13 @@ describe('SillyTavern server smoke suite', () => {
         const onDisk = JSON.parse(fs.readFileSync(secretsPath, 'utf8'));
         expect(onDisk[SECRET_KEY]).toEqual([{ id, value: SECRET_VALUE, label: 'smoke', active: true }]);
     }, CASE_TIMEOUT_MS);
+
+    test('frontend_lib_bundle_compiles_and_is_served', async () => {
+        const response = await client.get('/lib.js');
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get('content-type')).toMatch(/javascript/);
+        const body = await response.text();
+        expect(body.length).toBeGreaterThan(10000);
+    }, CASE_TIMEOUT_MS);
 });
