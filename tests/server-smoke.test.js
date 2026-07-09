@@ -166,6 +166,14 @@ describe('SillyTavern server smoke suite', () => {
         expect(await response.text()).toBe('Circular requests are not allowed');
     }, CASE_TIMEOUT_MS);
 
+    test('unhandled_route_error_is_returned_as_json_by_the_error_middleware', async () => {
+        const response = await client.postRaw('/api/ping', '{not valid json', 'application/json');
+
+        expect(response.status).toBe(400);
+        expect(response.headers.get('content-type')).toMatch(/^application\/json/);
+        expect(await response.json()).toEqual({ error: true, message: 'Bad Request' });
+    }, CASE_TIMEOUT_MS);
+
     test('secret_write_then_read_returns_masked_value_and_persists_plaintext', async () => {
         const written = await client.postJson('/api/secrets/write', {
             key: SECRET_KEY,

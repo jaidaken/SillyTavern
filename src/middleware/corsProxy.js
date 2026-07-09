@@ -7,7 +7,8 @@ import { forwardFetchResponse } from '../util.js';
  * @param {import('express').Response} res Express response object
  */
 export default async function corsProxyMiddleware(req, res) {
-    const url = req.params.url; // get the url from the request path
+    // Express 5 wildcard params arrive as an array of decoded path segments.
+    const url = req.params.url.join('/');
 
     // Disallow circular requests
     const serverUrl = req.protocol + '://' + req.get('host');
@@ -31,7 +32,8 @@ export default async function corsProxyMiddleware(req, res) {
         const response = await fetch(url, {
             method: req.method,
             headers: headers,
-            body: bodyMethods.includes(req.method) ? JSON.stringify(req.body) : undefined,
+            // body-parser 2 leaves req.body undefined for bodyless requests; Express 4 defaulted it to {}.
+            body: bodyMethods.includes(req.method) ? JSON.stringify(req.body ?? {}) : undefined,
         });
 
         // Copy over relevant response params to the proxy response

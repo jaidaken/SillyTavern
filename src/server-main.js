@@ -222,7 +222,7 @@ app.get('/', cacheBuster.middleware, (request, response) => {
 });
 
 // Callback endpoint for OAuth PKCE flows (e.g. OpenRouter)
-app.get('/callback/:source?', (request, response) => {
+app.get('/callback{/:source}', (request, response) => {
     const source = request.params.source;
     const query = request.url.split('?')[1];
     const searchParams = new URLSearchParams();
@@ -255,9 +255,9 @@ app.post('/api/ping', (request, response) => {
 });
 
 if (cliArgs.enableCorsProxy) {
-    app.use('/proxy/:url(*)', corsProxyMiddleware);
+    app.use('/proxy/*url', corsProxyMiddleware);
 } else {
-    app.use('/proxy/:url(*)', async (_, res) => {
+    app.use('/proxy/*url', async (_, res) => {
         const message = 'CORS proxy is disabled. Enable it in config.yaml or use the --corsProxy flag.';
         console.log(message);
         res.status(404).send(message);
@@ -459,6 +459,23 @@ function apply404Middleware() {
 }
 
 /**
+ * Registers the terminal error handler. Should only be called after all other middlewares have been registered.
+ */
+function applyErrorMiddleware() {
+    app.use((err, req, res, next) => {
+        console.error(color.red(`Unhandled error while serving ${req.method} ${req.originalUrl}`), err);
+
+        if (res.headersSent) {
+            return next(err);
+        }
+
+        const declared = Number(err?.status ?? err?.statusCode);
+        const status = Number.isInteger(declared) && declared >= 400 && declared <= 599 ? declared : 500;
+        return res.status(status).json({ error: true, message: http.STATUS_CODES[status] ?? 'Internal Server Error' });
+    });
+}
+
+/**
  * Sets the DNS resolution order based on the command line arguments.
  */
 function setDnsResolutionOrder() {
@@ -485,5 +502,6 @@ initUserStorage(globalThis.DATA_ROOT)
     .then(verifySecuritySettings)
     .then(preSetupTasks)
     .then(apply404Middleware)
+    .then(applyErrorMiddleware)
     .then(() => new ServerStartup(app, cliArgs).start())
     .then(postSetupTasks);

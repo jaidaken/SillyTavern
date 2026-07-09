@@ -1058,6 +1058,16 @@ export async function loginPageMiddleware(request, response) {
 }
 
 /**
+ * Gets the file path captured by a `*splat` wildcard route.
+ * @param {import('express').Request} req Request object
+ * @returns {string} File path relative to the route's mount point
+ */
+function getSplatPath(req) {
+    // Express 5 hands wildcards over as an array of already-decoded segments; the second decode preserves Express 4 parity.
+    return decodeURIComponent([req.params.splat].flat().join('/'));
+}
+
+/**
  * Creates a route handler for serving files from a specific directory.
  * @param {(req: import('express').Request) => string} directoryFn A function that returns the directory path to serve files from
  * @returns {import('express').RequestHandler}
@@ -1066,7 +1076,7 @@ function createRouteHandler(directoryFn) {
     return async (req, res) => {
         try {
             const directory = directoryFn(req);
-            const filePath = decodeURIComponent(req.params[0]);
+            const filePath = getSplatPath(req);
             const fullPath = path.join(directory, filePath);
             if (!isPathUnderParent(directory, path.resolve(fullPath))) {
                 return res.sendStatus(403);
@@ -1093,7 +1103,7 @@ function createExtensionsRouteHandler(directoryFn) {
     return async (req, res) => {
         try {
             const directory = directoryFn(req);
-            const filePath = decodeURIComponent(req.params[0]);
+            const filePath = getSplatPath(req);
             const localPath = path.join(directory, filePath);
             if (!isPathUnderParent(directory, path.resolve(localPath))) {
                 return res.sendStatus(403);
@@ -1210,10 +1220,10 @@ export async function getAllEnabledUsers() {
  * Express router for serving files from the user's directories.
  */
 export const router = express.Router();
-router.use('/backgrounds/*', createRouteHandler(req => req.user.directories.backgrounds));
-router.use('/characters/*', createRouteHandler(req => req.user.directories.characters));
-router.use('/User%20Avatars/*', createRouteHandler(req => req.user.directories.avatars));
-router.use('/assets/*', createRouteHandler(req => req.user.directories.assets));
-router.use('/user/images/*', createRouteHandler(req => req.user.directories.userImages));
-router.use('/user/files/*', createRouteHandler(req => req.user.directories.files));
-router.use('/scripts/extensions/third-party/*', extensionsEnabledFeatureGuard, createExtensionsRouteHandler(req => req.user.directories.extensions));
+router.use('/backgrounds/*splat', createRouteHandler(req => req.user.directories.backgrounds));
+router.use('/characters/*splat', createRouteHandler(req => req.user.directories.characters));
+router.use('/User%20Avatars/*splat', createRouteHandler(req => req.user.directories.avatars));
+router.use('/assets/*splat', createRouteHandler(req => req.user.directories.assets));
+router.use('/user/images/*splat', createRouteHandler(req => req.user.directories.userImages));
+router.use('/user/files/*splat', createRouteHandler(req => req.user.directories.files));
+router.use('/scripts/extensions/third-party/*splat', extensionsEnabledFeatureGuard, createExtensionsRouteHandler(req => req.user.directories.extensions));

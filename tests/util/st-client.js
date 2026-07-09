@@ -68,6 +68,21 @@ export class SillyTavernClient {
     }
 
     /**
+     * Posts a body verbatim, so a test can send payloads that JSON.stringify could never produce.
+     * @param {string} pathname Request path
+     * @param {string} body Raw request body
+     * @param {string} contentType Value of the Content-Type header
+     * @returns {Promise<Response>} The response
+     */
+    postRaw(pathname, body, contentType) {
+        return this.#send(pathname, {
+            method: 'POST',
+            headers: this.#headers({ 'Content-Type': contentType }),
+            body,
+        });
+    }
+
+    /**
      * @param {string} pathname Request path
      * @param {FormData} form Multipart form body
      * @returns {Promise<Response>} The response

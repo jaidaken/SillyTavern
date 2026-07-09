@@ -77,7 +77,7 @@ router.post('/upload', async (request, response) => {
     }
 });
 
-router.post('/list/:folder?', (request, response) => {
+router.post('/list{/:folder}', (request, response) => {
     try {
         if (request.params.folder) {
             if (request.body.folder) {
