@@ -2719,14 +2719,6 @@ export function scrollChatToBottom({ waitForFrame } = {}) {
     const doScroll = () => {
         let position = chatElement[0].scrollHeight;
 
-        if (power_user.waifuMode) {
-            const lastMessage = chatElement.find('.mes').last();
-            if (lastMessage.length) {
-                const lastMessagePosition = lastMessage.position().top;
-                position = chatElement.scrollTop() + lastMessagePosition;
-            }
-        }
-
         chatElement.scrollTop(position);
         requestId = null;
     };
@@ -11165,11 +11157,6 @@ jQuery(async function () {
 
     const chatElementScroll = document.getElementById('chat');
     const chatScrollHandler = function () {
-        if (power_user.waifuMode) {
-            scrollLock = true;
-            return;
-        }
-
         const scrollIsAtBottom = Math.abs(chatElementScroll.scrollHeight - chatElementScroll.clientHeight - chatElementScroll.scrollTop) < 5;
 
         // Resume autoscroll if the user scrolls to the bottom
