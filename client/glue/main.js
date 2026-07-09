@@ -93,26 +93,59 @@
         });
     }
 
-    // <template> content is inert: no scripts run, no subresources load. Highlight there, then sanitize.
+    const HIGHLIGHT_CACHE_MAX = 128;
+    const highlightCache = new Map();
+    let previousKeys = [];
+
+    function highlightKey(lang, source) {
+        return (lang || '') + '\u0000' + source;
+    }
+
+    // Insertion order is eviction order, so the oldest settled block goes first.
+    function cacheHighlight(key, value) {
+        if (highlightCache.size >= HIGHLIGHT_CACHE_MAX) {
+            highlightCache.delete(highlightCache.keys().next().value);
+        }
+        highlightCache.set(key, value);
+    }
+
+    // <template> content is inert: no scripts run, no subresources load, so hljs writes into it safely.
+    // Only the growing streaming body reaches here per frame, and highlightAuto walks every grammar.
     function highlightBlocks(html) {
         const tpl = document.createElement('template');
         tpl.innerHTML = html;
-        tpl.content.querySelectorAll('pre > code').forEach(function (el) {
+        const keys = [];
+        tpl.content.querySelectorAll('pre > code').forEach(function (el, i) {
             const tag = Array.from(el.classList).find(function (c) { return c.startsWith('language-'); });
             const lang = tag ? tag.slice(9) : null;
             const source = el.textContent;
+            const key = highlightKey(lang, source);
+            keys.push(key);
+            el.classList.add('hljs');
+
+            const hit = highlightCache.get(key);
+            if (hit !== undefined) {
+                el.innerHTML = hit;
+                return;
+            }
+
+            // Still growing: next frame would throw this work away. DOMPurify already escaped the
+            // text, and leaving it alone renders the tail as plain text until the fence settles.
+            if (streamActive && previousKeys[i] !== key) return;
+
             const out = (lang && hljs.getLanguage(lang))
                 ? hljs.highlight(source, { language: lang, ignoreIllegals: true })
                 : hljs.highlightAuto(source);
+            cacheHighlight(key, out.value);
             el.innerHTML = out.value;
-            el.classList.add('hljs');
         });
+        previousKeys = keys;
         return tpl.innerHTML;
     }
 
     const env = {
-        // Sanitize first, then highlight: every byte that renders has crossed DOMPurify, and
-        // hljs only ever adds escaped <span>s to text it already owns.
+        // Sanitize first, then highlight: the hljs <span>s are injected after the gate, so they
+        // never cross it. They are safe because hljs escapes the text it wraps, not because of DOMPurify.
         sanitize: function (ptr, len) {
             stats.sanitizes += 1;
             stats.mdBytes += len;
@@ -137,14 +170,12 @@
         if (streamActive) throw new Error('stream already running');
         streamActive = true;
 
-        const n = writeBytes(name);
-        wasm.__st_stream_begin(n.ptr, n.len);
-
         let pending = [];
         let pendingLen = 0;
         let raf = 0;
         let timer = 0;
         let ended = false;
+        let begun = false;
 
         function cancelScheduled() {
             if (raf) cancelAnimationFrame(raf);
@@ -178,6 +209,11 @@
         }
 
         try {
+            const n = writeBytes(name);
+            wasm.__st_stream_begin(n.ptr, n.len);
+            begun = true;
+            previousKeys = [];
+
             const response = await fetch(url, { headers: { Accept: 'text/event-stream' } });
             if (!response.ok || !response.body) throw new Error('stream failed: ' + response.status);
 
@@ -192,16 +228,20 @@
             }
             flush();
         } finally {
-            // A fetch reject, a !ok, or a null body must still close the stream: leaving it open
-            // strands the message in Streaming and blocks every later stream.
+            // A fetch reject, a !ok, a null body, or a throwing begin must all clear the flag: a
+            // latched streamActive strands the message in Streaming and blocks every later stream.
             cancelScheduled();
             ended = true;
-            wasm.__st_stream_end();
             streamActive = false;
-            stats.tokens = wasm.__st_stream_tokens();
-            window.__stStats = stats;
-            const el = document.getElementById('probe-metrics');
-            if (el) el.textContent = JSON.stringify(stats);
+            // __st_stream_end rerenders synchronously, so the flag must already be down for the
+            // terminal render to see the tail as settled. A begin that threw has nothing to close.
+            if (begun) {
+                wasm.__st_stream_end();
+                stats.tokens = wasm.__st_stream_tokens();
+                window.__stStats = stats;
+                const el = document.getElementById('probe-metrics');
+                if (el) el.textContent = JSON.stringify(stats);
+            }
         }
     }
 
