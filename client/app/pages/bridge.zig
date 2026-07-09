@@ -43,10 +43,14 @@ fn streamBegin(name_ptr: usize, name_len: usize) callconv(.c) void {
 }
 
 /// Raw SSE bytes, one buffer per animation frame. Decoding and framing happen in `stream.zig`.
+///
+/// A feed fails only out of memory, and the door has no way to resend the chunk it already freed.
+/// Ending the stream seals the tokens that did arrive; returning would strand the message mid
+/// stream, refusing every later `begin` and leaving the caret spinning for good.
 fn streamAppend(ptr: usize, len: usize) callconv(.c) void {
     const buf = doorBuf(ptr, len);
     defer store.global.allocator.free(buf);
-    live.feed(buf) catch return;
+    live.feed(buf) catch live.end();
     zx.client.rerender();
 }
 

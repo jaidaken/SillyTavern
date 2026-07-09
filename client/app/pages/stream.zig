@@ -30,7 +30,9 @@ pub const Stream = struct {
     store: *Store,
     state: State = .idle,
     decoder: utf8.Decoder = .{},
-    /// The trailing partial SSE line, always free of `\n`.
+    /// The bytes received and not yet emitted. Free of `\n` once `drain` returns, so `end` never
+    /// sees one; a `drain` stopped by an allocation failure leaves the lines it could not emit here
+    /// for the next `feed` or `end` to retry.
     line: std.ArrayList(u8) = .empty,
     tokens: usize = 0,
 
@@ -39,23 +41,37 @@ pub const Stream = struct {
         self.* = undefined;
     }
 
-    /// Takes ownership of `name` on success. On failure the caller still owns it.
+    /// Takes ownership of `name` on success. On failure the caller still owns it, and the counters
+    /// are already those of the refused stream rather than the finished one.
     pub fn begin(self: *Stream, name: []u8) Error!void {
         if (self.state == .streaming) return error.StreamInProgress;
-        try self.store.beginStream(name);
-        self.state = .streaming;
+
         self.decoder = .{};
         self.line.clearRetainingCapacity();
         self.tokens = 0;
+
+        try self.store.beginStream(name);
+        self.state = .streaming;
     }
 
     /// Feeds raw bytes from the door. One call per animation frame, not per token.
+    ///
+    /// A decode that runs out of memory consumes nothing: the carry and `line` are put back as they
+    /// were, so the same bytes may be fed again. A `drain` that runs out of memory keeps the lines
+    /// it could not emit and never re-emits the ones it did.
     pub fn feed(self: *Stream, bytes: []const u8) Allocator.Error!void {
         if (self.state != .streaming) return;
 
-        const text = try self.decoder.feed(self.allocator, bytes);
-        defer self.allocator.free(text);
-        try self.line.appendSlice(self.allocator, text);
+        {
+            const carry = self.decoder;
+            const mark = self.line.items.len;
+            errdefer {
+                self.decoder = carry;
+                self.line.shrinkRetainingCapacity(mark);
+            }
+            try self.decoder.feedInto(self.allocator, &self.line, bytes);
+        }
+
         try self.drain();
     }
 
@@ -69,8 +85,13 @@ pub const Stream = struct {
             self.line.appendSlice(self.allocator, tail) catch {};
         } else |_| {}
 
+        // Retries whatever a failed drain left behind, so what remains is a bare partial line.
+        self.drain() catch {};
+
+        const rest = self.line.items;
+        const cut = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
         // The last line carries a token even with no trailing newline to close it.
-        self.emit(self.line.items) catch {};
+        self.emit(rest[0..cut]) catch {};
         self.line.clearAndFree(self.allocator);
         self.store.endStream();
         self.state = .done;
@@ -78,10 +99,17 @@ pub const Stream = struct {
 
     fn drain(self: *Stream) Allocator.Error!void {
         var start: usize = 0;
+        // Runs on the error path too: a line that was emitted must never be emitted again.
+        defer self.consume(start);
+
         while (std.mem.indexOfScalarPos(u8, self.line.items, start, '\n')) |nl| {
             try self.emit(self.line.items[start..nl]);
             start = nl + 1;
         }
+    }
+
+    /// Drops the first `start` bytes of `line`, which `drain` has emitted and will not revisit.
+    fn consume(self: *Stream, start: usize) void {
         if (start == 0) return;
 
         const rest = self.line.items.len - start;
@@ -90,6 +118,8 @@ pub const Stream = struct {
     }
 
     fn emit(self: *Stream, raw_line: []const u8) Allocator.Error!void {
+        std.debug.assert(std.mem.indexOfScalar(u8, raw_line, '\n') == null);
+
         var line = raw_line;
         if (line.len > 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
         if (!std.mem.startsWith(u8, line, data_prefix)) return;
@@ -293,4 +323,154 @@ fn feedScenario(gpa: Allocator, chunk_size: usize) !void {
 
 test "stream_releases_everything_on_any_allocation_failure" {
     try testing.checkAllAllocationFailures(testing.allocator, feedScenario, .{@as(usize, 3)});
+}
+
+// The second token dwarfs the spare capacity the first one leaves in the store's tail. Emitting it
+// therefore always allocates, which is the failure the sweeps below inject between two emits.
+const token_a = "a" ** 48;
+const token_b = "b" ** 4096;
+const token_c = "c" ** 4;
+const two_lines = "data: " ++ token_a ++ "\ndata: " ++ token_b ++ "\n";
+
+fn failingAllocator() testing.FailingAllocator {
+    return testing.FailingAllocator.init(testing.allocator, .{ .resize_fail_index = 0 });
+}
+
+/// Asserts the sealed body holds each token it contains exactly once, in wire order, and no `\n`.
+fn expectNoTokenEmittedTwice(f: *Fixture) !void {
+    const body = f.body(0);
+    try testing.expect(std.mem.indexOfScalar(u8, body, '\n') == null);
+
+    var expected: std.ArrayList(u8) = .empty;
+    defer expected.deinit(testing.allocator);
+
+    var count: usize = 0;
+    inline for (.{ token_a, token_b, token_c }) |token| {
+        if (std.mem.indexOfScalar(u8, body, token[0]) != null) {
+            try expected.appendSlice(testing.allocator, token);
+            count += 1;
+        }
+    }
+
+    try testing.expectEqualStrings(expected.items, body);
+    try testing.expectEqual(count, f.stream.tokens);
+}
+
+test "a_failed_emit_never_lets_a_later_feed_emit_the_same_line_twice" {
+    var saw_emit_failure = false;
+
+    for (0..16) |k| {
+        var failing = failingAllocator();
+        const gpa = failing.allocator();
+
+        var f: Fixture = undefined;
+        f.init(gpa);
+        defer f.deinit();
+        try f.open(gpa, "Seraphina");
+
+        failing.fail_index = failing.alloc_index + k;
+        const failed = if (f.stream.feed(two_lines)) |_| false else |_| true;
+        const emitted_before_failure = f.body(0).len > 0;
+        failing.fail_index = std.math.maxInt(usize);
+
+        try f.stream.feed("data: " ++ token_c ++ "\n");
+        f.stream.end();
+        try expectNoTokenEmittedTwice(&f);
+
+        if (failed and emitted_before_failure) {
+            saw_emit_failure = true;
+            try testing.expectEqual(@as(usize, 3), f.stream.tokens);
+        }
+    }
+
+    try testing.expect(saw_emit_failure);
+}
+
+test "end_seals_a_newline_free_body_when_a_feed_left_lines_undrained" {
+    var saw_undrained_line = false;
+
+    for (0..16) |k| {
+        var failing = failingAllocator();
+        const gpa = failing.allocator();
+
+        var f: Fixture = undefined;
+        f.init(gpa);
+        defer f.deinit();
+        try f.open(gpa, "Seraphina");
+
+        failing.fail_index = failing.alloc_index + k;
+        const failed = if (f.stream.feed(two_lines)) |_| false else |_| true;
+        const undrained = std.mem.indexOfScalar(u8, f.stream.line.items, '\n') != null;
+        failing.fail_index = std.math.maxInt(usize);
+        if (failed and undrained) saw_undrained_line = true;
+
+        f.stream.end();
+        try expectNoTokenEmittedTwice(&f);
+        try testing.expectEqual(State.done, f.stream.state);
+    }
+
+    try testing.expect(saw_undrained_line);
+}
+
+test "a_feed_that_runs_out_of_memory_consumes_none_of_its_bytes" {
+    const cut_codepoint = "data: ab\xe4\xb8";
+    var saw_decode_failure = false;
+
+    for (0..6) |k| {
+        var failing = failingAllocator();
+        const gpa = failing.allocator();
+
+        var f: Fixture = undefined;
+        f.init(gpa);
+        defer f.deinit();
+        try f.open(gpa, "Seraphina");
+
+        failing.fail_index = failing.alloc_index + k;
+        const failed = if (f.stream.feed(cut_codepoint)) |_| false else |_| true;
+        failing.fail_index = std.math.maxInt(usize);
+
+        if (failed) {
+            saw_decode_failure = true;
+            try testing.expectEqual(@as(usize, 0), f.stream.line.items.len);
+            try testing.expectEqual(@as(usize, 0), f.stream.decoder.partial_len);
+            try f.stream.feed(cut_codepoint);
+        }
+
+        try f.stream.feed("\x96\n");
+        f.stream.end();
+
+        try testing.expectEqualStrings("ab\u{4E16}", f.body(0));
+        try testing.expectEqual(@as(usize, 1), f.stream.tokens);
+    }
+
+    try testing.expect(saw_decode_failure);
+}
+
+test "begin_resets_the_token_count_when_the_store_refuses_the_new_stream" {
+    var failing = failingAllocator();
+    const gpa = failing.allocator();
+
+    var f: Fixture = undefined;
+    f.init(gpa);
+    defer f.deinit();
+
+    try f.open(gpa, "First");
+    try f.stream.feed("data: one\ndata: two\n");
+    f.stream.end();
+    try testing.expectEqual(@as(usize, 2), f.stream.tokens);
+
+    // beginStream allocates only when the message list grows, so bring it to capacity first.
+    while (f.store.messages.items.len < f.store.messages.capacity) try f.store.appendCopy("You", "hi");
+
+    const name = try gpa.dupe(u8, "Second");
+    defer gpa.free(name);
+    const sealed = f.store.slice().len;
+
+    failing.fail_index = failing.alloc_index;
+    try testing.expectError(error.OutOfMemory, f.stream.begin(name));
+    failing.fail_index = std.math.maxInt(usize);
+
+    try testing.expectEqual(@as(usize, 0), f.stream.tokens);
+    try testing.expectEqual(State.done, f.stream.state);
+    try testing.expectEqual(sealed, f.store.slice().len);
 }

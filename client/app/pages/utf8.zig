@@ -44,14 +44,20 @@ pub const Decoder = struct {
         return b >= lo and b <= hi;
     }
 
-    /// Returns the validated UTF-8 decoded from `chunk`, minus any trailing truncated sequence,
-    /// which is held for the next call. Caller owns the result.
-    pub fn feed(self: *Decoder, allocator: Allocator, chunk: []const u8) Allocator.Error![]u8 {
-        var out: std.ArrayList(u8) = .empty;
-        errdefer out.deinit(allocator);
-
+    /// Appends the validated UTF-8 decoded from `chunk` to `out`, minus any trailing truncated
+    /// sequence, which is held for the next call.
+    ///
+    /// Failure leaves `out` holding what it had already appended and the carry advanced. A caller
+    /// wanting an all-or-nothing feed copies the decoder and the length of `out` first, and puts
+    /// both back on error.
+    pub fn feedInto(
+        self: *Decoder,
+        allocator: Allocator,
+        out: *std.ArrayList(u8),
+        chunk: []const u8,
+    ) Allocator.Error!void {
         var i: usize = 0;
-        if (self.partial_len > 0) i = try self.completeHeld(allocator, &out, chunk);
+        if (self.partial_len > 0) i = try self.completeHeld(allocator, out, chunk);
 
         outer: while (i < chunk.len) {
             const lead = leadInfo(chunk[i]) orelse {
@@ -66,7 +72,7 @@ pub const Decoder = struct {
                     @memcpy(self.partial[0..n], chunk[i..]);
                     self.partial_len = n;
                     self.lead = lead;
-                    break :outer;
+                    return;
                 }
                 if (!accepts(lead, n, chunk[i + n])) {
                     // One replacement per maximal subpart, then resynchronise on the offending byte.
@@ -79,15 +85,18 @@ pub const Decoder = struct {
             try out.appendSlice(allocator, chunk[i..][0..lead.need]);
             i += lead.need;
         }
-
-        return out.toOwnedSlice(allocator);
     }
 
-    /// Ends the stream. A sequence still held here was truncated by the peer, never completed.
+    /// Ends the stream. A sequence the peer truncated yields U+FFFD. A completed one, still held
+    /// because the append that would have emitted it ran out of memory, yields its own bytes.
     pub fn flush(self: *Decoder, allocator: Allocator) Allocator.Error![]u8 {
         if (self.partial_len == 0) return allocator.alloc(u8, 0);
+
+        const held = self.partial[0..self.partial_len];
+        const bytes = if (self.partial_len == self.lead.need) held else replacement;
+        const owned = try allocator.dupe(u8, bytes);
         self.partial_len = 0;
-        return allocator.dupe(u8, replacement);
+        return owned;
     }
 
     /// Extends the held sequence from `chunk`. Returns the index where ordinary scanning resumes.
@@ -118,13 +127,21 @@ pub const Decoder = struct {
 
 const testing = std.testing;
 
+/// The owned-slice form of `feedInto`, kept here because only the tests want the extra allocation.
+fn feedOwned(d: *Decoder, allocator: Allocator, chunk: []const u8) Allocator.Error![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try d.feedInto(allocator, &out, chunk);
+    return out.toOwnedSlice(allocator);
+}
+
 fn feedAll(allocator: Allocator, chunks: []const []const u8) Allocator.Error![]u8 {
     var d = Decoder{};
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
 
     for (chunks) |c| {
-        const text = try d.feed(allocator, c);
+        const text = try feedOwned(&d, allocator, c);
         defer allocator.free(text);
         try out.appendSlice(allocator, text);
     }
@@ -155,12 +172,12 @@ test "decoder_holds_a_truncated_sequence_and_emits_nothing_for_it_yet" {
     var d = Decoder{};
     const emoji = "\u{1F600}";
 
-    const first = try d.feed(testing.allocator, emoji[0..3]);
+    const first = try feedOwned(&d, testing.allocator, emoji[0..3]);
     defer testing.allocator.free(first);
     try testing.expectEqualStrings("", first);
     try testing.expectEqual(@as(usize, 3), d.partial_len);
 
-    const second = try d.feed(testing.allocator, emoji[3..4]);
+    const second = try feedOwned(&d, testing.allocator, emoji[3..4]);
     defer testing.allocator.free(second);
     try testing.expectEqualStrings(emoji, second);
     try testing.expectEqual(@as(usize, 0), d.partial_len);
@@ -236,7 +253,7 @@ test "decoder_output_never_depends_on_where_the_chunks_are_cut" {
         var at: usize = 0;
         while (at < src.len) {
             const take = @min(src.len - at, rand.uintLessThan(usize, 5) + 1);
-            const text = try d.feed(testing.allocator, src[at..][0..take]);
+            const text = try feedOwned(&d, testing.allocator, src[at..][0..take]);
             defer testing.allocator.free(text);
             try out.appendSlice(testing.allocator, text);
             at += take;
@@ -263,7 +280,7 @@ test "decoder_never_panics_and_always_emits_valid_utf8_for_random_bytes" {
         var at: usize = 0;
         while (at < bytes.len) {
             const take = @min(bytes.len - at, rand.uintLessThan(usize, 8) + 1);
-            const text = try d.feed(testing.allocator, bytes[at..][0..take]);
+            const text = try feedOwned(&d, testing.allocator, bytes[at..][0..take]);
             defer testing.allocator.free(text);
             try out.appendSlice(testing.allocator, text);
             at += take;
@@ -286,7 +303,7 @@ fn decodeScenario(allocator: Allocator, chunks: usize) !void {
     const step = @max(1, src.len / chunks);
     while (at < src.len) {
         const take = @min(src.len - at, step);
-        const text = try d.feed(allocator, src[at..][0..take]);
+        const text = try feedOwned(&d, allocator, src[at..][0..take]);
         defer allocator.free(text);
         try out.appendSlice(allocator, text);
         at += take;
@@ -300,4 +317,49 @@ fn decodeScenario(allocator: Allocator, chunks: usize) !void {
 
 test "decoder_releases_everything_on_any_allocation_failure" {
     try testing.checkAllAllocationFailures(testing.allocator, decodeScenario, .{@as(usize, 5)});
+}
+
+/// Fails the append that would have emitted the codepoint completed by the final byte of `emoji`.
+fn holdCompletedCodepoint(d: *Decoder, emoji: []const u8) !void {
+    const head = try feedOwned(d, testing.allocator, emoji[0..3]);
+    defer testing.allocator.free(head);
+    try testing.expectEqualStrings("", head);
+
+    var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(testing.allocator);
+    try testing.expectError(error.OutOfMemory, d.feedInto(failing.allocator(), &out, emoji[3..4]));
+    try testing.expectEqualStrings("", out.items);
+}
+
+test "flush_emits_a_completed_codepoint_the_failed_append_left_held" {
+    const emoji = "\u{1F600}";
+    var d = Decoder{};
+    try holdCompletedCodepoint(&d, emoji);
+
+    const tail = try d.flush(testing.allocator);
+    defer testing.allocator.free(tail);
+    try testing.expectEqualStrings(emoji, tail);
+    try testing.expectEqual(@as(usize, 0), d.partial_len);
+}
+
+test "the_next_feed_emits_a_completed_codepoint_the_failed_append_left_held" {
+    const emoji = "\u{1F600}";
+    var d = Decoder{};
+    try holdCompletedCodepoint(&d, emoji);
+
+    const text = try feedOwned(&d, testing.allocator, "z");
+    defer testing.allocator.free(text);
+    try testing.expectEqualStrings(emoji ++ "z", text);
+    try testing.expectEqual(@as(usize, 0), d.partial_len);
+}
+
+test "flush_still_replaces_a_sequence_the_peer_truncated" {
+    var d = Decoder{};
+    const held = try feedOwned(&d, testing.allocator, "\xf0\x9f\x98");
+    defer testing.allocator.free(held);
+
+    const tail = try d.flush(testing.allocator);
+    defer testing.allocator.free(tail);
+    try testing.expectEqualStrings(replacement, tail);
 }
