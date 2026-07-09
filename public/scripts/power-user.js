@@ -1949,7 +1949,7 @@ async function loadContextSettings() {
                 return;
             }
 
-            log.prompt.warn(`[Story String Validation] Story String is missing a field: ${field}. Adding it at the ${position}.`);
+            log.prompt.debug(`[Story String Validation] Story String is missing a field: ${field}. Adding it at the ${position}.`);
             const fieldTemplate = `{{#if ${field}}}{{${field}}}\n{{/if}}`;
             const firstCurlyPosition = storyString.includes('{{') ? storyString.indexOf('{{') : 0;
             const lastCurlyPosition = storyString.includes('}}') ? storyString.lastIndexOf('}}') + '}}'.length : storyString.length;
