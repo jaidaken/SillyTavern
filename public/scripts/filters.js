@@ -1,6 +1,7 @@
 import { fuzzySearchCharacters, fuzzySearchGroups, fuzzySearchPersonas, fuzzySearchTags, fuzzySearchWorldInfo, power_user } from './power-user.js';
 import { tag_map } from './tags.js';
 import { includesIgnoreCaseAndAccents } from './utils.js';
+import { log } from './log.js';
 
 
 /**
@@ -424,7 +425,7 @@ export class FilterHelper {
             typeScores.set(uid, score);
         }
         this.scoreCache.set(type, typeScores);
-        console.debug('search scores cached', type, typeScores);
+        log.ui.debug('search scores cached', type, typeScores);
     }
 
     /**

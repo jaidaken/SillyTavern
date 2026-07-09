@@ -1,3 +1,5 @@
+import { log } from './log.js';
+
 /** @type {CSSStyleSheet} */
 let dynamicStyleSheet = null;
 /** @type {CSSStyleSheet} */
@@ -17,7 +19,7 @@ const observer = new MutationObserver(mutations => {
                     try {
                         applyDynamicFocusStyles(node.sheet);
                     } catch (e) {
-                        console.warn('Failed to process new stylesheet:', e);
+                        log.ui.warn('Failed to process new stylesheet:', e);
                     }
                 });
             }
@@ -149,7 +151,7 @@ function applyDynamicFocusStyles(styleSheet, { fromExtension = false } = {}) {
             try {
                 targetStyleSheet.insertRule(focusRule, targetStyleSheet.cssRules.length);
             } catch (e) {
-                console.warn('Failed to insert focus rule:', e);
+                log.ui.warn('Failed to insert focus rule:', e);
             }
         }
     });
@@ -197,7 +199,7 @@ export function initDynamicStyles() {
         try {
             applyDynamicFocusStyles(sheet, { fromExtension: sheet.href?.toLowerCase().includes('scripts/extensions') == true });
         } catch (e) {
-            console.warn('Failed to process stylesheet on initial load:', e);
+            log.ui.warn('Failed to process stylesheet on initial load:', e);
         }
     });
 }

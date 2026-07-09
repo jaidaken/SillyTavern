@@ -1,4 +1,5 @@
 import { saveSettingsDebounced } from '../../script.js';
+import { log } from '../log.js';
 
 const MIGRATED_MARKER = '__migrated';
 const MIGRATABLE_KEYS = [
@@ -87,7 +88,7 @@ class AccountStorage {
      */
     getItem(key) {
         if (!this.#ready) {
-            console.warn(`AccountStorage not ready (trying to read from ${key})`);
+            log.users.warn(`AccountStorage not ready (trying to read from ${key})`);
         }
 
         return Object.hasOwn(this.#state, key) ? String(this.#state[key]) : null;
@@ -100,7 +101,7 @@ class AccountStorage {
      */
     setItem(key, value) {
         if (!this.#ready) {
-            console.warn(`AccountStorage not ready (trying to write to ${key})`);
+            log.users.warn(`AccountStorage not ready (trying to write to ${key})`);
         }
 
         const hasPropertySet = Object.hasOwn(this.#state, key) && this.#state[key] === String(value);
@@ -119,7 +120,7 @@ class AccountStorage {
      */
     removeItem(key) {
         if (!this.#ready) {
-            console.warn(`AccountStorage not ready (trying to remove ${key})`);
+            log.users.warn(`AccountStorage not ready (trying to remove ${key})`);
         }
 
         if (!Object.hasOwn(this.#state, key)) {

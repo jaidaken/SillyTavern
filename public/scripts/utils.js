@@ -17,6 +17,7 @@ import { getTagsList } from './tags.js';
 import { groups, selected_group } from './group-chats.js';
 import { getCurrentLocale, t } from './i18n.js';
 import { importWorldInfo } from './world-info.js';
+import { log } from './log.js';
 
 export const shiftUpByOne = (e, i, a) => a[i] = e + 1;
 export const shiftDownByOne = (e, i, a) => a[i] = e - 1;
@@ -791,7 +792,7 @@ export function saveCaretPosition(element) {
         end: range.endOffset,
     };
 
-    console.debug('Caret saved', position);
+    log.ui.debug('Caret saved', position);
 
     return position;
 }
@@ -807,7 +808,7 @@ export function restoreCaretPosition(element, position) {
         return;
     }
 
-    console.debug('Caret restored', position);
+    log.ui.debug('Caret restored', position);
 
     // Create a new range object
     const range = new Range();
@@ -842,7 +843,6 @@ export async function initScrollHeight(element) {
     if (diff < 3) { return; } //happens when the div isn't loaded yet
 
     const newHeight = curHeight + diff + 3; //the +3 here is to account for padding/line-height on text inputs
-    //console.log(`init height to ${newHeight}`);
     $(element).css('height', '');
     $(element).css('height', `${newHeight}px`);
     //resetScrollHeight(element);
@@ -1409,7 +1409,7 @@ export class Stopwatch {
      */
     constructor(interval) {
         if (isNaN(interval) || !isFinite(interval) || interval <= 0) {
-            console.warn('Invalid interval for Stopwatch, setting to 1');
+            log.sys.warn('Invalid interval for Stopwatch, setting to 1');
             interval = 1;
         }
 
@@ -1488,7 +1488,7 @@ export class RateLimiter {
 
         // Update the last resolve time
         this.lastResolveTime = Date.now() + this.interval;
-        console.debug(`RateLimiter.waitForResolve() ${this.lastResolveTime}`);
+        log.sys.debug(`RateLimiter.waitForResolve() ${this.lastResolveTime}`);
     }
 }
 
@@ -1501,13 +1501,13 @@ export class RateLimiter {
  * @returns {object} The extracted JSON object.
  */
 export function extractDataFromPng(data, identifier = 'chara') {
-    console.log('Attempting PNG import...');
+    log.content.debug('Attempting PNG import...');
     let uint8 = new Uint8Array(4);
     let uint32 = new Uint32Array(uint8.buffer);
 
     //check if png header is valid
     if (!data || data[0] !== 0x89 || data[1] !== 0x50 || data[2] !== 0x4E || data[3] !== 0x47 || data[4] !== 0x0D || data[5] !== 0x0A || data[6] !== 0x1A || data[7] !== 0x0A) {
-        console.log('PNG header invalid');
+        log.content.debug('PNG header invalid');
         return null;
     }
 
@@ -1541,7 +1541,7 @@ export function extractDataFromPng(data, identifier = 'chara') {
 
         // The IHDR header MUST come first.
         if (!chunks.length && name !== 'IHDR') {
-            console.log('Warning: IHDR header missing');
+            log.content.debug('Warning: IHDR header missing');
         }
 
         // The IEND header marks the end of the file,
@@ -1579,7 +1579,7 @@ export function extractDataFromPng(data, identifier = 'chara') {
     }
 
     if (!ended) {
-        console.log('.png file ended prematurely: no IEND header was found');
+        log.content.debug('.png file ended prematurely: no IEND header was found');
     }
 
     //find the chunk with the chara name, just check first and last letter
@@ -1589,7 +1589,7 @@ export function extractDataFromPng(data, identifier = 'chara') {
         && x.data.slice(0, identifier.length).every((v, i) => String.fromCharCode(v) == identifier[i])));
 
     if (found.length == 0) {
-        console.log('PNG Image contains no data');
+        log.content.debug('PNG Image contains no data');
         return null;
     } else {
         try {
@@ -1599,10 +1599,10 @@ export function extractDataFromPng(data, identifier = 'chara') {
                 b64buf += String.fromCharCode(bytes[i]);
             }
             let decoded = JSON.parse(atob(b64buf));
-            console.log(decoded);
+            log.content.debug(decoded);
             return decoded;
         } catch (e) {
-            console.log('Error decoding b64 in image: ' + e);
+            log.content.error('Error decoding b64 in image: ' + e);
             return null;
         }
     }
@@ -1633,7 +1633,7 @@ export async function getSanitizedFilename(fileName) {
         return responseData.fileName;
     } catch (error) {
         toastr.error(String(error), 'Could not sanitize fileName');
-        console.error('Could not sanitize fileName', error);
+        log.content.error('Could not sanitize fileName', error);
         throw error;
     }
 }
@@ -1764,7 +1764,7 @@ export async function promptForAvatarFile() {
                 const base64 = await getBase64Async(converted);
                 resolve(base64);
             } catch (error) {
-                console.error('Error processing selected image:', error);
+                log.content.error('Error processing selected image:', error);
                 toastr.error(t`Failed to process selected image: ${error.message}`);
                 resolve(null);
             }
@@ -1828,14 +1828,14 @@ export async function resolveAvatarData(input) {
             const converted = await ensureImageFormatSupported(new File([blob], 'avatar.png', { type: blob.type }));
             return await getBase64Async(converted);
         } catch (error) {
-            console.error('Error fetching local avatar:', error);
+            log.content.error('Error fetching local avatar:', error);
             toastr.warning(t`Failed to load avatar from path: ${error.message}`);
             return null;
         }
     }
 
     // Unknown format
-    console.warn('Unknown avatar format:', trimmed.substring(0, 50));
+    log.content.warn('Unknown avatar format:', trimmed.substring(0, 50));
     toastr.warning(t`Unknown avatar format. Use "prompt" to select a file, or provide a local file path.`);
     return null;
 }
@@ -2537,7 +2537,7 @@ export function toggleDrawer(drawer, expand = true) {
     const content = drawer.querySelector(':scope > .inline-drawer-content');
 
     if (!icon || !content) {
-        console.debug('toggleDrawer: No icon or content found in the drawer element.');
+        log.ui.debug('toggleDrawer: No icon or content found in the drawer element.');
         return;
     }
 
@@ -2688,7 +2688,7 @@ export function findPersona({ name = null, allowAvatar = true, insensitive = tru
     const matchingPersonas = personas.filter(a => matches(a));
     if (matchingPersonas.length > 1) {
         if (!quiet) toastr.warning(t`Multiple personas found for given conditions.`);
-        else console.warn(t`Multiple personas found for given conditions. Returning the first match.`);
+        else log.persona.warn(t`Multiple personas found for given conditions. Returning the first match.`);
     }
 
     return matchingPersonas[0] || null;
@@ -2727,7 +2727,7 @@ export function findChar({ name = null, allowAvatar = true, insensitive = true, 
         const preferredCharSearch = currentChars.filter(matches);
         if (preferredCharSearch.length > 1) {
             if (!quiet) toastr.warning(t`Multiple characters found for given conditions.`);
-            else console.warn(t`Multiple characters found for given conditions. Returning the first match.`);
+            else log.chars.warn(t`Multiple characters found for given conditions. Returning the first match.`);
         }
         if (preferredCharSearch.length) {
             return preferredCharSearch[0];
@@ -2746,7 +2746,7 @@ export function findChar({ name = null, allowAvatar = true, insensitive = true, 
     const matchingCharacters = name ? filteredCharacters.filter(matches) : filteredCharacters;
     if (matchingCharacters.length > 1) {
         if (!quiet) toastr.warning('Multiple characters found for given conditions.');
-        else console.warn('Multiple characters found for given conditions. Returning the first match.');
+        else log.chars.warn('Multiple characters found for given conditions. Returning the first match.');
     }
 
     return matchingCharacters[0] || null;
@@ -2888,9 +2888,9 @@ export function versionCompare(srcVersion, minVersion) {
  */
 export function logSlashCommandWarn(message, args, valueObj = null) {
     if (valueObj !== null && valueObj !== undefined) {
-        console.warn(message, valueObj, stripInternalArgs(args));
+        log.slash.warn(message, valueObj, stripInternalArgs(args));
     } else {
-        console.warn(message, stripInternalArgs(args));
+        log.slash.warn(message, stripInternalArgs(args));
     }
     return;
     function stripInternalArgs(args) {
@@ -2921,12 +2921,12 @@ export function setupScrollToTop({ scrollContainerId, buttonId, drawerId, visibi
 
     if (!btn || !drawer) {
         // Not fatal; the drawer or button may not exist in some builds. Use debug level.
-        console.debug('Scroll-to-top: button or drawer not found during setup.');
+        log.ui.debug('Scroll-to-top: button or drawer not found during setup.');
         return () => { /* noop cleanup */ };
     }
 
     if (!scrollContainer) {
-        console.debug('Scroll-to-top: scroll container not found during setup.');
+        log.ui.debug('Scroll-to-top: scroll container not found during setup.');
         return () => { /* noop cleanup */ };
     }
 
@@ -2978,14 +2978,14 @@ export async function importFromExternalUrl(url, { preserveFileName = null } = {
     let request;
 
     if (isValidUrl(url)) {
-        console.debug('Custom content import started for URL: ', url);
+        log.content.debug('Custom content import started for URL: ', url);
         request = await fetch('/api/content/importURL', {
             method: 'POST',
             headers: getRequestHeaders(),
             body: JSON.stringify({ url }),
         });
     } else {
-        console.debug('Custom content import started for Char UUID: ', url);
+        log.content.debug('Custom content import started for Char UUID: ', url);
         request = await fetch('/api/content/importUUID', {
             method: 'POST',
             headers: getRequestHeaders(),
@@ -2995,7 +2995,7 @@ export async function importFromExternalUrl(url, { preserveFileName = null } = {
 
     if (!request.ok) {
         toastr.info(request.statusText, 'Custom content import failed');
-        console.error('Custom content import failed', request.status, request.statusText);
+        log.content.error('Custom content import failed', request.status, request.statusText);
         return;
     }
 
@@ -3018,7 +3018,7 @@ export async function importFromExternalUrl(url, { preserveFileName = null } = {
             break;
         default:
             toastr.warning('Unknown content type');
-            console.error('Unknown content type', customContentType);
+            log.content.error('Unknown content type', customContentType);
             break;
     }
 }

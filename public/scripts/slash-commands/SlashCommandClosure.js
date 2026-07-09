@@ -12,6 +12,7 @@ import { SlashCommandExecutionError } from './SlashCommandExecutionError.js';
 import { SlashCommandExecutor } from './SlashCommandExecutor.js';
 import { SlashCommandNamedArgumentAssignment } from './SlashCommandNamedArgumentAssignment.js';
 import { SlashCommandScope } from './SlashCommandScope.js';
+import { log } from '../log.js';
 
 export class SlashCommandClosure {
     /** @type {SlashCommandScope} */ scope;
@@ -67,7 +68,7 @@ export class SlashCommandClosure {
                         // NB: Legacy replacer halted the script execution on unknown variables
                         return scope.getVariable(context.list[0], context.list[1]);
                     } catch (error) {
-                        console.warn('{{var}} dynamic macro execution error:', error);
+                        log.slash.warn('{{var}} dynamic macro execution error:', error);
                         return '';
                     }
                 },
@@ -314,7 +315,7 @@ export class SlashCommandClosure {
             // get executor before execution
             step = await stepper.next();
             if (step.value instanceof SlashCommandBreakPoint) {
-                console.log('encountered SlashCommandBreakPoint');
+                log.slash.debug('encountered SlashCommandBreakPoint');
                 if (this.debugController) {
                     // resolve args
                     await stepper.next();
@@ -347,7 +348,7 @@ export class SlashCommandClosure {
             // resolve args
             step = await stepper.next();
             if (step.value instanceof SlashCommandBreak) {
-                console.log('encountered SlashCommandBreak');
+                log.slash.debug('encountered SlashCommandBreak');
                 if (this.breakController) {
                     this.breakController?.break();
                     break;
@@ -518,7 +519,7 @@ export class SlashCommandClosure {
                     args[name] = [value];
                 }
             } else {
-                args[name] !== undefined && console.debug(`Named argument assigned multiple times: ${name}`);
+                args[name] !== undefined && log.slash.debug(`Named argument assigned multiple times: ${name}`);
                 args[name] = value;
             }
         };
@@ -622,10 +623,10 @@ export class SlashCommandClosure {
      */
     #lintPipe(command) {
         if (this.scope.pipe === undefined || this.scope.pipe === null) {
-            console.warn(`/${command.name} returned undefined or null. Auto-fixing to empty string.`);
+            log.slash.warn(`/${command.name} returned undefined or null. Auto-fixing to empty string.`);
             this.scope.pipe = '';
         } else if (!(typeof this.scope.pipe == 'string' || this.scope.pipe instanceof SlashCommandClosure)) {
-            console.warn(`/${command.name} returned illegal type (${typeof this.scope.pipe} - ${this.scope.pipe.constructor?.name ?? ''}). Auto-fixing to stringified JSON.`);
+            log.slash.warn(`/${command.name} returned illegal type (${typeof this.scope.pipe} - ${this.scope.pipe.constructor?.name ?? ''}). Auto-fixing to stringified JSON.`);
             this.scope.pipe = JSON.stringify(this.scope.pipe) ?? '';
         }
     }

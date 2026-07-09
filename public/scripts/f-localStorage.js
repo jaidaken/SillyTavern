@@ -1,17 +1,18 @@
 ////////////////// LOCAL STORAGE HANDLING /////////////////////
+import { log } from './log.js';
 
 /**
  * @deprecated THIS FUNCTION IS OBSOLETE. DO NOT USE
  */
 export function SaveLocal(target, val) {
     localStorage.setItem(target, val);
-    console.debug('SaveLocal -- ' + target + ' : ' + val);
+    log.sys.debug('SaveLocal -- ' + target + ' : ' + val);
 }
 /**
  * @deprecated THIS FUNCTION IS OBSOLETE. DO NOT USE
  */
 export function LoadLocal(target) {
-    console.debug('LoadLocal -- ' + target);
+    log.sys.debug('LoadLocal -- ' + target);
     return localStorage.getItem(target);
 }
 /**
@@ -25,17 +26,17 @@ export function LoadLocalBool(target) {
  * @deprecated THIS FUNCTION IS OBSOLETE. DO NOT USE
  */
 export function CheckLocal() {
-    console.log('----------local storage---------');
+    log.sys.debug('----------local storage---------');
     var i;
     for (i = 0; i < localStorage.length; i++) {
-        console.log(localStorage.key(i) + ' : ' + localStorage.getItem(localStorage.key(i)));
+        log.sys.debug(localStorage.key(i) + ' : ' + localStorage.getItem(localStorage.key(i)));
     }
-    console.log('------------------------------');
+    log.sys.debug('------------------------------');
 }
 
 /**
  * @deprecated THIS FUNCTION IS OBSOLETE. DO NOT USE
  */
-export function ClearLocal() { localStorage.clear(); console.log('Removed All Local Storage'); }
+export function ClearLocal() { localStorage.clear(); log.sys.debug('Removed All Local Storage'); }
 
 /////////////////////////////////////////////////////////////////////////

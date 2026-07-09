@@ -11,6 +11,7 @@ import { extension_settings, saveMetadataDebounced } from './extensions.js';
 import { selected_group } from './group-chats.js';
 import { getCharaFilename, delay } from './utils.js';
 import { power_user } from './power-user.js';
+import { log } from './log.js';
 
 const extensionName = 'cfg';
 const defaultSettings = {
@@ -79,7 +80,7 @@ function setCharCfg(tempValue, setting) {
 
         extension_settings.cfg.chara.push(tempCharaCfg);
     } else {
-        console.debug('Character CFG error: No avatar name key could be found.');
+        log.gen.debug('Character CFG error: No avatar name key could be found.');
 
         // Don't save settings if something went wrong
         return false;
@@ -400,7 +401,7 @@ export const metadataKeys = {
 // If the guidance scale is 1, ignore the CFG prompt(s) since it won't be used anyways
 export function getGuidanceScale() {
     if (!extension_settings.cfg) {
-        console.warn('CFG extension is not enabled. Skipping CFG guidance.');
+        log.gen.warn('CFG extension is not enabled. Skipping CFG guidance.');
         return;
     }
 
@@ -444,7 +445,7 @@ function getCustomSeparator() {
 
         return defaultSeparator;
     } catch {
-        console.warn('Invalid JSON detected for prompt separator. Using default separator.');
+        log.gen.warn('Invalid JSON detected for prompt separator. Using default separator.');
         return defaultSeparator;
     }
 }
@@ -488,7 +489,7 @@ export function getCfgPrompt(guidanceScale, isNegative, quiet = false) {
     const customSeparator = getCustomSeparator();
     const combinedCfgPrompt = splitCfgPrompt.filter((e) => e.length > 0).join(customSeparator);
     const insertionDepth = chat_metadata[metadataKeys.prompt_insertion_depth] ?? 1;
-    !quiet && console.log(`Setting CFG with guidance scale: ${guidanceScale.value}, negatives: ${combinedCfgPrompt}`);
+    !quiet && log.gen.debug(`Setting CFG with guidance scale: ${guidanceScale.value}, negatives: ${combinedCfgPrompt}`);
 
     return {
         value: combinedCfgPrompt,

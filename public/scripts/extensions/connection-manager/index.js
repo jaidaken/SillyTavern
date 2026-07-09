@@ -19,6 +19,7 @@ import { performFuzzySearch } from '/scripts/power-user.js';
 import { StreamingDisplay } from '/scripts/streaming-display.js';
 import { ConnectionManagerRequestService } from '../shared.js';
 import { formatReasoning } from '/scripts/reasoning.js';
+import { log } from '../../log.js';
 
 const MODULE_NAME = 'connection-manager';
 const NONE = '<None>';
@@ -230,7 +231,7 @@ async function readProfileFromCommands(mode, profile, cleanUp = false) {
                 continue;
             }
         } catch (error) {
-            console.error(`Failed to execute command: ${command}`, error);
+            log.net.error(`Failed to execute command: ${command}`, error);
         }
     }
 
@@ -273,7 +274,7 @@ async function createConnectionProfile(forceName = null) {
         const fancyName = String($(this).val());
         const keyName = Object.entries(FANCY_NAMES).find(x => x[1] === fancyName)?.[0];
         if (!keyName) {
-            console.warn('Key not found for fancy name:', fancyName);
+            log.net.warn('Key not found for fancy name:', fancyName);
             return;
         }
 
@@ -416,7 +417,7 @@ async function applyConnectionProfile(profile) {
             const args = getNamedArguments(allowEmpty ? { force: 'true' } : {});
             await SlashCommandParser.commands[command].callback(args, argument);
         } catch (error) {
-            console.error(`Failed to execute command: ${command} ${argument}`, error);
+            log.net.error(`Failed to execute command: ${command} ${argument}`, error);
         }
     }
 
@@ -488,7 +489,7 @@ async function renderDetailsContent(detailsContent) {
  */
 async function generateStreamCallback(args, value) {
     if (!value) {
-        console.warn('WARN: No argument provided for /profile-genstream command');
+        log.net.warn('No argument provided for /profile-genstream command');
         return '';
     }
 
@@ -537,7 +538,7 @@ async function generateStreamCallback(args, value) {
                 localClosure.onProgress = () => { };
                 await localClosure.execute();
             } catch (e) {
-                console.error('[GenStream] Error executing onStop closure', e);
+                log.net.error('[GenStream] Error executing onStop closure', e);
             }
         }
     } : null;
@@ -638,7 +639,7 @@ async function generateStreamCallback(args, value) {
                 return buildResultText();
             }
 
-            console.warn('[Slash Commands] Streaming failed, falling back to non-streaming:', error);
+            log.net.warn('[Slash Commands] Streaming failed, falling back to non-streaming:', error);
             display.hide({ instant: true });
 
             // Retry with non-streaming
@@ -674,7 +675,7 @@ async function generateStreamCallback(args, value) {
                 localClosure.onProgress = () => { };
                 await localClosure.execute();
             } catch (e) {
-                console.error('[GenStream] Error executing onComplete closure', e);
+                log.net.error('[GenStream] Error executing onComplete closure', e);
             }
         }
 
@@ -685,7 +686,7 @@ async function generateStreamCallback(args, value) {
 
         return buildResultText();
     } catch (err) {
-        console.error('Error on /genstream generation', err);
+        log.net.error('Error on /genstream generation', err);
         toastr.error(err.message, t`API Error`, { preventDuplicates: true });
         return '';
     } finally {
@@ -744,7 +745,7 @@ export async function init() {
         const profile = extension_settings.connectionManager.profiles.find(p => p.id === profileId);
 
         if (!profile) {
-            console.log(`Profile not found: ${profileId}`);
+            log.net.debug(`Profile not found: ${profileId}`);
             return;
         }
 
@@ -757,7 +758,7 @@ export async function init() {
         const selectedProfile = extension_settings.connectionManager.selectedProfile;
         const profile = extension_settings.connectionManager.profiles.find(p => p.id === selectedProfile);
         if (!profile) {
-            console.log('No profile selected');
+            log.net.debug('No profile selected');
             return;
         }
         await applyConnectionProfile(profile);
@@ -786,7 +787,7 @@ export async function init() {
         const selectedProfile = extension_settings.connectionManager.selectedProfile;
         const profile = extension_settings.connectionManager.profiles.find(p => p.id === selectedProfile);
         if (!profile) {
-            console.log('No profile selected');
+            log.net.debug('No profile selected');
             return;
         }
         const oldProfile = structuredClone(profile);
@@ -811,7 +812,7 @@ export async function init() {
         const selectedProfile = extension_settings.connectionManager.selectedProfile;
         const profile = extension_settings.connectionManager.profiles.find(p => p.id === selectedProfile);
         if (!profile) {
-            console.log('No profile selected');
+            log.net.debug('No profile selected');
             return;
         }
         if (!Array.isArray(profile.exclude)) {

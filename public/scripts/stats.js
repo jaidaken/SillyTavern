@@ -5,6 +5,7 @@ import { humanizeGenTime } from './RossAscends-mods.js';
 import { callGenericPopup, POPUP_TYPE } from './popup.js';
 import { registerDebugFunction } from './power-user.js';
 import { t, translate } from './i18n.js';
+import { log } from './log.js';
 
 let charStats = {};
 
@@ -242,8 +243,8 @@ async function updateStats() {
     });
 
     if (response.status !== 200) {
-        console.error('Failed to update stats');
-        console.log(response.status);
+        log.ui.error('Failed to update stats');
+        log.ui.debug(response.status);
     }
 }
 

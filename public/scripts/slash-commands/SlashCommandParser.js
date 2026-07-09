@@ -24,6 +24,7 @@ import { SlashCommandDebugController } from './SlashCommandDebugController.js';
 import { commonEnumProviders } from './SlashCommandCommonEnumsProvider.js';
 import { SlashCommandBreak } from './SlashCommandBreak.js';
 import { parseMacroContext } from '../autocomplete/EnhancedMacroAutoCompleteOption.js';
+import { log } from '../log.js';
 
 /** @typedef {import('./SlashCommand.js').NamedArgumentsCapture} NamedArgumentsCapture */
 /** @typedef {import('./SlashCommand.js').NamedArguments} NamedArguments */
@@ -77,7 +78,7 @@ export class SlashCommandParser {
      */
     static addCommandObjectUnsafe(command) {
         if ([command.name, ...command.aliases].some(x => Object.hasOwn(this.commands, x))) {
-            console.trace('WARN: Duplicate slash command registered!', [command.name, ...command.aliases]);
+            log.slash.warn('Duplicate slash command registered!', [command.name, ...command.aliases]);
         }
 
         const stack = new Error().stack.split('\n').map(it => it.trim());
@@ -476,7 +477,7 @@ export class SlashCommandParser {
                 this.parse(text, false);
             } catch (e) {
                 // do nothing
-                console.warn(e);
+                log.slash.warn(e);
             }
         }
         const executor = this.commandIndex
@@ -958,7 +959,7 @@ export class SlashCommandParser {
             cmd.end = this.index;
             return cmd;
         } else {
-            console.warn(this.behind, this.char, this.ahead);
+            log.slash.warn(this.behind, this.char, this.ahead);
             throw new SlashCommandParserError(`Unexpected end of command at position ${this.userIndex}: "/${cmd.name}"`, this.text, this.index);
         }
     }
@@ -1046,7 +1047,7 @@ export class SlashCommandParser {
             cmd.end = this.index;
             return cmd;
         } else {
-            console.warn(this.behind, this.char, this.ahead);
+            log.slash.warn(this.behind, this.char, this.ahead);
             throw new SlashCommandParserError(`Unexpected end of command at position ${this.userIndex}: "/${cmd.name}"`, this.text, this.index);
         }
     }

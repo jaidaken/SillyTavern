@@ -12,6 +12,7 @@ import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from '
 import { commonEnumProviders } from '../../slash-commands/SlashCommandCommonEnumsProvider.js';
 import { callGenericPopup, Popup, POPUP_TYPE } from '../../popup.js';
 import { debounce_timeout, MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, SCROLL_BEHAVIOR } from '../../constants.js';
+import { log } from '../../log.js';
 export { MODULE_NAME };
 
 const MODULE_NAME = 'caption';
@@ -70,7 +71,7 @@ async function setImageIcon() {
         sendButton.addClass('fa-image');
         sendButton.removeClass('fa-hourglass-half');
     } catch (error) {
-        console.log(error);
+        log.media.error(error);
     }
 }
 
@@ -83,7 +84,7 @@ async function setSpinnerIcon() {
         sendButton.removeClass('fa-image');
         sendButton.addClass('fa-hourglass-half');
     } catch (error) {
-        console.log(error);
+        log.media.error(error);
     }
 }
 
@@ -96,7 +97,7 @@ async function wrapCaptionTemplate(caption) {
     let template = extension_settings.caption.template || TEMPLATE_DEFAULT;
 
     if (!/{{caption}}/i.test(template)) {
-        console.warn('Poka-yoke: Caption template does not contain {{caption}}. Appending it.');
+        log.media.warn('Poka-yoke: Caption template does not contain {{caption}}. Appending it.');
         template += ' {{caption}}';
     }
 
@@ -149,7 +150,7 @@ async function captionExistingMessage(message, mediaIndex) {
     const caption = await getCaptionForFile(file, null, true);
 
     if (!caption) {
-        console.warn('Failed to generate a caption for the image.');
+        log.media.warn('Failed to generate a caption for the image.');
         return;
     }
 
@@ -380,7 +381,7 @@ async function getCaptionForFile(file, prompt, quiet) {
     } catch (error) {
         const errorMessage = error.message || 'Unknown error';
         toastr.error(errorMessage, 'Failed to caption');
-        console.error(error);
+        log.media.error(error);
         return '';
     } finally {
         setImageIcon();
@@ -735,7 +736,7 @@ export async function init() {
                 try {
                     await captionExistingMessage(message, mediaIndex);
                 } catch (e) {
-                    console.error(`Auto-captioning failed for message ID ${messageId}, media index ${mediaIndex}`, e);
+                    log.media.error(`Auto-captioning failed for message ID ${messageId}, media index ${mediaIndex}`, e);
                     continue;
                 }
             }
@@ -760,7 +761,7 @@ export async function init() {
             appendMediaToMessage(data, messageBlock, SCROLL_BEHAVIOR.KEEP);
             await saveChatConditional();
         } catch (e) {
-            console.error('Message image recaption failed', e);
+            log.media.error('Message image recaption failed', e);
             toastr.error(e.message || 'Unknown error', 'Failed to caption');
         } finally {
             messageMedia.removeClass(animationClass);

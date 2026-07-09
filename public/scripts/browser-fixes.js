@@ -1,4 +1,5 @@
 import { getParsedUA, isMobile } from './RossAscends-mods.js';
+import { log } from './log.js';
 
 const isFirefox = () => /firefox/i.test(navigator.userAgent);
 
@@ -55,7 +56,7 @@ function sanitizeInlineQuotationOnCopy() {
 
 function addSafariPatch() {
     const userAgent = getParsedUA();
-    console.debug('User Agent', userAgent);
+    log.ui.debug('User Agent', userAgent);
     const isMobileSafari = /iPad|iPhone|iPod/.test(navigator.platform) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
     const isDesktopSafari = userAgent?.browser?.name === 'Safari' && userAgent?.platform?.type === 'desktop';
     const isIOS = userAgent?.os?.name === 'iOS';
@@ -80,7 +81,7 @@ function applyBrowserFixes() {
                     return;
                 }
             }
-            console.debug('[Mobile] Device viewport change detected.');
+            log.ui.debug('[Mobile] Device viewport change detected.');
             document.documentElement.style.position = 'fixed';
             requestAnimationFrame(() => document.documentElement.style.position = '');
         };

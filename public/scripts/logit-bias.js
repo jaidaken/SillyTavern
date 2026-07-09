@@ -1,6 +1,7 @@
 import { saveSettingsDebounced } from '../script.js';
 import { getTextTokens } from './tokenizers.js';
 import { getSortableDelay, uuidv4 } from './utils.js';
+import { log } from './log.js';
 
 export const BIAS_CACHE = new Map();
 
@@ -12,7 +13,7 @@ export const BIAS_CACHE = new Map();
  */
 export function displayLogitBias(logitBias, containerSelector) {
     if (!Array.isArray(logitBias)) {
-        console.log('Logit bias set not found');
+        log.gen.debug('Logit bias set not found');
         return;
     }
 
@@ -41,7 +42,7 @@ export function displayLogitBias(logitBias, containerSelector) {
                 order.unshift($(this).data('id'));
             });
             logitBias.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
-            console.log('Logit bias reordered:', logitBias);
+            log.gen.debug('Logit bias reordered:', logitBias);
             saveSettingsDebounced();
         },
     });
@@ -128,7 +129,7 @@ export function getLogitBiasListResult(biasPreset, tokenizerType, getBiasObject)
                         throw new Error('Not an array of integers');
                     }
                 } catch (err) {
-                    console.log(`Failed to parse logit bias token list: ${text}`, err);
+                    log.gen.error(`Failed to parse logit bias token list: ${text}`, err);
                 }
             } else {
                 // Text with a leading space

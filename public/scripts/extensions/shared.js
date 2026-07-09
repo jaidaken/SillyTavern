@@ -6,6 +6,7 @@ import { SECRET_KEYS, secret_state } from '../secrets.js';
 import { textgen_types, textgenerationwebui_settings } from '../textgen-settings.js';
 import { getTokenCountAsync } from '../tokenizers.js';
 import { createThumbnail, isValidUrl } from '../utils.js';
+import { log } from '../log.js';
 
 /**
  * Generates a caption for an image using a multimodal model.
@@ -339,10 +340,10 @@ export async function generateWebLlmChatPrompt(messages, params = {}) {
         throw new Error('WebLLM extension is not installed.');
     }
 
-    console.debug('WebLLM chat completion request:', messages, params);
+    log.ext.debug('WebLLM chat completion request:', messages, params);
     const engine = SillyTavern.llm;
     const response = await engine.generateChatPrompt(messages, params);
-    console.debug('WebLLM chat completion response:', response);
+    log.ext.debug('WebLLM chat completion response:', response);
     return response;
 }
 

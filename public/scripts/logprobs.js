@@ -15,6 +15,7 @@ import { decodeTextTokens, getTokenizerBestMatch } from './tokenizers.js';
 import { power_user } from './power-user.js';
 import { callGenericPopup, POPUP_TYPE } from './popup.js';
 import { t } from './i18n.js';
+import { log } from './log.js';
 
 const TINTS = 4;
 const MAX_MESSAGE_LOGPROBS = 100;
@@ -184,19 +185,19 @@ function renderTopLogprobs() {
     const nodes = [];
     const candidates = topLogprobs
         .sort(([, logA], [, logB]) => logB - logA)
-        .map(([text, log]) => {
-            if (log <= 0) {
-                const probability = Math.exp(log);
+        .map(([text, logValue]) => {
+            if (logValue <= 0) {
+                const probability = Math.exp(logValue);
                 sum += probability;
-                return [text, probability, log];
+                return [text, probability, logValue];
             } else {
-                return [text, log, null];
+                return [text, logValue, null];
             }
         });
     candidates.push(['<others>', 1 - sum, 0]);
 
     let matched = false;
-    for (const [token, probability, log] of candidates) {
+    for (const [token, probability, logValue] of candidates) {
         const container = $('<button class="flex-container flexFlowColumn logprobs_top_candidate"></button>');
         const tokenNormalized = String(token).replace(/^[▁Ġ]/g, ' ');
 
@@ -208,8 +209,8 @@ function renderTopLogprobs() {
         const tokenText = $('<span></span>').text(`${toVisibleWhitespace(token.toString())}`);
         const percentText = $('<span></span>').text(`${(+probability * 100).toFixed(2)}%`);
         container.append(tokenText, percentText);
-        if (log) {
-            container.attr('title', `logarithm: ${log}`);
+        if (logValue) {
+            container.attr('title', `logarithm: ${logValue}`);
         }
         addKeyboardProps(container);
         if (token !== '<others>') {
@@ -386,12 +387,12 @@ function createSwipe(messageId, prompt) {
 
     //if we have pre-existing reasoning and are currently autoparsing
     if (isReasoningAutoParsed && msgHasParsedReasoning) {
-        console.debug('saw autoparse on with reasoning in message');
+        log.gen.debug('saw autoparse on with reasoning in message');
         //but the reroll prompt does not include the end of reasoning
         if (cleanedPrompt.includes(reasoningPrefix) && !cleanedPrompt.includes(reasoningSuffix)) {
             //we need to send the results to the reasoning block
             //this will involve the ReasoningHandler from reasoning.js
-            console.debug('..with start tag but no end tag... reroll reasoning');
+            log.gen.debug('..with start tag but no end tag... reroll reasoning');
             shouldRerollReasoning = true;
         }
 
@@ -403,19 +404,19 @@ function createSwipe(messageId, prompt) {
         //..with only the end think tag (implying prefilled think start)
         if (hasReasoningPrefix && hasReasoningSuffix) {
             //we need to send the results to the response block without reasoning attached
-            console.debug('...incl. end tag...rerolling response');
+            log.gen.debug('...incl. end tag...rerolling response');
             const endOfThink = cleanedPrompt.indexOf(reasoningSuffix) + reasoningSuffix.length;
             cleanedPrompt = cleanedPrompt.substring(endOfThink);
         }
 
         //if cleanedprompt includes the think prefix, but no suffix..
         if (hasReasoningPrefix && !hasReasoningSuffix) {
-            console.debug('..no end tag...rerolling reasoning, so removing prefix');
+            log.gen.debug('..no end tag...rerolling reasoning, so removing prefix');
             cleanedPrompt = cleanedPrompt.replace(reasoningPrefix, '');
         }
     }
 
-    console.debug('cleanedPrompt: ', cleanedPrompt);
+    log.gen.debug('cleanedPrompt: ', cleanedPrompt);
 
     /** @type {SwipeInfo} */
     const newSwipeInfo = {

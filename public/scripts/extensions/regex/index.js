@@ -12,6 +12,7 @@ import { allowPresetScripts, allowScopedScripts, disallowPresetScripts, disallow
 import { t } from '../../i18n.js';
 import { accountStorage } from '../../util/AccountStorage.js';
 import { getPresetManager } from '../../preset-manager.js';
+import { log } from '../../log.js';
 
 // Re-exports for legacy extensions
 export { getRegexScripts };
@@ -160,7 +161,7 @@ class RegexPresetManager {
     setupEventListeners() {
         this.presetSelect = /** @type {HTMLSelectElement} */ (document.getElementById('regex_presets'));
         if (!this.presetSelect) {
-            console.error('RegexPresetManager: Could not find preset select element in the DOM.');
+            log.ext.error('RegexPresetManager: Could not find preset select element in the DOM.');
             return;
         }
 
@@ -190,7 +191,7 @@ class RegexPresetManager {
 
         this.presetCreateButton = document.getElementById('regex_preset_create');
         if (!this.presetCreateButton) {
-            console.error('RegexPresetManager: Could not find preset create button in the DOM.');
+            log.ext.error('RegexPresetManager: Could not find preset create button in the DOM.');
             return;
         }
 
@@ -203,7 +204,7 @@ class RegexPresetManager {
 
         this.presetUpdateButton = document.getElementById('regex_preset_update');
         if (!this.presetUpdateButton) {
-            console.error('RegexPresetManager: Could not find preset update button in the DOM.');
+            log.ext.error('RegexPresetManager: Could not find preset update button in the DOM.');
             return;
         }
 
@@ -216,7 +217,7 @@ class RegexPresetManager {
 
         this.presetApplyButton = document.getElementById('regex_preset_apply');
         if (!this.presetApplyButton) {
-            console.error('RegexPresetManager: Could not find preset apply button in the DOM.');
+            log.ext.error('RegexPresetManager: Could not find preset apply button in the DOM.');
             return;
         }
 
@@ -228,7 +229,7 @@ class RegexPresetManager {
 
         this.presetDeleteButton = document.getElementById('regex_preset_delete');
         if (!this.presetDeleteButton) {
-            console.error('RegexPresetManager: Could not find preset delete button in the DOM.');
+            log.ext.error('RegexPresetManager: Could not find preset delete button in the DOM.');
             return;
         }
 
@@ -611,7 +612,7 @@ async function deleteRegexScript(id, scriptType, saveSettings = true) {
  */
 async function moveRegexScript(script, toType, fromType = null, saveSettings = true) {
     if (!Object.values(SCRIPT_TYPES).includes(toType)) {
-        console.warn(`moveRegexScript: Invalid target script type ${toType}`);
+        log.ext.warn(`moveRegexScript: Invalid target script type ${toType}`);
         return;
     }
     if (!Object.values(SCRIPT_TYPES).includes(fromType)) {
@@ -1051,7 +1052,7 @@ function populateDebuggerRuleList(container) {
     const rulesContainer = container.find('#regex_debugger_rules');
     const ruleTemplate = container.find('#regex_debugger_rule_template');
     if (!rulesContainer.length || !ruleTemplate.length) {
-        console.error('Regex Debugger: Could not find rule list or template in the DOM.');
+        log.ext.error('Regex Debugger: Could not find rule list or template in the DOM.');
         return;
     }
 
@@ -1435,7 +1436,7 @@ function runRegexCallback(args, value) {
                 return value;
             }
 
-            console.debug(`Running regex callback for ${scriptName}`);
+            log.ext.debug(`Running regex callback for ${scriptName}`);
             return runRegexScript(script, value);
         }
     }
@@ -1526,7 +1527,7 @@ async function onRegexImportObjectChange(regexScript, scriptType) {
         await loadRegexScripts();
         toastr.success(t`Regex script "${regexScript.scriptName}" imported.`);
     } catch (error) {
-        console.log(error);
+        log.ext.error(error);
         toastr.error(t`Invalid regex object.`);
         return;
     }
@@ -1553,7 +1554,7 @@ async function onRegexImportFileChange(file, scriptType) {
             await onRegexImportObjectChange(regexScripts, scriptType);
         }
     } catch (error) {
-        console.log(error);
+        log.ext.error(error);
         toastr.error('Invalid JSON file.');
         return;
     }
@@ -1945,7 +1946,7 @@ export async function init() {
                 await setter(newScripts);
                 saveSettingsDebounced();
 
-                console.debug(`Regex scripts in ${selector} reordered`);
+                log.ext.debug(`Regex scripts in ${selector} reordered`);
                 await reloadCurrentChat();
                 await loadRegexScripts();
             },

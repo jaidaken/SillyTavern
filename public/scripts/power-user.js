@@ -69,6 +69,7 @@ import { IMAGE_OVERSWIPE, MEDIA_DISPLAY } from './constants.js';
 import { t } from './i18n.js';
 import { getBackgroundPath, isCustomBackgroundUrl } from './backgrounds.js';
 import { persona_description_positions as _persona_description_positions } from './personas.js';
+import { log } from './log.js';
 
 export const toastPositionClasses = [
     'toast-top-left',
@@ -558,7 +559,6 @@ async function switchLabMode({ noReset = false } = {}) {
             let step = $(this).attr('step');
             originalSliderValues.push({ id, min, max, step });
         });
-        //console.log(originalSliderValues)
         //remove limits on all inputs and hide sliders
         $('#advanced-ai-config-block input')
             .attr('min', '-99999')
@@ -812,7 +812,6 @@ async function CreateZenSliders(elmnt) {
                 leftMargin = ((stepNumber) / numSteps) * 50 * -1;
                 handle.text(handleText)
                     .css('margin-left', `${leftMargin}px`);
-                //console.log(`${newSlider.attr('id')} initial value:${handleText}, stepNum:${stepNumber}, numSteps:${numSteps}, left-margin:${leftMargin}`)
             } else if (newSlider.attr('id') == 'rep_pen_range_textgenerationwebui_zenslider') {
                 //handling creation of rep_pen_range for ooba
                 if ($('#rep_pen_range_textgenerationwebui_zensliders').length !== 0) {
@@ -827,8 +826,6 @@ async function CreateZenSliders(elmnt) {
                 } else if (sliderValue === allVal) { handleText = 'All'; } else { handle.css('color', ''); }
                 handle.text(handleText)
                     .css('margin-left', `${leftMargin}px`);
-                //console.log(sliderValue, handleText, offVal, allVal)
-                //console.log(`${newSlider.attr('id')} sliderValue = ${sliderValue}, handleText:${handleText}, stepNum:${stepNumber}, numSteps:${numSteps}, left-margin:${leftMargin}`)
                 originalSlider.val(steps[sliderValue]);
             } else {
                 //create all other sliders
@@ -843,7 +840,6 @@ async function CreateZenSliders(elmnt) {
                 leftMargin = (stepNumber / numSteps) * 50 * -1;
                 originalSlider.val(numVal)
                     .data('newSlider', newSlider);
-                //console.log(`${newSlider.attr('id')} sliderValue = ${sliderValue}, handleText:${handleText, numVal}, stepNum:${stepNumber}, numSteps:${numSteps}, left-margin:${leftMargin}`)
                 var isManualInput = false;
                 var valueBeforeManualInput;
                 handle.css('margin-left', `${leftMargin}px`)
@@ -854,7 +850,7 @@ async function CreateZenSliders(elmnt) {
                         //this just selects all the text in the handle so user can overwrite easily
                         //needed because JQUery UI uses left/right arrow keys as well as home/end to move the slider..
                         valueBeforeManualInput = newSlider.val();
-                        console.log(valueBeforeManualInput);
+                        log.settings.debug(valueBeforeManualInput);
                         let handleElement = handle.get(0);
                         let range = document.createRange();
                         range.selectNodeContents(handleElement);
@@ -864,7 +860,6 @@ async function CreateZenSliders(elmnt) {
                     })
                     .on('keyup', function (e) {
                         valueBeforeManualInput = numVal;
-                        //console.log(valueBeforeManualInput, numVal, handleText);
                         isManualInput = true;
                         //allow enter to trigger slider update
                         if (e.key === 'Enter') {
@@ -885,7 +880,7 @@ async function CreateZenSliders(elmnt) {
                             } else {
                                 //if value not ok, warn and reset to last known valid value
                                 toastr.warning(`Invalid value. Must be between ${sliderMin} and ${sliderMax}`);
-                                console.log(valueBeforeManualInput);
+                                log.settings.debug(valueBeforeManualInput);
                                 newSlider.val(valueBeforeManualInput);
                                 handle.text(valueBeforeManualInput);
                                 handleSlideEvent.call(newSlider, null, { value: parseFloat(valueBeforeManualInput) }, 'manual');
@@ -905,7 +900,7 @@ async function CreateZenSliders(elmnt) {
         var numVal = parseFloat(Number(ui.value).toFixed(decimals));
         offVal = parseFloat(Number(offVal).toFixed(decimals));
         allVal = parseFloat(Number(allVal).toFixed(decimals));
-        console.log(numVal, sliderMin, sliderMax, numVal > sliderMax, numVal < sliderMin);
+        log.settings.debug(numVal, sliderMin, sliderMax, numVal > sliderMax, numVal < sliderMin);
         if (numVal > sliderMax) { numVal = sliderMax; }
         if (numVal < sliderMin) { numVal = sliderMin; }
         var stepNumber = parseFloat(((ui.value - sliderMin) / stepScale).toFixed(0));
@@ -913,20 +908,6 @@ async function CreateZenSliders(elmnt) {
         var leftMargin = (stepNumber / numSteps) * 50 * -1;
         var perStepPercent = 1 / numSteps; //how far in % each step should be on the slider
         var leftPos = newSlider.width() * (stepNumber * perStepPercent); //how big of a left margin to give the slider for manual inputs
-        /*         console.log(`
-                numVal: ${numVal},
-                sliderMax: ${sliderMax}
-                sliderMin: ${sliderMin}
-                sliderValRange: ${sliderValRange}
-                stepScale: ${stepScale}
-                Step: ${stepNumber} of ${numSteps}
-                offVal: ${offVal}
-                allVal = ${allVal}
-                initial value: ${handleText}
-                left-margin: ${leftMargin}
-                width: ${newSlider.width()}
-                percent of max: ${percentOfMax}
-                left: ${leftPos}`) */
         if (newSlider.attr('id') == 'amount_gen_zenslider') {
             //special handling for response length slider, pulls text aliases for step values from an array
             handleText = steps[stepNumber];
@@ -1041,27 +1022,27 @@ function applyAvatarStyle() {
 
 function applyChatDisplay() {
     if ([null, undefined].includes(power_user.chat_display)) {
-        console.debug('applyChatDisplay: saw no chat display type defined');
+        log.settings.debug('applyChatDisplay: saw no chat display type defined');
         power_user.chat_display = chat_styles.DEFAULT;
     }
-    console.debug(`poweruser.chat_display ${power_user.chat_display}`);
+    log.settings.debug(`poweruser.chat_display ${power_user.chat_display}`);
     $('#chat_display').val(power_user.chat_display).prop('selected', true);
 
     switch (power_user.chat_display) {
         case 0: {
-            console.debug('applying default chat');
+            log.settings.debug('applying default chat');
             $('body').removeClass('bubblechat');
             $('body').removeClass('documentstyle');
             break;
         }
         case 1: {
-            console.debug('applying bubblechat');
+            log.settings.debug('applying bubblechat');
             $('body').addClass('bubblechat');
             $('body').removeClass('documentstyle');
             break;
         }
         case 2: {
-            console.debug('applying document style');
+            log.settings.debug('applying document style');
             $('body').removeClass('bubblechat');
             $('body').addClass('documentstyle');
             break;
@@ -1072,7 +1053,7 @@ function applyChatDisplay() {
 function applyToastrPosition() {
     if (!toastPositionClasses.includes(power_user.toastr_position)) {
         power_user.toastr_position = defaultToastPosition;
-        console.warn(`applyToastrPosition: invalid toastr position, defaulting to ${defaultToastPosition}`);
+        log.settings.warn(`applyToastrPosition: invalid toastr position, defaulting to ${defaultToastPosition}`);
     }
 
     toastr.options.positionClass = power_user.toastr_position;
@@ -1433,11 +1414,11 @@ function applyTheme(name) {
             if (type) applyThemeColor(type);
             if (action) action(oldValue, newValue);
         } else {
-            console.debug(`Empty theme key: ${key}`);
+            log.settings.debug(`Empty theme key: ${key}`);
         }
     }
 
-    console.log('theme applied: ' + name);
+    log.settings.info('theme applied: ' + name);
 }
 
 async function applyMovingUIPreset(name) {
@@ -1451,7 +1432,7 @@ async function applyMovingUIPreset(name) {
     power_user.movingUIState = movingUIPreset.movingUIState;
 
 
-    console.log('MovingUI Preset applied: ' + name);
+    log.settings.info('MovingUI Preset applied: ' + name);
     loadMovingUIState();
     saveSettingsDebounced();
 }
@@ -1534,7 +1515,7 @@ export function applyStylePins() {
         pinsElement.append(...Array.from(styleTags));
         chatElement.prepend(pinsElement);
     } catch (error) {
-        console.error('Error applying style pins:', error);
+        log.settings.error('Error applying style pins:', error);
     }
 }
 
@@ -1643,6 +1624,8 @@ export async function loadPowerUserSettings(settings, data) {
 
     // Reset the saved chat template hash
     power_user.chat_template_hash = '';
+
+    log.setPersistedConfig({ logging: power_user.logging, console_log_prompts: power_user.console_log_prompts });
 
     $('#single_line').prop('checked', power_user.single_line);
     $('#relaxed_api_urls').prop('checked', power_user.relaxed_api_urls);
@@ -1836,23 +1819,23 @@ export function loadMovingUIState() {
     if (!isMobile()
         && power_user.movingUIState
         && power_user.movingUI === true) {
-        console.debug('loading movingUI state');
+        log.settings.debug('loading movingUI state');
         for (var elmntName of Object.keys(power_user.movingUIState)) {
             var elmntState = power_user.movingUIState[elmntName];
             try {
                 var elmnt = $('#' + $.escapeSelector(elmntName));
                 if (elmnt.length) {
-                    console.debug(`loading state for ${elmntName}`);
+                    log.settings.debug(`loading state for ${elmntName}`);
                     elmnt.css(elmntState);
                 } else {
-                    console.debug(`skipping ${elmntName} because it doesn't exist in the DOM`);
+                    log.settings.debug(`skipping ${elmntName} because it doesn't exist in the DOM`);
                 }
             } catch (err) {
-                console.debug(`error occurred while processing ${elmntName}: ${err}`);
+                log.settings.debug(`error occurred while processing ${elmntName}: ${err}`);
             }
         }
     } else {
-        console.debug('skipping movingUI state load');
+        log.settings.debug('skipping movingUI state load');
         return;
     }
 }
@@ -1963,7 +1946,7 @@ async function loadContextSettings() {
                 return;
             }
 
-            console.warn(`[Story String Validation] Story String is missing a field: ${field}. Adding it at the ${position}.`);
+            log.prompt.warn(`[Story String Validation] Story String is missing a field: ${field}. Adding it at the ${position}.`);
             const fieldTemplate = `{{#if ${field}}}{{${field}}}\n{{/if}}`;
             const firstCurlyPosition = storyString.includes('{{') ? storyString.indexOf('{{') : 0;
             const lastCurlyPosition = storyString.includes('}}') ? storyString.lastIndexOf('}}') + '}}'.length : storyString.length;
@@ -1999,7 +1982,7 @@ async function loadContextSettings() {
         } else {
             $element.val(power_user.context[control.property]);
         }
-        console.debug(`Setting ${$element.prop('id')} to ${power_user.context[control.property]}`);
+        log.settings.debug(`Setting ${$element.prop('id')} to ${power_user.context[control.property]}`);
 
         // If the setting already exists, no need to duplicate it
         // TODO: Maybe check the power_user object for the setting instead of a flag?
@@ -2013,7 +1996,7 @@ async function loadContextSettings() {
             } else {
                 power_user.context[control.property] = value;
             }
-            console.debug(`Setting ${$element.prop('id')} to ${value}`);
+            log.settings.debug(`Setting ${$element.prop('id')} to ${value}`);
             if (!CSS.supports('field-sizing', 'content') && $(this).is('textarea')) {
                 await resetScrollHeight($(this));
             }
@@ -2263,7 +2246,7 @@ export function renderStoryString(params, { customStoryString = null, customInst
         return output;
     } catch (e) {
         toastr.error('Check the story string template for validity', 'Error rendering story string');
-        console.error('Error rendering story string', e);
+        log.prompt.error('Error rendering story string', e);
         throw e; // rethrow the error
     }
 }
@@ -2296,7 +2279,7 @@ function validateStoryString(storyString, params) {
                 fieldsToWarn.push(field);
                 currentCache.fieldsWarned[field] = true;
             }
-            console.warn(`The story string does not contain {{${field}}}, but it would contain content:\n`, params[field]);
+            log.prompt.warn(`The story string does not contain {{${field}}}, but it would contain content:\n`, params[field]);
         }
     }
 
@@ -2504,7 +2487,7 @@ async function saveTheme(name = undefined, theme = undefined) {
 
     if (!response.ok) {
         toastr.error('Check the server connection and reload the page to prevent data loss.', 'Theme could not be saved');
-        console.error('Theme could not be saved', response);
+        log.settings.error('Theme could not be saved', response);
         throw new Error('Theme could not be saved');
     }
 
@@ -2605,7 +2588,7 @@ async function saveMovingUI() {
         name,
         movingUIState: power_user.movingUIState,
     };
-    console.log(movingUIPreset);
+    log.settings.debug(movingUIPreset);
 
     const response = await fetch('/api/moving-ui/save', {
         method: 'POST',
@@ -2632,7 +2615,7 @@ async function saveMovingUI() {
         saveSettingsDebounced();
     } else {
         toastr.error('Failed to save MovingUI state.');
-        console.error('MovingUI could not be saved', response);
+        log.settings.error('MovingUI could not be saved', response);
     }
 }
 
@@ -2819,7 +2802,7 @@ async function loadUntilMesId(mesId) {
 }
 
 async function doMesCut(_, text) {
-    console.debug(`was asked to cut message id #${text}`);
+    log.chat.debug(`was asked to cut message id #${text}`);
     const range = stringToRange(text, 0, chat.length - 1);
 
     //reject invalid args or no args
@@ -2963,7 +2946,7 @@ async function setThemeCallback(_, themeName) {
     });
 
     const results = fuse.search(themeName);
-    console.debug('Theme fuzzy search results for ' + themeName, results);
+    log.settings.debug('Theme fuzzy search results for ' + themeName, results);
     const theme = results[0]?.item;
 
     if (!theme) {
@@ -2987,7 +2970,7 @@ async function setmovingUIPreset(_, text) {
     });
 
     const results = fuse.search(text);
-    console.debug('movingUI preset fuzzy search results for ' + text, results);
+    log.settings.debug('movingUI preset fuzzy search results for ' + text, results);
     const preset = results[0]?.item;
 
     if (!preset) {
@@ -3010,7 +2993,7 @@ const EPHEMERAL_STOPPING_STRINGS = [];
  */
 export function addEphemeralStoppingString(value) {
     if (!EPHEMERAL_STOPPING_STRINGS.includes(value)) {
-        console.debug('Adding ephemeral stopping string:', value);
+        log.gen.debug('Adding ephemeral stopping string:', value);
         EPHEMERAL_STOPPING_STRINGS.push(value);
     }
 }
@@ -3020,7 +3003,7 @@ export function flushEphemeralStoppingStrings() {
         return;
     }
 
-    console.debug('Flushing ephemeral stopping strings:', EPHEMERAL_STOPPING_STRINGS);
+    log.gen.debug('Flushing ephemeral stopping strings:', EPHEMERAL_STOPPING_STRINGS);
     EPHEMERAL_STOPPING_STRINGS.splice(0, EPHEMERAL_STOPPING_STRINGS.length);
 }
 
@@ -3049,13 +3032,13 @@ export function generatedTextFiltered(text) {
     if (text.length > 0) {
         if (power_user.auto_swipe_minimum_length) {
             if (text.length < power_user.auto_swipe_minimum_length) {
-                console.log('Generated text size too small');
+                log.gen.debug('Generated text size too small');
                 return true;
             }
         }
         if (power_user.auto_swipe_blacklist.length && power_user.auto_swipe_blacklist_threshold) {
             if (containsBlacklistedWords(text, power_user.auto_swipe_blacklist, power_user.auto_swipe_blacklist_threshold)) {
-                console.log('Generated text has blacklisted words');
+                log.gen.debug('Generated text has blacklisted words');
                 return true;
             }
         }
@@ -3096,7 +3079,7 @@ export function getCustomStoppingStrings(limit = undefined) {
             return strings;
         } catch (error) {
             // If there's an error, return an empty array
-            console.warn('Error parsing custom stopping strings:', error);
+            log.settings.warn('Error parsing custom stopping strings:', error);
             return [];
         }
     }
@@ -3137,8 +3120,8 @@ jQuery(() => {
         const winHeight = window.innerHeight;
         const originalWidth = winWidth * zoomLevel;
         const originalHeight = winHeight * zoomLevel;
-        console.debug(`Window resize: ${coreTruthWinWidth}x${coreTruthWinHeight} -> ${window.innerWidth}x${window.innerHeight}`);
-        console.debug(`Zoom: ${zoomLevel}, X:${winWidth}, Y:${winHeight}, original: ${originalWidth}x${originalHeight} `);
+        log.settings.debug(`Window resize: ${coreTruthWinWidth}x${coreTruthWinHeight} -> ${window.innerWidth}x${window.innerHeight}`);
+        log.settings.debug(`Zoom: ${zoomLevel}, X:${winWidth}, Y:${winHeight}, original: ${originalWidth}x${originalHeight} `);
         return zoomLevel;
     });
 
@@ -3180,7 +3163,7 @@ jQuery(() => {
                 try {
                     var elmnt = $('#' + $.escapeSelector(elmntName));
                     if (elmnt.length) {
-                        console.log(`scaling ${elmntName} by ${scaleX}x${scaleY} to ${newWidth}x${newHeight}`);
+                        log.settings.debug(`scaling ${elmntName} by ${scaleX}x${scaleY} to ${newWidth}x${newHeight}`);
                         elmnt.css('height', newHeight);
                         elmnt.css('width', newWidth);
                         elmnt.css('inset', `${newTop}px ${newRight}px ${newBottom}px ${newLeft}px`);
@@ -3191,14 +3174,14 @@ jQuery(() => {
                         power_user.movingUIState[elmntName].left = newLeft;
                         power_user.movingUIState[elmntName].right = newRight;
                     } else {
-                        console.log(`skipping ${elmntName} because it doesn't exist in the DOM`);
+                        log.settings.debug(`skipping ${elmntName} because it doesn't exist in the DOM`);
                     }
                 } catch (err) {
-                    console.log(`error occurred while processing ${elmntName}: ${err}`);
+                    log.settings.debug(`error occurred while processing ${elmntName}: ${err}`);
                 }
             }
         } else {
-            console.debug('aborting MUI reset', Object.keys(power_user.movingUIState).length);
+            log.settings.debug('aborting MUI reset', Object.keys(power_user.movingUIState).length);
         }
         saveSettingsDebounced();
         coreTruthWinWidth = window.innerWidth;
@@ -3307,7 +3290,7 @@ jQuery(() => {
 
     $('#example_messages_behavior').on('change', function () {
         const selectedOption = String($(this).find(':selected').val());
-        console.log('Setting example messages behavior to', selectedOption);
+        log.settings.info('Setting example messages behavior to', selectedOption);
 
         switch (selectedOption) {
             case 'normal':
@@ -3324,8 +3307,8 @@ jQuery(() => {
                 break;
         }
 
-        console.debug('power_user.pin_examples', power_user.pin_examples);
-        console.debug('power_user.strip_examples', power_user.strip_examples);
+        log.settings.debug('power_user.pin_examples', power_user.pin_examples);
+        log.settings.debug('power_user.strip_examples', power_user.strip_examples);
 
         saveSettingsDebounced();
     });
@@ -3513,7 +3496,7 @@ jQuery(() => {
     });
 
     $('#movingUIPresets').on('change', async function () {
-        console.log('saw MUI preset change');
+        log.settings.debug('saw MUI preset change');
         const movingUIPresetSelected = String($(this).find(':selected').val());
         power_user.movingUIPreset = movingUIPresetSelected;
         applyMovingUIPreset(movingUIPresetSelected);
@@ -3578,7 +3561,7 @@ jQuery(() => {
             .split(',')
             .map(str => str.trim())
             .filter(str => str);
-        console.log('power_user.auto_swipe_blacklist', power_user.auto_swipe_blacklist);
+        log.settings.debug('power_user.auto_swipe_blacklist', power_user.auto_swipe_blacklist);
         saveSettingsDebounced();
     });
 
@@ -4061,7 +4044,7 @@ jQuery(() => {
             const file = inputElement?.files?.[0];
             await importTheme(file);
         } catch (error) {
-            console.error('Error importing UI theme', error);
+            log.settings.error('Error importing UI theme', error);
             toastr.error(String(error), 'Failed to import UI theme');
         } finally {
             if (inputElement) {
@@ -4094,7 +4077,7 @@ jQuery(() => {
         if (functionRecord) {
             functionRecord.func();
         } else {
-            console.warn(`Debug function ${functionId} not found`);
+            log.settings.warn(`Debug function ${functionId} not found`);
         }
     });
 
@@ -4281,7 +4264,7 @@ jQuery(() => {
                 element.style.setProperty(args.varname, value);
             });
 
-            console.info(`Set CSS variable "${args.varname}" to "${value}" on "${targetSelector}"`);
+            log.ui.info(`Set CSS variable "${args.varname}" to "${value}" on "${targetSelector}"`);
         },
         namedArgumentList: [
             SlashCommandNamedArgument.fromProps({

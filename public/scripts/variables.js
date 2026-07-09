@@ -13,6 +13,7 @@ import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { slashCommandReturnHelper } from './slash-commands/SlashCommandReturnHelper.js';
 import { SlashCommandScope } from './slash-commands/SlashCommandScope.js';
 import { isFalseBoolean, convertValueType, isTrueBoolean } from './utils.js';
+import { log } from './log.js';
 
 /** @typedef {import('./slash-commands/SlashCommandParser.js').NamedArguments} NamedArguments */
 /** @typedef {import('./slash-commands/SlashCommand.js').UnnamedArguments} UnnamedArguments */
@@ -535,7 +536,7 @@ export function evalBoolean(rule, a, b) {
             case 'in':
             case 'nin':
                 // Fall through to string comparison. Otherwise you could not check if 12345 contains 45 for example.
-                console.debug(`Boolean comparison rule '${rule}' is not supported for type number. Falling back to string comparison.`);
+                log.slash.debug(`Boolean comparison rule '${rule}' is not supported for type number. Falling back to string comparison.`);
                 break;
             default:
                 throw new Error(`Unknown boolean comparison rule for type number. Accepted: gt, gte, lt, lte, eq, neq. Provided: ${rule}`);
@@ -591,7 +592,7 @@ async function executeSubCommands(command, scope = null, parserFlags = null, abo
  */
 export function deleteLocalVariable(name) {
     if (!existsLocalVariable(name)) {
-        console.warn(`The local variable "${name}" does not exist.`);
+        log.slash.warn(`The local variable "${name}" does not exist.`);
         return '';
     }
 
@@ -607,7 +608,7 @@ export function deleteLocalVariable(name) {
  */
 export function deleteGlobalVariable(name) {
     if (!existsGlobalVariable(name)) {
-        console.warn(`The global variable "${name}" does not exist.`);
+        log.slash.warn(`The global variable "${name}" does not exist.`);
         return '';
     }
 
@@ -697,7 +698,7 @@ function subValuesCallback(args, value) {
 function divValuesCallback(args, value) {
     return performOperation(value, (array) => {
         if (array[1] === 0) {
-            console.warn('Division by zero.');
+            log.slash.warn('Division by zero.');
             return 0;
         }
         return array[0] / array[1];
@@ -707,7 +708,7 @@ function divValuesCallback(args, value) {
 function modValuesCallback(args, value) {
     return performOperation(value, (array) => {
         if (array[1] === 0) {
-            console.warn('Division by zero.');
+            log.slash.warn('Division by zero.');
             return 0;
         }
         return array[0] % array[1];

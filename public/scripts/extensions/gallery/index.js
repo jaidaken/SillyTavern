@@ -20,6 +20,7 @@ import { t, translate } from '../../i18n.js';
 import { Popup } from '../../popup.js';
 import { deleteMediaFromServer } from '../../chats.js';
 import { MEDIA_REQUEST_TYPE, VIDEO_EXTENSIONS } from '../../constants.js';
+import { log } from '../../log.js';
 
 const isVideo = (/** @type {string} */ url) => VIDEO_EXTENSIONS.some(ext => new RegExp(`.${ext}$`, 'i').test(url));
 const extensionName = 'gallery';
@@ -141,7 +142,7 @@ async function getGalleryItems(url) {
                 const maxSide = Math.round(150 * 1.5);
                 item.srct = await getVideoThumbnail(item.src, maxSide, maxSide);
             } catch (error) {
-                console.error('Failed to generate video thumbnail for gallery:', error);
+                log.media.error('Failed to generate video thumbnail for gallery:', error);
             }
         }
 
@@ -168,7 +169,7 @@ async function getGalleryFolders() {
         const data = await response.json();
         return data;
     } catch (error) {
-        console.error('Failed to fetch gallery folders:', error);
+        log.media.error('Failed to fetch gallery folders:', error);
         return [];
     }
 }
@@ -334,7 +335,7 @@ async function showCharGallery(deleteModeState = false) {
         await delay(100);
         await initGallery(items, url);
     } catch (err) {
-        console.error(err);
+        log.media.error(err);
     }
 }
 
@@ -357,7 +358,7 @@ async function uploadFile(file, url) {
 
         toastr.success(t`File uploaded successfully. Saved at: ${path}`);
     } catch (error) {
-        console.error('There was an issue uploading the file:', error);
+        log.media.error('There was an issue uploading the file:', error);
 
         // Replacing alert with toastr error notification
         toastr.error(t`Failed to upload the file.`);
@@ -373,7 +374,7 @@ async function uploadFile(file, url) {
  * @returns {Promise<void>} - Promise representing the completion of the draggable container creation.
  */
 async function makeMovable(url) {
-    console.debug('making new container from template');
+    log.media.debug('making new container from template');
     const id = 'gallery';
     const template = $('#generic_draggable_template').html();
     const newElement = $(template);
@@ -470,7 +471,7 @@ async function makeMovable(url) {
             toastr.info(t`Gallery folder changed to ${newUrl}`);
             galleryFolderInput.value = newUrl;
         } catch (error) {
-            console.error('Failed to change gallery folder:', error);
+            log.media.error('Failed to change gallery folder:', error);
             toastr.error(error?.message || t`Unknown error`, t`Failed to change gallery folder`);
         }
     };
@@ -481,7 +482,7 @@ async function makeMovable(url) {
             closeButton.trigger('click');
             await showCharGallery();
         } catch (error) {
-            console.error('Failed to restore gallery folder:', error);
+            log.media.error('Failed to restore gallery folder:', error);
             toastr.error(error?.message || t`Unknown error`, t`Failed to restore gallery folder`);
         }
     };
@@ -556,7 +557,7 @@ async function makeMovable(url) {
     });
 
     $(`.draggable[forChar="${id}"] img`).on('dragstart', (e) => {
-        console.log('saw drag on avatar!');
+        log.media.debug('saw drag on avatar!');
         e.preventDefault();
         return false;
     });
@@ -631,7 +632,7 @@ function makeDragImg(id, url) {
     const template = document.getElementById('generic_draggable_template');
 
     if (!(template instanceof HTMLTemplateElement)) {
-        console.error('The element is not a <template> tag');
+        log.media.error('The element is not a <template> tag');
         return;
     }
 
@@ -696,12 +697,12 @@ function makeDragImg(id, url) {
 
         // Prevent dragging the image
         $(`#${uniqueId} img`).on('dragstart', (e) => {
-            console.log('saw drag on avatar!');
+            log.media.debug('saw drag on avatar!');
             e.preventDefault();
             return false;
         });
     } else {
-        console.error('Failed to append the template content or retrieve the appended content.');
+        log.media.error('Failed to append the template content or retrieve the appended content.');
     }
 }
 
@@ -792,7 +793,7 @@ async function listGalleryCommand(args) {
         const items = await getGalleryItems(url);
         return JSON.stringify(items.map(it => it.src));
     } catch (err) {
-        console.error(err);
+        log.media.error(err);
     }
     return JSON.stringify([]);
 }

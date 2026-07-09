@@ -11,13 +11,15 @@ import { ButtonUi } from './src/ui/ButtonUi.js';
 import { SettingsUi } from './src/ui/SettingsUi.js';
 import { debounceAsync } from '../../utils.js';
 import { selected_group } from '../../group-chats.js';
+import { log as stLog } from '../../log.js';
 export { debounceAsync };
 
 
-const _VERBOSE = true;
-export const debug = (...msg) => _VERBOSE ? console.debug('[QR2]', ...msg) : null;
-export const log = (...msg) => _VERBOSE ? console.log('[QR2]', ...msg) : null;
-export const warn = (...msg) => _VERBOSE ? console.warn('[QR2]', ...msg) : null;
+// QR2's log/debug/warn helpers route through the shared logger under the ext category
+// (previously an always-on _VERBOSE console shim, so the [QR2] chatter was never gated).
+export const debug = (...msg) => stLog.ext.debug('[QR2]', ...msg);
+export const log = (...msg) => stLog.ext.debug('[QR2]', ...msg);
+export const warn = (...msg) => stLog.ext.warn('[QR2]', ...msg);
 
 
 const defaultConfig = {

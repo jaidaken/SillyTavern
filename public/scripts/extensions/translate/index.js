@@ -19,6 +19,7 @@ import { enumIcons } from '../../slash-commands/SlashCommandCommonEnumsProvider.
 import { enumTypes, SlashCommandEnumValue } from '../../slash-commands/SlashCommandEnumValue.js';
 import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
 import { splitRecursive } from '../../utils.js';
+import { log } from '../../log.js';
 
 export const autoModeOptions = {
     NONE: 'none',
@@ -479,7 +480,7 @@ async function translate(text, lang, provider = null) {
 
         return result;
     } catch (error) {
-        console.log(error);
+        log.ext.error(error);
         toastr.error(String(error), 'Failed to translate message');
     }
 }
@@ -516,7 +517,7 @@ async function translateInner(text, lang, provider) {
         case 'yandex':
             return await translateProviderYandex(text, lang);
         default:
-            console.error('Unknown translation provider', provider);
+            log.ext.error('Unknown translation provider', provider);
             return text;
     }
 }
@@ -534,7 +535,7 @@ async function translateOutgoingMessage(messageId) {
     message.mes = await translate(originalText, extension_settings.translate.internal_language);
     updateMessageBlock(messageId, message);
 
-    console.log('translateOutgoingMessage', messageId);
+    log.ext.debug('translateOutgoingMessage', messageId);
 }
 
 function shouldTranslate(types) {
@@ -590,7 +591,7 @@ async function onTranslateChatClick() {
 
         await context.saveChat();
     } catch (error) {
-        console.log(error);
+        log.ext.error(error);
         toastr.error('Failed to translate chat');
     } finally {
         translateChatExecuting = false;

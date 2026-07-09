@@ -22,6 +22,7 @@ import { t } from './i18n.js';
 import { macros, MacroCategory } from './macros/macro-system.js';
 import { MacrosParser } from './macros.js';
 import { power_user } from './power-user.js';
+import { log } from './log.js';
 
 const MODULE_NAME = '2_floating_prompt'; // <= Deliberate, for sorting lower than memory
 
@@ -241,7 +242,7 @@ function onExtensionFloatingCharaPromptInput() {
 
         extension_settings.note.chara.push(tempCharaNote);
     } else {
-        console.log('Character author\'s note error: No avatar name key could be found.');
+        log.prompt.debug('Character author\'s note error: No avatar name key could be found.');
         toastr.error(t`Something went wrong. Could not save character's author's note.`);
 
         // Don't save settings if something went wrong
@@ -324,7 +325,7 @@ function loadSettings() {
 export function setFloatingPrompt() {
     const context = getContext();
     if (!context.groupId && context.characterId === undefined) {
-        console.debug('setFloatingPrompt: Not in a chat. Skipping.');
+        log.prompt.debug('setFloatingPrompt: Not in a chat. Skipping.');
         shouldWIAddPrompt = false;
         return;
     }
@@ -332,7 +333,7 @@ export function setFloatingPrompt() {
     // take the count of messages
     let lastMessageNumber = Array.isArray(context.chat) && context.chat.length ? context.chat.filter(m => m.is_user).length : 0;
 
-    console.debug(`
+    log.prompt.debug(`
     setFloatingPrompt entered
     ------
     lastMessageNumber = ${lastMessageNumber}

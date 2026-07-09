@@ -1,5 +1,6 @@
 import { power_user } from './power-user.js';
 import { delay } from './utils.js';
+import { log } from './log.js';
 
 // Symbol for not primary swipe error
 const NOT_PRIMARY = Symbol('not_primary_swipe');
@@ -367,7 +368,7 @@ export class SmoothEventSourceStream extends EventSourceStream {
                     }
                 } catch (error) {
                     if (error instanceof Error && error.cause !== NOT_PRIMARY) {
-                        console.debug('Smooth Streaming parsing error', error);
+                        log.net.debug('Smooth Streaming parsing error', error);
                     }
                     controller.enqueue(event);
                 }

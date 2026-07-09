@@ -8,6 +8,7 @@ import { Popup, POPUP_RESULT } from '/scripts/popup.js';
 import { power_user } from '/scripts/power-user.js';
 import { accountStorage } from '/scripts/util/AccountStorage.js';
 import { SimpleMutex } from '/scripts/util/SimpleMutex.js';
+import { log } from '../../log.js';
 
 /**
  * @typedef {Object} MacroErrorContext
@@ -104,7 +105,7 @@ export function createMacroRuntimeError({ message, call, def, macroName }) {
  */
 export function logMacroRuntimeWarning({ message, call, def, macroName, error }) {
     const payload = buildMacroPayload({ call, def, macroName, error });
-    console.warn('[Macro] Warning:', message, payload);
+    log.prompt.warn('[Macro] Warning:', message, payload);
 }
 
 /**
@@ -115,7 +116,7 @@ export function logMacroRuntimeWarning({ message, call, def, macroName, error })
  */
 export function logMacroInternalError({ message, call, macroName, error }) {
     const payload = buildMacroPayload({ call, def: undefined, macroName, error });
-    console.error('[Macro] Error:', message, payload);
+    log.prompt.error('[Macro] Error:', message, payload);
 }
 
 /**
@@ -125,7 +126,7 @@ export function logMacroInternalError({ message, call, macroName, error }) {
  */
 export function logMacroRegisterWarning({ message, macroName, error = undefined }) {
     const payload = buildMacroPayload({ macroName, error });
-    console.warn('[Macro] Warning:', message, payload);
+    log.prompt.warn('[Macro] Warning:', message, payload);
 }
 
 /**
@@ -136,7 +137,7 @@ export function logMacroRegisterWarning({ message, macroName, error = undefined 
  */
 export function logMacroRegisterError({ message, macroName, error = undefined }) {
     const payload = buildMacroPayload({ macroName, error });
-    console.error('[Macro] Registration Error:', message, payload);
+    log.prompt.error('[Macro] Registration Error:', message, payload);
 }
 
 /**
@@ -145,7 +146,7 @@ export function logMacroRegisterError({ message, macroName, error = undefined })
  * @param {{ message: string, error?: any }} options
  */
 export function logMacroGeneralError({ message, error }) {
-    console.error('[Macro] Error:', message, error);
+    log.prompt.error('[Macro] Error:', message, error);
 }
 
 /**
@@ -195,7 +196,7 @@ export function logMacroSyntaxWarning({ phase, input, errors }) {
         input,
     };
 
-    console.warn('[Macro] Warning:', `${label} errors detected`, payload);
+    log.prompt.warn('[Macro] Warning:', `${label} errors detected`, payload);
 }
 
 /**

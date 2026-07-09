@@ -14,6 +14,7 @@
 import { t } from './i18n.js';
 import { stopGeneration } from '../script.js';
 import { Popup, POPUP_RESULT, POPUP_TYPE } from './popup.js';
+import { log } from './log.js';
 
 /**
  * Enum representing the toast display mode for the action loader.
@@ -143,7 +144,7 @@ export class ActionLoaderHandle {
 
         // Warn if non-blocking loader has no toast - it won't be visible to the user
         if (!blocking && toastMode === ActionLoaderToastMode.NONE && !overlayContent) {
-            console.warn('[ActionLoader] Non-blocking loader created without a toast. This loader will not be visible to the user.');
+            log.ext.warn('[ActionLoader] Non-blocking loader created without a toast. This loader will not be visible to the user.');
         }
 
         // Show the blocking loader overlay if this is the first blocking handle
@@ -275,7 +276,7 @@ export class ActionLoaderHandle {
             try {
                 await this.#onStop();
             } catch (e) {
-                console.error('Error executing onStop handler', e);
+                log.ext.error('Error executing onStop handler', e);
             }
         } else {
             stopGeneration();
@@ -297,7 +298,7 @@ export class ActionLoaderHandle {
             try {
                 await this.#onHide();
             } catch (e) {
-                console.error('Error executing onHide handler', e);
+                log.ext.error('Error executing onHide handler', e);
             }
         }
 
@@ -562,7 +563,7 @@ async function hideOverlay() {
         const spinner = $('#load-spinner');
 
         if (!loaderElement.length) {
-            console.warn('Loader element not found, skipping animation');
+            log.ext.warn('Loader element not found, skipping animation');
             cleanup();
             return;
         }
@@ -587,7 +588,7 @@ async function hideOverlay() {
             yoinkPreloader();
 
             loaderPopup.complete(POPUP_RESULT.AFFIRMATIVE)
-                .catch((err) => console.error('Error completing loaderPopup:', err))
+                .catch((err) => log.ext.error('Error completing loaderPopup:', err))
                 .finally(() => {
                     loaderPopup = null;
                     resolve();

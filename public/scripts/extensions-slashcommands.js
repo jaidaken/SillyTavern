@@ -6,6 +6,7 @@ import { commonEnumProviders } from './slash-commands/SlashCommandCommonEnumsPro
 import { enumTypes, SlashCommandEnumValue } from './slash-commands/SlashCommandEnumValue.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { isFalseBoolean, isTrueBoolean } from './utils.js';
+import { log } from './log.js';
 
 /**
  * @param {'enable' | 'disable' | 'toggle'} action - The action to perform on the extension
@@ -60,9 +61,9 @@ function getExtensionActionCallback(action) {
         toastr.success(`Extension ${extension.name} ${action}d.`);
 
 
-        console.info(`Extension ${action}ed: ${extension.name}`);
+        log.slash.info(`Extension ${action}ed: ${extension.name}`);
         if (!reload) {
-            console.info('Reload not requested, so page needs to be reloaded manually for changes to take effect.');
+            log.slash.info('Reload not requested, so page needs to be reloaded manually for changes to take effect.');
         }
 
         return extension.name;

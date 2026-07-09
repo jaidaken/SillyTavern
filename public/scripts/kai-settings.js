@@ -21,6 +21,7 @@ import {
 } from './power-user.js';
 import { getEventSourceStream } from './sse-stream.js';
 import { getSortableDelay, versionCompare } from './utils.js';
+import { log } from './log.js';
 
 export let koboldai_settings;
 export let koboldai_setting_names;
@@ -393,7 +394,7 @@ export function setKoboldFlags(koboldUnitedVersion, koboldCppVersion) {
  * @param {any[]} orderArray Sampler order array.
  */
 function sortItemsByOrder(orderArray) {
-    console.debug('Preset samplers order: ' + orderArray);
+    log.net.debug('Preset samplers order: ' + orderArray);
     const $draggableItems = $('#kobold_order');
 
     for (let i = 0; i < orderArray.length; i++) {
@@ -407,7 +408,7 @@ export async function getStatusKobold() {
     let endpoint = kai_settings.api_server;
 
     if (!endpoint) {
-        console.warn('No endpoint for status check');
+        log.net.warn('No endpoint for status check');
         setOnlineStatus('no_connection');
         return resultCheckStatus();
     }
@@ -442,7 +443,7 @@ export async function getStatusKobold() {
             toastr.error(data.response, t`API Error`, { timeOut: 5000, preventDuplicates: true });
         }
     } catch (err) {
-        console.error('Error getting status', err);
+        log.net.error('Error getting status', err);
         setOnlineStatus('no_connection');
     }
 
@@ -497,7 +498,7 @@ export function initKoboldSettings() {
                 order.push($(this).data('id'));
             });
             kai_settings.sampler_order = order;
-            console.log('Samplers reordered:', kai_settings.sampler_order);
+            log.net.debug('Samplers reordered:', kai_settings.sampler_order);
             saveSettingsDebounced();
         },
     });

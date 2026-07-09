@@ -1,4 +1,5 @@
 import { t } from './i18n.js';
+import { log } from './log.js';
 
 // the hash can be obtained from command line e.g. via: MODEL=path_to_model; python -c "import json, hashlib, sys; print(hashlib.sha256(json.load(open('"$MODEL"/tokenizer_config.json'))['chat_template'].encode()).hexdigest())"
 // note that chat templates must be trimmed to match the llama.cpp metadata value
@@ -119,7 +120,7 @@ const not_found = { context: null, instruct: null };
 
 export async function deriveTemplatesFromChatTemplate(chat_template, hash) {
     if (chat_template.trim() === '') {
-        console.log('Missing chat template.');
+        log.prompt.debug('Missing chat template.');
         return not_found;
     }
 
@@ -134,7 +135,7 @@ export async function deriveTemplatesFromChatTemplate(chat_template, hash) {
         }
     }
 
-    console.warn(`Unknown chat template hash: ${hash} for [${chat_template}]`);
+    log.prompt.warn(`Unknown chat template hash: ${hash} for [${chat_template}]`);
     return not_found;
 }
 

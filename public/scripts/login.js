@@ -1,4 +1,5 @@
 import { initAccessibility } from './a11y.js';
+import { log } from './log.js';
 
 /**
  * CRSF token for requests.
@@ -40,7 +41,7 @@ async function getUserList() {
     }
 
     const userListObj = await response.json();
-    console.log(userListObj);
+    log.users.debug(userListObj);
     return userListObj;
 }
 
@@ -95,7 +96,7 @@ async function sendRecoveryPart2(handle, code, newPassword) {
         return displayError(errorData.error || 'An error occurred');
     }
 
-    console.log(`Successfully recovered password for ${handle}!`);
+    log.users.info(`Successfully recovered password for ${handle}!`);
     await performLogin(handle, newPassword);
 }
 
@@ -129,11 +130,11 @@ async function performLogin(handle, password) {
         const data = await response.json();
 
         if (data.handle) {
-            console.log(`Successfully logged in as ${handle}!`);
+            log.users.info(`Successfully logged in as ${handle}!`);
             redirectToHome();
         }
     } catch (error) {
-        console.error('Error logging in:', error);
+        log.users.error('Error logging in:', error);
         displayError(String(error));
     }
 }
@@ -219,11 +220,11 @@ function onCancelRecoveryClick() {
  * @param {import('../../src/users').UserViewModel[]} userList List of users
  */
 function configureNormalLogin(userList) {
-    console.log('Discreet login is disabled');
+    log.users.debug('Discreet login is disabled');
     $('#handleEntryBlock').hide();
     $('#normalLoginPrompt').show();
     $('#discreetLoginPrompt').hide();
-    console.log(userList);
+    log.users.debug(userList);
     for (const user of userList) {
         const userBlock = $('<div></div>').addClass('userSelect');
         const avatarBlock = $('<div></div>').addClass('avatar');
@@ -240,7 +241,7 @@ function configureNormalLogin(userList) {
  * Configures the login page for discreet login.
  */
 function configureDiscreetLogin() {
-    console.log('Discreet login is enabled');
+    log.users.debug('Discreet login is enabled');
     $('#handleEntryBlock').show();
     $('#normalLoginPrompt').hide();
     $('#discreetLoginPrompt').show();

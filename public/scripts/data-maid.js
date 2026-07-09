@@ -4,6 +4,7 @@ import { t } from './i18n.js';
 import { callGenericPopup, Popup, POPUP_TYPE } from './popup.js';
 import { renderTemplateAsync } from './templates.js';
 import { humanFileSize, timestampToMoment } from './utils.js';
+import { log } from './log.js';
 
 /**
  * @typedef {object} DataMaidReportResult
@@ -133,7 +134,7 @@ class DataMaidDialog {
         } catch (error) {
             this.hideSpinner();
             toastr.error(t`An error has occurred. Check the console for details.`);
-            console.error('Error generating Data Maid report:', error);
+            log.sys.error('Error generating Data Maid report:', error);
         } finally {
             this.isScanning = false;
         }
@@ -341,7 +342,7 @@ class DataMaidDialog {
 
             return true;
         } catch (error) {
-            console.error('Error deleting item:', error);
+            log.sys.error('Error deleting item:', error);
             return false;
         }
     }
@@ -396,7 +397,7 @@ class DataMaidDialog {
 export function initDataMaid() {
     const dataMaidButton = document.getElementById('data_maid_button');
     if (!dataMaidButton) {
-        console.warn('Data Maid button not found');
+        log.sys.warn('Data Maid button not found');
         return;
     }
 

@@ -21,6 +21,7 @@
 import { SVGInject } from '../lib.js';
 import { t } from './i18n.js';
 import { animation_duration, messageFormatting } from '/script.js';
+import { log } from './log.js';
 
 /** CSS class prefix */
 const CSS_PREFIX = 'streaming-display';
@@ -126,7 +127,7 @@ export class StreamingDisplay {
                 try {
                     await this.#onStop?.();
                 } catch (e) {
-                    console.error('[StreamingDisplay] Error executing stop handler', e);
+                    log.ui.error('[StreamingDisplay] Error executing stop handler', e);
                 }
             });
             controls.appendChild(this.#stopButton);

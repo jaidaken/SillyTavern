@@ -1,3 +1,5 @@
+import { log } from '../log.js';
+
 /**
  * Patches showdown to unrestrictedly unhash HTML spans.
  * @param {import('showdown')} showdown The showdown object to patch
@@ -16,7 +18,7 @@ export function addShowdownPatch(showdown) {
                 var num = RegExp.$1;
                 repText = repText.replace('¨C' + num + 'C', globals.gHtmlSpans[num]);
                 if (limit === 10000) {
-                    console.error('maximum nesting of 10000 spans reached!!!');
+                    log.ui.error('maximum nesting of 10000 spans reached!!!');
                     break;
                 }
                 ++limit;

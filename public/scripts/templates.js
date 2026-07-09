@@ -1,5 +1,6 @@
 import { DOMPurify, Handlebars } from '../lib.js';
 import { applyLocale } from './i18n.js';
+import { log } from './log.js';
 
 /**
  * @type {Map<string, function>}
@@ -13,7 +14,7 @@ const TEMPLATE_CACHE = new Map();
  * @returns {string} Response text
  */
 function getUrlSync(url) {
-    console.debug('Loading URL synchronously', url);
+    log.ui.debug('Loading URL synchronously', url);
     const request = new XMLHttpRequest();
     request.open('GET', url, false); // `false` makes the request synchronous
     request.send();
@@ -83,7 +84,7 @@ export async function renderTemplateAsync(templateId, templateData = {}, sanitiz
 
         return result;
     } catch (err) {
-        console.error('Error rendering template', templateId, templateData, err);
+        log.ui.error('Error rendering template', templateId, templateData, err);
         toastr.error('Check the DevTools console for more information.', 'Error rendering template');
     }
 }
@@ -125,7 +126,7 @@ export function renderTemplate(templateId, templateData = {}, sanitize = true, l
 
         return result;
     } catch (err) {
-        console.error('Error rendering template', templateId, templateData, err);
+        log.ui.error('Error rendering template', templateId, templateData, err);
         toastr.error('Check the DevTools console for more information.', 'Error rendering template');
     }
 }

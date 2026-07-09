@@ -5,6 +5,7 @@ import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from './slash-commands/SlashCommandArgument.js';
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { isValidUrl } from './utils.js';
+import { log } from './log.js';
 
 /**
  * @typedef {Object} Scraper
@@ -39,7 +40,7 @@ export class ScraperManager {
      */
     static async registerDataBankScraper(scraper) {
         if (ScraperManager.#scrapers.some(s => s.id === scraper.id)) {
-            console.warn(`Scraper with ID ${scraper.id} already registered`);
+            log.ext.warn(`Scraper with ID ${scraper.id} already registered`);
             return;
         }
 
@@ -66,7 +67,7 @@ export class ScraperManager {
     static runDataBankScraper(scraperId) {
         const scraper = ScraperManager.#scrapers.find(s => s.id === scraperId);
         if (!scraper) {
-            console.warn(`Scraper with ID ${scraperId} not found`);
+            log.ext.warn(`Scraper with ID ${scraperId} not found`);
             return;
         }
         return scraper.scrape();
@@ -80,7 +81,7 @@ export class ScraperManager {
     static isScraperAvailable(scraperId) {
         const scraper = ScraperManager.#scrapers.find(s => s.id === scraperId);
         if (!scraper) {
-            console.warn(`Scraper with ID ${scraperId} not found`);
+            log.ext.warn(`Scraper with ID ${scraperId} not found`);
             return;
         }
         return scraper.isAvailable();
@@ -264,7 +265,7 @@ class MediaWikiScraper {
 
             return result.ok;
         } catch (error) {
-            console.debug('Could not probe Fandom/MediaWiki plugin', error);
+            log.ext.debug('Could not probe Fandom/MediaWiki plugin', error);
             return false;
         }
     }
@@ -357,7 +358,7 @@ class FandomScraper {
 
             return result.ok;
         } catch (error) {
-            console.debug('Could not probe Fandom plugin', error);
+            log.ext.debug('Could not probe Fandom plugin', error);
             return false;
         }
     }

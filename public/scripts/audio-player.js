@@ -1,4 +1,5 @@
 import { formatTime } from './utils.js';
+import { log } from './log.js';
 
 export class AudioPlayer {
     /**
@@ -105,7 +106,7 @@ export class AudioPlayer {
         const requiredElements = ['playPauseBtn', 'currentTime', 'totalTime', 'progress', 'progressBar', 'volumeBtn'];
         for (const key of requiredElements) {
             if (!this.elements[key]) {
-                console.warn(`AudioPlayer: Required element .audio-player-${key.replace(/([A-Z])/g, '-$1').toLowerCase()} not found`);
+                log.media.warn(`AudioPlayer: Required element .audio-player-${key.replace(/([A-Z])/g, '-$1').toLowerCase()} not found`);
             }
         }
     }
@@ -468,7 +469,7 @@ export class AudioPlayer {
             const playPromise = this.audio.play();
             if (playPromise !== undefined) {
                 playPromise.catch(error => {
-                    console.error('Audio play failed:', error);
+                    log.media.error('Audio play failed:', error);
                 });
             }
         }

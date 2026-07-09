@@ -42,6 +42,7 @@ import {
     getUniqueName,
     isTrueBoolean,
 } from './utils.js';
+import { log } from './log.js';
 
 const bookmarkNameToken = 'Checkpoint #';
 
@@ -214,7 +215,7 @@ export async function createBranch(mesId, { swipeId = null } = {}) {
     const existingChats = await getExistingChatNames();
     const name = getUniqueName(mainChatName, (x) => existingChats.includes(x), { nameBuilder: buildBranchName });
     if (!name) {
-        console.error('Could not generate a unique branch name.');
+        log.chat.error('Could not generate a unique branch name.');
         toastr.error('Could not generate a unique branch name.', 'Branch creation failed');
         return;
     }
@@ -327,12 +328,12 @@ async function backToMainChat() {
 
 export async function convertSoloToGroupChat() {
     if (selected_group) {
-        console.log('Already in group. No need for conversion');
+        log.chat.debug('Already in group. No need for conversion');
         return;
     }
 
     if (this_chid === undefined) {
-        console.log('Need to have a character selected');
+        log.chat.debug('Need to have a character selected');
         return;
     }
 
@@ -382,7 +383,7 @@ export async function convertSoloToGroupChat() {
     });
 
     if (!createGroupResponse.ok) {
-        console.error('Group creation unsuccessful');
+        log.chat.error('Group creation unsuccessful');
         return;
     }
 
@@ -428,7 +429,7 @@ export async function convertSoloToGroupChat() {
     const createChatResponse = await fetch('/api/chats/group/save', createChatRequest);
 
     if (!createChatResponse.ok) {
-        console.error('Group chat creation unsuccessful');
+        log.chat.error('Group chat creation unsuccessful');
         toastr.error('Group chat creation unsuccessful');
         return;
     }

@@ -3,6 +3,7 @@ import { extension_settings, writeExtensionField } from '../../extensions.js';
 import { getPresetManager } from '../../preset-manager.js';
 import { regexFromString } from '../../utils.js';
 import { lodash } from '../../../lib.js';
+import { log } from '../../log.js';
 
 /**
  * @readonly
@@ -127,7 +128,7 @@ export function getScriptsByType(scriptType, { allowedOnly } = DEFAULT_GET_REGEX
             return Array.isArray(presetScripts) ? presetScripts : [];
         }
         default:
-            console.warn(`getScriptsByType: Invalid script type ${scriptType}`);
+            log.ext.warn(`getScriptsByType: Invalid script type ${scriptType}`);
             return [];
     }
 }
@@ -153,7 +154,7 @@ export async function saveScriptsByType(scripts, scriptType) {
             break;
         }
         default:
-            console.warn(`saveScriptsByType: Invalid script type ${scriptType}`);
+            log.ext.warn(`saveScriptsByType: Invalid script type ${scriptType}`);
             break;
     }
 }
@@ -334,7 +335,7 @@ function sanitizeRegexMacro(x) {
 export function getRegexedString(rawString, placement, { characterOverride, isMarkdown, isPrompt, isEdit, depth } = {}) {
     // WTF have you passed me?
     if (typeof rawString !== 'string') {
-        console.warn('getRegexedString: rawString is not a string. Returning empty string.');
+        log.ext.warn('getRegexedString: rawString is not a string. Returning empty string.');
         return '';
     }
 
@@ -354,19 +355,19 @@ export function getRegexedString(rawString, placement, { characterOverride, isMa
             (!script.markdownOnly && !script.promptOnly && !isMarkdown && !isPrompt)
         ) {
             if (isEdit && !script.runOnEdit) {
-                console.debug(`getRegexedString: Skipping script ${script.scriptName} because it does not run on edit`);
+                log.ext.debug(`getRegexedString: Skipping script ${script.scriptName} because it does not run on edit`);
                 return;
             }
 
             // Check if the depth is within the min/max depth
             if (typeof depth === 'number') {
                 if (!isNaN(script.minDepth) && script.minDepth !== null && script.minDepth >= -1 && depth < script.minDepth) {
-                    console.debug(`getRegexedString: Skipping script ${script.scriptName} because depth ${depth} is less than minDepth ${script.minDepth}`);
+                    log.ext.debug(`getRegexedString: Skipping script ${script.scriptName} because depth ${depth} is less than minDepth ${script.minDepth}`);
                     return;
                 }
 
                 if (!isNaN(script.maxDepth) && script.maxDepth !== null && script.maxDepth >= 0 && depth > script.maxDepth) {
-                    console.debug(`getRegexedString: Skipping script ${script.scriptName} because depth ${depth} is greater than maxDepth ${script.maxDepth}`);
+                    log.ext.debug(`getRegexedString: Skipping script ${script.scriptName} because depth ${depth} is greater than maxDepth ${script.maxDepth}`);
                     return;
                 }
             }
@@ -403,7 +404,7 @@ export function runRegexScript(regexScript, rawString, { characterOverride } = {
             case substitute_find_regex.ESCAPED:
                 return substituteParamsExtended(regexScript.findRegex, {}, sanitizeRegexMacro);
             default:
-                console.warn(`runRegexScript: Unknown substituteRegex value ${regexScript.substituteRegex}. Using raw regex.`);
+                log.ext.warn(`runRegexScript: Unknown substituteRegex value ${regexScript.substituteRegex}. Using raw regex.`);
                 return regexScript.findRegex;
         }
     };

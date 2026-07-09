@@ -8,6 +8,7 @@ import {
     context_presets,
 } from './power-user.js';
 import { onlyUnique, regexFromString, resetScrollHeight } from './utils.js';
+import { log } from './log.js';
 
 /**
  * @type {InstructSettings[]} Instruct mode presets.
@@ -180,7 +181,7 @@ export function updateBindModelTemplatesState() {
 export function selectContextPreset(preset, { quiet = false, isAuto = false } = {}) {
     const presetExists = context_presets.some(x => x.name === preset);
     if (!presetExists) {
-        console.warn(`Context template "${preset}" not found`);
+        log.prompt.warn(`Context template "${preset}" not found`);
         return;
     }
 
@@ -205,7 +206,7 @@ export function selectContextPreset(preset, { quiet = false, isAuto = false } = 
 export function selectInstructPreset(preset, { quiet = false, isAuto = false } = {}) {
     const presetExists = instruct_presets.some(x => x.name === preset);
     if (!presetExists) {
-        console.warn(`Instruct template "${preset}" not found`);
+        log.prompt.warn(`Instruct template "${preset}" not found`);
         return;
     }
 
@@ -271,7 +272,7 @@ export function autoSelectInstructPreset(modelId) {
                 }
             } catch {
                 // If regex is invalid, ignore it
-                console.warn(`Invalid instruct activation regex in preset "${preset.name}"`);
+                log.prompt.warn(`Invalid instruct activation regex in preset "${preset.name}"`);
             }
         }
     }

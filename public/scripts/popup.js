@@ -3,6 +3,7 @@ import { shouldSendOnEnter } from './RossAscends-mods.js';
 import { t } from './i18n.js';
 import { power_user, toastPositionClasses } from './power-user.js';
 import { clamp, removeFromArray, runAfterAnimation, uuidv4 } from './utils.js';
+import { log } from './log.js';
 
 /** @readonly */
 /** @enum {Number} */
@@ -323,7 +324,7 @@ export class Popup {
         this.customInputs = customInputs;
         this.customInputs?.forEach(input => {
             if (!input.id || !(typeof input.id === 'string')) {
-                console.warn('Given custom input does not have a valid id set');
+                log.ui.warn('Given custom input does not have a valid id set');
                 return;
             }
 
@@ -434,7 +435,7 @@ export class Popup {
 
                 this.inputControls.appendChild(label);
             } else {
-                console.warn('Unknown custom input type. Only checkbox, text, number and textarea are supported.', input);
+                log.ui.warn('Unknown custom input type. Only checkbox, text, number and textarea are supported.', input);
                 return;
             }
         });
@@ -502,7 +503,7 @@ export class Popup {
                 break;
             }
             default: {
-                console.warn('Unknown popup type.', type);
+                log.ui.warn('Unknown popup type.', type);
                 break;
             }
         }
@@ -528,7 +529,7 @@ export class Popup {
         } else if (typeof content == 'string') {
             this.content.innerHTML = content;
         } else {
-            console.warn('Unknown popup text type. Should be jQuery, HTMLElement or string.', content);
+            log.ui.warn('Unknown popup text type. Should be jQuery, HTMLElement or string.', content);
         }
 
         // Already prepare the auto-focus control by adding the "autofocus" attribute, this should be respected by showModal()

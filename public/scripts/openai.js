@@ -81,6 +81,7 @@ import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { COMETAPI_IGNORE_PATTERNS, IGNORE_SYMBOL, MEDIA_DISPLAY, MEDIA_TYPE } from './constants.js';
 import { syncNanoGptProvidersForModel, syncOpenRouterProvidersForModel, updateNanoGptProvidersWarning, updateOpenRouterProvidersWarning } from './textgen-models.js';
+import { log } from './log.js';
 
 export {
     openai_messages_count,
@@ -1752,7 +1753,7 @@ export function getChatCompletionModel(settings = null) {
         case chat_completion_sources.WORKERS_AI:
             return settings.workers_ai_model;
         default:
-            console.error(`Unknown chat completion source: ${source}`);
+            log.settings.error(`Unknown chat completion source: ${source}`);
             return '';
     }
 }
@@ -3317,7 +3318,7 @@ async function calculateLogitBias() {
         result = await reply.json();
     } catch (err) {
         result = {};
-        console.error(err);
+        log.net.openai.error(err);
     }
     return result;
 }
@@ -3379,7 +3380,7 @@ class TokenHandler {
     }
 
     log() {
-        console.table({ ...this.counts, 'total': this.getTotal() });
+        log.tok.table({ ...this.counts, 'total': this.getTotal() });
     }
 }
 
@@ -3446,7 +3447,7 @@ class Message {
         this.content = content;
 
         if (!this.role) {
-            console.log(`Message role not set, defaulting to 'system' for identifier '${this.identifier}'`);
+            log.prompt.debug(`Message role not set, defaulting to 'system' for identifier '${this.identifier}'`);
             this.role = 'system';
         }
 
@@ -3536,7 +3537,7 @@ class Message {
                 const blob = await response.blob();
                 image = await getBase64Async(blob);
             } catch (error) {
-                console.error('Image adding skipped', error);
+                log.media.error('Image adding skipped', error);
                 return;
             }
         }
@@ -3551,7 +3552,7 @@ class Message {
             this.tokens += tokens;
         } catch (error) {
             this.tokens += Message.tokensPerImage;
-            console.error('Failed to get image token cost', error);
+            log.media.error('Failed to get image token cost', error);
         }
     }
 
@@ -3570,7 +3571,7 @@ class Message {
                 const blob = await response.blob();
                 video = await getBase64Async(blob);
             } catch (error) {
-                console.error('Video adding skipped', error);
+                log.media.error('Video adding skipped', error);
                 return;
             }
         }
@@ -3586,7 +3587,7 @@ class Message {
         } catch (error) {
             // Convservative estimate for video token cost without knowing duration
             this.tokens += 263 * 40; // ~40 second video (60 seconds max)
-            console.error('Failed to get video token cost', error);
+            log.media.error('Failed to get video token cost', error);
         }
     }
 
@@ -3605,7 +3606,7 @@ class Message {
                 const blob = await response.blob();
                 audio = await getBase64Async(blob);
             } catch (error) {
-                console.error('Audio adding skipped', error);
+                log.media.error('Audio adding skipped', error);
                 return;
             }
         }
@@ -3620,7 +3621,7 @@ class Message {
             // Estimate for audio token cost without knowing duration
             const tokens = 32 * 300; // ~5 minute audio
             this.tokens += tokens;
-            console.error('Failed to get audio token cost', error);
+            log.media.error('Failed to get audio token cost', error);
         }
     }
 
@@ -4051,7 +4052,7 @@ export class ChatCompletion {
      * @param {string} output - The output message to log.
      */
     log(output) {
-        if (this.loggingEnabled) console.log('[ChatCompletion] ' + output);
+        if (this.loggingEnabled) log.prompt.debug('[ChatCompletion] ' + output);
     }
 
     /**
@@ -4076,7 +4077,7 @@ export class ChatCompletion {
      */
     validateMessageCollection(collection) {
         if (!(collection instanceof MessageCollection)) {
-            console.log(collection);
+            log.prompt.debug(collection);
             throw new Error('Argument must be an instance of MessageCollection');
         }
     }
@@ -4089,7 +4090,7 @@ export class ChatCompletion {
      */
     validateMessage(message) {
         if (!(message instanceof Message)) {
-            console.log(message);
+            log.prompt.debug(message);
             throw new Error('Argument must be an instance of Message');
         }
     }
@@ -4372,13 +4373,13 @@ async function getStatusOpen() {
     }
 
     if (oai_settings.chat_completion_source === chat_completion_sources.CUSTOM && !isValidUrl(oai_settings.custom_url)) {
-        console.debug('Invalid endpoint URL of Custom OpenAI API:', oai_settings.custom_url);
+        log.net.openai.debug('Invalid endpoint URL of Custom OpenAI API:', oai_settings.custom_url);
         setOnlineStatus(t`Invalid endpoint URL. Requests may fail.`);
         return resultCheckStatus();
     }
 
     if (oai_settings.chat_completion_source === chat_completion_sources.AZURE_OPENAI && !isValidUrl(oai_settings.azure_base_url)) {
-        console.debug('Invalid endpoint URL of Azure OpenAI API:', oai_settings.azure_base_url);
+        log.net.openai.debug('Invalid endpoint URL of Azure OpenAI API:', oai_settings.azure_base_url);
         setOnlineStatus(t`Invalid Azure endpoint URL. Requests may fail.`);
         return resultCheckStatus();
     }
@@ -4458,7 +4459,7 @@ async function getStatusOpen() {
             setOnlineStatus(t`Status check bypassed`);
         }
     } catch (error) {
-        console.error(error);
+        log.net.openai.error(error);
 
         if (!canBypass) {
             setOnlineStatus('no_connection');
@@ -4531,7 +4532,7 @@ function onLogitBiasPresetChange() {
     const preset = oai_settings.bias_presets[value];
 
     if (!Array.isArray(preset)) {
-        console.error('Preset not found');
+        log.settings.error('Preset not found');
         return;
     }
 
@@ -4561,7 +4562,7 @@ function onLogitBiasPresetChange() {
                 order.unshift($(this).data('id'));
             });
             preset.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
-            console.log('Logit bias reordered:', preset);
+            log.settings.info('Logit bias reordered:', preset);
             saveSettingsDebounced();
         },
     });
@@ -4688,7 +4689,7 @@ async function onPresetImportFileChange(e) {
         const popupResult = await Popup.show.confirm(textHeader, textMessage, popupOptions);
 
         if (popupResult === POPUP_RESULT.CANCELLED) {
-            console.log('Import cancelled by user');
+            log.settings.info('Import cancelled by user');
             return;
         }
 
@@ -4758,7 +4759,7 @@ async function onExportPresetClick() {
         const popupResult = await Popup.show.confirm(textHeader, textMessage, popupOptions);
 
         if (popupResult === POPUP_RESULT.CANCELLED) {
-            console.log('Export cancelled by user');
+            log.settings.info('Export cancelled by user');
             return;
         }
 
@@ -5356,23 +5357,23 @@ async function onModelChange() {
         } else if (value === '' || value === 'claude-2') {
             value = default_settings.claude_model;
         }
-        console.log('Claude model changed to', value);
+        log.settings.info('Claude model changed to', value);
         oai_settings.claude_model = value;
         $('#model_claude_select').val(oai_settings.claude_model);
     }
 
     if ($(this).is('#model_openai_select')) {
-        console.log('OpenAI model changed to', value);
+        log.settings.info('OpenAI model changed to', value);
         oai_settings.openai_model = value;
     }
 
     if ($(this).is('#model_openrouter_select')) {
         if (!value || !hasModelsLoaded) {
-            console.debug('Null OR model selected. Ignoring.');
+            log.settings.debug('Null OR model selected. Ignoring.');
             return;
         }
 
-        console.log('OpenRouter model changed to', value);
+        log.settings.info('OpenRouter model changed to', value);
         oai_settings.openrouter_model = value;
         syncOpenRouterProvidersForModel(value, '#openrouter_providers_chat');
     }
@@ -5383,186 +5384,186 @@ async function onModelChange() {
             $('#model_ai21_select').val(value);
         }
 
-        console.log('AI21 model changed to', value);
+        log.settings.info('AI21 model changed to', value);
         oai_settings.ai21_model = value;
     }
 
     if ($(this).is('#model_google_select')) {
         if (!value) {
-            console.debug('Null Google model selected. Ignoring.');
+            log.settings.debug('Null Google model selected. Ignoring.');
             return;
         }
 
-        console.log('Google model changed to', value);
+        log.settings.info('Google model changed to', value);
         oai_settings.google_model = value;
     }
 
     if ($(this).is('#model_vertexai_select')) {
-        console.log('Vertex AI model changed to', value);
+        log.settings.info('Vertex AI model changed to', value);
         oai_settings.vertexai_model = value;
     }
 
     if ($(this).is('#model_mistralai_select')) {
         if (!value || !hasModelsLoaded) {
-            console.debug('Null MistralAI model selected. Ignoring.');
+            log.settings.debug('Null MistralAI model selected. Ignoring.');
             return;
         }
-        console.log('MistralAI model changed to', value);
+        log.settings.info('MistralAI model changed to', value);
         oai_settings.mistralai_model = value;
         $('#model_mistralai_select').val(oai_settings.mistralai_model);
     }
 
     if ($(this).is('#model_cohere_select')) {
-        console.log('Cohere model changed to', value);
+        log.settings.info('Cohere model changed to', value);
         oai_settings.cohere_model = value;
     }
 
     if ($(this).is('#model_perplexity_select')) {
-        console.log('Perplexity model changed to', value);
+        log.settings.info('Perplexity model changed to', value);
         oai_settings.perplexity_model = value;
     }
 
     if ($(this).is('#model_groq_select')) {
         if (!value || !hasModelsLoaded) {
-            console.debug('Null Groq model selected. Ignoring.');
+            log.settings.debug('Null Groq model selected. Ignoring.');
             return;
         }
-        console.log('Groq model changed to', value);
+        log.settings.info('Groq model changed to', value);
         oai_settings.groq_model = value;
     }
 
     if ($(this).is('#model_siliconflow_select')) {
         if (!value) {
-            console.debug('Null SiliconFlow model selected. Ignoring.');
+            log.settings.debug('Null SiliconFlow model selected. Ignoring.');
             return;
         }
-        console.log('SiliconFlow model changed to', value);
+        log.settings.info('SiliconFlow model changed to', value);
         oai_settings.siliconflow_model = value;
     }
 
     if ($(this).is('#model_minimax_select')) {
         if (!value) {
-            console.debug('Null MiniMax model selected. Ignoring.');
+            log.settings.debug('Null MiniMax model selected. Ignoring.');
             return;
         }
-        console.log('MiniMax model changed to', value);
+        log.settings.info('MiniMax model changed to', value);
         oai_settings.minimax_model = value;
     }
 
     if ($(this).is('#model_electronhub_select')) {
         if (!value || !hasModelsLoaded) {
-            console.debug('Null ElectronHub model selected. Ignoring.');
+            log.settings.debug('Null ElectronHub model selected. Ignoring.');
             return;
         }
-        console.log('ElectronHub model changed to', value);
+        log.settings.info('ElectronHub model changed to', value);
         oai_settings.electronhub_model = value;
     }
 
     if ($(this).is('#model_chutes_select')) {
         if (!value || !hasModelsLoaded) {
-            console.debug('Null Chutes model selected. Ignoring.');
+            log.settings.debug('Null Chutes model selected. Ignoring.');
             return;
         }
-        console.log('Chutes model changed to', value);
+        log.settings.info('Chutes model changed to', value);
         oai_settings.chutes_model = value;
     }
 
     if ($(this).is('#model_nanogpt_select')) {
         if (!value || !hasModelsLoaded) {
-            console.debug('Null NanoGPT model selected. Ignoring.');
+            log.settings.debug('Null NanoGPT model selected. Ignoring.');
             return;
         }
 
-        console.log('NanoGPT model changed to', value);
+        log.settings.info('NanoGPT model changed to', value);
         oai_settings.nanogpt_model = value;
         syncNanoGptProvidersForModel(value, '#nanogpt_provider');
     }
 
     if ($(this).is('#model_deepseek_select')) {
         if (!value) {
-            console.debug('Null DeepSeek model selected. Ignoring.');
+            log.settings.debug('Null DeepSeek model selected. Ignoring.');
             return;
         }
 
-        console.log('DeepSeek model changed to', value);
+        log.settings.info('DeepSeek model changed to', value);
         oai_settings.deepseek_model = value;
     }
 
     if (value && $(this).is('#model_custom_select')) {
-        console.log('Custom model changed to', value);
+        log.settings.info('Custom model changed to', value);
         oai_settings.custom_model = value;
         $('#custom_model_id').val(value).trigger('input');
     }
 
     if (value && $(this).is('#model_pollinations_select')) {
-        console.log('Pollinations model changed to', value);
+        log.settings.info('Pollinations model changed to', value);
         oai_settings.pollinations_model = value;
     }
 
     if ($(this).is('#model_aimlapi_select')) {
         if (!value || !hasModelsLoaded) {
-            console.debug('Null AI/ML model selected. Ignoring.');
+            log.settings.debug('Null AI/ML model selected. Ignoring.');
             return;
         }
-        console.log('AI/ML model changed to', value);
+        log.settings.info('AI/ML model changed to', value);
         oai_settings.aimlapi_model = value;
     }
 
     if ($(this).is('#model_xai_select')) {
         if (!value) {
-            console.debug('Null XAI model selected. Ignoring.');
+            log.settings.debug('Null XAI model selected. Ignoring.');
             return;
         }
-        console.log('XAI model changed to', value);
+        log.settings.info('XAI model changed to', value);
         oai_settings.xai_model = value;
     }
 
     if ($(this).is('#model_moonshot_select')) {
         if (!value || !hasModelsLoaded) {
-            console.debug('Null Moonshot model selected. Ignoring.');
+            log.settings.debug('Null Moonshot model selected. Ignoring.');
             return;
         }
-        console.log('Moonshot model changed to', value);
+        log.settings.info('Moonshot model changed to', value);
         oai_settings.moonshot_model = value;
     }
 
     if ($(this).is('#model_fireworks_select')) {
         if (!value || !hasModelsLoaded) {
-            console.debug('Null Fireworks model selected. Ignoring.');
+            log.settings.debug('Null Fireworks model selected. Ignoring.');
             return;
         }
-        console.log('Fireworks model changed to', value);
+        log.settings.info('Fireworks model changed to', value);
         oai_settings.fireworks_model = value;
     }
 
     if ($(this).is('#model_cometapi_select')) {
         if (!value) {
-            console.debug('Null CometAPI model selected. Ignoring.');
+            log.settings.debug('Null CometAPI model selected. Ignoring.');
             return;
         }
-        console.log('CometAPI model changed to', value);
+        log.settings.info('CometAPI model changed to', value);
         oai_settings.cometapi_model = value;
     }
 
     if ($(this).is('#azure_openai_model')) {
         if (!value) {
-            console.debug('Null Azure OpenAI model selected. Ignoring.');
+            log.settings.debug('Null Azure OpenAI model selected. Ignoring.');
             return;
         }
         oai_settings.azure_openai_model = value;
     }
 
     if ($(this).is('#model_zai_select')) {
-        console.log('ZAI model changed to', value);
+        log.settings.info('ZAI model changed to', value);
         oai_settings.zai_model = value;
     }
 
     if ($(this).is('#model_workers_ai_select')) {
         if (!value || !hasModelsLoaded) {
-            console.debug('Null Workers AI model selected. Ignoring.');
+            log.settings.debug('Null Workers AI model selected. Ignoring.');
             return;
         }
-        console.log('Workers AI model changed to', value);
+        log.settings.info('Workers AI model changed to', value);
         oai_settings.workers_ai_model = value;
     }
 
@@ -5812,7 +5813,7 @@ async function onModelChange() {
         } else {
             const model = model_list.find(m => m.id === oai_settings.aimlapi_model);
             maxContext = (model?.info?.contextLength ?? model?.context_length) || max_32k;
-            console.log('[AI/ML API] Model CTX:', model?.info?.contextLength);
+            log.settings.debug('[AI/ML API] Model CTX:', model?.info?.contextLength);
         }
 
         $('#openai_max_context')
@@ -5961,7 +5962,7 @@ async function onConnectButtonClick(e) {
         }
 
         if (!secret_state[config.key] && (!config.proxy || !oai_settings.reverse_proxy) && !config.keyless) {
-            console.log(`No secret key saved for ${oai_settings.chat_completion_source}`);
+            log.net.openai.debug(`No secret key saved for ${oai_settings.chat_completion_source}`);
             return;
         }
     }
@@ -6051,7 +6052,7 @@ async function testApiConnection() {
 
     try {
         const reply = await sendOpenAIRequest('quiet', [{ 'role': 'user', 'content': 'Hi' }], new AbortController().signal);
-        console.log(reply);
+        log.net.openai.debug(reply);
         toastr.success(t`API connection successful!`);
     } catch (err) {
         toastr.error(t`Could not get a reply from API. Check your connection settings / API key and try again.`);
@@ -6398,7 +6399,7 @@ function onProxyPresetChange() {
     if (selectedPreset) {
         setProxyPreset(selectedPreset.name, selectedPreset.url, selectedPreset.password);
     } else {
-        console.error(t`Proxy preset '${value}' not found in proxies array.`);
+        log.settings.error(t`Proxy preset '${value}' not found in proxies array.`);
     }
     saveSettingsDebounced();
 }
@@ -6523,7 +6524,7 @@ async function onVertexAIValidateServiceAccount() {
         toastr.success(t`Service Account JSON is valid and saved securely`);
         saveSettingsDebounced();
     } catch (error) {
-        console.error('JSON validation error:', error);
+        log.settings.error('JSON validation error:', error);
         toastr.error(t`Invalid JSON format`);
         updateVertexAIServiceAccountStatus(false, t`Invalid JSON format`);
     }
