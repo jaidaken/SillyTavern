@@ -3,6 +3,7 @@ import path from 'node:path';
 import urlJoin from 'url-join';
 import { DEFAULT_AVATAR_PATH } from './constants.js';
 import { extractFileFromZipBuffer } from './util.js';
+import { log } from './log.js';
 
 /**
  * A parser for BYAF (Backyard Archive Format) files.
@@ -137,7 +138,7 @@ export class ByafParser {
         }
 
         if (charactersArray.length > 1) {
-            console.warn('Warning: BYAF manifest contains more than one character, only the first one will be imported');
+            log.chars.warn('Warning: BYAF manifest contains more than one character, only the first one will be imported');
         }
 
         const characterPath = charactersArray[0];
@@ -154,7 +155,7 @@ export class ByafParser {
             const character = JSON.parse(characterBuffer.toString());
             return { character, characterPath };
         } catch (error) {
-            console.error('Failed to parse character JSON from BYAF:', error);
+            log.chars.error('Failed to parse character JSON from BYAF:', error);
             throw new Error('Invalid BYAF file: character is not a valid JSON', { cause: error });
         }
     }
@@ -169,7 +170,7 @@ export class ByafParser {
         const scenariosArray = manifest?.scenarios;
 
         if (!Array.isArray(scenariosArray) || scenariosArray.length === 0) {
-            console.warn('Warning: BYAF manifest contains no scenarios');
+            log.chars.warn('Warning: BYAF manifest contains no scenarios');
             return [{}];
         }
 
@@ -178,19 +179,19 @@ export class ByafParser {
         for (const scenarioPath of scenariosArray) {
             const scenarioBuffer = await extractFileFromZipBuffer(this.#data, scenarioPath);
             if (!scenarioBuffer) {
-                console.warn('Warning: failed to extract BYAF scenario JSON');
+                log.chars.warn('Warning: failed to extract BYAF scenario JSON');
             }
             if (scenarioBuffer) {
                 try {
                     scenarios.push(JSON.parse(scenarioBuffer.toString()));
                 } catch (error) {
-                    console.warn('Warning: BYAF scenario is not a valid JSON', error);
+                    log.chars.warn('Warning: BYAF scenario is not a valid JSON', error);
                 }
             }
         }
 
         if (scenarios.length === 0) {
-            console.warn('Warning: BYAF manifest contains no valid scenarios');
+            log.chars.warn('Warning: BYAF manifest contains no valid scenarios');
             return [{}];
         }
 
@@ -209,7 +210,7 @@ export class ByafParser {
         const characterImages = character?.images;
 
         if (!Array.isArray(characterImages) || characterImages.length === 0) {
-            console.warn('Warning: BYAF character has no images');
+            log.chars.warn('Warning: BYAF character has no images');
             return [{ filename: '', image: defaultAvatarBuffer, label: '' }];
         }
 
@@ -217,21 +218,21 @@ export class ByafParser {
         for (const image of characterImages) {
             const imagePath = image?.path;
             if (!imagePath) {
-                console.warn('Warning: BYAF character image path is empty');
+                log.chars.warn('Warning: BYAF character image path is empty');
                 continue;
             }
 
             const fullImagePath = urlJoin(path.dirname(characterPath), imagePath);
             const imageBuffer = await extractFileFromZipBuffer(this.#data, fullImagePath);
             if (!imageBuffer) {
-                console.warn('Warning: failed to extract BYAF character image');
+                log.chars.warn('Warning: failed to extract BYAF character image');
                 continue;
             }
 
             imageBuffers.push({ filename: path.basename(imagePath), image: imageBuffer, label: image?.label || '' });
         }
         if (imageBuffers.length === 0) {
-            console.warn('Warning: BYAF character has no valid images');
+            log.chars.warn('Warning: BYAF character has no valid images');
             return [{ filename: '', image: defaultAvatarBuffer, label: '' }];
         }
         return imageBuffers;
@@ -425,7 +426,7 @@ export class ByafParser {
                 chat.push(chatMessage);
             }
         } else {
-            console.warn('Warning: BYAF scenario contained no messages property.');
+            log.chars.warn('Warning: BYAF scenario contained no messages property.');
         }
 
         return chat.map(obj => JSON.stringify(obj)).join('\n');

@@ -5,6 +5,7 @@ import sanitize from 'sanitize-filename';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { extractFileFromZipBuffer, extractFilesFromZipBuffer, normalizeZipEntryPath, ensureDirectory } from './util.js';
 import { DEFAULT_AVATAR_PATH } from './constants.js';
+import { log } from './log.js';
 
 // 'embeded://' is intentional - RisuAI exports use this misspelling
 const CHARX_EMBEDDED_URI_PREFIXES = ['embeded://', 'embedded://', '__asset:'];
@@ -64,7 +65,7 @@ export class CharXParser {
      * @returns {Promise<CharXParseResult>}
      */
     async parse() {
-        console.info('Importing from CharX');
+        log.chars.info('Importing from CharX');
         const cardBuffer = await extractFileFromZipBuffer(this.#data, 'card.json');
 
         if (!cardBuffer) {
@@ -347,7 +348,7 @@ export function persistCharXAssets(assets, bufferMap, directories, characterFold
         }
         const buffer = bufferMap.get(asset.zipPath);
         if (!buffer) {
-            console.warn(`CharX: Asset ${asset.zipPath} missing or unsupported, skipping.`);
+            log.chars.warn(`CharX: Asset ${asset.zipPath} missing or unsupported, skipping.`);
             continue;
         }
 
@@ -391,7 +392,7 @@ export function persistCharXAssets(assets, bufferMap, directories, characterFold
                 summary.misc += 1;
             }
         } catch (error) {
-            console.warn(`CharX: Failed to save asset "${asset.name}": ${error.message}`);
+            log.chars.warn(`CharX: Failed to save asset "${asset.name}": ${error.message}`);
         }
     }
 

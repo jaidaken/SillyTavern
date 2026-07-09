@@ -7,6 +7,7 @@ import sanitize from 'sanitize-filename';
 
 import { clientRelativePath, removeFileExtension, getImages, isPathUnderParent } from '../util.js';
 import { MEDIA_EXTENSIONS, MEDIA_REQUEST_TYPE } from '../constants.js';
+import { log } from '../log.js';
 
 /**
  * Ensure the directory for the provided file path exists.
@@ -72,7 +73,7 @@ router.post('/upload', async (request, response) => {
         await fs.promises.writeFile(pathToNewFile, new Uint8Array(imageBuffer));
         response.send({ path: clientRelativePath(request.user.directories.root, pathToNewFile) });
     } catch (error) {
-        console.error(error);
+        log.media.error(error);
         response.status(500).send({ error: 'Failed to save the image' });
     }
 });
@@ -84,7 +85,7 @@ router.post('/list{/:folder}', (request, response) => {
                 return response.status(400).send({ error: 'Folder specified in both URL and body' });
             }
 
-            console.warn('Deprecated: Use POST /api/images/list with folder in request body');
+            log.media.warn('Deprecated: Use POST /api/images/list with folder in request body');
             request.body.folder = request.params.folder;
         }
 
@@ -107,7 +108,7 @@ router.post('/list{/:folder}', (request, response) => {
         }
         return response.send(images);
     } catch (error) {
-        console.error(error);
+        log.media.error(error);
         return response.status(500).send({ error: 'Unable to retrieve files' });
     }
 });
@@ -125,7 +126,7 @@ router.post('/folders', (request, response) => {
 
         return response.send(folders);
     } catch (error) {
-        console.error(error);
+        log.media.error(error);
         return response.status(500).send({ error: 'Unable to retrieve folders' });
     }
 });
@@ -146,10 +147,10 @@ router.post('/delete', async (request, response) => {
         }
 
         fs.unlinkSync(pathToDelete);
-        console.info(`Deleted image: ${request.body.path} from ${request.user.profile.handle}`);
+        log.media.info(`Deleted image: ${request.body.path} from ${request.user.profile.handle}`);
         return response.sendStatus(200);
     } catch (error) {
-        console.error(error);
+        log.media.error(error);
         return response.sendStatus(500);
     }
 });

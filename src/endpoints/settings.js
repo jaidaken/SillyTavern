@@ -10,6 +10,7 @@ import { SETTINGS_FILE } from '../constants.js';
 import { getConfigValue, generateTimestamp, removeOldBackups } from '../util.js';
 import { getAllUserHandles, getUserDirectories } from '../users.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
+import { log } from '../log.js';
 
 const ENABLE_EXTENSIONS = !!getConfigValue('extensions.enabled', true, 'boolean');
 const ENABLE_EXTENSIONS_AUTO_UPDATE = !!getConfigValue('extensions.autoUpdate', true, 'boolean');
@@ -108,7 +109,7 @@ function readPresetsFromDirectory(directoryPath, options = {}) {
             fileNames.push(removeFileExtension ? item.replace(/\.[^/.]+$/, '') : item);
         } catch {
             // skip
-            console.warn(`${item} is not a valid JSON`);
+            log.settings.warn(`${item} is not a valid JSON`);
         }
     });
 
@@ -123,7 +124,7 @@ async function backupSettings() {
             backupUserSettings(handle, true);
         }
     } catch (err) {
-        console.error('Could not backup settings file', err);
+        log.settings.error('Could not backup settings file', err);
     }
 }
 
@@ -210,7 +211,7 @@ router.post('/save', function (request, response) {
         triggerAutoSave(request.user.profile.handle);
         response.send({ result: 'ok' });
     } catch (err) {
-        console.error(err);
+        log.settings.error(err);
         response.send(err);
     }
 });
@@ -308,7 +309,7 @@ router.post('/get-snapshots', async (request, response) => {
 
         response.json(result);
     } catch (error) {
-        console.error(error);
+        log.settings.error(error);
         response.sendStatus(500);
     }
 });
@@ -332,7 +333,7 @@ router.post('/load-snapshot', getFileNameValidationFunction('name'), async (requ
 
         response.send(content);
     } catch (error) {
-        console.error(error);
+        log.settings.error(error);
         response.sendStatus(500);
     }
 });
@@ -342,7 +343,7 @@ router.post('/make-snapshot', async (request, response) => {
         backupUserSettings(request.user.profile.handle, false);
         response.sendStatus(204);
     } catch (error) {
-        console.error(error);
+        log.settings.error(error);
         response.sendStatus(500);
     }
 });
@@ -368,7 +369,7 @@ router.post('/restore-snapshot', getFileNameValidationFunction('name'), async (r
 
         response.sendStatus(204);
     } catch (error) {
-        console.error(error);
+        log.settings.error(error);
         response.sendStatus(500);
     }
 });

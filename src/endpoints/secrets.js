@@ -4,6 +4,7 @@ import path from 'node:path';
 import express from 'express';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { color, getConfigValue, uuidv4 } from '../util.js';
+import { log } from '../log.js';
 
 export const SECRETS_FILE = 'secrets.json';
 export const SECRET_KEYS = {
@@ -301,7 +302,7 @@ export class SecretManager {
         const targetIndex = secretArray.findIndex(s => s.id === id);
 
         if (targetIndex === -1) {
-            console.warn(`Secret with ID ${id} not found for key ${key}`);
+            log.settings.warn(`Secret with ID ${id} not found for key ${key}`);
             return;
         }
 
@@ -328,7 +329,7 @@ export class SecretManager {
         const targetIndex = secretArray.findIndex(s => s.id === id);
 
         if (targetIndex === -1) {
-            console.warn(`Secret with ID ${id} not found for key ${key}`);
+            log.settings.warn(`Secret with ID ${id} not found for key ${key}`);
             return;
         }
 
@@ -414,7 +415,7 @@ export class SecretManager {
         fs.cpSync(this.filePath, backupFilePath);
 
         this._writeSecretsFile(migratedSecrets);
-        console.info(color.green('Secrets migrated successfully, old secrets backed up to:'), backupFilePath);
+        log.settings.info(color.green('Secrets migrated successfully, old secrets backed up to:'), backupFilePath);
     }
 }
 
@@ -501,7 +502,7 @@ export function migrateFlatSecrets(directoriesList) {
             const manager = new SecretManager(directories);
             manager.migrateFlatSecrets();
         } catch (error) {
-            console.warn(color.red(`Failed to migrate secrets for ${directories.root}:`), error);
+            log.settings.warn(color.red(`Failed to migrate secrets for ${directories.root}:`), error);
         }
     }
 }
@@ -521,7 +522,7 @@ router.post('/write', (request, response) => {
 
         return response.send({ id });
     } catch (error) {
-        console.error('Error writing secret:', error);
+        log.settings.error('Error writing secret:', error);
         return response.sendStatus(500);
     }
 });
@@ -532,7 +533,7 @@ router.post('/read', (request, response) => {
         const state = manager.getSecretState();
         return response.send(state);
     } catch (error) {
-        console.error('Error reading secret state:', error);
+        log.settings.error('Error reading secret state:', error);
         return response.send({});
     }
 });
@@ -540,7 +541,7 @@ router.post('/read', (request, response) => {
 router.post('/view', (request, response) => {
     try {
         if (!allowKeysExposure) {
-            console.error('secrets.json could not be viewed unless allowKeysExposure in config.yaml is set to true');
+            log.settings.error('secrets.json could not be viewed unless allowKeysExposure in config.yaml is set to true');
             return response.sendStatus(403);
         }
 
@@ -552,7 +553,7 @@ router.post('/view', (request, response) => {
 
         return response.send(secrets);
     } catch (error) {
-        console.error('Error viewing secrets:', error);
+        log.settings.error('Error viewing secrets:', error);
         return response.sendStatus(500);
     }
 });
@@ -566,7 +567,7 @@ router.post('/find', (request, response) => {
         }
 
         if (!allowKeysExposure && !EXPORTABLE_KEYS.includes(key)) {
-            console.error('Cannot fetch secrets unless allowKeysExposure in config.yaml is set to true');
+            log.settings.error('Cannot fetch secrets unless allowKeysExposure in config.yaml is set to true');
             return response.sendStatus(403);
         }
 
@@ -580,7 +581,7 @@ router.post('/find', (request, response) => {
         const secretValue = manager.readSecret(key, id);
         return response.send({ value: secretValue });
     } catch (error) {
-        console.error('Error finding secret:', error);
+        log.settings.error('Error finding secret:', error);
         return response.sendStatus(500);
     }
 });
@@ -598,7 +599,7 @@ router.post('/delete', (request, response) => {
 
         return response.sendStatus(204);
     } catch (error) {
-        console.error('Error deleting secret:', error);
+        log.settings.error('Error deleting secret:', error);
         return response.sendStatus(500);
     }
 });
@@ -616,7 +617,7 @@ router.post('/rotate', (request, response) => {
 
         return response.sendStatus(204);
     } catch (error) {
-        console.error('Error rotating secret:', error);
+        log.settings.error('Error rotating secret:', error);
         return response.sendStatus(500);
     }
 });
@@ -634,7 +635,7 @@ router.post('/rename', (request, response) => {
 
         return response.sendStatus(204);
     } catch (error) {
-        console.error('Error renaming secret:', error);
+        log.settings.error('Error renaming secret:', error);
         return response.sendStatus(500);
     }
 });

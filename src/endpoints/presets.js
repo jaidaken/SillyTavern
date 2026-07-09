@@ -6,6 +6,7 @@ import sanitize from 'sanitize-filename';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 
 import { getDefaultPresetFile, getDefaultPresets } from './content-manager.js';
+import { log } from '../log.js';
 
 /**
  * Gets the folder and extension for the preset settings based on the API source ID.
@@ -97,7 +98,7 @@ router.post('/restore', function (request, response) {
 
         return response.send(result);
     } catch (error) {
-        console.error(error);
+        log.settings.error(error);
         return response.sendStatus(500);
     }
 });

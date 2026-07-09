@@ -1,6 +1,7 @@
 import express from 'express';
 import fetch from 'node-fetch';
 import { readSecret, SECRET_KEYS } from './secrets.js';
+import { log } from '../log.js';
 
 export const router = express.Router();
 
@@ -37,7 +38,7 @@ router.post('/generate-voice', async (request, response) => {
 
         // Validate required parameters
         if (!text || !voiceId || !apiKey || !groupId) {
-            console.warn('MiniMax TTS: Missing required parameters');
+            log.net.warn('MiniMax TTS: Missing required parameters');
             return response.status(400).json({ error: 'Missing required parameters: text, voiceId, apiKey, and groupId are required' });
         }
 
@@ -66,7 +67,7 @@ router.post('/generate-voice', async (request, response) => {
 
         const apiUrl = `${apiHost}/v1/t2a_v2?GroupId=${groupId}`;
 
-        console.debug('MiniMax TTS Request:', {
+        log.net.debug('MiniMax TTS Request:', {
             url: apiUrl,
             body: { ...requestBody, voice_setting: { ...requestBody.voice_setting, voice_id: '[REDACTED]' } },
         });
@@ -88,7 +89,7 @@ router.post('/generate-voice', async (request, response) => {
                 // Try to parse JSON error response
                 /** @type {any} */
                 const errorData = await apiResponse.json();
-                console.error('MiniMax TTS API error (JSON):', errorData);
+                log.net.error('MiniMax TTS API error (JSON):', errorData);
 
                 // Check for MiniMax specific error format
                 const baseResp = errorData?.base_resp;
@@ -105,19 +106,19 @@ router.post('/generate-voice', async (request, response) => {
                 // If not JSON, try to read text
                 try {
                     const errorText = await apiResponse.text();
-                    console.error('MiniMax TTS API error (Text):', errorText);
+                    log.net.error('MiniMax TTS API error (Text):', errorText);
                     if (errorText && errorText.length > 500) {
                         errorMessage = `HTTP ${apiResponse.status}: Response too large (${errorText.length} characters)`;
                     } else {
                         errorMessage = errorText || `HTTP ${apiResponse.status}`;
                     }
                 } catch (textError) {
-                    console.error('MiniMax TTS: Failed to read error response:', textError);
+                    log.net.error('MiniMax TTS: Failed to read error response:', textError);
                     errorMessage = `HTTP ${apiResponse.status}: Unable to read error details`;
                 }
             }
 
-            console.error('MiniMax TTS API request failed:', errorMessage);
+            log.net.error('MiniMax TTS API request failed:', errorMessage);
             return response.status(500).json({ error: errorMessage });
         }
 
@@ -126,9 +127,9 @@ router.post('/generate-voice', async (request, response) => {
         let responseData;
         try {
             responseData = await apiResponse.json();
-            console.debug('MiniMax TTS Response received');
+            log.net.debug('MiniMax TTS Response received');
         } catch (jsonError) {
-            console.error('MiniMax TTS: Failed to parse response as JSON:', jsonError);
+            log.net.error('MiniMax TTS: Failed to parse response as JSON:', jsonError);
             return response.status(500).json({ error: 'Invalid response format from MiniMax API' });
         }
 
@@ -141,7 +142,7 @@ router.post('/generate-voice', async (request, response) => {
             } else {
                 errorMessage = `API Error: ${baseResp.status_msg}`;
             }
-            console.error('MiniMax TTS API error:', baseResp);
+            log.net.error('MiniMax TTS API error:', baseResp);
             return response.status(500).json({ error: errorMessage });
         }
 
@@ -151,7 +152,7 @@ router.post('/generate-voice', async (request, response) => {
             const hexAudio = responseData.data.audio;
 
             if (!hexAudio || typeof hexAudio !== 'string') {
-                console.error('MiniMax TTS: Invalid audio data format');
+                log.net.error('MiniMax TTS: Invalid audio data format');
                 return response.status(500).json({ error: 'Invalid audio data format' });
             }
 
@@ -160,7 +161,7 @@ router.post('/generate-voice', async (request, response) => {
 
             // Validate hex string format
             if (!/^[0-9a-fA-F]*$/.test(cleanHex)) {
-                console.error('MiniMax TTS: Invalid hex string format');
+                log.net.error('MiniMax TTS: Invalid hex string format');
                 return response.status(500).json({ error: 'Invalid audio data format' });
             }
 
@@ -171,17 +172,17 @@ router.post('/generate-voice', async (request, response) => {
                 // Convert hex string to byte array
                 const hexMatches = paddedHex.match(/.{1,2}/g);
                 if (!hexMatches) {
-                    console.error('MiniMax TTS: Failed to parse hex string');
+                    log.net.error('MiniMax TTS: Failed to parse hex string');
                     return response.status(500).json({ error: 'Invalid hex string format' });
                 }
                 const audioBytes = new Uint8Array(hexMatches.map(byte => parseInt(byte, 16)));
 
                 if (audioBytes.length === 0) {
-                    console.error('MiniMax TTS: Audio conversion resulted in empty array');
+                    log.net.error('MiniMax TTS: Audio conversion resulted in empty array');
                     return response.status(500).json({ error: 'Audio data conversion failed' });
                 }
 
-                console.debug(`MiniMax TTS: Converted ${paddedHex.length} hex characters to ${audioBytes.length} bytes`);
+                log.net.debug(`MiniMax TTS: Converted ${paddedHex.length} hex characters to ${audioBytes.length} bytes`);
 
                 // Set appropriate headers and send audio data
                 const mimeType = getAudioMimeType(format);
@@ -190,17 +191,17 @@ router.post('/generate-voice', async (request, response) => {
 
                 return response.send(Buffer.from(audioBytes));
             } catch (conversionError) {
-                console.error('MiniMax TTS: Audio conversion error:', conversionError);
+                log.net.error('MiniMax TTS: Audio conversion error:', conversionError);
                 return response.status(500).json({ error: `Audio data conversion failed: ${conversionError.message}` });
             }
         } else if (responseData.data && responseData.data.url) {
             // Handle URL-based audio response
-            console.debug('MiniMax TTS: Received audio URL:', responseData.data.url);
+            log.net.debug('MiniMax TTS: Received audio URL:', responseData.data.url);
 
             try {
                 const audioResponse = await fetch(responseData.data.url);
                 if (!audioResponse.ok) {
-                    console.error('MiniMax TTS: Failed to fetch audio from URL:', audioResponse.status);
+                    log.net.error('MiniMax TTS: Failed to fetch audio from URL:', audioResponse.status);
                     return response.status(500).json({ error: `Failed to fetch audio from URL: ${audioResponse.status}` });
                 }
 
@@ -212,17 +213,17 @@ router.post('/generate-voice', async (request, response) => {
 
                 return response.send(Buffer.from(audioBuffer));
             } catch (urlError) {
-                console.error('MiniMax TTS: Error fetching audio from URL:', urlError);
+                log.net.error('MiniMax TTS: Error fetching audio from URL:', urlError);
                 return response.status(500).json({ error: `Failed to fetch audio: ${urlError.message}` });
             }
         } else {
             // Handle error response
             const errorMessage = responseData.base_resp?.status_msg || responseData.error?.message || 'Unknown error';
-            console.error('MiniMax TTS: No valid audio data in response:', responseData);
+            log.net.error('MiniMax TTS: No valid audio data in response:', responseData);
             return response.status(500).json({ error: `API Error: ${errorMessage}` });
         }
     } catch (error) {
-        console.error('MiniMax TTS generation failed:', error);
+        log.net.error('MiniMax TTS generation failed:', error);
         return response.status(500).json({ error: 'Internal server error' });
     }
 });

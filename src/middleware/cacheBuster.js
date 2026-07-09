@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { DEFAULT_USER } from '../constants.js';
 import { getConfigValue } from '../util.js';
+import { log } from '../log.js';
 
 /**
  * Sets the Clear-Site-Data header to bust the browser cache.
@@ -31,7 +32,7 @@ class CacheBuster {
             try {
                 this.#userAgentRegex = new RegExp(userAgentPattern, 'i');
             } catch {
-                console.error('[Cache Buster] Invalid user agent pattern:', userAgentPattern);
+                log.sys.error('[Cache Buster] Invalid user agent pattern:', userAgentPattern);
             }
         }
     }
@@ -50,7 +51,7 @@ class CacheBuster {
 
         // If response headers are already sent or response is ended
         if (response.headersSent || response.writableEnded) {
-            console.warn('[Cache Buster] Response ended or headers already sent');
+            log.sys.warn('[Cache Buster] Response ended or headers already sent');
             return false;
         }
 

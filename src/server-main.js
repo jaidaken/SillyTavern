@@ -62,6 +62,7 @@ import {
     setWindowTitle,
     getConfigValue,
 } from './util.js';
+import { resolveLogConfig } from './log.js';
 import { UPLOADS_DIRECTORY } from './constants.js';
 
 // Routers
@@ -482,8 +483,10 @@ function setDnsResolutionOrder() {
     }
 }
 
-// Resolve log level gating before any other startup step logs (plugin loading, migrations, etc).
+// Resolve log gating before any startup step logs. resolveLogConfig re-reads category
+// thresholds now the config path is set (log.js falls back to DEBUG during early import).
 setupLogLevel();
+resolveLogConfig();
 
 // User storage module needs to be initialized before starting the server
 initUserStorage(globalThis.DATA_ROOT)

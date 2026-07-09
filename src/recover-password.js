@@ -7,6 +7,7 @@ import {
     getPasswordHash,
     toKey,
 } from './users.js';
+import { log } from './log.js';
 
 /**
  * Initializes the storage with the data root specified in the config file.
@@ -17,7 +18,7 @@ async function initStorage(configPath) {
     const dataRoot = config.dataRoot;
 
     if (!dataRoot) {
-        console.error('No "dataRoot" setting found in config.yaml file.');
+        log.users.error('No "dataRoot" setting found in config.yaml file.');
         process.exit(1);
     }
 
@@ -39,27 +40,27 @@ export async function recoverPassword(configPath, userAccount, userPassword) {
     const user = await storage.get(toKey(userAccount));
 
     if (!user) {
-        console.error(`User "${userAccount}" not found.`);
+        log.users.error(`User "${userAccount}" not found.`);
         process.exit(1);
     }
 
     if (!user.enabled) {
-        console.log('User is disabled. Enabling...');
+        log.users.info('User is disabled. Enabling...');
         user.enabled = true;
     }
 
     if (userPassword) {
-        console.log('Setting new password...');
+        log.users.info('Setting new password...');
         const salt = getPasswordSalt();
         const passwordHash = getPasswordHash(userPassword, salt);
         user.password = passwordHash;
         user.salt = salt;
     } else {
-        console.log('Setting an empty password...');
+        log.users.info('Setting an empty password...');
         user.password = '';
         user.salt = '';
     }
 
     await storage.setItem(toKey(userAccount), user);
-    console.log('User recovered. A program will exit now.');
+    log.users.info('User recovered. A program will exit now.');
 }

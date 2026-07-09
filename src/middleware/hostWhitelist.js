@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { color, getConfigValue, safeReadFileSync } from '../util.js';
 import { isHostAllowed, hostValidationMiddleware } from 'host-validation-middleware';
+import { log } from '../log.js';
 
 const knownHosts = new Set();
 const maxKnownHosts = 1000;
@@ -26,13 +27,13 @@ export default function hostWhitelistMiddleware(req, res, next) {
     const hostValue = req.headers.host;
     if (hostWhitelistScan && !isHostAllowed(hostValue, hostWhitelist) && !knownHosts.has(hostValue) && knownHosts.size < maxKnownHosts) {
         const isFirstWarning = knownHosts.size === 0;
-        console.warn(color.red('Request from untrusted host:'), hostValue);
-        console.warn(`If you trust this host, you can add it to ${color.yellow('hostWhitelist.hosts')} in config.yaml`);
+        log.sys.warn(color.red('Request from untrusted host:'), hostValue);
+        log.sys.warn(`If you trust this host, you can add it to ${color.yellow('hostWhitelist.hosts')} in config.yaml`);
         if (!hostWhitelistEnabled && isFirstWarning) {
-            console.warn(`To protect against host spoofing, consider setting ${color.yellow('hostWhitelist.enabled')} to true`);
+            log.sys.warn(`To protect against host spoofing, consider setting ${color.yellow('hostWhitelist.enabled')} to true`);
         }
         if (isFirstWarning) {
-            console.warn(`To disable this warning, set ${color.yellow('hostWhitelist.scan')} to false`);
+            log.sys.warn(`To disable this warning, set ${color.yellow('hostWhitelist.scan')} to false`);
         }
         knownHosts.add(hostValue);
     }

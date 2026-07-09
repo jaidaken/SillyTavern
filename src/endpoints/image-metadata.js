@@ -11,6 +11,7 @@ import writeFileAtomic from 'write-file-atomic';
 import express from 'express';
 import { Jimp } from '../jimp.js';
 import { getConfigValue, isPathUnderParent, uuidv4 } from '../util.js';
+import { log } from '../log.js';
 
 export const METADATA_FILE = 'image-metadata.json';
 
@@ -95,7 +96,7 @@ async function getAverageColorWithJimp(buffer) {
         const toHex = (c) => c.toString(16).padStart(2, '0');
         return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
     } catch (error) {
-        console.warn('[Jimp] Failed to calculate average color:', error.message);
+        log.media.warn('[Jimp] Failed to calculate average color:', error.message);
         return '#808080';
     }
 }
@@ -233,7 +234,7 @@ export async function getOrGenerateMetadataBatch(userDataRoot, relativePaths, ty
             indexModified = true;
             generatedCount++;
         } catch (error) {
-            console.warn(`[ImageMetadata] Failed to generate metadata for ${relativePath}:`, error.message);
+            log.media.warn(`[ImageMetadata] Failed to generate metadata for ${relativePath}:`, error.message);
         }
     }
 
@@ -336,7 +337,7 @@ export async function cleanupOrphanedMetadata(userDataRoot) {
 
     if (orphanedPaths.length > 0) {
         await writeMetadataIndex(userDataRoot, index);
-        console.log(`[ImageMetadata] Cleaned up ${orphanedPaths.length} orphaned metadata entries`);
+        log.media.info(`[ImageMetadata] Cleaned up ${orphanedPaths.length} orphaned metadata entries`);
     }
 
     return orphanedPaths;
@@ -439,7 +440,7 @@ export async function assignImagesToFolder(userDataRoot, folderId, relativePaths
         try {
             await fs.access(absPath);
         } catch {
-            console.warn(`[ImageMetadata] Skipping missing background file: '${posixPath}'`);
+            log.media.warn(`[ImageMetadata] Skipping missing background file: '${posixPath}'`);
             continue;
         }
 
@@ -487,7 +488,7 @@ router.post('/folders/get', async function (request, response) {
         const index = await readMetadataIndex(request.user.directories.root);
         return response.json(index.folders || []);
     } catch (error) {
-        console.error('[ImageMetadata] Folders list error:', error);
+        log.media.error('[ImageMetadata] Folders list error:', error);
         return response.status(500).json({ error: 'Internal server error.' });
     }
 });
@@ -505,7 +506,7 @@ router.post('/folders/create', async function (request, response) {
         const folder = await createFolder(request.user.directories.root, name.trim());
         return response.json(folder);
     } catch (error) {
-        console.error('[ImageMetadata] Folder create error:', error);
+        log.media.error('[ImageMetadata] Folder create error:', error);
         return response.status(500).json({ error: 'Internal server error.' });
     }
 });
@@ -523,7 +524,7 @@ router.post('/folders/set-thumbnails', async function (request, response) {
         await setFolderThumbnailsBatch(request.user.directories.root, updates);
         return response.json({ ok: true });
     } catch (error) {
-        console.error('[ImageMetadata] Folder set-thumbnails error:', error);
+        log.media.error('[ImageMetadata] Folder set-thumbnails error:', error);
         return response.status(500).json({ error: 'Internal server error.' });
     }
 });
@@ -544,7 +545,7 @@ router.post('/folders/update', async function (request, response) {
         if (error.message.includes('not found')) {
             return response.status(404).json({ error: error.message });
         }
-        console.error('[ImageMetadata] Folder update error:', error);
+        log.media.error('[ImageMetadata] Folder update error:', error);
         return response.status(500).json({ error: 'Internal server error.' });
     }
 });
@@ -565,7 +566,7 @@ router.post('/folders/delete', async function (request, response) {
         if (error.message.includes('not found')) {
             return response.status(404).json({ error: error.message });
         }
-        console.error('[ImageMetadata] Folder delete error:', error);
+        log.media.error('[ImageMetadata] Folder delete error:', error);
         return response.status(500).json({ error: 'Internal server error.' });
     }
 });
@@ -589,7 +590,7 @@ router.post('/folders/assign', async function (request, response) {
         if (error.message.includes('not found')) {
             return response.status(404).json({ error: error.message });
         }
-        console.error('[ImageMetadata] Folder assign error:', error);
+        log.media.error('[ImageMetadata] Folder assign error:', error);
         return response.status(500).json({ error: 'Internal server error.' });
     }
 });
@@ -610,7 +611,7 @@ router.post('/folders/unassign', async function (request, response) {
         await unassignImagesFromFolder(request.user.directories.root, id, paths);
         return response.json({ ok: true });
     } catch (error) {
-        console.error('[ImageMetadata] Folder unassign error:', error);
+        log.media.error('[ImageMetadata] Folder unassign error:', error);
         return response.status(500).json({ error: 'Internal server error.' });
     }
 });
@@ -691,7 +692,7 @@ router.post('/', async function (request, response) {
 
         return response.status(400).json({ error: 'Invalid request format.' });
     } catch (error) {
-        console.error('[ImageMetadata] API error:', error);
+        log.media.error('[ImageMetadata] API error:', error);
         return response.status(500).json({ error: 'Internal server error.' });
     }
 });
@@ -720,7 +721,7 @@ router.post('/all', async function (request, response) {
 
         return response.json(index);
     } catch (error) {
-        console.error('[ImageMetadata] Failed to read metadata index:', error);
+        log.media.error('[ImageMetadata] Failed to read metadata index:', error);
         return response.status(500).json({ error: 'Internal server error.' });
     }
 });
@@ -735,7 +736,7 @@ router.post('/cleanup', async function (request, response) {
         const removed = await cleanupOrphanedMetadata(userDataRoot);
         return response.json({ removed, count: removed.length });
     } catch (error) {
-        console.error('[ImageMetadata] Cleanup error:', error);
+        log.media.error('[ImageMetadata] Cleanup error:', error);
         return response.status(500).json({ error: 'Internal server error.' });
     }
 });

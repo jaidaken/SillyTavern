@@ -7,6 +7,7 @@ import sanitize from 'sanitize-filename';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 
 import { getImageBuffers } from '../util.js';
+import { log } from '../log.js';
 
 /**
  * Gets the path to the sprites folder for the provided character name
@@ -88,14 +89,14 @@ export function importRisuSprites(directories, data) {
             return;
         }
 
-        console.info(`RisuAI: Found ${images.length} sprites for ${name}. Writing to disk.`);
+        log.media.info(`RisuAI: Found ${images.length} sprites for ${name}. Writing to disk.`);
         const files = fs.readdirSync(spritesPath);
 
         outer: for (const [label, fileBase64] of images) {
             // Remove existing sprite with the same label
             for (const file of files) {
                 if (path.parse(file).name === label) {
-                    console.warn(`RisuAI: The sprite ${label} for ${name} already exists. Skipping.`);
+                    log.media.warn(`RisuAI: The sprite ${label} for ${name} already exists. Skipping.`);
                     continue outer;
                 }
             }
@@ -109,7 +110,7 @@ export function importRisuSprites(directories, data) {
         delete data.data.extensions.risuai.additionalAssets;
         delete data.data.extensions.risuai.emotions;
     } catch (error) {
-        console.error(error);
+        log.media.error(error);
     }
 }
 
@@ -144,7 +145,7 @@ router.get('/get', function (request, response) {
                 });
         }
     } catch (err) {
-        console.error(err);
+        log.media.error(err);
     }
     return response.send(sprites);
 });
@@ -178,7 +179,7 @@ router.post('/delete', async (request, response) => {
 
         return response.sendStatus(200);
     } catch (error) {
-        console.error(error);
+        log.media.error(error);
         return response.sendStatus(500);
     }
 });
@@ -231,7 +232,7 @@ router.post('/upload-zip', async (request, response) => {
         fs.unlinkSync(spritePackPath);
         return response.send({ ok: true, count: sprites.length });
     } catch (error) {
-        console.error(error);
+        log.media.error(error);
         return response.sendStatus(500);
     }
 });
@@ -283,7 +284,7 @@ router.post('/upload', async (request, response) => {
         fs.unlinkSync(spritePath);
         return response.send({ ok: true });
     } catch (error) {
-        console.error(error);
+        log.media.error(error);
         return response.sendStatus(500);
     }
 });

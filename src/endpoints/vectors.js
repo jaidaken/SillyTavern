@@ -6,6 +6,7 @@ import express from 'express';
 import sanitize from 'sanitize-filename';
 
 import { getConfigValue } from '../util.js';
+import { log } from '../log.js';
 
 import { getNomicAIBatchVector, getNomicAIVector } from '../vectors/nomicai-vectors.js';
 import { getOpenAIVector, getOpenAIBatchVector } from '../vectors/openai-vectors.js';
@@ -456,14 +457,14 @@ async function regenerateCorruptedIndexErrorHandler(req, res, error) {
 
             if (exists) {
                 const path = index.folderPath;
-                console.warn(`Corrupted index detected at ${path}, regenerating...`);
+                log.vectors.warn(`Corrupted index detected at ${path}, regenerating...`);
                 await index.deleteIndex();
                 return res.redirect(307, req.originalUrl + '?regenerated=true');
             }
         }
     }
 
-    console.error(error);
+    log.vectors.error(error);
     return res.sendStatus(500);
 }
 
@@ -570,12 +571,12 @@ router.post('/purge-all', async (req, res) => {
                 continue;
             }
             await fs.promises.rm(sourcePath, { recursive: true });
-            console.info(`Deleted vector source store at ${sourcePath}`);
+            log.vectors.info(`Deleted vector source store at ${sourcePath}`);
         }
 
         return res.sendStatus(200);
     } catch (error) {
-        console.error(error);
+        log.vectors.error(error);
         return res.sendStatus(500);
     }
 });
@@ -594,12 +595,12 @@ router.post('/purge', async (req, res) => {
                 continue;
             }
             await fs.promises.rm(sourcePath, { recursive: true });
-            console.info(`Deleted vector index at ${sourcePath}`);
+            log.vectors.info(`Deleted vector index at ${sourcePath}`);
         }
 
         return res.sendStatus(200);
     } catch (error) {
-        console.error(error);
+        log.vectors.error(error);
         return res.sendStatus(500);
     }
 });

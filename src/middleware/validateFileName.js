@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { log } from '../log.js';
 
 export const forbiddenRegExp = path.sep === '/' ? /[/\x00]/ : /[/\x00\\]/;
 
@@ -26,7 +27,7 @@ export function getFileNameValidationFunction(fieldName) {
     return function validateAvatarUrlMiddleware(req, res, next) {
         if (req.body && fieldName in req.body && (typeof req.body[fieldName] === 'string' || hasToString(req.body[fieldName]))) {
             if (forbiddenRegExp.test(req.body[fieldName])) {
-                console.error('An error occurred while validating the request body', {
+                log.sys.error('An error occurred while validating the request body', {
                     handle: req.user.profile.handle,
                     path: req.originalUrl,
                     field: fieldName,

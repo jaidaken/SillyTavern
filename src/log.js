@@ -95,10 +95,23 @@ function envSpec() {
     return map;
 }
 
-// Config is read once at process startup (util.js caches it synchronously, no watcher), so
-// overrides are resolved once here. Precedence low to high: config categories, ST_LOG env.
-const DEFAULT_LEVEL = getConfigValue('logging.minLogLevel', LOG_LEVELS.DEBUG, 'number');
-const overrides = new Map([...configSpec(), ...envSpec()]);
+// Config may be read before setConfigFilePath runs (command-line.js imports this early),
+// so guard the reads; resolveLogConfig re-applies real config once the path is set.
+function readConfig() {
+    try {
+        return {
+            defaultLevel: getConfigValue('logging.minLogLevel', LOG_LEVELS.DEBUG, 'number'),
+            over: new Map([...configSpec(), ...envSpec()]),
+        };
+    } catch {
+        return { defaultLevel: LOG_LEVELS.DEBUG, over: new Map(envSpec()) };
+    }
+}
+
+let DEFAULT_LEVEL;
+let overrides;
+({ defaultLevel: DEFAULT_LEVEL, over: overrides } = readConfig());
+const nodes = new Map();
 
 function resolveThreshold(category) {
     let resolved = DEFAULT_LEVEL;
@@ -132,11 +145,16 @@ function emitterFor(category, levelName) {
     return console[CONSOLE_METHOD[levelName]].bind(console, badge(category));
 }
 
-function buildNode(category) {
-    const node = {};
+function refreshNode(category, node) {
     for (const levelName of LEVEL_NAMES) {
         node[levelName] = emitterFor(category, levelName);
     }
+}
+
+function buildNode(category) {
+    const node = {};
+    refreshNode(category, node);
+    nodes.set(category, node);
     return node;
 }
 
@@ -148,5 +166,14 @@ for (const category of CATEGORIES) {
     for (const part of category.split('.')) {
         path = path ? `${path}.${part}` : part;
         parent = parent[part] ?? (parent[part] = buildNode(path));
+    }
+}
+
+// Re-read config and rebind every emitter. Called from server startup once the config
+// path is set, so the DEBUG fallback used during early import is replaced by real config.
+export function resolveLogConfig() {
+    ({ defaultLevel: DEFAULT_LEVEL, over: overrides } = readConfig());
+    for (const [category, node] of nodes) {
+        refreshNode(category, node);
     }
 }

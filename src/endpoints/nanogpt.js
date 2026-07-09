@@ -1,6 +1,7 @@
 import express from 'express';
 import fetch from 'node-fetch';
 import { readSecret, SECRET_KEYS } from './secrets.js';
+import { log } from '../log.js';
 
 export const router = express.Router();
 const API_NANOGPT = 'https://nano-gpt.com/api';
@@ -38,7 +39,7 @@ router.post('/credits', async (req, res) => {
         const key = readSecret(req.user.directories, SECRET_KEYS.NANOGPT);
 
         if (!key) {
-            console.warn('NanoGPT API key not found');
+            log.net.warn('NanoGPT API key not found');
             return res.sendStatus(400);
         }
 
@@ -54,7 +55,7 @@ router.post('/credits', async (req, res) => {
         ]);
 
         if (balanceReq.status !== 'fulfilled' || !balanceReq.value.ok) {
-            console.warn('NanoGPT balance request failed', balanceReq.status === 'fulfilled' ? balanceReq.value.statusText : balanceReq.reason);
+            log.net.warn('NanoGPT balance request failed', balanceReq.status === 'fulfilled' ? balanceReq.value.statusText : balanceReq.reason);
             return res.sendStatus(500);
         }
 
@@ -89,14 +90,14 @@ router.post('/credits', async (req, res) => {
                 };
             }
         } else if (subReq.status === 'fulfilled') {
-            console.warn('NanoGPT subscription usage request failed', subReq.value.statusText);
+            log.net.warn('NanoGPT subscription usage request failed', subReq.value.statusText);
         } else {
-            console.warn('NanoGPT subscription usage request failed', subReq.reason);
+            log.net.warn('NanoGPT subscription usage request failed', subReq.reason);
         }
 
         return res.json(result);
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return res.sendStatus(500);
     }
 });
@@ -132,7 +133,7 @@ router.post('/models/providers', async (req, res) => {
             providers,
         });
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         return res.sendStatus(500);
     }
 });

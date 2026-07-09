@@ -5,6 +5,7 @@ import color from 'chalk';
 import _ from 'lodash';
 import { serverDirectory } from './server-directory.js';
 import { keyToEnv, setConfigFilePath } from './util.js';
+import { log } from './log.js';
 
 const keyMigrationMap = [
     {
@@ -166,7 +167,7 @@ export function addMissingConfigValues(configPath) {
         const defaultConfig = yaml.parse(fs.readFileSync(path.join(serverDirectory, './default/config.yaml'), 'utf8'));
 
         if (!fs.existsSync(configPath)) {
-            console.warn(color.yellow(`Warning: config.yaml not found at ${configPath}. Creating a new one with default values.`));
+            log.sys.warn(color.yellow(`Warning: config.yaml not found at ${configPath}. Creating a new one with default values.`));
             fs.writeFileSync(configPath, yaml.stringify(defaultConfig));
             return;
         }
@@ -184,8 +185,8 @@ export function addMissingConfigValues(configPath) {
                 const newValue = migrate(oldValue);
                 process.env[newEnvKey] = newValue;
                 delete process.env[oldEnvKey];
-                console.warn(color.yellow(`Warning: Using a deprecated environment variable: ${oldEnvKey}. Please use ${newEnvKey} instead.`));
-                console.log(`Redirecting ${color.blue(oldEnvKey)}=${oldValue} -> ${color.blue(newEnvKey)}=${newValue}`);
+                log.sys.warn(color.yellow(`Warning: Using a deprecated environment variable: ${oldEnvKey}. Please use ${newEnvKey} instead.`));
+                log.sys.info(`Redirecting ${color.blue(oldEnvKey)}=${oldValue} -> ${color.blue(newEnvKey)}=${newValue}`);
             }
 
             if (_.has(config, oldKey)) {
@@ -229,16 +230,16 @@ export function addMissingConfigValues(configPath) {
         }
 
         if (addedKeys.length > 0) {
-            console.log('Adding missing config values to config.yaml:', addedKeys);
+            log.sys.info('Adding missing config values to config.yaml:', addedKeys);
         }
 
         if (migratedKeys.length > 0) {
-            console.log('Migrating config values in config.yaml:', migratedKeys);
+            log.sys.info('Migrating config values in config.yaml:', migratedKeys);
         }
 
         fs.writeFileSync(configPath, yaml.stringify(config));
     } catch (error) {
-        console.warn(color.yellow('Could not add missing config values to config.yaml'), error);
+        log.sys.warn(color.yellow('Could not add missing config values to config.yaml'), error);
     }
 }
 
@@ -247,7 +248,7 @@ export function addMissingConfigValues(configPath) {
  * @param {string} configPath Path to config.yaml
  */
 export function initConfig(configPath) {
-    console.log('Using config path:', color.green(configPath));
+    log.sys.info('Using config path:', color.green(configPath));
     setConfigFilePath(configPath);
     addMissingConfigValues(configPath);
 }

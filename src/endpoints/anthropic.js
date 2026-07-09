@@ -2,6 +2,7 @@ import fetch from 'node-fetch';
 import express from 'express';
 
 import { readSecret, SECRET_KEYS } from './secrets.js';
+import { log } from '../log.js';
 
 export const router = express.Router();
 
@@ -31,7 +32,7 @@ router.post('/caption-image', async (request, response) => {
             max_tokens: 4096,
         };
 
-        console.debug('Multimodal captioning request', body);
+        log.net.debug('Multimodal captioning request', body);
 
         const result = await fetch(url, {
             body: JSON.stringify(body),
@@ -45,14 +46,14 @@ router.post('/caption-image', async (request, response) => {
 
         if (!result.ok) {
             const text = await result.text();
-            console.warn(`Claude API returned error: ${result.status} ${result.statusText}`, text);
+            log.net.warn(`Claude API returned error: ${result.status} ${result.statusText}`, text);
             return response.status(result.status).send({ error: true });
         }
 
         /** @type {any} */
         const generateResponseJson = await result.json();
         const caption = generateResponseJson.content[0].text;
-        console.debug('Claude response:', generateResponseJson);
+        log.net.debug('Claude response:', generateResponseJson);
 
         if (!caption) {
             return response.status(500).send('No caption found');
@@ -60,7 +61,7 @@ router.post('/caption-image', async (request, response) => {
 
         return response.json({ caption });
     } catch (error) {
-        console.error(error);
+        log.net.error(error);
         response.status(500).send('Internal server error');
     }
 });

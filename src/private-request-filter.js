@@ -8,6 +8,7 @@ import ipRegex from 'ip-regex';
 import { Agent } from 'agent-base';
 import { color } from './util.js';
 import { filterValidIpPatterns } from './express-common.js';
+import { log } from './log.js';
 
 const LOG_HEADER = '[Private Request Filter]';
 
@@ -110,11 +111,11 @@ class PrivateRequestAgent extends Agent {
         /**
          * Raise an error and log it if necessary.
          * @param {string} message The error message.
-         * @param {boolean} [log=true] Whether to log the error to the console.
+         * @param {boolean} [shouldLog=true] Whether to log the error to the console.
          */
-        const raiseError = (message, log = true) => {
-            if (log) {
-                console.error(color.red(LOG_HEADER), message);
+        const raiseError = (message, shouldLog = true) => {
+            if (shouldLog) {
+                log.sys.error(color.red(LOG_HEADER), message);
             }
             throw new Error(message);
         };
@@ -149,7 +150,7 @@ class PrivateRequestAgent extends Agent {
             // Private IP address, check if it's allowed in the whitelist
             if (this.#isAllowedPrivateAddress(ip)) {
                 if (this.logAllowed) {
-                    console.info(color.green(LOG_HEADER), 'Allowed request to private IP address:', color.blue(ip));
+                    log.sys.info(color.green(LOG_HEADER), 'Allowed request to private IP address:', color.blue(ip));
                 }
 
                 return connect(ip);
@@ -210,9 +211,8 @@ class PrivateRequestAgent extends Agent {
 export default function initPrivateRequestFilter({ listen, enabled, privateAddressWhitelist, logBlocked, logAllowed, allowUnresolvedHosts, enableKeepAlive }) {
     if (!enabled) {
         if (listen) {
-            console.warn();
-            console.warn(color.yellow('Warning: listen is enabled but private request filter is disabled. This may expose your server to SSRF attacks.'));
-            console.warn(color.blue('To enable, provide trusted addresses in privateAddressWhitelist.allowedRanges and set privateAddressWhitelist.enabled to true in config.yaml and restart the server.'));
+            log.sys.warn(color.yellow('Warning: listen is enabled but private request filter is disabled. This may expose your server to SSRF attacks.'));
+            log.sys.warn(color.blue('To enable, provide trusted addresses in privateAddressWhitelist.allowedRanges and set privateAddressWhitelist.enabled to true in config.yaml and restart the server.'));
         }
         return;
     }
@@ -222,10 +222,8 @@ export default function initPrivateRequestFilter({ listen, enabled, privateAddre
     http.globalAgent = agent;
     https.globalAgent = agent;
 
-    console.info();
-    console.info(color.green(LOG_HEADER), 'Enabled');
+    log.sys.info(color.green(LOG_HEADER), 'Enabled');
     if (agent.privateAddressWhitelist.length > 0) {
-        console.info(color.green(LOG_HEADER), 'Allowed private addresses:', color.blue(agent.privateAddressWhitelist.join(', ')));
+        log.sys.info(color.green(LOG_HEADER), 'Allowed private addresses:', color.blue(agent.privateAddressWhitelist.join(', ')));
     }
-    console.info();
 }

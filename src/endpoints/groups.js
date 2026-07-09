@@ -8,6 +8,7 @@ import { sync as writeFileAtomicSync, default as writeFileAtomic } from 'write-f
 
 import { color, tryParse } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
+import { log } from '../log.js';
 
 export const router = express.Router();
 
@@ -21,7 +22,7 @@ function warnOnGroupMetadata(groupData) {
     }
     ['chat_metadata', 'past_metadata'].forEach(key => {
         if (Object.hasOwn(groupData, key)) {
-            console.warn(color.yellow(`Group JSON data for "${groupData.id}" contains deprecated key "${key}".`));
+            log.chat.warn(color.yellow(`Group JSON data for "${groupData.id}" contains deprecated key "${key}".`));
             delete groupData[key];
         }
     });
@@ -60,7 +61,7 @@ export async function migrateGroupChatsMetadataFormat(userDirectories) {
                         [groupData.chat_id]: (groupData.chat_metadata || {}),
                     };
                     if (!Array.isArray(groupData.chats)) {
-                        console.warn(color.yellow(`Group ${groupFile.name} has no chats array, skipping migration.`));
+                        log.chat.warn(color.yellow(`Group ${groupFile.name} has no chats array, skipping migration.`));
                         continue;
                     }
                     for (const chatId of groupData.chats) {
@@ -68,7 +69,7 @@ export async function migrateGroupChatsMetadataFormat(userDirectories) {
                             const chatFileName = sanitize(`${chatId}.jsonl`);
                             const chatFileDirent = groupChatFiles.find(f => f.isFile() && f.name === chatFileName);
                             if (!chatFileDirent) {
-                                console.warn(color.yellow(`Group chat file ${chatId} not found, skipping migration.`));
+                                log.chat.warn(color.yellow(`Group chat file ${chatId} not found, skipping migration.`));
                                 continue;
                             }
                             const chatFilePath = path.join(userDirs.groupChats, chatFileName);
@@ -77,7 +78,7 @@ export async function migrateGroupChatsMetadataFormat(userDirectories) {
                             const chatData = chatDataRaw.split('\n').filter(line => line.trim()).map(line => tryParse(line)).filter(Boolean);
                             const alreadyHasMetadata = chatData.length > 0 && Object.hasOwn(chatData[0], 'chat_metadata');
                             if (alreadyHasMetadata) {
-                                console.log(color.yellow(`Group chat ${chatId} already has chat metadata, skipping update.`));
+                                log.chat.info(color.yellow(`Group chat ${chatId} already has chat metadata, skipping update.`));
                                 continue;
                             }
                             await fsPromises.copyFile(chatFilePath, path.join(backupPath, chatFileName));
@@ -85,27 +86,27 @@ export async function migrateGroupChatsMetadataFormat(userDirectories) {
                             const newChatData = [chatHeader, ...chatData];
                             const newChatDataRaw = newChatData.map(entry => JSON.stringify(entry)).join('\n');
                             await writeFileAtomic(chatFilePath, newChatDataRaw, 'utf8');
-                            console.log(`Updated group chat data format for ${chatId}`);
+                            log.chat.info(`Updated group chat data format for ${chatId}`);
                             anyDataMigrated = true;
                         } catch (chatError) {
-                            console.error(color.red(`Could not update existing chat data for ${chatId}`), chatError);
+                            log.chat.error(color.red(`Could not update existing chat data for ${chatId}`), chatError);
                         }
                     }
                     delete groupData.chat_metadata;
                     delete groupData.past_metadata;
                     await writeFileAtomic(groupFilePath, JSON.stringify(groupData, null, 4), 'utf8');
-                    console.log(`Migrated group chats metadata for group: ${groupData.id}`);
+                    log.chat.info(`Migrated group chats metadata for group: ${groupData.id}`);
                     anyDataMigrated = true;
                 } catch (groupError) {
-                    console.error(color.red(`Could not process group file ${groupFile.name}`), groupError);
+                    log.chat.error(color.red(`Could not process group file ${groupFile.name}`), groupError);
                 }
             }
             if (anyDataMigrated) {
-                console.log(color.green(`Completed migration of group chats metadata for user at ${userDirs.root}`));
-                console.log(color.cyan(`Backups of modified files are located at ${backupPath}`));
+                log.chat.info(color.green(`Completed migration of group chats metadata for user at ${userDirs.root}`));
+                log.chat.info(color.cyan(`Backups of modified files are located at ${backupPath}`));
             }
         } catch (directoryError) {
-            console.error(color.red(`Error migrating group chats metadata for user at ${userDirs.root}`), directoryError);
+            log.chat.error(color.red(`Error migrating group chats metadata for user at ${userDirs.root}`), directoryError);
         }
     }
 }
@@ -146,7 +147,7 @@ router.post('/all', (request, response) => {
             group.chat_size = chat_size;
             groups.push(group);
         } catch (error) {
-            console.error(error);
+            log.chat.error(error);
         }
     });
 
@@ -214,7 +215,7 @@ router.post('/delete', getFileNameValidationFunction('id'), async (request, resp
 
         if (group && Array.isArray(group.chats)) {
             for (const chat of group.chats) {
-                console.info('Deleting group chat', chat);
+                log.chat.info('Deleting group chat', chat);
                 const pathToFile = path.join(request.user.directories.groupChats, sanitize(`${chat}.jsonl`));
 
                 if (fs.existsSync(pathToFile)) {
@@ -223,7 +224,7 @@ router.post('/delete', getFileNameValidationFunction('id'), async (request, resp
             }
         }
     } catch (error) {
-        console.error('Could not delete group chats. Clean them up manually.', error);
+        log.chat.error('Could not delete group chats. Clean them up manually.', error);
     }
 
     if (fs.existsSync(pathToGroup)) {

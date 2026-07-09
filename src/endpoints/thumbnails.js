@@ -10,6 +10,7 @@ import { imageSize as sizeOf } from 'image-size';
 import { getConfigValue, invalidateFirefoxCache } from '../util.js';
 import { getThumbnailResolution, isAnimatedWebP, isAnimatedApng, thumbnailDimensions as dimensions } from './image-metadata.js';
 import { ResizeStrategy } from '@jimp/plugin-resize';
+import { log } from '../log.js';
 
 export const publicRouter = express.Router();
 export const apiRouter = express.Router();
@@ -142,7 +143,7 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
             }
         }
         if (!fs.existsSync(pathToOriginalFile)) {
-            console.error(`[generateThumbnail] Cannot generate thumbnail, original file not found: ${pathToOriginalFile}`);
+            log.media.error(`[generateThumbnail] Cannot generate thumbnail, original file not found: ${pathToOriginalFile}`);
             return { path: null, aspectRatio: null, resolution: null };
         }
 
@@ -178,11 +179,11 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
         if (result.success) {
             return { path: pathToCachedFile, aspectRatio: result.aspectRatio ?? null, resolution: result.resolution ?? null };
         } else {
-            console.error(`[generateThumbnail] Failed to process image ${file}:`, result.error);
+            log.media.error(`[generateThumbnail] Failed to process image ${file}:`, result.error);
             return { path: null, aspectRatio: null, resolution: null };
         }
     } catch (error) {
-        console.error(`[generateThumbnail] Unexpected error processing ${file}:`, error);
+        log.media.error(`[generateThumbnail] Unexpected error processing ${file}:`, error);
         return { path: null, aspectRatio: null, resolution: null };
     }
 }
@@ -236,7 +237,7 @@ async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
 
         return { success: true, aspectRatio, resolution: thumbnailResolution };
     } catch (error) {
-        console.warn(`[Thumbnails] Failed to process image ${file}:`, error);
+        log.media.warn(`[Thumbnails] Failed to process image ${file}:`, error);
         return { success: false, filename: file, error: error.message };
     }
 }
@@ -302,7 +303,7 @@ publicRouter.get('/', async function (request, response) {
         // Send a 404 so the frontend can display a placeholder
         return response.sendStatus(404);
     } catch (error) {
-        console.error('Failed getting thumbnail', error);
+        log.media.error('Failed getting thumbnail', error);
         return response.sendStatus(500);
     }
 });

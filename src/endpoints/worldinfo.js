@@ -6,6 +6,7 @@ import sanitize from 'sanitize-filename';
 import _ from 'lodash';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { tryParse } from '../util.js';
+import { log } from '../log.js';
 
 /**
  * Reads a World Info file and returns its contents
@@ -25,7 +26,7 @@ export function readWorldInfoFile(directories, worldInfoName, allowDummy) {
     const pathToWorldInfo = path.join(directories.worlds, filename);
 
     if (!fs.existsSync(pathToWorldInfo)) {
-        console.error(`World info file ${filename} doesn't exist.`);
+        log.wi.error(`World info file ${filename} doesn't exist.`);
         return dummyObject;
     }
 
@@ -57,13 +58,13 @@ router.post('/list', async (request, response) => {
                 };
                 data.push(fileData);
             } catch (err) {
-                console.warn(`Error reading or parsing World Info file ${file.name}:`, err);
+                log.wi.warn(`Error reading or parsing World Info file ${file.name}:`, err);
             }
         }
 
         return response.send(data);
     } catch (err) {
-        console.error('Error reading World Info directory:', err);
+        log.wi.error('Error reading World Info directory:', err);
         return response.sendStatus(500);
     }
 });

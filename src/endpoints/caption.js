@@ -1,5 +1,6 @@
 import express from 'express';
 import { getPipeline, getRawImage } from '../transformers.js';
+import { log } from '../log.js';
 
 export const router = express.Router();
 
@@ -12,18 +13,18 @@ router.post('/', async (req, res) => {
         const rawImage = await getRawImage(image);
 
         if (!rawImage) {
-            console.warn('Failed to parse captioned image');
+            log.media.warn('Failed to parse captioned image');
             return res.sendStatus(400);
         }
 
         const pipe = await getPipeline(TASK);
         const result = await pipe(rawImage);
         const text = result[0].generated_text;
-        console.info('Image caption:', text);
+        log.media.info('Image caption:', text);
 
         return res.json({ caption: text });
     } catch (error) {
-        console.error(error);
+        log.media.error(error);
         return res.sendStatus(500);
     }
 });

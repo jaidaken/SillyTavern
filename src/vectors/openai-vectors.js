@@ -1,6 +1,7 @@
 import fetch from 'node-fetch';
 import { SECRET_KEYS, readSecret } from '../endpoints/secrets.js';
 import { OPENROUTER_HEADERS } from '../constants.js';
+import { log } from '../log.js';
 
 const SOURCES = {
     'togetherai': {
@@ -83,14 +84,14 @@ export async function getOpenAIBatchVector(texts, source, directories, model = '
     const config = SOURCES[source];
 
     if (!config) {
-        console.error('Unknown source', source);
+        log.vectors.error('Unknown source', source);
         throw new Error('Unknown source');
     }
 
     const key = readSecret(directories, config.secretKey);
 
     if (!key) {
-        console.warn('No API key found');
+        log.vectors.warn('No API key found');
         throw new Error('No API key found');
     }
 
@@ -122,7 +123,7 @@ export async function getOpenAIBatchVector(texts, source, directories, model = '
 
     if (!response.ok) {
         const text = await response.text();
-        console.warn('API request failed', response.statusText, text);
+        log.vectors.warn('API request failed', response.statusText, text);
         throw new Error('API request failed');
     }
 
@@ -130,7 +131,7 @@ export async function getOpenAIBatchVector(texts, source, directories, model = '
     const data = await response.json();
 
     if (!Array.isArray(data?.data)) {
-        console.warn('API response was not an array');
+        log.vectors.warn('API response was not an array');
         throw new Error('API response was not an array');
     }
 

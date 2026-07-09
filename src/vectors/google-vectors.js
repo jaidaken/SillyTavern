@@ -1,5 +1,6 @@
 import fetch from 'node-fetch';
 import { getGoogleApiConfig } from '../endpoints/google.js';
+import { log } from '../log.js';
 
 /**
  * Gets the vector for the given text from Google AI Studio
@@ -26,7 +27,7 @@ export async function getMakerSuiteBatchVector(texts, model, request) {
 
     if (!response.ok) {
         const text = await response.text();
-        console.warn(`${apiName} batch request failed`, response.statusText, text);
+        log.vectors.warn(`${apiName} batch request failed`, response.statusText, text);
         throw new Error(`${apiName} batch request failed`);
     }
 
@@ -62,7 +63,7 @@ export async function getVertexBatchVector(texts, model, request) {
 
     if (!response.ok) {
         const text = await response.text();
-        console.warn(`${apiName} batch request failed`, response.statusText, text);
+        log.vectors.warn(`${apiName} batch request failed`, response.statusText, text);
         throw new Error(`${apiName} batch request failed`);
     }
 

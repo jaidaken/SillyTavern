@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import express from 'express';
 import sanitize from 'sanitize-filename';
 import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import { log } from '../log.js';
 
 export const router = express.Router();
 
@@ -26,13 +27,13 @@ router.post('/delete', (request, response) => {
     try {
         const filename = path.join(request.user.directories.themes, sanitize(`${request.body.name}.json`));
         if (!fs.existsSync(filename)) {
-            console.error('Theme file not found:', filename);
+            log.settings.error('Theme file not found:', filename);
             return response.sendStatus(404);
         }
         fs.unlinkSync(filename);
         return response.sendStatus(200);
     } catch (error) {
-        console.error(error);
+        log.settings.error(error);
         return response.sendStatus(500);
     }
 });

@@ -3,6 +3,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { ProxyAgent } from 'proxy-agent';
 import { isValidUrl, color } from './util.js';
+import { log } from './log.js';
 
 const LOG_HEADER = '[Request Proxy]';
 
@@ -24,17 +25,17 @@ export default function initRequestProxy({ enabled, url, bypass, enableKeepAlive
         }
 
         if (privateRequestFilterEnabled) {
-            console.warn(color.yellow(LOG_HEADER), 'Warning: Request proxy is enabled while private request filter is also enabled. Only URLs that BYPASS the request proxy will be checked.');
-            console.warn(color.yellow(LOG_HEADER), 'To ensure all requests are properly filtered, disable the request proxy.');
+            log.net.warn(color.yellow(LOG_HEADER), 'Warning: Request proxy is enabled while private request filter is also enabled. Only URLs that BYPASS the request proxy will be checked.');
+            log.net.warn(color.yellow(LOG_HEADER), 'To ensure all requests are properly filtered, disable the request proxy.');
         }
 
         if (!url) {
-            console.error(color.red(LOG_HEADER), 'No proxy URL provided');
+            log.net.error(color.red(LOG_HEADER), 'No proxy URL provided');
             return;
         }
 
         if (!isValidUrl(url)) {
-            console.error(color.red(LOG_HEADER), 'Invalid proxy URL provided');
+            log.net.error(color.red(LOG_HEADER), 'Invalid proxy URL provided');
             return;
         }
 
@@ -54,10 +55,8 @@ export default function initRequestProxy({ enabled, url, bypass, enableKeepAlive
         http.globalAgent = proxyAgent;
         https.globalAgent = proxyAgent;
 
-        console.info();
-        console.info(color.green(LOG_HEADER), 'Proxy URL is used:', color.blue(url));
-        console.info();
+        log.net.info(color.green(LOG_HEADER), 'Proxy URL is used:', color.blue(url));
     } catch (error) {
-        console.error(color.red(LOG_HEADER), 'Failed to initialize request proxy:', error);
+        log.net.error(color.red(LOG_HEADER), 'Failed to initialize request proxy:', error);
     }
 }

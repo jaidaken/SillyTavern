@@ -1,4 +1,5 @@
 import fetch from 'node-fetch';
+import { log } from '../log.js';
 
 /**
  * Gets the vector for the given text from SillyTavern-extras
@@ -35,8 +36,8 @@ async function getExtrasVectorImpl(text, apiUrl, apiKey) {
         url = new URL(apiUrl);
         url.pathname = '/api/embeddings/compute';
     } catch (error) {
-        console.error('Failed to set up Extras API call:', error);
-        console.debug('Extras API URL given was:', apiUrl);
+        log.vectors.error('Failed to set up Extras API call:', error);
+        log.vectors.debug('Extras API URL given was:', apiUrl);
         throw error;
     }
 
@@ -61,7 +62,7 @@ async function getExtrasVectorImpl(text, apiUrl, apiKey) {
 
     if (!response.ok) {
         const text = await response.text();
-        console.warn('Extras request failed', response.statusText, text);
+        log.vectors.warn('Extras request failed', response.statusText, text);
         throw new Error('Extras request failed');
     }
 

@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { log } from '../log.js';
 
 /**
  * Decodes a file name from Latin1 to UTF-8.
@@ -24,7 +25,7 @@ export default function multerMonkeyPatch(req, _res, next) {
 
         next();
     } catch (error) {
-        console.error('Error in multerMonkeyPatch:', error);
+        log.sys.error('Error in multerMonkeyPatch:', error);
         next();
     }
 }

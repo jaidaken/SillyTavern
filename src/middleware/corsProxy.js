@@ -1,5 +1,6 @@
 import fetch from 'node-fetch';
 import { forwardFetchResponse } from '../util.js';
+import { log } from '../log.js';
 
 /**
  * Middleware to proxy requests to a different domain
@@ -39,7 +40,7 @@ export default async function corsProxyMiddleware(req, res) {
         // Copy over relevant response params to the proxy response
         await forwardFetchResponse(response, res);
     } catch (error) {
-        console.error('Error in CORS proxy middleware:', error);
+        log.net.error('Error in CORS proxy middleware:', error);
         if (!res.headersSent) {
             return res.sendStatus(500);
         }

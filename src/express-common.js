@@ -2,6 +2,7 @@ import ipaddr from 'ipaddr.js';
 import ipMatching from 'ip-matching';
 import { RateLimiterRes } from 'rate-limiter-flexible';
 import { getConfigValue } from './util.js';
+import { log } from './log.js';
 
 const noopMiddleware = (_req, _res, next) => next();
 /** @deprecated Do not use. A global middleware is provided at the application level. */
@@ -103,7 +104,7 @@ export function filterValidIpPatterns(entries, formatLog) {
             validEntries.push(entry);
         } catch (e) {
             if (typeof formatLog === 'function') {
-                console.warn(formatLog(entry, e?.message || 'Unknown error'));
+                log.sys.warn(formatLog(entry, e?.message || 'Unknown error'));
             }
         }
     }

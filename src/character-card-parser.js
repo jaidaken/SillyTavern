@@ -4,6 +4,7 @@ import { Buffer } from 'node:buffer';
 import encode from './png/encode.js';
 import extract from 'png-chunks-extract';
 import PNGtext from 'png-chunk-text';
+import { log } from './log.js';
 
 /**
  * Writes Character metadata to a PNG image buffer.
@@ -57,7 +58,7 @@ export const read = (image) => {
     const textChunks = chunks.filter((chunk) => chunk.name === 'tEXt').map((chunk) => PNGtext.decode(chunk.data));
 
     if (textChunks.length === 0) {
-        console.error('PNG metadata does not contain any text chunks.');
+        log.chars.error('PNG metadata does not contain any text chunks.');
         throw new Error('No PNG metadata.');
     }
 
@@ -73,7 +74,7 @@ export const read = (image) => {
         return Buffer.from(textChunks[charaIndex].text, 'base64').toString('utf8');
     }
 
-    console.error('PNG metadata does not contain any character data.');
+    log.chars.error('PNG metadata does not contain any character data.');
     throw new Error('No PNG metadata.');
 };
 

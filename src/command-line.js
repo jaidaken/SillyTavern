@@ -6,6 +6,7 @@ import ipRegex from 'ip-regex';
 import envPaths from 'env-paths';
 import { color, getConfigValue, stringToBool } from './util.js';
 import { initConfig } from './config-init.js';
+import { log } from './log.js';
 
 /**
  * @typedef {object} CommandLineArguments Parsed command line arguments
@@ -270,11 +271,11 @@ export class CommandLineParser {
         const defaultConfig = this.getDefaultConfig(isGlobal);
 
         if (isGlobal && cliArguments.configPath) {
-            console.warn(color.yellow('Warning: "--configPath" argument is ignored in global mode'));
+            log.sys.warn(color.yellow('Warning: "--configPath" argument is ignored in global mode'));
         }
 
         if (isGlobal && cliArguments.dataRoot) {
-            console.warn(color.yellow('Warning: "--dataRoot" argument is ignored in global mode'));
+            log.sys.warn(color.yellow('Warning: "--dataRoot" argument is ignored in global mode'));
         }
 
         const configPath = isGlobal
@@ -293,7 +294,7 @@ export class CommandLineParser {
                 fs.mkdirSync(dataRoot, { recursive: true });
             }
         } catch (err) {
-            console.warn(color.yellow(`Warning: Failed to create data root directory at ${dataRoot}. Please make sure the path is correct and writable.`), err);
+            log.sys.warn(color.yellow(`Warning: Failed to create data root directory at ${dataRoot}. Please make sure the path is correct and writable.`), err);
         }
 
         /** @type {CommandLineArguments} */
@@ -369,12 +370,12 @@ export class CommandLineParser {
         };
 
         if (!this.booleanAutoOptions.includes(result.enableIPv6)) {
-            console.warn(color.red('`protocol: ipv6` option invalid'), '\n use:', this.booleanAutoOptions, '\n setting to:', defaultConfig.enableIPv6);
+            log.sys.warn(color.red('`protocol: ipv6` option invalid'), '\n use:', this.booleanAutoOptions, '\n setting to:', defaultConfig.enableIPv6);
             result.enableIPv6 = defaultConfig.enableIPv6;
         }
 
         if (!this.booleanAutoOptions.includes(result.enableIPv4)) {
-            console.warn(color.red('`protocol: ipv4` option invalid'), '\n use:', this.booleanAutoOptions, '\n setting to:', defaultConfig.enableIPv4);
+            log.sys.warn(color.red('`protocol: ipv4` option invalid'), '\n use:', this.booleanAutoOptions, '\n setting to:', defaultConfig.enableIPv4);
             result.enableIPv4 = defaultConfig.enableIPv4;
         }
 

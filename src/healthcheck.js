@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { serverDirectory } from './server-directory.js';
+import { log } from './log.js';
 
 // Default to 0 seconds (disabled) if not set
 const intervalSeconds = parseInt(process.env.SILLYTAVERN_HEARTBEATINTERVAL || '0');
@@ -19,7 +20,7 @@ const heartbeatFile = path.join(dataRoot, 'heartbeat.json');
 
 try {
     if (!fs.existsSync(heartbeatFile)) {
-        console.error(`Heartbeat file not found at: ${heartbeatFile}`);
+        log.sys.error(`Heartbeat file not found at: ${heartbeatFile}`);
         process.exit(1);
     }
 
@@ -29,12 +30,12 @@ try {
     const diff = now - lastModified;
 
     if (diff > threshold) {
-        console.error(`Server is unresponsive. Last heartbeat was ${Math.round(diff / 1000)} seconds ago.`);
+        log.sys.error(`Server is unresponsive. Last heartbeat was ${Math.round(diff / 1000)} seconds ago.`);
         process.exit(1);
     }
 
     process.exit(0);
 } catch (err) {
-    console.error('Healthcheck error:', err.message);
+    log.sys.error('Healthcheck error:', err.message);
     process.exit(1);
 }

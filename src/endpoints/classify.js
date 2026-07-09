@@ -1,6 +1,7 @@
 import express from 'express';
 
 import { getPipeline } from '../transformers.js';
+import { log } from '../log.js';
 
 const TASK = 'text-classification';
 
@@ -17,7 +18,7 @@ router.post('/labels', async (req, res) => {
         const result = Object.keys(pipe.model.config.label2id);
         return res.json({ labels: result });
     } catch (error) {
-        console.error(error);
+        log.ext.error(error);
         return res.sendStatus(500);
     }
 });
@@ -43,13 +44,13 @@ router.post('/', async (req, res) => {
             }
         }
 
-        console.debug('Classify input:', text);
+        log.ext.debug('Classify input:', text);
         const result = await getResult(text);
-        console.debug('Classify output:', result);
+        log.ext.debug('Classify output:', result);
 
         return res.json({ classification: result });
     } catch (error) {
-        console.error(error);
+        log.ext.error(error);
         return res.sendStatus(500);
     }
 });

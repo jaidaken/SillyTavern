@@ -9,6 +9,7 @@ const readFile = fs.promises.readFile;
 const readdir = fs.promises.readdir;
 
 import { getAllUserHandles, getUserDirectories } from '../users.js';
+import { log } from '../log.js';
 
 const STATS_FILE = 'stats.json';
 
@@ -149,7 +150,7 @@ async function collectAndCreateStats(chatsPath, charactersPath) {
  * @param {string} charactersPath Path to the directory containing the character files.
  */
 export async function recreateStats(handle, chatsPath, charactersPath) {
-    console.info('Collecting and creating stats for user:', handle);
+    log.sys.info('Collecting and creating stats for user:', handle);
     const stats = await collectAndCreateStats(chatsPath, charactersPath);
     STATS.set(handle, stats);
     await saveStatsToFile();
@@ -178,7 +179,7 @@ export async function init() {
             }
         }
     } catch (err) {
-        console.error('Failed to initialize stats:', err);
+        log.sys.error('Failed to initialize stats:', err);
     }
     // Save stats every 5 minutes
     setInterval(saveStatsToFile, 5 * 60 * 1000);
@@ -201,7 +202,7 @@ async function saveStatsToFile() {
                 await writeFileAtomic(statsFilePath, JSON.stringify(charStats));
                 TIMESTAMPS.set(handle, Date.now());
             } catch (error) {
-                console.error('Failed to save stats to file.', error);
+                log.sys.error('Failed to save stats to file.', error);
             }
         }
     }
@@ -215,7 +216,7 @@ export async function onExit() {
     try {
         await saveStatsToFile();
     } catch (err) {
-        console.error('Failed to write stats to file:', err);
+        log.sys.error('Failed to write stats to file:', err);
     }
 }
 
@@ -232,7 +233,7 @@ function readAndParseFile(filepath) {
         let lines = file.split('\n');
         return lines;
     } catch (error) {
-        console.error(`Error reading file at ${filepath}: ${error}`);
+        log.sys.error(`Error reading file at ${filepath}: ${error}`);
         return [];
     }
 }
@@ -421,7 +422,7 @@ function calculateTotalGenTimeAndWordCount(
                     firstChatTime = Math.min(parseTimestamp(json.send_date), firstChatTime);
                 }
             } catch (error) {
-                console.error(`Error parsing line ${line}: ${error}`);
+                log.sys.error(`Error parsing line ${line}: ${error}`);
             }
         }
     }
@@ -454,7 +455,7 @@ router.post('/recreate', async function (request, response) {
         await recreateStats(request.user.profile.handle, request.user.directories.chats, request.user.directories.characters);
         return response.sendStatus(200);
     } catch (error) {
-        console.error(error);
+        log.sys.error(error);
         return response.sendStatus(500);
     }
 });

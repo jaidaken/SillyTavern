@@ -2,6 +2,7 @@ import fetch from 'node-fetch';
 import { Router } from 'express';
 
 import { readSecret, SECRET_KEYS } from './secrets.js';
+import { log } from '../log.js';
 
 export const router = Router();
 
@@ -10,7 +11,7 @@ router.post('/generate-voice', async (req, res) => {
     try {
         let provider_endpoint = req.body.provider_endpoint;
         if (!provider_endpoint) {
-            console.warn('Volcengine endpoint not set, use default endpoint instead');
+            log.net.warn('Volcengine endpoint not set, use default endpoint instead');
             provider_endpoint = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional';
         }
 
@@ -18,7 +19,7 @@ router.post('/generate-voice', async (req, res) => {
         const accessKey = readSecret(req.user.directories, SECRET_KEYS.VOLCENGINE_ACCESS_KEY);
 
         if (!appId || !accessKey) {
-            console.warn('Volcengine generate-voice request missing required parameters appId or accessKey');
+            log.net.warn('Volcengine generate-voice request missing required parameters appId or accessKey');
             return res.sendStatus(403);
         }
 
@@ -27,7 +28,7 @@ router.post('/generate-voice', async (req, res) => {
         const voice_speaker = req.body.voice_speaker;
 
         if (!resourceId || !text || !voice_speaker) {
-            console.warn('Volcengine generate-voice request missing required parameters resourceId or text or voice_speaker');
+            log.net.warn('Volcengine generate-voice request missing required parameters resourceId or text or voice_speaker');
             return res.sendStatus(400);
         }
 
@@ -64,7 +65,7 @@ router.post('/generate-voice', async (req, res) => {
 
         if (!response.ok) {
             const logid = response.headers.get('X-Tt-Logid') || '';
-            console.warn('Volcengine Request failed', response.status, response.statusText, logid);
+            log.net.warn('Volcengine Request failed', response.status, response.statusText, logid);
             return res.header('X-Tt-Logid', logid).status(500).send(`TTS Generation Failed: ${response.statusText}`);
         }
         const decoder = new TextDecoder();
@@ -96,7 +97,7 @@ router.post('/generate-voice', async (req, res) => {
                             audioChunks_.push(audioData);
                         }
                     } catch (e) {
-                        console.error('Error parsing Volcengine TTS stream line:', e);
+                        log.net.error('Error parsing Volcengine TTS stream line:', e);
                     }
                 }
             });
@@ -130,7 +131,7 @@ router.post('/generate-voice', async (req, res) => {
         res.set('Content-Type', 'audio/mpeg');
         res.status(200).send(finalAudioData);
     } catch (error) {
-        console.error('Volcengine generate-voice fetch failed', error);
+        log.net.error('Volcengine generate-voice fetch failed', error);
         res.status(500).send(`TTS Generation Failed: ${error}`);
     }
 });

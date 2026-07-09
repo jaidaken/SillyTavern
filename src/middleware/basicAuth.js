@@ -9,6 +9,7 @@ import { RateLimiterMemory, RateLimiterRes } from 'rate-limiter-flexible';
 import { getAllUserHandles, toKey, getPasswordHash } from '../users.js';
 import { getConfigValue, safeReadFileSync } from '../util.js';
 import { getIpAddress, retryAfter } from '../express-common.js';
+import { log } from '../log.js';
 
 const PER_USER_BASIC_AUTH = !!getConfigValue('perUserBasicAuth', false, 'boolean');
 const ENABLE_ACCOUNTS = !!getConfigValue('enableUserAccounts', false, 'boolean');
@@ -76,10 +77,10 @@ const basicAuthMiddleware = async function (request, response, callback) {
         return unauthorizedResponse(response);
     } catch (error) {
         if (error instanceof RateLimiterRes) {
-            console.error('Basic auth failed: Rate limited from', getIpAddress(request, PREFER_REAL_IP_HEADER), request.method, request.originalUrl);
+            log.users.error('Basic auth failed: Rate limited from', getIpAddress(request, PREFER_REAL_IP_HEADER), request.method, request.originalUrl);
             return retryAfter(response, error).sendStatus(429);
         }
-        console.error('Basic auth error:', error);
+        log.users.error('Basic auth error:', error);
         return response.sendStatus(500);
     }
 };

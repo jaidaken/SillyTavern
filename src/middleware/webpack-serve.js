@@ -1,6 +1,7 @@
 import path from 'node:path';
 import webpack from 'webpack';
 import getPublicLibConfig from '../../webpack.config.js';
+import { log } from '../log.js';
 
 export default function getWebpackServeMiddleware() {
     /**
@@ -31,8 +32,7 @@ export default function getWebpackServeMiddleware() {
      * @returns {Promise<void>}
      */
     devMiddleware.runWebpackCompiler = ({ forceDist = false, pruneCache = false } = {}) => {
-        console.log();
-        console.log('Compiling frontend libraries...');
+        log.sys.info('Compiling frontend libraries...');
 
         const publicLibConfig = getPublicLibConfig({ forceDist, pruneCache });
         const compiler = webpack(publicLibConfig);
@@ -41,8 +41,7 @@ export default function getWebpackServeMiddleware() {
             compiler.run((_error, stats) => {
                 const output = stats?.toString(publicLibConfig.stats);
                 if (output) {
-                    console.log(output);
-                    console.log();
+                    log.sys.info(output);
                 }
                 compiler.close(() => {
                     resolve();

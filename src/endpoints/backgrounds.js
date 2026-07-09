@@ -8,6 +8,7 @@ import { invalidateThumbnail } from './thumbnails.js';
 import { thumbnailDimensions, readMetadataIndex, renameMetadata, removeMetadata, getOrGenerateMetadataBatch } from './image-metadata.js';
 import { getImages } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
+import { log } from '../log.js';
 
 export const router = express.Router();
 
@@ -32,7 +33,7 @@ router.post('/all', async function (request, response) {
 
         response.json({ images: imagesWithMetadata, config });
     } catch (error) {
-        console.error('[Backgrounds] Error fetching backgrounds:', error);
+        log.media.error('[Backgrounds] Error fetching backgrounds:', error);
         response.status(500).json({ error: 'Failed to fetch backgrounds' });
     }
 });
@@ -60,7 +61,7 @@ router.post('/folders', async function (request, response) {
 
         response.json({ folders, imageFolderMap });
     } catch (error) {
-        console.error('[Backgrounds] Folders endpoint error:', error);
+        log.media.error('[Backgrounds] Folders endpoint error:', error);
         response.status(500).json({ error: 'Internal server error.' });
     }
 });
@@ -70,14 +71,14 @@ router.post('/delete', getFileNameValidationFunction('bg'), async function (requ
         if (!request.body) return response.sendStatus(400);
 
         if (request.body.bg !== sanitize(request.body.bg)) {
-            console.error('Malicious bg name prevented');
+            log.media.error('Malicious bg name prevented');
             return response.sendStatus(403);
         }
 
         const fileName = path.join(request.user.directories.backgrounds, sanitize(request.body.bg));
 
         if (!fs.existsSync(fileName)) {
-            console.error('BG file not found');
+            log.media.error('BG file not found');
             return response.sendStatus(400);
         }
 
@@ -87,12 +88,12 @@ router.post('/delete', getFileNameValidationFunction('bg'), async function (requ
         // Remove metadata for deleted image
         const relativePath = path.join('backgrounds', request.body.bg);
         await removeMetadata(request.user.directories.root, relativePath).catch(err => {
-            console.warn('[Backgrounds] Failed to remove metadata:', err.message);
+            log.media.warn('[Backgrounds] Failed to remove metadata:', err.message);
         });
 
         return response.send('ok');
     } catch (err) {
-        console.error(err);
+        log.media.error(err);
         response.sendStatus(500);
     }
 });
@@ -105,12 +106,12 @@ router.post('/rename', async function (request, response) {
         const newFileName = path.join(request.user.directories.backgrounds, sanitize(request.body.new_bg));
 
         if (!fs.existsSync(oldFileName)) {
-            console.error('BG file not found');
+            log.media.error('BG file not found');
             return response.sendStatus(400);
         }
 
         if (fs.existsSync(newFileName)) {
-            console.error('New BG file already exists');
+            log.media.error('New BG file already exists');
             return response.sendStatus(400);
         }
 
@@ -122,12 +123,12 @@ router.post('/rename', async function (request, response) {
         const oldRelativePath = path.join('backgrounds', request.body.old_bg);
         const newRelativePath = path.join('backgrounds', request.body.new_bg);
         await renameMetadata(request.user.directories.root, oldRelativePath, newRelativePath).catch(err => {
-            console.warn('[Backgrounds] Failed to rename metadata:', err.message);
+            log.media.warn('[Backgrounds] Failed to rename metadata:', err.message);
         });
 
         return response.send('ok');
     } catch (err) {
-        console.error(err);
+        log.media.error(err);
         response.sendStatus(500);
     }
 });
@@ -145,12 +146,12 @@ router.post('/upload', async function (request, response) {
         // Generate metadata for the new image
         const relativePath = path.join('backgrounds', filename);
         await getOrGenerateMetadataBatch(request.user.directories.root, [relativePath], 'bg').catch(err => {
-            console.warn('[Backgrounds] Failed to generate metadata for upload:', err.message);
+            log.media.warn('[Backgrounds] Failed to generate metadata for upload:', err.message);
         });
 
         response.send(filename);
     } catch (err) {
-        console.error(err);
+        log.media.error(err);
         response.sendStatus(500);
     }
 });
