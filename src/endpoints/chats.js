@@ -216,7 +216,7 @@ function importKoboldLiteChat(_userName, _characterName, data) {
     const inputToken = '{{[INPUT]}}';
     const outputToken = '{{[OUTPUT]}}';
 
-    /** @type {function(string): object} */
+    /** @type {(msg: string) => object} */
     function processKoboldMessage(msg) {
         const isUser = msg.includes(inputToken);
         return {
@@ -719,7 +719,7 @@ router.post('/import', validateAvatarUrlMiddleware, function (request, response)
             fs.unlinkSync(pathToUpload);
             const jsonData = JSON.parse(data);
 
-            /** @type {function(string, string, object): string|string[]} */
+            /** @type {(userName: string, characterName: string, data: object) => string|string[]} */
             let importFunc;
 
             if (jsonData.savedsettings !== undefined) { // Kobold Lite format
@@ -979,9 +979,11 @@ router.post('/search', validateAvatarUrlMiddleware, async function (request, res
 router.post('/recent', async function (request, response) {
     try {
         /** @typedef {{pngFile?: string, groupId?: string, filePath: string, mtime: number}} ChatFile */
+        // Mirrors PinnedChat in public/scripts/welcome-screen.js; inlined so the type gate does not pull the frontend bundle in.
+        /** @typedef {{group: string, avatar: string, file_name: string}} PinnedChat */
         /** @type {ChatFile[]} */
         const allChatFiles = [];
-        /** @type {import('../../public/scripts/welcome-screen.js').PinnedChat[]} */
+        /** @type {PinnedChat[]} */
         const pinnedChats = Array.isArray(request.body.pinned) ? request.body.pinned : [];
 
         const getCharacterChatFiles = async () => {

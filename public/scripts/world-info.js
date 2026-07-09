@@ -890,12 +890,10 @@ export const worldInfoCache = new StructuredCloneMap({ cloneOnGet: true, cloneOn
  * @returns {Promise<WIPromptResult>} The world info string and depth.
  */
 export async function getWorldInfoPrompt(chat, maxContext, isDryRun, globalScanData) {
-    let worldInfoString = '', worldInfoBefore = '', worldInfoAfter = '';
-
     const activatedWorldInfo = await checkWorldInfo(chat, maxContext, isDryRun, globalScanData);
-    worldInfoBefore = activatedWorldInfo.worldInfoBefore;
-    worldInfoAfter = activatedWorldInfo.worldInfoAfter;
-    worldInfoString = worldInfoBefore + worldInfoAfter;
+    const worldInfoBefore = activatedWorldInfo.worldInfoBefore;
+    const worldInfoAfter = activatedWorldInfo.worldInfoAfter;
+    const worldInfoString = worldInfoBefore + worldInfoAfter;
 
     if (!isDryRun && activatedWorldInfo.allActivatedEntries && activatedWorldInfo.allActivatedEntries.size > 0) {
         const arg = Array.from(activatedWorldInfo.allActivatedEntries.values());

@@ -1428,7 +1428,7 @@ export class QuickReply {
                                 let unnamed = this.debugController.unnamedArguments ?? [];
                                 if (!Array.isArray(unnamed)) unnamed = [unnamed];
                                 // @ts-ignore
-                                while (unnamed.length < executor.unnamedArgumentList?.length ?? 0) unnamed.push(undefined);
+                                while (unnamed.length < executor.unnamedArgumentList?.length) unnamed.push(undefined);
                                 // @ts-ignore
                                 unnamed = unnamed.map((it, idx) => [executor.unnamedArgumentList?.[idx], it]);
                                 // @ts-ignore

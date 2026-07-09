@@ -526,7 +526,7 @@ export class DataMaidService {
     /**
      * Parses all chat files and returns an array of chat messages.
      * Searches both individual character chats and group chats.
-     * @param {function(DataMaidMessage): boolean} filterFn - Filter function to apply to each message.
+     * @param {(message: DataMaidMessage) => boolean} filterFn - Filter function to apply to each message.
      * @returns {Promise<DataMaidMessage[]>} Array of chat messages
      */
     async #parseAllChats(filterFn) {
@@ -564,7 +564,7 @@ export class DataMaidService {
     /**
      * Parses all metadata from chat files and group definitions.
      * Extracts metadata from both active and historical chat data.
-     * @param {function(DataMaidChatMetadata): boolean} filterFn - Filter function to apply to each metadata entry.
+     * @param {(metadata: DataMaidChatMetadata) => boolean} filterFn - Filter function to apply to each metadata entry.
      * @returns {Promise<DataMaidChatMetadata[]>} Parsed chat metadata as an array.
      */
     async #parseAllMetadata(filterFn) {

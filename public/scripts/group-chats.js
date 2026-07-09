@@ -2086,9 +2086,9 @@ function filterGroupMemberList() {
 async function createGroup() {
     let name = $('#rm_group_chat_name').val().toString();
     let allowSelfResponses = !!$('#rm_group_allow_self_responses').prop('checked');
-    let activationStrategy = Number($('#rm_group_activation_strategy').find(':selected').val()) ?? group_activation_strategy.NATURAL;
-    let generationMode = Number($('#rm_group_generation_mode').find(':selected').val()) ?? group_generation_mode.SWAP;
-    let autoModeDelay = Number($('#rm_group_automode_delay').val()) ?? DEFAULT_AUTO_MODE_DELAY;
+    let activationStrategy = Number($('#rm_group_activation_strategy').find(':selected').val());
+    let generationMode = Number($('#rm_group_generation_mode').find(':selected').val());
+    let autoModeDelay = Number($('#rm_group_automode_delay').val());
     const members = newGroupMembers;
     const memberNames = characters.filter(x => members.includes(x.avatar)).map(x => x.name).join(', ');
 

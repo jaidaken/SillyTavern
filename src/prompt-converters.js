@@ -38,7 +38,7 @@ const enableThoughtSignatures = !!getConfigValue('gemini.thoughtSignatures', tru
  * @property {string} charName Character name
  * @property {string} userName User name
  * @property {string[]} groupNames Group member names
- * @property {function(string): boolean} startsWithGroupName Check if a message starts with a group name
+ * @property {(message: string) => boolean} startsWithGroupName Check if a message starts with a group name
  */
 
 /**
@@ -630,7 +630,7 @@ export function convertAI21Messages(messages, names) {
     }
 
     // Collect all the system messages up until the first instance of a non-system message, and then remove them from the messages array.
-    let i = 0, systemPrompt = '';
+    let i, systemPrompt = '';
 
     for (i = 0; i < messages.length; i++) {
         if (messages[i].role !== 'system') {

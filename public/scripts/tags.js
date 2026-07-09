@@ -1463,7 +1463,7 @@ function toggleTagThreeState(element, { stateOverride = undefined, simulateClick
 
     if (simulateClick) {
         // Calculate how many clicks are needed to go from the current state to the target state
-        let clickCount = 0;
+        let clickCount;
         if (targetStateIndex >= currentStateIndex) {
             clickCount = targetStateIndex - currentStateIndex;
         } else {

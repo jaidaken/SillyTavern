@@ -155,7 +155,7 @@ export class ByafParser {
             return { character, characterPath };
         } catch (error) {
             console.error('Failed to parse character JSON from BYAF:', error);
-            throw new Error('Invalid BYAF file: character is not a valid JSON');
+            throw new Error('Invalid BYAF file: character is not a valid JSON', { cause: error });
         }
     }
 
@@ -292,7 +292,7 @@ export class ByafParser {
                         continue; // Skip adding a new background since it already exists
                     }
                     backgrounds.push({
-                        name: `${character?.name} bg ${i++}` || '',
+                        name: `${character?.name} bg ${i++}`,
                         data: data,
                         paths: [bgImagePath],
                     });

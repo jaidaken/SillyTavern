@@ -1,17 +1,14 @@
 import { hljs } from '../../lib.js';
 import { t } from '../i18n.js';
-import { SlashCommandAbortController } from './SlashCommandAbortController.js';
 import { SlashCommandArgument, SlashCommandNamedArgument } from './SlashCommandArgument.js';
 import { SlashCommandClosure } from './SlashCommandClosure.js';
-import { SlashCommandDebugController } from './SlashCommandDebugController.js';
-import { SlashCommandScope } from './SlashCommandScope.js';
 
 /**
  * @typedef {NamedArgumentsCapture & {
- * _scope:SlashCommandScope,
+ * _scope:import('./SlashCommandScope.js').SlashCommandScope,
  * _parserFlags:import('./SlashCommandParser.js').ParserFlags,
- * _abortController:SlashCommandAbortController,
- * _debugController:SlashCommandDebugController,
+ * _abortController:import('./SlashCommandAbortController.js').SlashCommandAbortController,
+ * _debugController:import('./SlashCommandDebugController.js').SlashCommandDebugController,
  * _hasUnnamedArgument:boolean,
  * }} NamedArguments
  */

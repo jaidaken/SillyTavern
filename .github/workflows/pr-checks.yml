@@ -14,17 +14,11 @@ jobs:
     # Only needs to run when code is changed
     if: always() && (github.event.action == 'opened' || github.event.action == 'synchronize')
 
-    # Override permissions, linter likely needs write access to issues
-    permissions:
-      contents: read
-      issues: write
-      pull-requests: write
-
     steps:
       - name: Checkout Repository
         # Checkout
         # https://github.com/marketplace/actions/checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
             ref: ${{ github.event.pull_request.head.sha }}
             repository: ${{ github.event.pull_request.head.repo.full_name }}
@@ -32,25 +26,43 @@ jobs:
       - name: Setup Node.js
         # Setup Node.js environment
         # https://github.com/marketplace/actions/setup-node-js-environment
-        uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 24
+          node-version: 26
 
       - name: Run npm install
         run: npm ci --ignore-scripts
 
       - name: Run ESLint
-        # Action ESLint
-        # https://github.com/marketplace/actions/action-eslint
-        uses: sibiraj-s/action-eslint@bcf41bb9abce43cdbad51ab9b3da2eddaa17eab3 # v3.0.1
+        run: npm run lint
+
+  run-typecheck:
+    name: ✅ Check Types on PR
+    runs-on: ubuntu-latest
+    # Only needs to run when code is changed
+    if: always() && (github.event.action == 'opened' || github.event.action == 'synchronize')
+
+    steps:
+      - name: Checkout Repository
+        # Checkout
+        # https://github.com/marketplace/actions/checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}                # ESLint can run with the original permissions
-          eslint-args: '--ignore-path=.gitignore --quiet'
-          extensions: 'js'
-          annotations: true
-          ignore-patterns: |
-            dist/
-            lib/
+            ref: ${{ github.event.pull_request.head.sha }}
+            repository: ${{ github.event.pull_request.head.repo.full_name }}
+
+      - name: Setup Node.js
+        # Setup Node.js environment
+        # https://github.com/marketplace/actions/setup-node-js-environment
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 26
+
+      - name: Install root dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run typecheck
+        run: npm run typecheck
 
   run-tests:
     name: ✅ Run Unit Tests on PR
@@ -62,7 +74,7 @@ jobs:
       - name: Checkout Repository
         # Checkout
         # https://github.com/marketplace/actions/checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
             ref: ${{ github.event.pull_request.head.sha }}
             repository: ${{ github.event.pull_request.head.repo.full_name }}
@@ -70,9 +82,9 @@ jobs:
       - name: Setup Node.js
         # Setup Node.js environment
         # https://github.com/marketplace/actions/setup-node-js-environment
-        uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 24
+          node-version: 26
 
       - name: Install root dependencies
         run: npm ci --ignore-scripts
@@ -82,3 +94,38 @@ jobs:
 
       - name: Run unit tests
         run: npm run test:unit --prefix tests
+
+  run-e2e:
+    name: ✅ Run E2E Tests on PR
+    runs-on: ubuntu-latest
+    # Only needs to run when code is changed
+    if: always() && (github.event.action == 'opened' || github.event.action == 'synchronize')
+
+    steps:
+      - name: Checkout Repository
+        # Checkout
+        # https://github.com/marketplace/actions/checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+            ref: ${{ github.event.pull_request.head.sha }}
+            repository: ${{ github.event.pull_request.head.repo.full_name }}
+
+      - name: Setup Node.js
+        # Setup Node.js environment
+        # https://github.com/marketplace/actions/setup-node-js-environment
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 26
+
+      - name: Install root dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install test dependencies
+        run: npm ci --ignore-scripts --prefix tests
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+        working-directory: tests
+
+      - name: Run E2E tests
+        run: npm run test:e2e:ci --prefix tests

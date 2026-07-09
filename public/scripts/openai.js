@@ -3305,7 +3305,7 @@ function parseOpenAITextLogprobs(logprobs) {
 
 async function calculateLogitBias() {
     const body = JSON.stringify(oai_settings.bias_presets[oai_settings.bias_preset_selected]);
-    let result = {};
+    let result;
 
     try {
         const reply = await fetch(`/api/backends/chat-completions/bias?model=${getTokenizerModel()}`, {

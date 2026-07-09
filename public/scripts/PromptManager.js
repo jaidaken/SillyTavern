@@ -636,7 +636,7 @@ class PromptManager {
                 return userPrompts;
             }, []);
 
-            let promptOrder = [];
+            let promptOrder;
             if ('global' === this.configuration.promptOrder.strategy) {
                 promptOrder = this.getPromptOrderForCharacter({ id: this.configuration.promptOrder.dummyId });
             } else if ('character' === this.configuration.promptOrder.strategy) {
@@ -926,8 +926,8 @@ class PromptManager {
      * @returns {void}
      */
     updatePromptByIdentifier(identifier, updatePrompt) {
-        let prompt = this.serviceSettings.prompts.find((item) => identifier === item.identifier);
-        if (prompt) prompt = Object.assign(prompt, updatePrompt);
+        const prompt = this.serviceSettings.prompts.find((item) => identifier === item.identifier);
+        if (prompt) Object.assign(prompt, updatePrompt);
     }
 
     /**
@@ -1691,7 +1691,7 @@ class PromptManager {
 
             const calculatedTokens = tokens ? tokens : '-';
 
-            let detachSpanHtml = '';
+            let detachSpanHtml;
             if (this.isPromptDeletionAllowed(prompt)) {
                 detachSpanHtml = `
                     <span title="Remove" class="prompt-manager-detach-action caution fa-solid fa-chain-broken fa-xs"></span>
@@ -1700,7 +1700,7 @@ class PromptManager {
                 detachSpanHtml = '<span class="fa-solid"></span>';
             }
 
-            let editSpanHtml = '';
+            let editSpanHtml;
             if (this.isPromptEditAllowed(prompt)) {
                 editSpanHtml = `
                     <span title="edit" class="prompt-manager-edit-action fa-solid fa-pencil fa-xs"></span>
@@ -1709,7 +1709,7 @@ class PromptManager {
                 editSpanHtml = '<span class="fa-solid"></span>';
             }
 
-            let toggleSpanHtml = '';
+            let toggleSpanHtml;
             if (this.isPromptToggleAllowed(prompt)) {
                 toggleSpanHtml = `
                     <span class="prompt-manager-toggle-action ${listEntry.enabled ? 'fa-solid fa-toggle-on' : 'fa-solid fa-toggle-off'}"></span>

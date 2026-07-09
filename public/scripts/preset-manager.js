@@ -512,7 +512,7 @@ class PresetManager {
         } catch (error) {
             toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Preset could not be renamed`);
             console.error('Preset could not be renamed', error);
-            throw new Error('Preset could not be renamed');
+            throw new Error('Preset could not be renamed', { cause: error });
         }
     }
 

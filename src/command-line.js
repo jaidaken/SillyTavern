@@ -35,10 +35,10 @@ import { initConfig } from './config-init.js';
  * @property {boolean} requestProxyEnabled If enable outgoing request proxy
  * @property {string} requestProxyUrl Request proxy URL
  * @property {string[]} requestProxyBypass Request proxy bypass list
- * @property {function(): URL} getIPv4ListenUrl Get IPv4 listen URL
- * @property {function(): URL} getIPv6ListenUrl Get IPv6 listen URL
- * @property {function(import('./server-startup.js').ServerStartupResult): Promise<string>} getBrowserLaunchHostname Get browser launch hostname
- * @property {function(string): URL} getBrowserLaunchUrl Get browser launch URL
+ * @property {() => URL} getIPv4ListenUrl Get IPv4 listen URL
+ * @property {() => URL} getIPv6ListenUrl Get IPv6 listen URL
+ * @property {(result: import('./server-startup.js').ServerStartupResult) => Promise<string>} getBrowserLaunchHostname Get browser launch hostname
+ * @property {(hostname: string) => URL} getBrowserLaunchUrl Get browser launch URL
  */
 
 /**

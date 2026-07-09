@@ -72,7 +72,7 @@ export async function getVertexAIAuth(request) {
                 };
             } catch (error) {
                 console.error('Failed to authenticate with service account:', error);
-                throw new Error(`Service account authentication failed: ${error.message}`);
+                throw new Error(`Service account authentication failed: ${error.message}`, { cause: error });
             }
         }
         throw new Error('Service Account JSON is required for Vertex AI Full mode');
@@ -201,7 +201,7 @@ export async function getGoogleApiConfig(request, model, endpoint = 'generateCon
                 const serviceAccount = JSON.parse(serviceAccountJson);
                 projectId = getProjectIdFromServiceAccount(serviceAccount);
             } catch (error) {
-                throw new Error('Failed to extract project ID from Service Account JSON.');
+                throw new Error('Failed to extract project ID from Service Account JSON.', { cause: error });
             }
             // Handle global region differently - no region prefix in hostname
             baseUrl = region === 'global'

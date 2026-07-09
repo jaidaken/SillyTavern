@@ -3038,7 +3038,7 @@ async function generatePicture(initiator, args, trigger, message, callback) {
     const dimensions = setTypeSpecificDimensions(generationType);
     const abortController = new AbortController();
     let negativePromptPrefix = args?.negative || '';
-    let imagePath = '';
+    let imagePath;
 
     const stopListener = () => abortController.abort('Aborted by user');
 
@@ -3085,7 +3085,7 @@ async function generatePicture(initiator, args, trigger, message, callback) {
         const reason = err.error?.message || err.message || 'Unknown error';
         const errorText = 'SD prompt text generation failed. ' + reason;
         toastr.error(errorText, 'Image Generation');
-        throw new Error(errorText);
+        throw new Error(errorText, { cause: err });
     } finally {
         restoreOriginalDimensions(dimensions);
         await loaderHandle.hide();
@@ -3262,7 +3262,7 @@ async function generateMultimodalPrompt(generationType, quietPrompt) {
     } catch (error) {
         console.error(error);
         toastr.error('Multimodal captioning failed. Please try again.', 'Image Generation');
-        throw new Error('Multimodal captioning failed.');
+        throw new Error('Multimodal captioning failed.', { cause: error });
     }
 }
 

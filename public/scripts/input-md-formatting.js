@@ -14,7 +14,7 @@ export function initInputMarkdown() {
         if (e.key === 'Control' || !e.ctrlKey || e.altKey || e.metaKey || (e.shiftKey && !(e.ctrlKey && e.shiftKey && e.code === 'Backquote'))) {
             return;
         }
-        let charsToAdd = '';
+        let charsToAdd;
         let possiblePreviousFormattingMargin = 1;
 
         switch (true) {
@@ -85,7 +85,6 @@ export function initInputMarkdown() {
                 if (selectedText.endsWith(' ')) {
                     possibleAddedSpace = ' ';
                     selectedText = selectedText.substring(0, selectedText.length - 1);
-                    end--; // Adjust the end index since we removed the space
                 }
                 // To add the formatting, we need to select the text first
                 textarea.focus();
@@ -109,7 +108,7 @@ export function initInputMarkdown() {
                 textarea.setSelectionRange(midCaretExpandedStart, midCaretExpandedEnd);
                 //set variables for comparison
                 let discoveredWordWithPossibleFormatting = textarea.value.substring(midCaretExpandedStart, midCaretExpandedEnd).trim();
-                let discoveredWord = '';
+                let discoveredWord;
 
                 if (discoveredWordWithPossibleFormatting.endsWith(charsToAdd) && discoveredWordWithPossibleFormatting.startsWith(charsToAdd)) {
                     discoveredWord = textarea.value.substring(midCaretExpandedStart + charsToAdd.length, midCaretExpandedEnd - charsToAdd.length).trim();

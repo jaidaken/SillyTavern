@@ -1,0 +1,816 @@
+{
+    "typescriptVersion": "7.0.2",
+    "total": 507,
+    "errors": [
+        {
+            "file": "plugins.js",
+            "code": "TS18046",
+            "message": "'error' is of type 'unknown'.",
+            "count": 1
+        },
+        {
+            "file": "src/additional-headers.js",
+            "code": "TS2339",
+            "message": "Property 'headers' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/byaf.js",
+            "code": "TS2304",
+            "message": "Cannot find name 'ByafCharacter'.",
+            "count": 4
+        },
+        {
+            "file": "src/byaf.js",
+            "code": "TS2304",
+            "message": "Cannot find name 'ByafChatBackground'.",
+            "count": 2
+        },
+        {
+            "file": "src/byaf.js",
+            "code": "TS2304",
+            "message": "Cannot find name 'ByafExampleMessage'.",
+            "count": 1
+        },
+        {
+            "file": "src/byaf.js",
+            "code": "TS2304",
+            "message": "Cannot find name 'ByafLoreItem'.",
+            "count": 1
+        },
+        {
+            "file": "src/byaf.js",
+            "code": "TS2304",
+            "message": "Cannot find name 'ByafManifest'.",
+            "count": 4
+        },
+        {
+            "file": "src/byaf.js",
+            "code": "TS2304",
+            "message": "Cannot find name 'ByafScenario'.",
+            "count": 5
+        },
+        {
+            "file": "src/byaf.js",
+            "code": "TS2304",
+            "message": "Cannot find name 'CharacterBook'.",
+            "count": 2
+        },
+        {
+            "file": "src/byaf.js",
+            "code": "TS2304",
+            "message": "Cannot find name 'TavernCardV2'.",
+            "count": 1
+        },
+        {
+            "file": "src/byaf.js",
+            "code": "TS2552",
+            "message": "Cannot find name 'ByafParseResult'. Did you mean 'ByafParser'?",
+            "count": 1
+        },
+        {
+            "file": "src/charx.js",
+            "code": "TS18046",
+            "message": "'error' is of type 'unknown'.",
+            "count": 1
+        },
+        {
+            "file": "src/charx.js",
+            "code": "TS2322",
+            "message": "Type 'string' is not assignable to type 'null'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/assets.js",
+            "code": "TS2322",
+            "message": "Type 'string' is not assignable to type 'null'.",
+            "count": 3
+        },
+        {
+            "file": "src/endpoints/backends/chat-completions.js",
+            "code": "TS18046",
+            "message": "'error' is of type 'unknown'.",
+            "count": 8
+        },
+        {
+            "file": "src/endpoints/backends/chat-completions.js",
+            "code": "TS2339",
+            "message": "Property 'cache_control' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/backends/chat-completions.js",
+            "code": "TS2339",
+            "message": "Property 'role' does not exist on type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/backends/chat-completions.js",
+            "code": "TS2339",
+            "message": "Property 'value' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/backends/chat-completions.js",
+            "code": "TS2698",
+            "message": "Spread types may only be created from object types.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/backends/kobold.js",
+            "code": "TS18046",
+            "message": "'error' is of type 'unknown'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/backends/kobold.js",
+            "code": "TS2339",
+            "message": "Property 'status' does not exist on type '{}'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/backends/text-completions.js",
+            "code": "TS2339",
+            "message": "Property 'code' does not exist on type '{}'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/backends/text-completions.js",
+            "code": "TS2339",
+            "message": "Property 'error' does not exist on type '{}'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/backends/text-completions.js",
+            "code": "TS2339",
+            "message": "Property 'message' does not exist on type '{}'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/backends/text-completions.js",
+            "code": "TS2339",
+            "message": "Property 'status' does not exist on type '{}'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/backends/text-completions.js",
+            "code": "TS2339",
+            "message": "Property 'statusText' does not exist on type '{}'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS18046",
+            "message": "'exception' is of type 'unknown'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2304",
+            "message": "Cannot find name 'ByafScenario'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2322",
+            "message": "Type '0.5' is not assignable to type 'undefined'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2322",
+            "message": "Type 'false' is not assignable to type 'undefined'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2322",
+            "message": "Type 'object' is not assignable to type '{ name: any; description: any; creatorcomment: any; personality: any; first_mes: any; avatar: string; chat: string; mes_example: any; scenario: any; create_date: string; talkativeness: any; creator: any; tags: any; }'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2322",
+            "message": "Type 'object' is not assignable to type '{ name: any; description: any; creatorcomment: any; personality: string; first_mes: any; avatar: string; chat: string; mes_example: any; scenario: any; create_date: string; talkativeness: any; creator: any; tags: any; }'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'avatar' does not exist on type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'ch_name' does not exist on type 'object'.",
+            "count": 3
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'character_version' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'chat_size' does not exist on type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'chat' does not exist on type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'create_date' does not exist on type 'object'.",
+            "count": 6
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'creator_notes' does not exist on type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'creator' does not exist on type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'creatorcomment' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'data_size' does not exist on type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'data' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'date_added' does not exist on type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'date_last_chat' does not exist on type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'depth_prompt_depth' does not exist on type 'object'.",
+            "count": 3
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'depth_prompt_prompt' does not exist on type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'depth_prompt_role' does not exist on type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'description' does not exist on type 'object'.",
+            "count": 3
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'entries' does not exist on type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'extensions' does not exist on type 'object'.",
+            "count": 3
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'fav' does not exist on type 'object'.",
+            "count": 4
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'first_mes' does not exist on type 'object'.",
+            "count": 3
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'json_data' does not exist on type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'mes_example' does not exist on type 'object'.",
+            "count": 3
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'name' does not exist on type 'object'.",
+            "count": 4
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'originalData' does not exist on type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'personality' does not exist on type 'object'.",
+            "count": 3
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'post_history_instructions' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'scenario' does not exist on type 'object'.",
+            "count": 3
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'spec' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'system_prompt' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'tags' does not exist on type 'object'.",
+            "count": 8
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'talkativeness' does not exist on type 'object'.",
+            "count": 3
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2339",
+            "message": "Property 'world' does not exist on type 'object'.",
+            "count": 5
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2564",
+            "message": "Property '#instance' has no initializer and is not definitely assigned in the constructor.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/characters.js",
+            "code": "TS2564",
+            "message": "Property '#syncInterval' has no initializer and is not definitely assigned in the constructor.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/chats.js",
+            "code": "TS2339",
+            "message": "Property 'actions' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/chats.js",
+            "code": "TS2339",
+            "message": "Property 'chat_metadata' does not exist on type '{ match: boolean; file_id: string; file_name: string; file_size: string; chat_items: number; mes: string; last_mes: number; }'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/chats.js",
+            "code": "TS2339",
+            "message": "Property 'data_visible' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/chats.js",
+            "code": "TS2339",
+            "message": "Property 'data' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/chats.js",
+            "code": "TS2339",
+            "message": "Property 'histories' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/chats.js",
+            "code": "TS2339",
+            "message": "Property 'messages' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/chats.js",
+            "code": "TS2339",
+            "message": "Property 'msgs' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/chats.js",
+            "code": "TS2339",
+            "message": "Property 'prompt' does not exist on type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/chats.js",
+            "code": "TS2339",
+            "message": "Property 'savedsettings' does not exist on type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/classify.js",
+            "code": "TS2322",
+            "message": "Type 'object | undefined' is not assignable to type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/content-manager.js",
+            "code": "TS2304",
+            "message": "Cannot find name 'TavernCardV2'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/content-manager.js",
+            "code": "TS2749",
+            "message": "'CONTENT_SCOPE' refers to a value, but is being used as a type here. Did you mean 'typeof CONTENT_SCOPE'?",
+            "count": 3
+        },
+        {
+            "file": "src/endpoints/content-manager.js",
+            "code": "TS2749",
+            "message": "'CONTENT_TYPES' refers to a value, but is being used as a type here. Did you mean 'typeof CONTENT_TYPES'?",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/google.js",
+            "code": "TS18046",
+            "message": "'error' is of type 'unknown'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/google.js",
+            "code": "TS2322",
+            "message": "Type 'object' is not assignable to type 'HeadersInit | undefined'.",
+            "count": 7
+        },
+        {
+            "file": "src/endpoints/google.js",
+            "code": "TS2339",
+            "message": "Property 'client_email' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/google.js",
+            "code": "TS2339",
+            "message": "Property 'private_key' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/google.js",
+            "code": "TS2339",
+            "message": "Property 'project_id' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/groups.js",
+            "code": "TS2339",
+            "message": "Property 'id' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/horde.js",
+            "code": "TS2345",
+            "message": "Argument of type 'unknown' is not assignable to parameter of type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/image-metadata.js",
+            "code": "TS18046",
+            "message": "'error' is of type 'unknown'.",
+            "count": 9
+        },
+        {
+            "file": "src/endpoints/minimax.js",
+            "code": "TS18046",
+            "message": "'conversionError' is of type 'unknown'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/minimax.js",
+            "code": "TS18046",
+            "message": "'urlError' is of type 'unknown'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/presets.js",
+            "code": "TS2339",
+            "message": "Property 'filename' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/presets.js",
+            "code": "TS2339",
+            "message": "Property 'folder' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/presets.js",
+            "code": "TS2339",
+            "message": "Property 'name' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/sprites.js",
+            "code": "TS2339",
+            "message": "Property 'data' does not exist on type 'object'.",
+            "count": 4
+        },
+        {
+            "file": "src/endpoints/stable-diffusion.js",
+            "code": "TS18046",
+            "message": "'error' is of type 'unknown'.",
+            "count": 4
+        },
+        {
+            "file": "src/endpoints/stats.js",
+            "code": "TS18046",
+            "message": "'err' is of type 'unknown'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/thumbnails.js",
+            "code": "TS18046",
+            "message": "'error' is of type 'unknown'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/tokenizers.js",
+            "code": "TS18046",
+            "message": "'error' is of type 'unknown'.",
+            "count": 2
+        },
+        {
+            "file": "src/endpoints/tokenizers.js",
+            "code": "TS2345",
+            "message": "Argument of type 'NonSharedBuffer' is not assignable to parameter of type 'ArrayBuffer'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/tokenizers.js",
+            "code": "TS2564",
+            "message": "Property '#instance' has no initializer and is not definitely assigned in the constructor.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/translate.js",
+            "code": "TS18046",
+            "message": "'error' is of type 'unknown'.",
+            "count": 5
+        },
+        {
+            "file": "src/endpoints/users-private.js",
+            "code": "TS2345",
+            "message": "Argument of type 'string' is not assignable to parameter of type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/users-public.js",
+            "code": "TS2345",
+            "message": "Argument of type 'string' is not assignable to parameter of type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/vectors.js",
+            "code": "TS2339",
+            "message": "Property 'body' does not exist on type 'object'.",
+            "count": 24
+        },
+        {
+            "file": "src/endpoints/vectors.js",
+            "code": "TS2339",
+            "message": "Property 'model' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/endpoints/vectors.js",
+            "code": "TS2345",
+            "message": "Argument of type 'unknown' is not assignable to parameter of type 'Error'.",
+            "count": 5
+        },
+        {
+            "file": "src/endpoints/worldinfo.js",
+            "code": "TS2322",
+            "message": "Type '{ entries: {}; } | null' is not assignable to type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/express-common.js",
+            "code": "TS2339",
+            "message": "Property 'message' does not exist on type '{}'.",
+            "count": 1
+        },
+        {
+            "file": "src/healthcheck.js",
+            "code": "TS18046",
+            "message": "'err' is of type 'unknown'.",
+            "count": 1
+        },
+        {
+            "file": "src/middleware/corsProxy.js",
+            "code": "TS2339",
+            "message": "Property 'join' does not exist on type 'string | string[]'.",
+            "count": 1
+        },
+        {
+            "file": "src/middleware/whitelist.js",
+            "code": "TS18046",
+            "message": "'e' is of type 'unknown'.",
+            "count": 1
+        },
+        {
+            "file": "src/plugin-loader.js",
+            "code": "TS18046",
+            "message": "'error' is of type 'unknown'.",
+            "count": 1
+        },
+        {
+            "file": "src/png/encode.js",
+            "code": "TS2345",
+            "message": "Argument of type 'Uint8Array<ArrayBuffer>' is not assignable to parameter of type 'BufferInput'.",
+            "count": 1
+        },
+        {
+            "file": "src/png/encode.js",
+            "code": "TS2345",
+            "message": "Argument of type 'Uint8Array<ArrayBufferLike>' is not assignable to parameter of type 'BufferInput'.",
+            "count": 1
+        },
+        {
+            "file": "src/prompt-converters.js",
+            "code": "TS2339",
+            "message": "Property 'cache_control' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/prompt-converters.js",
+            "code": "TS2339",
+            "message": "Property 'content' does not exist on type 'object & Record<\"name\", unknown>'.",
+            "count": 3
+        },
+        {
+            "file": "src/prompt-converters.js",
+            "code": "TS2339",
+            "message": "Property 'content' does not exist on type 'object'.",
+            "count": 108
+        },
+        {
+            "file": "src/prompt-converters.js",
+            "code": "TS2339",
+            "message": "Property 'name' does not exist on type 'object'.",
+            "count": 47
+        },
+        {
+            "file": "src/prompt-converters.js",
+            "code": "TS2339",
+            "message": "Property 'prefix' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/prompt-converters.js",
+            "code": "TS2339",
+            "message": "Property 'reasoning_content' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/prompt-converters.js",
+            "code": "TS2339",
+            "message": "Property 'reasoning_details' does not exist on type 'object'.",
+            "count": 1
+        },
+        {
+            "file": "src/prompt-converters.js",
+            "code": "TS2339",
+            "message": "Property 'role' does not exist on type 'object & Record<\"name\", unknown>'.",
+            "count": 1
+        },
+        {
+            "file": "src/prompt-converters.js",
+            "code": "TS2339",
+            "message": "Property 'role' does not exist on type 'object & Record<\"tool_call_id\", unknown>'.",
+            "count": 1
+        },
+        {
+            "file": "src/prompt-converters.js",
+            "code": "TS2339",
+            "message": "Property 'role' does not exist on type 'object'.",
+            "count": 56
+        },
+        {
+            "file": "src/prompt-converters.js",
+            "code": "TS2339",
+            "message": "Property 'signature' does not exist on type 'object'.",
+            "count": 4
+        },
+        {
+            "file": "src/prompt-converters.js",
+            "code": "TS2339",
+            "message": "Property 'tool_call_id' does not exist on type 'object'.",
+            "count": 5
+        },
+        {
+            "file": "src/prompt-converters.js",
+            "code": "TS2339",
+            "message": "Property 'tool_calls' does not exist on type 'object'.",
+            "count": 13
+        },
+        {
+            "file": "src/server-main.js",
+            "code": "TS18046",
+            "message": "'err' is of type 'unknown'.",
+            "count": 1
+        },
+        {
+            "file": "src/users.js",
+            "code": "TS18046",
+            "message": "'error' is of type 'unknown'.",
+            "count": 1
+        },
+        {
+            "file": "src/util.js",
+            "code": "TS18046",
+            "message": "'error' is of type 'unknown'.",
+            "count": 2
+        },
+        {
+            "file": "src/util.js",
+            "code": "TS2322",
+            "message": "Type 'string' is not assignable to type 'null'.",
+            "count": 4
+        },
+        {
+            "file": "src/util.js",
+            "code": "TS2339",
+            "message": "Property '$defs' does not exist on type 'object'.",
+            "count": 2
+        },
+        {
+            "file": "src/util.js",
+            "code": "TS2339",
+            "message": "Property 'trim' does not exist on type 'never'.",
+            "count": 1
+        },
+        {
+            "file": "src/util.js",
+            "code": "TS2769",
+            "message": "No overload matches this call.",
+            "count": 1
+        },
+        {
+            "file": "src/vectors/google-vectors.js",
+            "code": "TS2322",
+            "message": "Type 'object' is not assignable to type 'HeadersInit | undefined'.",
+            "count": 2
+        }
+    ]
+}

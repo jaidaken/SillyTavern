@@ -93,7 +93,6 @@ import { SlashCommandBreakController } from './slash-commands/SlashCommandBreakC
 import { SlashCommandExecutionError } from './slash-commands/SlashCommandExecutionError.js';
 import { slashCommandReturnHelper } from './slash-commands/SlashCommandReturnHelper.js';
 import { accountStorage } from './util/AccountStorage.js';
-import { SlashCommandDebugController } from './slash-commands/SlashCommandDebugController.js';
 import { SlashCommandScope } from './slash-commands/SlashCommandScope.js';
 import { t } from './i18n.js';
 import { kai_settings } from './kai-settings.js';
@@ -4259,7 +4258,7 @@ async function runCallback(args, name) {
         };
         return await globalThis.executeQuickReplyByName(name, args, options);
     } catch (error) {
-        throw new Error(t`Error running Quick Reply "${name}": ${error.message}`);
+        throw new Error(t`Error running Quick Reply "${name}": ${error.message}`, { cause: error });
     }
 }
 
@@ -5885,7 +5884,7 @@ async function messageNameCallback(args, name) {
         return message.name;
     }
 
-    let newName = '';
+    let newName;
 
     if (message.is_user) {
         const persona = findPersona({ name: name });
@@ -6847,7 +6846,7 @@ const clearCommandProgressDebounced = debounce(clearCommandProgress);
  * @prop {boolean} [handleExecutionErrors] (false) Whether to handle execution errors (show toast on error) or throw
  * @prop {import('./slash-commands/SlashCommandParser.js').ParserFlags} [parserFlags] (null) Parser flags to apply
  * @prop {SlashCommandAbortController} [abortController] (null) Controller used to abort or pause command execution
- * @prop {SlashCommandDebugController} [debugController] (null) Controller used to control debug execution
+ * @prop {import('./slash-commands/SlashCommandDebugController.js').SlashCommandDebugController} [debugController] (null) Controller used to control debug execution
  * @prop {(done:number, total:number)=>void} [onProgress] (null) Callback to handle progress events
  * @prop {string} [source] (null) String indicating where the code come from (e.g., QR name)
  */
@@ -6896,7 +6895,7 @@ export async function executeSlashCommandsOnChatInput(text, options = {}) {
     fs.classList.remove('script_aborted');
 
     /**@type {SlashCommandClosureResult} */
-    let result = null;
+    let result;
     let currentProgress = 0;
     try {
         commandsFromChatInputAbortController = new SlashCommandAbortController();

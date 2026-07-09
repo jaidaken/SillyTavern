@@ -281,21 +281,6 @@ export class MacroBrowser {
         const sortBtn = this.dom.querySelector('.macro-sort-btn');
         sortBtn?.classList.toggle('active', this.isSorted);
     }
-
-    /**
-     * Handles keyboard shortcuts.
-     * @param {KeyboardEvent} evt
-     */
-    #handleKeyDown(evt) {
-        if (!evt.shiftKey && !evt.altKey && evt.ctrlKey && evt.key.toLowerCase() === 'f') {
-            if (!this.dom.closest('body')) return;
-            if (this.dom.closest('.mes') && !this.dom.closest('.last_mes')) return;
-            evt.preventDefault();
-            evt.stopPropagation();
-            evt.stopImmediatePropagation();
-            this.searchInput?.focus();
-        }
-    }
 }
 
 /**

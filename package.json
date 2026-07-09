@@ -90,7 +90,7 @@
         "url-join": "^5.0.0",
         "vectra": "^0.2.2",
         "wavefile": "^11.0.0",
-        "webpack": "5.105.4",
+        "webpack": "5.107.2",
         "write-file-atomic": "^8.0.0",
         "ws": "^8.18.3",
         "yaml": "^2.8.3",
@@ -125,10 +125,14 @@
         "start:deno": "deno run --allow-run --allow-net --allow-read --allow-write --allow-sys --allow-env server.js",
         "start:bun": "bun server.js",
         "start:no-csrf": "node server.js --disableCsrf",
-        "lint": "eslint \"src/**/*.js\" \"public/**/*.js\" ./*.js",
-        "lint:fix": "eslint \"src/**/*.js\" \"public/**/*.js\" ./*.js --fix",
+        "lint": "eslint \"src/**/*.js\" \"public/**/*.js\" \"scripts/**/*.mjs\" ./*.js",
+        "lint:fix": "eslint \"src/**/*.js\" \"public/**/*.js\" \"scripts/**/*.mjs\" ./*.js --fix",
+        "typecheck": "node scripts/typecheck-gate.mjs",
+        "typecheck:raw": "tsc --noEmit --project jsconfig.json",
+        "typecheck:baseline": "node scripts/typecheck-gate.mjs --write",
         "plugins:update": "node plugins update",
-        "plugins:install": "node plugins install"
+        "plugins:install": "node plugins install",
+        "prepare": "husky"
     },
     "bin": {
         "sillytavern": "./src/server-global.js"
@@ -140,6 +144,7 @@
     "main": "server.js",
     "devDependencies": {
         "@chevrotain/types": "^12.0.0",
+        "@eslint/js": "^10.0.1",
         "@types/archiver": "^8.0.0",
         "@types/bytes": "^3.1.5",
         "@types/command-exists": "^1.2.3",
@@ -156,7 +161,7 @@
         "@types/lodash": "^4.17.24",
         "@types/mime-types": "^3.0.1",
         "@types/multer": "^2.1.0",
-        "@types/node": "^18.19.84",
+        "@types/node": "^26.1.1",
         "@types/node-persist": "^3.1.8",
         "@types/png-chunk-text": "^1.0.3",
         "@types/png-chunks-extract": "^1.0.2",
@@ -166,10 +171,10 @@
         "@types/write-file-atomic": "^4.0.3",
         "@types/yargs": "^17.0.33",
         "@types/yauzl": "^2.10.3",
-        "eslint": "^8.57.1",
-        "eslint-plugin-jest": "^27.9.0",
-        "eslint-plugin-jsdoc": "^48.10.0",
-        "eslint-plugin-playwright": "^2.3.0",
-        "typescript": "^5.9.3"
+        "eslint": "^10.6.0",
+        "eslint-plugin-jsdoc": "^63.0.12",
+        "globals": "^17.7.0",
+        "husky": "^9.1.7",
+        "typescript": "^7.0.2"
     }
 }

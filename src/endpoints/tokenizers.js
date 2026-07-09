@@ -147,7 +147,7 @@ async function getPathToTokenizer(model, fallbackModel) {
             return fallbackModel;
         }
 
-        throw new Error(`Failed to instantiate a tokenizer and fallback is not provided. Reason: ${error.message}`);
+        throw new Error(`Failed to instantiate a tokenizer and fallback is not provided. Reason: ${error.message}`, { cause: error });
     }
 }
 

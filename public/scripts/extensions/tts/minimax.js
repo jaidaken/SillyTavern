@@ -946,7 +946,7 @@ class MiniMaxTtsProvider {
                 console.debug('MiniMax TTS: Audio playback started successfully');
             } catch (playError) {
                 console.error('MiniMax TTS: Play error:', playError);
-                throw new Error(`Audio playback failed: ${playError.message}`);
+                throw new Error(`Audio playback failed: ${playError.message}`, { cause: playError });
             }
 
             this.audioElement.onended = () => {

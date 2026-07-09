@@ -6,20 +6,27 @@
         "strictNullChecks": true,
         "strictFunctionTypes": true,
         "checkJs": true,
+        "noImplicitAny": false,
         "allowUmdGlobalAccess": true,
         "allowSyntheticDefaultImports": true,
         "resolveJsonModule": true,
-        "strictBindCallApply": true
+        "strictBindCallApply": true,
+        "skipLibCheck": true,
+        "maxNodeModuleJsDepth": 0
     },
+    "include": [
+        "src/**/*.js",
+        "*.js"
+    ],
     "exclude": [
-        "**/node_modules/**",
-        "**/dist/**",
-        "**/.git/**",
-        "public/**",
-        "backups/**",
-        "data/**",
-        "cache/**",
-        "src/tokenizers/**",
-        "docker/**"
+        "**/node_modules/**/*",
+        "**/dist/**/*",
+        "**/.git/**/*",
+        "public/**/*",
+        "backups/**/*",
+        "data/**/*",
+        "cache/**/*",
+        "src/tokenizers/**/*",
+        "docker/**/*"
     ]
 }

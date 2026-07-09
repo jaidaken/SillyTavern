@@ -610,7 +610,7 @@ export class ReasoningHandler {
     #updateReasoningTimeUI() {
         const element = this.messageReasoningHeaderDom;
         const duration = this.getDuration();
-        let data = null;
+        let data;
         let title = '';
         if (duration) {
             const seconds = moment.duration(duration).asSeconds();

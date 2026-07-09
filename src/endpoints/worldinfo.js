@@ -101,7 +101,7 @@ router.post('/import', (request, response) => {
 
     const filename = `${path.parse(sanitize(request.file.originalname)).name}.json`;
 
-    let fileContents = null;
+    let fileContents;
 
     if (request.body.convertedData) {
         fileContents = request.body.convertedData;

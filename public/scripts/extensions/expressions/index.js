@@ -1855,7 +1855,7 @@ async function onClickExpressionUpload(event) {
 
         const existingFiles = spriteCache[name]?.find(x => x.label === expression)?.files || [];
 
-        let spriteName = expression;
+        let spriteName;
 
         if (extension_settings.expressions.allowMultiple) {
             const matchesExisting = existingFiles.some(x => x.fileName === file.name);

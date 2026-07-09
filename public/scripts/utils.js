@@ -1170,7 +1170,7 @@ export function splitRecursive(input, length, delimiters = ['\n\n', '\n', ' ', '
 
     // Merge short chunks
     const result = [];
-    let currentChunk = '';
+    let currentChunk;
     for (let i = 0; i < flatParts.length;) {
         currentChunk = flatParts[i];
         let j = i + 1;
@@ -3001,12 +3001,11 @@ export async function importFromExternalUrl(url, { preserveFileName = null } = {
 
     const data = await request.blob();
     const customContentType = request.headers.get('X-Custom-Content-Type');
-    let fileName = request.headers.get('Content-Disposition').split('filename=')[1].replace(/"/g, '');
+    const fileName = request.headers.get('Content-Disposition').split('filename=')[1].replace(/"/g, '');
     const file = new File([data], fileName, { type: data.type });
 
     const extraData = new Map();
     if (preserveFileName) {
-        fileName = preserveFileName;
         extraData.set(file, preserveFileName);
     }
 

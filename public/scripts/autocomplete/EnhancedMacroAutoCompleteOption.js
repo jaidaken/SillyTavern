@@ -1378,16 +1378,16 @@ export function parseMacroContext(macroText, cursorOffset) {
     // Check for variable shorthand prefix (. or $)
     // These trigger variable expression mode instead of regular macro parsing
     /** @type {'.'|'$'|null} */
-    let variablePrefix = null;
+    let variablePrefix;
     let variableName = '';
     /** @type {string|null} */
     let variableOperator = null;
     let variableValue = '';
-    let isVariableShorthand = false;
+    let isVariableShorthand;
     let isTypingVariableName = false;
     let isTypingOperator = false;
     let isTypingValue = false;
-    let variableNameEnd = i;
+    let variableNameEnd;
 
     const remainingAfterFlags = macroText.slice(i);
     if (remainingAfterFlags.startsWith('.') || remainingAfterFlags.startsWith('$')) {

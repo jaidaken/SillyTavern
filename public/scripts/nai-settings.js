@@ -608,7 +608,6 @@ export function getNovelGenerationData(finalPrompt, settings, maxLength, isImper
 
 // Check if the prefix needs to be overridden to use instruct mode
 function selectPrefix(selected_prefix, finalPrompt) {
-    let useInstruct = false;
     const clio = nai_settings.model_novel.includes('clio');
     const kayra = nai_settings.model_novel.includes('kayra');
     const erato = nai_settings.model_novel.includes('erato');
@@ -617,7 +616,7 @@ function selectPrefix(selected_prefix, finalPrompt) {
     if (isNewModel) {
         // NovelAI claims they scan backwards 1000 characters (not tokens!) to look for instruct brackets. That's really short.
         const tail = finalPrompt.slice(-1500);
-        useInstruct = tail.includes('}');
+        const useInstruct = tail.includes('}');
         return useInstruct ? 'special_instruct' : selected_prefix;
     }
 

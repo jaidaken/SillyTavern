@@ -4862,7 +4862,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     // Add user alignment message if last message is not a user message
     const stoppedAtUser = userMessageIndices.includes(lastAddedIndex);
     if (addUserAlignment && !stoppedAtUser) {
-        tokenCount += await getTokenCountAsync(userAlignmentMessage.replace(/\r/gm, ''));
+        await getTokenCountAsync(userAlignmentMessage.replace(/\r/gm, ''));
         chatString = userAlignmentMessage + chatString;
         arrMes.push(userAlignmentMessage);
         injectedIndices.push(arrMes.length - 1);
@@ -5398,7 +5398,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             return data;
         }
 
-        let messageChunk = '';
+        let messageChunk;
 
         // if an error was returned in data (textgenwebui), show it and throw it
         if (data.error) {
@@ -7992,7 +7992,7 @@ export async function saveSettings(loopCounter = 0) {
     if (TempResponseLength.isCustomized()) {
         if (loopCounter < MAX_RETRIES) {
             console.warn('Response length is currently being overridden, scheduling another save');
-            saveSettingsDebounced(++loopCounter);
+            saveSettingsDebounced(loopCounter + 1);
             return;
         }
         console.error('Response length is currently being overridden, but the save loop has reached the maximum number of retries');
@@ -11678,7 +11678,6 @@ jQuery(async function () {
     ////////////////// OPTIMIZED RANGE SLIDER LISTENERS////////////////
 
     var sliderLocked = true;
-    var sliderTimer;
 
     $('input[type=\'range\']').on('touchstart', function () {
         // Unlock the slider after 300ms
@@ -11689,7 +11688,6 @@ jQuery(async function () {
     });
 
     $('input[type=\'range\']').on('touchend', function () {
-        clearTimeout(sliderTimer);
         $(this).css('background-color', '');
         sliderLocked = true;
     });

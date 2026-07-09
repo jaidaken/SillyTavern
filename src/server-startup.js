@@ -405,7 +405,7 @@ export class ServerStartup {
 
         if (this.cliArgs.enableIPv6 === 'auto' || this.cliArgs.enableIPv4 === 'auto') {
             const ipQuery = await getHasIP();
-            let hasIPv6 = false, hasIPv4 = false;
+            let hasIPv6, hasIPv4;
 
             hasIPv6 = this.cliArgs.listen ? ipQuery.hasIPv6Any : ipQuery.hasIPv6Local;
             if (this.cliArgs.enableIPv6 === 'auto') {

@@ -1325,7 +1325,7 @@ export function setWindowTitle(title) {
 /**
  * Parses a JSON string and applies a mutation function to the parsed object.
  * @param {string} jsonString JSON string to parse
- * @param {function(any): void} mutation Mutation function to apply to the parsed JSON object
+ * @param {(data: any) => void} mutation Mutation function to apply to the parsed JSON object
  * @returns {string} Mutated JSON string
  */
 export function mutateJsonString(jsonString, mutation) {

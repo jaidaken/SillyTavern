@@ -317,9 +317,9 @@ export class SlashCommandClosure {
                 console.log('encountered SlashCommandBreakPoint');
                 if (this.debugController) {
                     // resolve args
-                    step = await stepper.next();
+                    await stepper.next();
                     // "execute" breakpoint
-                    step = await stepper.next();
+                    await stepper.next();
                     // get next executor
                     step = await stepper.next();
                     // breakpoint has to yield before arguments are resolved if one of the
@@ -404,7 +404,6 @@ export class SlashCommandClosure {
                 // nothing to do for breakpoints, just raise counter and yield for "before exec"
                 done++;
                 yield executor;
-                isFirst = false;
             } else if (executor instanceof SlashCommandBreak) {
                 // /break need to resolve the unnamed arg and put it into pipe, then yield
                 // for "before exec"
@@ -412,7 +411,6 @@ export class SlashCommandClosure {
                 done += this.executorList.length - this.executorList.indexOf(executor);
                 this.scope.pipe = value ?? this.scope.pipe;
                 yield executor;
-                isFirst = false;
             } else {
                 // regular commands do all the argument resolving logic...
                 await this.substituteNamedArguments(executor, args);
@@ -432,7 +430,7 @@ export class SlashCommandClosure {
                 executor.onProgress = (subDone, subTotal) => this.onProgress?.(done + subDone, this.commandCount);
                 const isStepping = this.debugController?.testStepping(this);
                 if (this.debugController) {
-                    this.debugController.isStepping = false || this.debugController.isSteppingInto;
+                    this.debugController.isStepping = this.debugController.isSteppingInto;
                 }
                 try {
                     this.scope.pipe = await executor.command.callback(args, value ?? '');
