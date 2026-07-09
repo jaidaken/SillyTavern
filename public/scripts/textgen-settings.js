@@ -687,6 +687,13 @@ async function getStatusTextgen() {
             signal: abortStatusCheck.signal,
         });
 
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+            log.settings.debug(`Status check received non-JSON response (${response.status})`);
+            setOnlineStatus('no_connection');
+            return resultCheckStatus();
+        }
+
         const data = await response.json();
 
         if (textgenerationwebui_settings.type === textgen_types.MANCER) {

@@ -110,6 +110,71 @@ import { ConnectionManagerRequestService } from './extensions/shared.js';
 import { updateReasoningUI, parseReasoningFromString, getReasoningTemplateByName } from './reasoning.js';
 import { IGNORE_SYMBOL } from './constants.js';
 import { macros } from './macros/macro-system.js';
+import { log } from './log.js';
+
+// Mirrors MacrosParser's internal bridging so extensions keep the legacy (name, fn, description) signature,
+// without calling the deprecated MacrosParser.registerMacro.
+function registerContextMacro(key, value, description = '') {
+    if (typeof key !== 'string') {
+        throw new Error('Macro key must be a string');
+    }
+
+    key = key.trim();
+
+    if (!key) {
+        throw new Error('Macro key must not be empty or whitespace only');
+    }
+
+    if (key.startsWith('{{') || key.endsWith('}}')) {
+        throw new Error('Macro key must not include the surrounding braces');
+    }
+
+    if (typeof value !== 'string' && typeof value !== 'function') {
+        log.prompt.warn(`Macro value for "${key}" will be converted to a string`);
+        value = MacrosParser.sanitizeMacroValue(value);
+    }
+
+    if (macros.registry.hasMacro(key)) {
+        log.prompt.warn(`Macro ${key} is already registered`);
+    }
+
+    const legacyValue = value;
+
+    macros.registry.registerMacro(key, {
+        // Legacy-shaped macros never took arguments; keep the contract that only {{key}} without arguments is valid.
+        category: 'legacy',
+        description: typeof description === 'string' ? description : 'Automatically registered macro from extension context',
+        handler: () => {
+            let stored = legacyValue;
+
+            if (typeof stored === 'function') {
+                try {
+                    const nonce = uuidv4();
+                    stored = stored(nonce);
+                } catch (e) {
+                    log.prompt.warn(`Macro "${key}" function threw an error.`, e);
+                    stored = '';
+                }
+            }
+
+            return stored;
+        },
+    });
+}
+
+function unregisterContextMacro(key) {
+    if (typeof key !== 'string') {
+        throw new Error('Macro key must be a string');
+    }
+
+    key = key.trim();
+
+    if (!key) {
+        throw new Error('Macro key must not be empty or whitespace only');
+    }
+
+    macros.registry.unregisterMacro(key);
+}
 
 export function getContext() {
     return {
@@ -176,9 +241,9 @@ export function getContext() {
         /** @deprecated Handlebars for extensions are no longer supported. */
         registerHelper: () => { },
         /** @deprecated Use `macros.register(name, { handler, description })` from scripts/macros/macro-system.js instead. */
-        registerMacro: MacrosParser.registerMacro.bind(MacrosParser),
+        registerMacro: registerContextMacro,
         /** @deprecated Use `macros.registry.unregisterMacro(name)` from scripts/macros/macro-system.js instead. */
-        unregisterMacro: MacrosParser.unregisterMacro.bind(MacrosParser),
+        unregisterMacro: unregisterContextMacro,
         registerFunctionTool: ToolManager.registerFunctionTool.bind(ToolManager),
         unregisterFunctionTool: ToolManager.unregisterFunctionTool.bind(ToolManager),
         isToolCallingSupported: ToolManager.isToolCallingSupported.bind(ToolManager),

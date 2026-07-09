@@ -1,3 +1,5 @@
+import { log } from '../scripts/log.js';
+
 /* Polyfill indexOf. */
 var indexOf;
 
@@ -43,7 +45,7 @@ var EventEmitter = function (autoFireAfterEmit = []) {
 EventEmitter.prototype.on = function (event, listener) {
     // Unknown event used by external libraries?
     if (event === undefined) {
-        console.trace('EventEmitter: Cannot listen to undefined event');
+        log.events.warn('EventEmitter: Cannot listen to undefined event');
         return;
     }
 
@@ -129,11 +131,7 @@ EventEmitter.prototype.removeListener = function (event, listener) {
  */
 EventEmitter.prototype.emit = async function (event) {
     let args = [].slice.call(arguments, 1);
-    if (localStorage.getItem('eventTracing') === 'true') {
-        console.trace('Event emitted: ' + event, args);
-    } else {
-        console.debug('Event emitted: ' + event);
-    }
+    log.events.trace('Event emitted: ' + event, args);
 
     let i, listeners, length;
 
@@ -146,8 +144,7 @@ EventEmitter.prototype.emit = async function (event) {
                 await listeners[i].apply(this, args);
             }
             catch (err) {
-                console.error(err);
-                console.trace('Error in event listener');
+                log.events.error('Error in event listener', err);
             }
         }
     }
@@ -159,11 +156,7 @@ EventEmitter.prototype.emit = async function (event) {
 
 EventEmitter.prototype.emitAndWait = async function (event) {
     let args = [].slice.call(arguments, 1);
-    if (localStorage.getItem('eventTracing') === 'true') {
-        console.trace('Event emitted: ' + event, args);
-    } else {
-        console.debug('Event emitted: ' + event);
-    }
+    log.events.trace('Event emitted: ' + event, args);
 
     let i, listeners, length;
 
@@ -176,8 +169,7 @@ EventEmitter.prototype.emitAndWait = async function (event) {
                 await listeners[i].apply(this, args);
             }
             catch (err) {
-                console.error(err);
-                console.trace('Error in event listener');
+                log.events.error('Error in event listener', err);
             }
         }
     }

@@ -111,14 +111,14 @@ function applyDynamicFocusStyles(styleSheet, { fromExtension = false } = {}) {
         try {
             processRules(sheet.cssRules, wrappers);
         } catch (e) {
-            log.ui.warn('Skipping cross-origin or inaccessible imported stylesheet:', e);
+            log.ui.debug('Skipping cross-origin or inaccessible imported stylesheet:', e);
         }
     }
 
     try {
         processRules(styleSheet.cssRules, []);
     } catch (e) {
-        log.ui.warn('Skipping cross-origin or inaccessible stylesheet:', e);
+        log.ui.debug('Skipping cross-origin or inaccessible stylesheet:', e);
         return;
     }
 
