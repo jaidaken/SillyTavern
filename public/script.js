@@ -274,7 +274,6 @@ import { clearItemizedPrompts, deleteItemizedPromptForMessage, deleteItemizedPro
 import { getSystemMessageByType, initSystemMessages, SAFETY_CHAT, sendSystemMessage, system_message_types, system_messages } from './scripts/system-messages.js';
 import { event_types, eventSource } from './scripts/events.js';
 import { initAccessibility } from './scripts/a11y.js';
-import { initAccessibilityLabels } from './scripts/accessibility-labels.js';
 import { applyStreamFadeIn } from './scripts/util/stream-fadein.js';
 import { initDomHandlers } from './scripts/dom-handlers.js';
 import { SimpleMutex } from './scripts/util/SimpleMutex.js';
@@ -770,7 +769,6 @@ async function firstLoadInit() {
     initDataMaid();
     initItemizedPrompts();
     initAccessibility();
-    initAccessibilityLabels();
     initSwipePicker();
     addDebugFunctions();
     doDailyExtensionUpdatesCheck();

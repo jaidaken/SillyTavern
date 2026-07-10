@@ -2236,6 +2236,8 @@ export function initChatUtilities() {
         wrapper.classList.add('height100p', 'wide100p', 'flex-container');
         wrapper.classList.add('flexFlowColumn', 'justifyCenter', 'alignitemscenter');
         const textarea = document.createElement('textarea');
+        textarea.name = 'expanded_editor';
+        textarea.setAttribute('aria-label', 'Expanded editor');
         textarea.dataset.for = broId;
         if (bro[0].dataset.macros !== undefined) {
             textarea.dataset.macros = bro[0].dataset.macros;

@@ -929,6 +929,8 @@ function generateExtensionElement(name, manifest, isActive, isDisabled, isExtern
     toggleDiv.classList.add('extension_toggle');
     const toggle = document.createElement('input');
     toggle.type = 'checkbox';
+    toggle.name = 'extension_toggle';
+    toggle.setAttribute('aria-label', `Toggle ${name}`);
     toggle.dataset.name = name;
     if (isActive || isDisabled) {
         toggle.title = t`Click to toggle`;
@@ -1468,6 +1470,8 @@ async function onBranchClick() {
 
     const branches = await getExtensionBranches(extensionName, isGlobal);
     const selectElement = document.createElement('select');
+    selectElement.name = 'extension_branch';
+    selectElement.setAttribute('aria-label', 'Switch branch');
     selectElement.classList.add('text_pole', 'wide100p');
     selectElement.addEventListener('change', function () {
         newBranch = this.value;

@@ -464,16 +464,16 @@
                     <small>
                         <span data-i18n="Sampling steps">Sampling steps</span>
                     </small>
-                    <input class="neo-range-slider" type="range" id="sd_steps" name="sd_steps" min="{{steps_min}}" max="{{steps_max}}" step="{{steps_step}}" value="{{steps}}" >
-                    <input class="neo-range-input" type="number" id="sd_steps_value" data-for="sd_steps" min="{{steps_min}}" max="{{steps_max}}" step="{{steps_step}}" value="{{steps}}" >
+                    <input aria-label="Sampling steps" class="neo-range-slider" type="range" id="sd_steps" name="sd_steps" min="{{steps_min}}" max="{{steps_max}}" step="{{steps_step}}" value="{{steps}}" >
+                    <input aria-label="Sampling steps" class="neo-range-input" type="number" id="sd_steps_value" data-for="sd_steps" min="{{steps_min}}" max="{{steps_max}}" step="{{steps_step}}" value="{{steps}}" >
                 </div>
 
                 <div class="alignitemscenter flex-container flexFlowColumn flexGrow flexShrink gap0 flexBasis48p">
                     <small>
                         <span data-i18n="CFG Scale">CFG Scale</span>
                     </small>
-                    <input class="neo-range-slider" type="range" id="sd_scale" name="sd_scale" min="{{scale_min}}" max="{{scale_max}}" step="{{scale_step}}" value="{{scale}}" >
-                    <input class="neo-range-input" type="number" id="sd_scale_value" data-for="sd_scale" min="{{scale_min}}" max="{{scale_max}}" step="{{scale_step}}" value="{{scale}}" >
+                    <input aria-label="CFG Scale" class="neo-range-slider" type="range" id="sd_scale" name="sd_scale" min="{{scale_min}}" max="{{scale_max}}" step="{{scale_step}}" value="{{scale}}" >
+                    <input aria-label="CFG Scale" class="neo-range-input" type="number" id="sd_scale_value" data-for="sd_scale" min="{{scale_min}}" max="{{scale_max}}" step="{{scale_step}}" value="{{scale}}" >
                 </div>
             </div>
 
@@ -482,16 +482,16 @@
                     <small>
                         <span data-i18n="Width">Width</span>
                     </small>
-                    <input class="neo-range-slider" type="range" id="sd_width" name="sd_width" max="{{dimension_max}}" min="{{dimension_min}}" step="{{dimension_step}}" value="{{width}}" >
-                    <input class="neo-range-input" type="number" id="sd_width_value" data-for="sd_width" max="{{dimension_max}}" min="{{dimension_min}}" step="{{dimension_step}}" value="{{width}}" >
+                    <input aria-label="Width" class="neo-range-slider" type="range" id="sd_width" name="sd_width" max="{{dimension_max}}" min="{{dimension_min}}" step="{{dimension_step}}" value="{{width}}" >
+                    <input aria-label="Width" class="neo-range-input" type="number" id="sd_width_value" data-for="sd_width" max="{{dimension_max}}" min="{{dimension_min}}" step="{{dimension_step}}" value="{{width}}" >
                 </div>
 
                 <div class="alignitemscenter flex-container flexFlowColumn flexGrow flexShrink gap0 flexBasis48p">
                     <small>
                         <span data-i18n="Height">Height</span>
                     </small>
-                    <input class="neo-range-slider" type="range" id="sd_height" name="sd_height" max="{{dimension_max}}" min="{{dimension_min}}" step="{{dimension_step}}" value="{{height}}" >
-                    <input class="neo-range-input" type="number" id="sd_height_value" data-for="sd_height" max="{{dimension_max}}" min="{{dimension_min}}" step="{{dimension_step}}" value="{{height}}" >
+                    <input aria-label="Height" class="neo-range-slider" type="range" id="sd_height" name="sd_height" max="{{dimension_max}}" min="{{dimension_min}}" step="{{dimension_step}}" value="{{height}}" >
+                    <input aria-label="Height" class="neo-range-input" type="number" id="sd_height_value" data-for="sd_height" max="{{dimension_max}}" min="{{dimension_min}}" step="{{dimension_step}}" value="{{height}}" >
                 </div>
 
                 <div id="sd_swap_dimensions" class="right_menu_button" title="Swap width and height" data-i18n="[title]Swap width and height">
@@ -504,32 +504,32 @@
                     <small>
                         <span data-i18n="Upscale by">Upscale by</span>
                     </small>
-                    <input class="neo-range-slider" type="range" id="sd_hr_scale" name="sd_hr_scale" min="{{hr_scale_min}}" max="{{hr_scale_max}}" step="{{hr_scale_step}}" value="{{hr_scale}}" >
-                    <input class="neo-range-input" type="number" id="sd_hr_scale_value" data-for="sd_hr_scale" min="{{hr_scale_min}}" max="{{hr_scale_max}}" step="{{hr_scale_step}}" value="{{hr_scale}}" >
+                    <input aria-label="Upscale by" class="neo-range-slider" type="range" id="sd_hr_scale" name="sd_hr_scale" min="{{hr_scale_min}}" max="{{hr_scale_max}}" step="{{hr_scale_step}}" value="{{hr_scale}}" >
+                    <input aria-label="Upscale by" class="neo-range-input" type="number" id="sd_hr_scale_value" data-for="sd_hr_scale" min="{{hr_scale_min}}" max="{{hr_scale_max}}" step="{{hr_scale_step}}" value="{{hr_scale}}" >
                 </div>
 
                 <div class="alignitemscenter flex-container flexFlowColumn flexGrow flexShrink gap0 flexBasis48p" data-sd-source="auto,vlad,comfy">
                     <small>
                         <span data-i18n="Denoising strength">Denoising strength</span>
                     </small>
-                    <input class="neo-range-slider" type="range" id="sd_denoising_strength" name="sd_denoising_strength" min="{{denoising_strength_min}}" max="{{denoising_strength_max}}" step="{{denoising_strength_step}}" value="{{denoising_strength}}" >
-                    <input class="neo-range-input" type="number" id="sd_denoising_strength_value" data-for="sd_denoising_strength" min="{{denoising_strength_min}}" max="{{denoising_strength_max}}" step="{{denoising_strength_step}}" value="{{denoising_strength}}" >
+                    <input aria-label="Denoising strength" class="neo-range-slider" type="range" id="sd_denoising_strength" name="sd_denoising_strength" min="{{denoising_strength_min}}" max="{{denoising_strength_max}}" step="{{denoising_strength_step}}" value="{{denoising_strength}}" >
+                    <input aria-label="Denoising strength" class="neo-range-input" type="number" id="sd_denoising_strength_value" data-for="sd_denoising_strength" min="{{denoising_strength_min}}" max="{{denoising_strength_max}}" step="{{denoising_strength_step}}" value="{{denoising_strength}}" >
                 </div>
 
                 <div class="alignitemscenter flex-container flexFlowColumn flexGrow flexShrink gap0 flexBasis48p" data-sd-source="auto,vlad">
                     <small>
                         <span data-i18n="Hires steps (2nd pass)">Hires steps (2nd pass)</span>
                     </small>
-                    <input class="neo-range-slider" type="range" id="sd_hr_second_pass_steps" name="sd_hr_second_pass_steps" max="{{hr_second_pass_steps_max}}" step="{{hr_second_pass_steps_step}}" value="{{hr_second_pass_steps}}"  >
-                    <input class="neo-range-input" type="number" id="sd_hr_second_pass_steps_value" data-for="sd_hr_second_pass_steps" max="{{hr_second_pass_steps_max}}" step="{{hr_second_pass_steps_step}}" value="{{hr_second_pass_steps}}" >
+                    <input aria-label="Hires steps (2nd pass)" class="neo-range-slider" type="range" id="sd_hr_second_pass_steps" name="sd_hr_second_pass_steps" max="{{hr_second_pass_steps_max}}" step="{{hr_second_pass_steps_step}}" value="{{hr_second_pass_steps}}"  >
+                    <input aria-label="Hires steps (2nd pass)" class="neo-range-input" type="number" id="sd_hr_second_pass_steps_value" data-for="sd_hr_second_pass_steps" max="{{hr_second_pass_steps_max}}" step="{{hr_second_pass_steps_step}}" value="{{hr_second_pass_steps}}" >
                 </div>
 
                 <div class="alignitemscenter flex-container flexFlowColumn flexGrow flexShrink gap0 flexBasis48p" data-sd-source="auto,vlad,comfy,horde,drawthings,extras,sdcpp">
                     <small>
                         <span data-i18n="CLIP Skip">CLIP Skip</span>
                     </small>
-                    <input class="neo-range-slider" type="range" id="sd_clip_skip" name="sd_clip_skip" min="{{clip_skip_min}}" max="{{clip_skip_max}}" step="{{clip_skip_step}}" value="{{clip_skip}}" >
-                    <input class="neo-range-input" type="number" id="sd_clip_skip_value" data-for="sd_clip_skip" min="{{clip_skip_min}}" max="{{clip_skip_max}}" step="{{clip_skip_step}}" value="{{clip_skip}}" >
+                    <input aria-label="CLIP Skip" class="neo-range-slider" type="range" id="sd_clip_skip" name="sd_clip_skip" min="{{clip_skip_min}}" max="{{clip_skip_max}}" step="{{clip_skip_step}}" value="{{clip_skip}}" >
+                    <input aria-label="CLIP Skip" class="neo-range-input" type="number" id="sd_clip_skip_value" data-for="sd_clip_skip" min="{{clip_skip_min}}" max="{{clip_skip_max}}" step="{{clip_skip_step}}" value="{{clip_skip}}" >
                 </div>
             </div>
 
@@ -591,7 +591,7 @@
                 <span data-i18n="Style">Style</span>
             </h4>
             <div class="flex-container">
-                <select id="sd_style" class="flex1 text_pole"></select>
+                <select aria-label="Style" id="sd_style" class="flex1 text_pole"></select>
                 <div id="sd_save_style" data-i18n="[title]Save style" title="Save style" class="menu_button">
                     <i class="fa-solid fa-save"></i>
                 </div>

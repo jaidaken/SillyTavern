@@ -15,7 +15,7 @@
 						<input type="checkbox" id="qr--modal-showLabel">
 						Show
 					</label>
-					<input type="text" class="text_pole" id="qr--modal-label">
+					<input aria-label="Qr Modal Label" type="text" class="text_pole" id="qr--modal-label">
 					<div class="menu_button fa-fw fa-solid fa-chevron-down" id="qr--modal-switcher" title="Switch to another QR"></div>
 				</div>
 			</div>
@@ -68,7 +68,7 @@
 			<template id="qr--ctxItem">
 				<div class="qr--ctxItem" data-order="0">
 					<div class="drag-handle ui-sortable-handle">☰</div>
-					<select class="qr--set"></select>
+					<select name="qr--set" aria-label="Quick Reply Set" class="qr--set"></select>
 					<label class="qr--isChainedLabel checkbox_label" title="When enabled, the current Quick Reply will be sent together with (before) the clicked QR from the context menu.">
 						<span data-i18n="Chaining:">Chaining:</span>
 						<input type="checkbox" class="qr--isChained">
@@ -122,7 +122,7 @@
    			</label>
             <div class="flex-container alignItemsBaseline flexFlowColumn flexNoGap" title="Activate this quick reply when a World Info entry with the same Automation ID is triggered.">
                 <small data-i18n="Automation ID:">Automation ID</small>
-                <input type="text" id="qr--automationId" class="text_pole flex1" placeholder="( None )">
+                <input aria-label="Automation ID" type="text" id="qr--automationId" class="text_pole flex1" placeholder="( None )">
             </div>
 		</div>
 
@@ -155,7 +155,7 @@
 			<div title="Minimize" id="qr--modal-minimize" class="qr--modal-debugButton menu_button fa-solid fa-minimize"></div>
 			<div title="Maximize" id="qr--modal-maximize" class="qr--modal-debugButton menu_button fa-solid fa-maximize"></div>
 		</div>
-		<textarea rows="1" id="qr--modal-send_textarea" placeholder="Chat input for use with {{input}}" title="Chat input for use with {{input}}"></textarea>
+		<textarea aria-label="Execute" rows="1" id="qr--modal-send_textarea" placeholder="Chat input for use with {{input}}" title="Chat input for use with {{input}}"></textarea>
 		<div id="qr--modal-debugState"></div>
 	</div>
 </div>

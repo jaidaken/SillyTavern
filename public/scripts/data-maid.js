@@ -375,6 +375,8 @@ class DataMaidDialog {
         const response = await fetch(url);
         const text = await response.text();
         const element = document.createElement('textarea');
+        element.name = 'dataMaidTextView';
+        element.setAttribute('aria-label', 'File contents');
         element.classList.add('dataMaidTextView');
         element.readOnly = true;
         element.textContent = text;

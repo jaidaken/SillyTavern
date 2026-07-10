@@ -246,7 +246,7 @@
         var lastClassName = attributes.lastClassName || '';
 
         var html = '';
-        var sizeSelect = `<select class="J-paginationjs-size-select">`;
+        var sizeSelect = `<select class="J-paginationjs-size-select" name="paginationjs-size" aria-label="Items per page">`;
         var goInput = '<input type="text" class="J-paginationjs-go-pagenumber">';
         var goButton = `<input type="button" class="J-paginationjs-go-button" value="${goButtonText}">`;
         var formattedString;

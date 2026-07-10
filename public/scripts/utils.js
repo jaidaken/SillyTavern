@@ -67,6 +67,8 @@ export function canUseNegativeLookbehind() {
  */
 export const renderPaginationDropdown = function (pageSize, sizeChangerOptions) {
     const sizeSelect = document.createElement('select');
+    sizeSelect.name = 'paginationjs-size';
+    sizeSelect.setAttribute('aria-label', 'Items per page');
     sizeSelect.classList.add('J-paginationjs-size-select');
 
     if (sizeChangerOptions.indexOf(pageSize) === -1) {
@@ -551,6 +553,8 @@ export function copyText(text) {
 
     const parent = document.querySelector('dialog[open]:last-of-type') ?? document.body;
     const textArea = document.createElement('textarea');
+    textArea.name = 'clipboard_shim';
+    textArea.setAttribute('aria-label', 'Clipboard');
     textArea.value = text;
     parent.appendChild(textArea);
     textArea.focus();
@@ -2606,6 +2610,8 @@ export async function showFontAwesomePicker(customList = null) {
         const search = document.createElement('div'); {
             search.classList.add('faQuery-container');
             const qry = document.createElement('input'); {
+                qry.name = 'faQuery';
+                qry.setAttribute('aria-label', 'Filter icons');
                 qry.classList.add('text_pole');
                 qry.classList.add('faQuery');
                 qry.type = 'search';

@@ -393,6 +393,8 @@ async function makeMovable(url) {
     controlsContainer.classList.add('flex-container', 'alignItemsCenter');
 
     const sortSelect = document.createElement('select');
+    sortSelect.name = 'gallery_sort';
+    sortSelect.setAttribute('aria-label', 'Sort order');
     sortSelect.classList.add('gallery-sort-select');
 
     for (const sort of Object.values(SORT)) {
@@ -421,6 +423,8 @@ async function makeMovable(url) {
     // Create a hidden file input
     const fileInput = document.createElement('input');
     fileInput.type = 'file';
+    fileInput.name = 'gallery_upload';
+    fileInput.setAttribute('aria-label', 'Upload media');
     fileInput.accept = 'image/*,video/*';
     fileInput.multiple = true;
     fileInput.style.display = 'none';
@@ -489,6 +493,8 @@ async function makeMovable(url) {
 
     const galleryFolderInput = document.createElement('input');
     galleryFolderInput.type = 'text';
+    galleryFolderInput.name = 'gallery_folder';
+    galleryFolderInput.setAttribute('aria-label', 'Folder Name');
     galleryFolderInput.placeholder = t`Folder Name`;
     galleryFolderInput.title = t`Enter a folder name to change the gallery folder`;
     galleryFolderInput.value = url;

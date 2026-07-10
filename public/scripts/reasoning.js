@@ -1233,6 +1233,8 @@ function setReasoningEventHandlers() {
         const chatElement = document.getElementById('chat');
         const textarea = document.createElement('textarea');
         const reasoningBlock = messageBlock.find('.mes_reasoning');
+        textarea.name = 'reasoning_edit';
+        textarea.setAttribute('aria-label', 'Edit reasoning');
         textarea.classList.add('reasoning_edit_textarea');
         textarea.value = reasoning;
         $(textarea).insertBefore(reasoningBlock);

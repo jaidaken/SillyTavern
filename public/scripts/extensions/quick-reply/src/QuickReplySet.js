@@ -287,6 +287,8 @@ export class QuickReplySet {
                     dom.append(subTitle);
                 }
                 sel = document.createElement('select'); {
+                    sel.name = 'qr--transferSelect';
+                    sel.setAttribute('aria-label', 'Target Quick Reply Set');
                     sel.classList.add('qr--transferSelect');
                     sel.setAttribute('autofocus', '1');
                     const noOpt = document.createElement('option'); {

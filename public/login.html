@@ -53,11 +53,11 @@
                         <div id="userListBlock" class="wide100p">
                             <div id="userList" class="flex-container justifySpaceEvenly"></div>
                             <div id="handleEntryBlock" style="display:none;" class="flex-container flexFlowColumn alignItemsCenter">
-                                <input id="userHandle" class="text_pole" type="text" placeholder="User handle" autocomplete="username">
+                                <input aria-label="User Handle" id="userHandle" class="text_pole" type="text" placeholder="User handle" autocomplete="username">
                             </div>
                             <div id="passwordEntryBlock" style="display:none;"
                                 class="flex-container flexFlowColumn alignItemsCenter">
-                                <input id="userPassword" class="text_pole" type="password" placeholder="Password" autocomplete="current-password">
+                                <input aria-label="User Password" id="userPassword" class="text_pole" type="password" placeholder="Password" autocomplete="current-password">
                                 <a id="recoverPassword" href="#" onclick="return false;">Forgot password?</a>
                                 <div class="flex-container">
                                     <div id="loginButton" class="menu_button">Login</div>
@@ -67,8 +67,8 @@
                                 <div id="recoverMessage">
                                     Recovery code has been posted to the server console.
                                 </div>
-                                <input id="recoveryCode" class="text_pole" type="text" placeholder="Recovery code">
-                                <input id="newPassword" class="text_pole" type="password" placeholder="New password" autocomplete="new-password">
+                                <input aria-label="Recovery Code" id="recoveryCode" class="text_pole" type="text" placeholder="Recovery code">
+                                <input aria-label="New Password" id="newPassword" class="text_pole" type="password" placeholder="New password" autocomplete="new-password">
                                 <div class="flex-container flexGap10">
                                     <div id="sendRecovery" class="menu_button">Send</div>
                                     <div id="cancelRecovery" class="menu_button">Cancel</div>

@@ -55,6 +55,8 @@ class BackupsBrowser {
                 }
             });
             const textArea = document.createElement('textarea');
+            textArea.name = 'backup_contents';
+            textArea.setAttribute('aria-label', 'Backup contents');
             textArea.classList.add('text_pole', 'monospace', 'textarea_compact', 'margin0', 'height100p');
             textArea.readOnly = true;
             textArea.value = parsedLines.map(l => `${l.name} [${timestampToMoment(l.send_date).format('lll')}]\n${l.mes}`).join('\n\n\n');

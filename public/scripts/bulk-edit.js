@@ -84,7 +84,7 @@ function enableBulkSelect() {
         if ($(el).find('.bulk_select_checkbox').length > 0) {
             return;
         }
-        const checkbox = $('<input type=\'checkbox\' class=\'bulk_select_checkbox\'>');
+        const checkbox = $('<input type=\'checkbox\' name=\'bulk_select\' aria-label=\'Select character\' class=\'bulk_select_checkbox\'>');
         checkbox.on('change', () => {
             // Do something when the checkbox is changed
         });
