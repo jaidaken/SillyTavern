@@ -1,3 +1,5 @@
+import './jimp-fetch-shim.js';
+
 import { createJimp } from '@jimp/core';
 
 // Optimized image formats

@@ -609,7 +609,7 @@ function createSentencepieceDecodingHandler(tokenizer) {
             if (!instance) throw new Error('Failed to load the Sentencepiece tokenizer');
             const ops = ids.map(id => instance.decodeIds([id]));
             const chunks = await Promise.all(ops);
-            const text = chunks.join('');
+            const text = instance.decodeIds(ids);
             return response.send({ text, chunks });
         } catch (error) {
             log.tok.error(error);

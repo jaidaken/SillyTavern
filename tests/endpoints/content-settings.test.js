@@ -78,11 +78,9 @@ describe('SillyTavern content, files and settings endpoints', () => {
             expect(response.status).toBe(400);
         }, CASE_TIMEOUT_MS);
 
-        test('files_sanitize_filename_with_a_missing_field_coerces_to_the_literal_string_undefined', async () => {
-            // String(request.body.fileName) makes an absent field the truthy string "undefined".
+        test('files_sanitize_filename_with_a_missing_field_is_rejected', async () => {
             const response = await client.postJson('/api/files/sanitize-filename', {});
-            expect(response.status).toBe(200);
-            expect((await response.json()).fileName).toBe('undefined');
+            expect(response.status).toBe(400);
         }, CASE_TIMEOUT_MS);
 
         test('files_upload_writes_the_file_and_returns_its_client_relative_path', async () => {

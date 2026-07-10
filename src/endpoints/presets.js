@@ -59,6 +59,10 @@ router.post('/save', function (request, response) {
 });
 
 router.post('/delete', function (request, response) {
+    if (!request.body.name) {
+        return response.sendStatus(400);
+    }
+
     const name = sanitize(request.body.name);
     if (!name) {
         return response.sendStatus(400);

@@ -13,6 +13,10 @@ export const router = express.Router();
 
 router.post('/sanitize-filename', async (request, response) => {
     try {
+        if (!request.body.fileName) {
+            return response.status(400).send('No fileName specified');
+        }
+
         const fileName = String(request.body.fileName);
         if (!fileName) {
             return response.status(400).send('No fileName specified');

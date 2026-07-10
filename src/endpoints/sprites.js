@@ -151,6 +151,10 @@ router.get('/get', function (request, response) {
 });
 
 router.post('/delete', async (request, response) => {
+    if (!request.body.name) {
+        return response.sendStatus(400);
+    }
+
     const label = request.body.label;
     const name = String(request.body.name);
     const isSubfolder = name.includes('/');

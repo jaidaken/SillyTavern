@@ -458,6 +458,11 @@ describe('SillyTavern chat and character data endpoints', () => {
             expect(response.status).toBe(400);
         }, CASE_TIMEOUT_MS);
 
+        test('preset_delete_without_a_name_is_rejected', async () => {
+            const response = await client.postJson('/api/presets/delete', { apiId: 'openai' });
+            expect(response.status).toBe(400);
+        }, CASE_TIMEOUT_MS);
+
         test('preset_restore_reports_a_non_default_preset_as_not_default', async () => {
             const response = await client.postJson('/api/presets/restore', { apiId: 'openai', name: presetName });
             expect(response.status).toBe(200);

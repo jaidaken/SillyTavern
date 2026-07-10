@@ -6,6 +6,7 @@ import { ZipArchive } from 'archiver';
 
 import { SillyTavernServer, DEFAULT_HANDLE } from '../util/st-server.js';
 import { SillyTavernClient } from '../util/st-client.js';
+import { Jimp } from '../../src/jimp.js';
 
 const BOOT_TIMEOUT_MS = 180000;
 const CASE_TIMEOUT_MS = 30000;
@@ -18,6 +19,11 @@ function tinyPngBuffer() {
 
 function tinyPngBlob() {
     return new Blob([tinyPngBuffer()], { type: 'image/png' });
+}
+
+async function decodablePngBuffer(size = 1) {
+    const image = new Jimp({ width: size, height: size, color: 0xff0000ff });
+    return image.getBuffer('image/png');
 }
 
 async function buildSpriteZipBuffer(entryName) {
@@ -309,9 +315,9 @@ describe('SillyTavern media and image endpoints', () => {
             expect(await response.json()).toEqual([]);
         }, CASE_TIMEOUT_MS);
 
-        test('sprite_delete_without_a_name_coerces_undefined_to_a_string_and_returns_404_not_400', async () => {
+        test('sprite_delete_without_a_name_is_rejected', async () => {
             const response = await client.postJson('/api/sprites/delete', { label: 'joy' });
-            expect(response.status).toBe(404);
+            expect(response.status).toBe(400);
         }, CASE_TIMEOUT_MS);
 
         test('sprite_delete_is_rejected_for_anonymous_client', async () => {
@@ -366,15 +372,25 @@ describe('SillyTavern media and image endpoints', () => {
             fs.writeFileSync(path.join(avatarsDir, 'P8AvatarSeed.png'), tinyPngBuffer());
         });
 
-        test('avatar_upload_of_a_png_fails_because_the_jimp_png_codec_cannot_load_its_wasm_module', async () => {
+        test('avatar_upload_of_a_png_succeeds_and_the_stored_file_decodes_back_to_the_source_dimensions', async () => {
+            const sourceBuffer = await decodablePngBuffer(1);
             const form = new FormData();
             form.append('overwrite_name', 'P8Avatar.png');
-            form.append('avatar', tinyPngBlob(), 'source.png');
+            form.append('avatar', new Blob([sourceBuffer], { type: 'image/png' }), 'source.png');
 
             const response = await client.postForm('/api/avatars/upload', form);
-            expect(response.status).toBe(400);
-            expect(await response.text()).toBe('Is not a valid image');
-            expect(fs.existsSync(path.join(server.userDirectory(), 'User Avatars', 'P8Avatar.png'))).toBe(false);
+            expect(response.status).toBe(200);
+            expect(await response.json()).toEqual({ path: 'P8Avatar.png' });
+
+            const avatarPath = path.join(server.userDirectory(), 'User Avatars', 'P8Avatar.png');
+            expect(fs.existsSync(avatarPath)).toBe(true);
+
+            const decoded = await Jimp.read(avatarPath);
+            expect(decoded.bitmap.width).toBe(1);
+            expect(decoded.bitmap.height).toBe(1);
+
+            const listed = await client.postJson('/api/avatars/get', {});
+            expect(await listed.json()).toContain('P8Avatar.png');
         }, CASE_TIMEOUT_MS);
 
         test('avatar_upload_is_rejected_for_anonymous_client', async () => {
@@ -407,10 +423,9 @@ describe('SillyTavern media and image endpoints', () => {
             expect(response.status).toBe(403);
         }, CASE_TIMEOUT_MS);
 
-        test('avatar_delete_without_the_avatar_field_is_an_unhandled_server_error', async () => {
+        test('avatar_delete_without_the_avatar_field_is_rejected', async () => {
             const response = await client.postJson('/api/avatars/delete', {});
-            expect(response.status).toBe(500);
-            expect(await response.json()).toEqual({ error: true, message: 'Internal Server Error' });
+            expect(response.status).toBe(400);
         }, CASE_TIMEOUT_MS);
 
         test('avatar_delete_with_a_path_separator_is_rejected_as_bad_input', async () => {
@@ -441,20 +456,29 @@ describe('SillyTavern media and image endpoints', () => {
     });
 
     describe('thumbnails', () => {
-        beforeAll(() => {
+        let thumbBgSourceBuffer;
+
+        beforeAll(async () => {
             const backgroundsDir = path.join(server.userDirectory(), 'backgrounds');
             fs.mkdirSync(backgroundsDir, { recursive: true });
-            fs.writeFileSync(path.join(backgroundsDir, 'P8ThumbBg.png'), tinyPngBuffer());
+            thumbBgSourceBuffer = await decodablePngBuffer(1);
+            fs.writeFileSync(path.join(backgroundsDir, 'P8ThumbBg.png'), thumbBgSourceBuffer);
         });
 
-        test('thumbnail_get_for_a_png_background_falls_back_to_the_original_file_because_jimp_thumbnail_generation_fails', async () => {
+        test('thumbnail_get_for_a_png_background_generates_a_resized_thumbnail_via_the_working_jimp_codec', async () => {
             const response = await client.get('/thumbnail?type=bg&file=P8ThumbBg.png');
             expect(response.status).toBe(200);
             expect(response.headers.get('content-type')).toMatch(/^image\//);
 
             const body = Buffer.from(await response.arrayBuffer());
-            expect(body).toEqual(tinyPngBuffer());
-            expect(fs.existsSync(path.join(server.userDirectory(), 'thumbnails', 'bg', 'P8ThumbBg.png'))).toBe(false);
+            expect(body).not.toEqual(thumbBgSourceBuffer);
+
+            const thumbPath = path.join(server.userDirectory(), 'thumbnails', 'bg', 'P8ThumbBg.png');
+            expect(fs.existsSync(thumbPath)).toBe(true);
+
+            const decoded = await Jimp.read(thumbPath);
+            expect(decoded.bitmap.width).toBe(120);
+            expect(decoded.bitmap.height).toBe(120);
         }, CASE_TIMEOUT_MS);
 
         test('thumbnail_get_is_rejected_for_anonymous_client', async () => {

@@ -22,6 +22,7 @@ router.post('/get', function (request, response) {
 
 router.post('/delete', getFileNameValidationFunction('avatar'), function (request, response) {
     if (!request.body) return response.sendStatus(400);
+    if (!request.body.avatar) return response.sendStatus(400);
 
     if (request.body.avatar !== sanitize(request.body.avatar)) {
         log.media.error('Malicious avatar name prevented');

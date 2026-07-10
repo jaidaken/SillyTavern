@@ -266,7 +266,7 @@ describe('SillyTavern LLM provider and tokenizer endpoints', () => {
     });
 
     describe('tokenizers: local sentencepiece and tiktoken models (fully offline, deterministic)', () => {
-        test('llama_decode_concatenates_per_token_chunks_without_word_boundary_spaces', async () => {
+        test('llama_encode_decode_round_trips_the_sentence_with_word_boundary_spaces', async () => {
             const encoded = await client.postJson('/api/tokenizers/llama/encode', { text: SAMPLE_TEXT });
             expect(encoded.status).toBe(200);
             const encodedBody = await encoded.json();
@@ -276,8 +276,7 @@ describe('SillyTavern LLM provider and tokenizer endpoints', () => {
             const decoded = await client.postJson('/api/tokenizers/llama/decode', { ids: encodedBody.ids });
             expect(decoded.status).toBe(200);
             const decodedBody = await decoded.json();
-            // Per-id decode+join (SentencePieceProcessor#decodeIds([id])) drops every inter-word space.
-            expect(decodedBody.text).toBe('Thequickbrownfoxjumpsoverthelazydog.');
+            expect(decodedBody.text).toBe(SAMPLE_TEXT);
             expect(decodedBody.chunks).toEqual(['The', 'quick', 'brown', 'fo', 'x', 'j', 'umps', 'over', 'the', 'lazy', 'dog', '.']);
         }, CASE_TIMEOUT_MS);
 
