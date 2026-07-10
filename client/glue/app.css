@@ -645,3 +645,23 @@ body {
     from { opacity: 0; transform: translateY(calc(var(--move) * -10px)); }
     to { opacity: 1; transform: translateY(0); }
 }
+
+/* Messages fade-and-rise in on insert. ziex patches the streaming body's text node in place and
+   keeps stable element identity, so this fires once per message, not on every rerender. */
+.mes {
+    animation: mes-in 240ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@keyframes mes-in {
+    from { opacity: 0; transform: translateY(calc(var(--move) * 6px)); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Composer buttons also ease transform + filter, so the send press and hover brighten do not snap. */
+.composer-btn {
+    transition: background 120ms ease, color 120ms ease, filter 120ms ease, transform 90ms ease;
+}
+
+.composer-btn:active {
+    transform: translateY(calc(var(--move) * 1px)) scale(calc(1 - var(--move) * 0.03));
+}
