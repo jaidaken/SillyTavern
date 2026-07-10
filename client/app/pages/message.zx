@@ -7,6 +7,7 @@ pub const MessageProps = struct {
 // in the served HTML, so a message arriving at runtime could never hydrate. Each message is
 // its own element and text node inside ChatView's vtree instead.
 pub fn MessageView(allocator: zx.Allocator, props: MessageProps) zx.Component {
+    instrument.bump();
     const body: html.SanitizedHtml = sanitized.renderMessage(allocator, props.msg.body, props.cacheable);
 
     return (
@@ -21,3 +22,4 @@ const zx = @import("zx");
 const store = @import("./store.zig");
 const html = @import("./html.zig");
 const sanitized = @import("./sanitized.zig");
+const instrument = @import("./instrument.zig");

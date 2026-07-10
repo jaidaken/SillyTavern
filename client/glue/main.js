@@ -304,6 +304,50 @@
         }
     }
 
+    // Render-count replay driver: one token per feed, synchronous (no rAF, no wall-clock), so the
+    // __st_mv_renders delta per feed is the exact MessageView count. Needs a -Dinstrument wasm.
+    function renderCountProbe(params) {
+        if (!wasm.__st_mv_renders) throw new Error('__st_mv_renders missing: build with -Dinstrument');
+
+        const extra = Math.max(0, parseInt(params.get('msgs') || '0', 10) || 0);
+        const tokens = Math.max(1, parseInt(params.get('tokens') || '60', 10) || 60);
+
+        for (let i = 0; i < extra; i++) {
+            appendMessage('You', 'seed message ' + i);
+        }
+
+        const begin = writeBytes('Seraphina');
+        wasm.__st_stream_begin(begin.ptr, begin.len);
+
+        const onscreen = document.querySelectorAll('.mes').length;
+        const perToken = [];
+        for (let i = 0; i < tokens; i++) {
+            const buf = writeRaw(encoder.encode('data: {"content":"tok' + i + ' "}\n\n'));
+            const pre = wasm.__st_mv_renders();
+            wasm.__st_stream_append(buf.ptr, buf.len);
+            perToken.push(wasm.__st_mv_renders() - pre);
+        }
+        wasm.__st_stream_end();
+
+        const min = Math.min.apply(null, perToken);
+        const max = Math.max.apply(null, perToken);
+        const result = {
+            mode: 'rendercount',
+            onscreen: onscreen,
+            tokens: tokens,
+            perTokenMin: min,
+            perTokenMax: max,
+            perTokenSum: perToken.reduce(function (a, b) { return a + b; }, 0),
+            constant: min === max,
+            streamTokens: wasm.__st_stream_tokens ? wasm.__st_stream_tokens() : -1,
+        };
+        window.__stRenderCount = result;
+        const el = document.createElement('pre');
+        el.id = 'probe-metrics';
+        el.textContent = JSON.stringify(result);
+        document.body.appendChild(el);
+    }
+
     async function boot() {
         const [door, purifyMod, hljsMod] = await Promise.all([
             import(ZIEX_DOOR),
@@ -426,6 +470,11 @@
         });
 
         const params = new URLSearchParams(window.location.search);
+
+        if (params.has('rendercount')) {
+            renderCountProbe(params);
+            return;
+        }
 
         // Proves a message that has no SSR marker still renders: the acceptance gate for streaming.
         if (params.has('growth')) {

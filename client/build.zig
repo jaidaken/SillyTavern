@@ -10,6 +10,12 @@ pub fn build(b: *std.Build) !void {
         "Prioritize performance, safety, or binary size",
     ) orelse .ReleaseSmall;
 
+    // Off by default so the render counter and its door export never reach the production wasm.
+    // The render-count harness turns it on through the export CLI: `export -- --build-args=-Dinstrument`.
+    const instrument = b.option(bool, "instrument", "Compile the render-count instrumentation") orelse false;
+    const build_opts = b.addOptions();
+    build_opts.addOption(bool, "instrument", instrument);
+
     const app_exe = b.addExecutable(.{
         .name = "st_client",
         .root_module = b.createModule(.{
@@ -18,6 +24,7 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
         }),
     });
+    app_exe.root_module.addImport("build_options", build_opts.createModule());
 
     const md4c = b.createModule(.{ .root_source_file = b.path("app/pages/markdown.zig") });
     addMd4c(b, md4c);

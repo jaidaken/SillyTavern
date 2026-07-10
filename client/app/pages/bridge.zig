@@ -15,6 +15,7 @@ const builtin = @import("builtin");
 const zx = @import("zx");
 const store = @import("./store.zig");
 const stream_mod = @import("./stream.zig");
+const instrument = @import("./instrument.zig");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
@@ -74,6 +75,12 @@ fn streamDone() callconv(.c) u32 {
     return @intFromBool(live.state == .done);
 }
 
+/// Total `MessageView` resolutions so far, for the render-count harness to read per-token deltas.
+/// Only compiled and exported when `-Dinstrument` is set, so it never ships in the production wasm.
+fn messageViewRenders() callconv(.c) usize {
+    return instrument.messageViewRenders();
+}
+
 comptime {
     if (is_wasm) {
         @export(&appendMessage, .{ .name = "__st_append_message" });
@@ -82,5 +89,8 @@ comptime {
         @export(&streamEnd, .{ .name = "__st_stream_end" });
         @export(&streamTokens, .{ .name = "__st_stream_tokens" });
         @export(&streamDone, .{ .name = "__st_stream_done" });
+        if (instrument.enabled) {
+            @export(&messageViewRenders, .{ .name = "__st_mv_renders" });
+        }
     }
 }

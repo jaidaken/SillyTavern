@@ -11,6 +11,7 @@ Usage: python3 devserve.py [--port 8080] [--dist dist] [--backend http://127.0.0
 import argparse
 import base64
 import http.server
+import json
 import pathlib
 import signal
 import socketserver
@@ -93,7 +94,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         try:
             for i in range(tokens):
-                self.wfile.write(f"data: {prefix}{i} \n\n".encode())
+                # json.dumps escapes the prefix so `?prefix=a"b` stays valid JSON; completion.zig
+                # rejects any payload whose first byte is not `{`. Trailing space joins the tokens.
+                payload = json.dumps({"content": f"{prefix}{i} "})
+                self.wfile.write(f"data: {payload}\n\n".encode())
                 self.wfile.flush()
                 time.sleep(delay)
             self.wfile.write(b"data: [DONE]\n\n")
