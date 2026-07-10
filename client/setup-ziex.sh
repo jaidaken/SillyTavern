@@ -29,9 +29,9 @@ fi
 
 # Apply the Zig-source patches (not the door: 03 is the upstream core.ts diff, applied to the
 # compiled door separately in patch-door.sh).
-for p in "$PATCHES"/01-*.patch "$PATCHES"/02-*.patch "$PATCHES"/04-*.patch; do
+for p in "$PATCHES"/01-*.patch "$PATCHES"/02-*.patch "$PATCHES"/04-*.patch "$PATCHES"/05-*.patch; do
     git -C "$ZIEX_DIR" apply "../$p"
     echo "setup-ziex: applied $(basename "$p")"
 done
 
-echo "setup-ziex: $ZIEX_DIR ready at $ZIEX_REV + 3 zig patches"
+echo "setup-ziex: $ZIEX_DIR ready at $ZIEX_REV + 4 zig patches"

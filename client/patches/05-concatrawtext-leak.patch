@@ -1,0 +1,164 @@
+diff --git i/src/runtime/client/Client.zig w/src/runtime/client/Client.zig
+index 0a233e21..708a34f3 100644
+--- i/src/runtime/client/Client.zig
++++ w/src/runtime/client/Client.zig
+@@ -409,6 +409,7 @@ pub fn render(self: *Client, cmp: ComponentMeta) !void {
+                         patch.data.UPDATE.attributes.deinit();
+                         patch.data.UPDATE.removed_attributes.deinit(allocator);
+                     },
++                    .RAW_HTML => allocator.free(patch.data.RAW_HTML.html),
+                     else => {},
+                 }
+             }
+diff --git i/src/runtime/core/vdom.zig w/src/runtime/core/vdom.zig
+index cc0367e9..0139388b 100644
+--- i/src/runtime/core/vdom.zig
++++ w/src/runtime/core/vdom.zig
+@@ -277,10 +277,15 @@ pub fn diff(
+ 
+                     if (new_element.escaping == .none) {
+                         const old_html = try concatRawText(allocator, old_element.children);
++                        defer allocator.free(old_html);
+                         const new_html = try concatRawText(allocator, new_element.children orelse &.{});
+                         old_vnode.component = resolved_component;
+                         old_vnode.key = VNode.extractKey(resolved_component);
+-                        if (!std.mem.eql(u8, old_html, new_html)) {
++                        if (std.mem.eql(u8, old_html, new_html)) {
++                            allocator.free(new_html);
++                        } else {
++                            // new_html ownership moves to the RAW_HTML patch, freed in Client patch cleanup.
++                            errdefer allocator.free(new_html);
+                             try patches.append(allocator, Patch{
+                                 .type = .RAW_HTML,
+                                 .data = .{ .RAW_HTML = .{
+@@ -381,13 +386,14 @@ fn createVNodeFromComponent(allocator: zx.Allocator, component: zx.Component, ow
+ fn concatRawText(allocator: zx.Allocator, children: ?[]const zx.Component) ![]const u8 {
+     const list = children orelse return "";
+     var aw = std.Io.Writer.Allocating.init(allocator);
++    errdefer aw.deinit();
+     for (list) |child| {
+         switch (child) {
+             .text => |t| try aw.writer.writeAll(t),
+             else => {},
+         }
+     }
+-    return aw.written();
++    return try aw.toOwnedSlice();
+ }
+ 
+ fn flattenComponents(allocator: zx.Allocator, children: []const zx.Component) ![]const zx.Component {
+@@ -668,3 +674,114 @@ fn componentOwnerId(allocator: zx.Allocator, component: zx.Component, owner_comp
+ 
+ const zx = @import("../../root.zig");
+ const std = @import("std");
++
++fn escapingNoneElement(children: []const zx.Component) zx.Component {
++    return .{ .element = .{ .tag = .div, .children = children, .escaping = .none } };
++}
++
++// Frees new_html via the patch cleanup exactly as Client.render does, so the oracle sees the real ownership contract.
++fn runEscapingNoneDiff(allocator: zx.Allocator, old_text: []const u8, new_text: []const u8) !usize {
++    const old_children = [_]zx.Component{.{ .text = old_text }};
++    const new_children = [_]zx.Component{.{ .text = new_text }};
++
++    const old_vnode = try VNode.createFromComponent(allocator, escapingNoneElement(&old_children), "", 0);
++    defer old_vnode.deinit(allocator);
++
++    var patches = std.ArrayList(Patch).empty;
++    defer {
++        for (patches.items) |*p| {
++            switch (p.type) {
++                .RAW_HTML => allocator.free(p.data.RAW_HTML.html),
++                else => {},
++            }
++        }
++        patches.deinit(allocator);
++    }
++
++    try diff(allocator, old_vnode, escapingNoneElement(&new_children), null, &patches);
++    return patches.items.len;
++}
++
++test "concatRawText returns an owned freeable slice" {
++    const allocator = std.testing.allocator;
++    const children = [_]zx.Component{ .{ .text = "foo" }, .{ .text = "bar" } };
++    const html = try concatRawText(allocator, &children);
++    defer allocator.free(html);
++    try std.testing.expectEqualStrings("foobar", html);
++}
++
++test "concatRawText cleans up on every allocation failure" {
++    const children = [_]zx.Component{ .{ .text = "foo" }, .{ .text = "bar" } };
++    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
++        fn run(allocator: zx.Allocator, ch: []const zx.Component) !void {
++            // The Allocating writer signals its only failure mode (OOM) as WriteFailed.
++            const html = concatRawText(allocator, ch) catch |e| switch (e) {
++                error.WriteFailed => return error.OutOfMemory,
++                else => return e,
++            };
++            allocator.free(html);
++        }
++    }.run, .{@as([]const zx.Component, &children)});
++}
++
++test "escaping-none diff emits a RAW_HTML patch owning a fresh concatenation" {
++    const allocator = std.testing.allocator;
++    const old_children = [_]zx.Component{.{ .text = "alpha" }};
++    const new_children = [_]zx.Component{.{ .text = "beta" }};
++
++    const old_vnode = try VNode.createFromComponent(allocator, escapingNoneElement(&old_children), "", 0);
++    defer old_vnode.deinit(allocator);
++
++    var patches = std.ArrayList(Patch).empty;
++    defer patches.deinit(allocator);
++
++    try diff(allocator, old_vnode, escapingNoneElement(&new_children), null, &patches);
++
++    try std.testing.expectEqual(@as(usize, 1), patches.items.len);
++    try std.testing.expectEqual(PatchType.RAW_HTML, patches.items[0].type);
++    const html = patches.items[0].data.RAW_HTML.html;
++    try std.testing.expectEqualStrings("beta", html);
++    // The patch owns a fresh buffer, not the vtree child's text pointer, so freeing it below
++    // cannot dangle any vtree reference (no use-after-free).
++    try std.testing.expect(html.ptr != new_children[0].text.ptr);
++    allocator.free(html);
++    try std.testing.expectEqualStrings("alpha", old_vnode.children.items[0].component.text);
++}
++
++test "escaping-none diff frees both concatenations across many renders" {
++    for (0..64) |_| {
++        try std.testing.expectEqual(@as(usize, 1), try runEscapingNoneDiff(std.testing.allocator, "alpha", "beta"));
++    }
++}
++
++test "escaping-none diff with unchanged text emits no patch and frees the concatenation" {
++    try std.testing.expectEqual(@as(usize, 0), try runEscapingNoneDiff(std.testing.allocator, "same", "same"));
++}
++
++test "escaping-none diff cleans up on every allocation failure" {
++    // Build the vtree with the base allocator so the failing allocator targets only diff's own
++    // allocations (old_html, new_html, the patch list), the surface this fix owns.
++    const Ctx = struct {
++        base: zx.Allocator,
++        fn run(failing: zx.Allocator, ctx: @This()) !void {
++            const old_children = [_]zx.Component{.{ .text = "alpha" }};
++            const new_children = [_]zx.Component{.{ .text = "beta" }};
++            const old_vnode = try VNode.createFromComponent(ctx.base, escapingNoneElement(&old_children), "", 0);
++            defer old_vnode.deinit(ctx.base);
++
++            var patches = std.ArrayList(Patch).empty;
++            defer {
++                for (patches.items) |*p| switch (p.type) {
++                    .RAW_HTML => failing.free(p.data.RAW_HTML.html),
++                    else => {},
++                };
++                patches.deinit(failing);
++            }
++            diff(failing, old_vnode, escapingNoneElement(&new_children), null, &patches) catch |e| switch (e) {
++                error.WriteFailed => return error.OutOfMemory,
++                else => return e,
++            };
++        }
++    };
++    try std.testing.checkAllAllocationFailures(std.testing.allocator, Ctx.run, .{Ctx{ .base = std.testing.allocator }});
++}
