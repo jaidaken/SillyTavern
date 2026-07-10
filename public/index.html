@@ -6740,7 +6740,7 @@
                     <span data-i18n="Exporting a character would also export the selected Lorebook file embedded in the JSON data.">Exporting a character would also export the selected Lorebook file embedded in the JSON data.</span>
                 </div>
                 <div class="range-block-range wide100p">
-                    <select class="character_world_info_selector wide100p">
+                    <select aria-label="Primary Lorebook" class="character_world_info_selector wide100p">
                         <option value="">--- None ---</option>
                     </select>
                 </div>
@@ -6754,7 +6754,7 @@
                     <span data-i18n="NOTE: These choices are optional and won't be preserved on character export!">NOTE: These choices are optional and won't be preserved on character export!</span>
                 </div>
                 <div class="range-block-range wide100p">
-                    <select class="character_extra_world_info_selector wide100p" multiple>
+                    <select aria-label="Auxiliary Lorebooks" class="character_extra_world_info_selector wide100p" multiple>
                         <option value="" data-i18n="-- World Info not found --">-- World Info not found --</option>
                     </select>
                 </div>
@@ -6810,15 +6810,15 @@
                                 </span>
                             </small>
                             <small class="textAlignCenter" data-i18n="Primary Keywords">Primary Keywords</small>
-                            <select class="keyprimaryselect keyselect" name="key" data-i18n="[placeholder]Keywords or Regexes" placeholder="Keywords or Regexes" multiple="multiple"></select>
-                            <textarea class="text_pole keyprimarytextpole mobile" name="key" rows="1" data-i18n="[placeholder]Comma separated list" placeholder="Comma separated list" style="display: none;"></textarea>
+                            <select aria-label="Primary Keywords" class="keyprimaryselect keyselect" name="key" data-i18n="[placeholder]Keywords or Regexes" placeholder="Keywords or Regexes" multiple="multiple"></select>
+                            <textarea aria-label="Primary Keywords" class="text_pole keyprimarytextpole mobile" name="key" rows="1" data-i18n="[placeholder]Comma separated list" placeholder="Comma separated list" style="display: none;"></textarea>
                             <button type="button" class="switch_input_type_icon" tabindex="-1" title="Switch to plaintext mode" data-i18n="[title]Switch to plaintext mode" data-icon-on="✨" data-icon-off="⌨️" data-tooltip-on="Switch to fancy mode" data-tooltip-off="Switch to plaintext mode">
                                 ⌨️
                             </button>
                         </div>
                         <div class="world_entry_form_control">
                             <small class="textAlignCenter" data-i18n="Logic">Logic</small>
-                            <select name="entryLogicType" class="text_pole widthFitContent margin0">
+                            <select aria-label="Keyword Logic" name="entryLogicType" class="text_pole widthFitContent margin0">
                                 <option value="0" data-i18n="AND ANY">AND ANY</option>
                                 <option value="3" data-i18n="AND ALL">AND ALL</option>
                                 <option value="1" data-i18n="NOT ALL">NOT ALL</option>
@@ -6832,8 +6832,8 @@
                                 </span>
                             </small>
                             <small class="textAlignCenter" data-i18n="Optional Filter">Optional Filter</small>
-                            <select class="keysecondaryselect keyselect" name="keysecondary" data-i18n="[placeholder]Keywords or Regexes (ignored if empty)" placeholder="Keywords or Regexes (ignored if empty)" multiple="multiple"></select>
-                            <textarea class="text_pole keysecondarytextpole mobile" name="keysecondary" rows="1" data-i18n="[placeholder]Comma separated list (ignored if empty)" placeholder="Comma separated list (ignored if empty)" style="display: none;"></textarea>
+                            <select aria-label="Optional Filter Keywords" class="keysecondaryselect keyselect" name="keysecondary" data-i18n="[placeholder]Keywords or Regexes (ignored if empty)" placeholder="Keywords or Regexes (ignored if empty)" multiple="multiple"></select>
+                            <textarea aria-label="Optional Filter Keywords" class="text_pole keysecondarytextpole mobile" name="keysecondary" rows="1" data-i18n="[placeholder]Comma separated list (ignored if empty)" placeholder="Comma separated list (ignored if empty)" style="display: none;"></textarea>
                             <button type="button" class="switch_input_type_icon" tabindex="-1" title="Switch to plaintext mode" data-i18n="[title]Switch to plaintext mode" data-icon-on="✨" data-icon-off="⌨️" data-tooltip-on="Switch to fancy mode" data-tooltip-off="Switch to plaintext mode">
                                 ⌨️
                             </button>
@@ -6845,15 +6845,15 @@
                                 <span data-i18n="Outlet Name">Outlet Name</span>
                                 <div class="fa-solid fa-circle-info opacity50p"></div>
                             </small>
-                            <input class="text_pole margin0" name="outletName" type="text" placeholder="Outlet Name" data-i18n="[placeholder]Outlet Name">
+                            <input aria-label="Outlet Name" class="text_pole margin0" name="outletName" type="text" placeholder="Outlet Name" data-i18n="[placeholder]Outlet Name">
                         </div>
                         <div class="world_entry_form_control flex1">
                             <small class="textAlignCenter" data-i18n="Scan Depth">Scan Depth</small>
-                            <input class="text_pole margin0" name="scanDepth" type="number" placeholder="Use global setting" data-i18n="[placeholder]Use global setting" max="1000">
+                            <input aria-label="Scan Depth" class="text_pole margin0" name="scanDepth" type="number" placeholder="Use global setting" data-i18n="[placeholder]Use global setting" max="1000">
                         </div>
                         <div class="world_entry_form_control flex1">
                             <small class="textAlignCenter" data-i18n="Case-Sensitive">Case-Sensitive</small>
-                            <select name="caseSensitive" class="text_pole widthNatural margin0">
+                            <select aria-label="Case-Sensitive Matching" name="caseSensitive" class="text_pole widthNatural margin0">
                                 <option value="null" data-i18n="Use global">Use global</option>
                                 <option value="true" data-i18n="Yes">Yes</option>
                                 <option value="false" data-i18n="No">No</option>
@@ -6861,7 +6861,7 @@
                         </div>
                         <div class="world_entry_form_control flex1">
                             <small class="textAlignCenter" data-i18n="Whole Words">Whole Words</small>
-                            <select name="matchWholeWords" class="text_pole widthNatural margin0">
+                            <select aria-label="Match Whole Words" name="matchWholeWords" class="text_pole widthNatural margin0">
                                 <option value="null" data-i18n="Use global">Use global</option>
                                 <option value="true" data-i18n="Yes">Yes</option>
                                 <option value="false" data-i18n="No">No</option>
@@ -6869,7 +6869,7 @@
                         </div>
                         <div class="world_entry_form_control flex1">
                             <small class="textAlignCenter" data-i18n="Group Scoring">Group Scoring</small>
-                            <select name="useGroupScoring" class="text_pole widthNatural margin0">
+                            <select aria-label="Use Group Scoring" name="useGroupScoring" class="text_pole widthNatural margin0">
                                 <option value="null" data-i18n="Use global">Use global</option>
                                 <option value="true" data-i18n="Yes">Yes</option>
                                 <option value="false" data-i18n="No">No</option>
@@ -6877,14 +6877,14 @@
                         </div>
                         <div class="world_entry_form_control flex1" title="Can be used to automatically activate Quick Replies" data-i18n="[title]Can be used to automatically activate Quick Replies">
                             <small class="textAlignCenter" data-i18n="Automation ID">Automation ID</small>
-                            <input class="text_pole margin0" name="automationId" type="text" placeholder="( None )" data-i18n="[placeholder]( None )">
+                            <input aria-label="Automation ID" class="text_pole margin0" name="automationId" type="text" placeholder="( None )" data-i18n="[placeholder]( None )">
                         </div>
                         <div class="world_entry_form_control flex1" title="Defines delay levels for recursive scans.&#13;&#13;Initially, only the first level (smallest number) will match.&#13;Once no matches are found, the next level becomes eligible for matching.&#13;This repeats until all levels are checked.&#13;&#13;Tied to the &quot;Delay until recursion&quot; setting." data-i18n="[title]delay_until_recursion_level">
                             <small class="textAlignCenter">
                                 <span data-i18n="Recursion Level">Recursion Level</span>
                                 <div class="fa-solid fa-circle-info opacity50p"></div>
                             </small>
-                            <input class="text_pole margin0" name="delayUntilRecursionLevel" type="text" placeholder="1">
+                            <input aria-label="Delay Until Recursion Level" class="text_pole margin0" name="delayUntilRecursionLevel" type="text" placeholder="1">
                         </div>
                     </div>
                     <div name="contentAndCharFilterBlock" class="world_entry_thin_controls flex2">
@@ -6905,13 +6905,13 @@
                                         <div class="flex-container">
                                             <div class="flex-container flexFlowColumn">
                                                 <label class="checkbox flex-container alignitemscenter flexNoGap" data-i18n="[title]This entry will not be recursively activated by other entries." title="This entry will not be recursively activated by other entries.">
-                                                    <input type="checkbox" name="excludeRecursion" />
+                                                    <input aria-label="Non-recursable" type="checkbox" name="excludeRecursion" />
                                                     <span data-i18n="Non-recursable">
                                                         Non-recursable
                                                     </span>
                                                 </label>
                                                 <label class="checkbox flex-container alignitemscenter flexNoGap" title="This entry will not activate other entries recursively." data-i18n="[title]This entry will not activate other entries recursively.">
-                                                    <input type="checkbox" name="preventRecursion" />
+                                                    <input aria-label="Prevent further recursion" type="checkbox" name="preventRecursion" />
                                                     <span data-i18n="Prevent further recursion">
                                                         Prevent further recursion
                                                     </span>
@@ -6940,7 +6940,7 @@
                                     </span>
                                 </small>
                             </label>
-                            <textarea class="text_pole mdHotkeys" name="content" rows="8" data-i18n="[placeholder]What this keyword should mean to the AI, sent verbatim" placeholder="What this keyword should mean to the AI, sent verbatim"></textarea>
+                            <textarea aria-label="Entry Content" class="text_pole mdHotkeys" name="content" rows="8" data-i18n="[placeholder]What this keyword should mean to the AI, sent verbatim" placeholder="What this keyword should mean to the AI, sent verbatim"></textarea>
                         </div>
                     </div>
                     <div class="world_entry_thin_controls commentContainer">
@@ -6966,7 +6966,7 @@
                             </label>
                         </div>
                         <div class="range-block-range">
-                            <input type="text" class="text_pole margin0" name="group" rows="1" data-i18n="[placeholder]Only one entry with the same label will be activated" placeholder="Only one entry with the same label will be activated">
+                            <input aria-label="Inclusion Group" type="text" class="text_pole margin0" name="group" rows="1" data-i18n="[placeholder]Only one entry with the same label will be activated" placeholder="Only one entry with the same label will be activated">
                         </div>
                     </div>
                     <div class="flex2 flex-container flexFlowColumn flexNoGap" data-i18n="[title]A relative likelihood of entry activation within the group" title="A relative likelihood of entry activation within the group">
@@ -6976,7 +6976,7 @@
                             </small>
                         </div>
                         <div class="range-block-range">
-                            <input type="number" class="text_pole margin0" name="groupWeight" rows="1" placeholder="100" min="1" max="999999">
+                            <input aria-label="Group Weight" type="number" class="text_pole margin0" name="groupWeight" rows="1" placeholder="100" min="1" max="999999">
                         </div>
                     </div>
                     <div class="flex2 flex-container flexFlowColumn flexNoGap" data-i18n="[title]Sticky entries will stay active for N messages after being triggered." title="Sticky entries will stay active for N messages after being triggered.">
@@ -6989,7 +6989,7 @@
                             </small>
                         </div>
                         <div class="range-block-range">
-                            <input class="text_pole margin0" name="sticky" type="number" data-i18n="[placeholder]Non-sticky" placeholder="Non-sticky" min="0" max="999999">
+                            <input aria-label="Sticky" class="text_pole margin0" name="sticky" type="number" data-i18n="[placeholder]Non-sticky" placeholder="Non-sticky" min="0" max="999999">
                         </div>
                     </div>
                     <div class="flex2 flex-container flexFlowColumn flexNoGap" data-i18n="[title]Entries with a cooldown can't be activated N messages after being triggered." title="Entries with a cooldown can't be activated N messages after being triggered.">
@@ -7002,7 +7002,7 @@
                             </small>
                         </div>
                         <div class="range-block-range">
-                            <input class="text_pole margin0" name="cooldown" type="number" data-i18n="[placeholder]No cooldown" placeholder="No cooldown" min="0" max="999999">
+                            <input aria-label="Cooldown" class="text_pole margin0" name="cooldown" type="number" data-i18n="[placeholder]No cooldown" placeholder="No cooldown" min="0" max="999999">
                         </div>
                     </div>
                     <div class="flex2 flex-container flexFlowColumn flexNoGap" data-i18n="[title]Entries with a delay can't be activated until there are N messages present in the chat." title="Entries with a delay can't be activated until there are N messages present in the chat.">
@@ -7015,7 +7015,7 @@
                             </small>
                         </div>
                         <div class="range-block-range">
-                            <input class="text_pole margin0" name="delay" type="number" data-i18n="[placeholder]No delay" placeholder="No delay" min="0" max="999999">
+                            <input aria-label="Delay" class="text_pole margin0" name="delay" type="number" data-i18n="[placeholder]No delay" placeholder="No delay" min="0" max="999999">
                         </div>
                     </div>
                 </div>
@@ -7036,7 +7036,7 @@
                             </label>
                         </div>
                         <div class="range-block-range">
-                            <select name="characterFilter" multiple>
+                            <select aria-label="Character Filter" name="characterFilter" multiple>
                                 <option value="" data-i18n="-- Characters not found --">
                                     -- Characters not found --
                                 </option>
@@ -7057,7 +7057,7 @@
                             </label>
                         </div>
                         <div class="range-block-range">
-                            <select name="triggers" multiple>
+                            <select aria-label="Generation Triggers" name="triggers" multiple>
                                 <option data-i18n="Normal" value="normal">Normal</option>
                                 <option data-i18n="Continue" value="continue">Continue</option>
                                 <option data-i18n="Impersonate" value="impersonate">Impersonate</option>
@@ -7144,10 +7144,10 @@
                                 <div class="flex-container alignitemscenter wide100p">
                                     <div class="WIEntryTitleAndStatus flex-container flex1 alignitemscenter">
                                         <div class="flex-container flex1">
-                                            <textarea class="text_pole" rows="1" name="comment" data-i18n="[placeholder]Entry Title/Memo" placeholder="Entry Title/Memo"></textarea>
+                                            <textarea aria-label="Entry Title" class="text_pole" rows="1" name="comment" data-i18n="[placeholder]Entry Title/Memo" placeholder="Entry Title/Memo"></textarea>
                                         </div>
                                         <!-- <span class="world_entry_form_position_value"></span> -->
-                                        <select data-i18n="[title]WI Entry Status:🔵 Constant🟢 Normal🔗 Vectorized" title="WI Entry Status:&#13;🔵 Constant&#13;🟢 Normal&#13;🔗 Vectorized" name="entryStateSelector" class="text_pole widthNatural margin0">
+                                        <select aria-label="Entry Status" data-i18n="[title]WI Entry Status:🔵 Constant🟢 Normal🔗 Vectorized" title="WI Entry Status:&#13;🔵 Constant&#13;🟢 Normal&#13;🔗 Vectorized" name="entryStateSelector" class="text_pole widthNatural margin0">
                                             <option value="constant" title="Constant" data-i18n="[title]WI_Entry_Status_Constant">🔵</option>
                                             <option value="normal" title="Normal" data-i18n="[title]WI_Entry_Status_Normal">🟢</option>
                                             <option value="vectorized" title="Vectorized" data-i18n="[title]WI_Entry_Status_Vectorized">🔗</option>
@@ -7156,7 +7156,7 @@
                                     <div class="WIEnteryHeaderControls flex-container">
                                         <div name="PositionBlock" class="world_entry_form_control world_entry_form_radios wi-enter-footer-text">
                                             <label for="position" class="WIEntryHeaderTitleMobile" data-i18n="Position:">Position:</label>
-                                            <select name="position" class="text_pole widthNatural margin0" data-i18n="[title]T_Position" title="↑Char: Before Character Definitions&#13;↓Char: After Character Definitions&#13;↑EM: Before Example Messages&#13;↓EM: After Example Messages&#13;↑AN: Before Author's Note&#13;↓AN: After Author's Note&#13;@D ⚙️: at Depth (System)&#13;@D 👤: at Depth (User)&#13;@D 🤖: at Depth (Assistant)">
+                                            <select aria-label="Insertion Position" name="position" class="text_pole widthNatural margin0" data-i18n="[title]T_Position" title="↑Char: Before Character Definitions&#13;↓Char: After Character Definitions&#13;↑EM: Before Example Messages&#13;↓EM: After Example Messages&#13;↑AN: Before Author's Note&#13;↓AN: After Author's Note&#13;@D ⚙️: at Depth (System)&#13;@D 👤: at Depth (User)&#13;@D 🤖: at Depth (Assistant)">
                                                 <option value="0" data-role="" data-i18n="Before Char Defs">
                                                     ↑Char
                                                 </option>
@@ -7191,15 +7191,15 @@
                                         </div>
                                         <div class="world_entry_form_control wi-enter-footer-text flex-container flexNoGap">
                                             <label for="depth" class="WIEntryHeaderTitleMobile" data-i18n="Depth:">Depth:</label>
-                                            <input title="Depth" class="text_pole wideMax100px margin0" type="number" name="depth" data-i18n="[title]Depth" placeholder="" min="0" max="9999" />
+                                            <input aria-label="Insertion Depth" title="Depth" class="text_pole wideMax100px margin0" type="number" name="depth" data-i18n="[title]Depth" placeholder="" min="0" max="9999" />
                                         </div>
                                         <div class="world_entry_form_control wi-enter-footer-text  flex-container flexNoGap">
                                             <label for="order" class="WIEntryHeaderTitleMobile" data-i18n="Order:">Order:</label>
-                                            <input title="Order" data-i18n="[title]Order" class="text_pole wideMax100px margin0" type="number" name="order" placeholder="" min="0" max="9999" />
+                                            <input aria-label="Insertion Order" title="Order" data-i18n="[title]Order" class="text_pole wideMax100px margin0" type="number" name="order" placeholder="" min="0" max="9999" />
                                         </div>
                                         <div class="world_entry_form_control wi-enter-footer-text flex-container flexNoGap probabilityContainer">
                                             <label for="order" class="WIEntryHeaderTitleMobile" data-i18n="Trigger %:">Trigger %:</label>
-                                            <input title="Probability" data-i18n="[title]Probability" class="text_pole wideMax100px margin0" type="number" name="probability" placeholder="" min="0" max="100" />
+                                            <input aria-label="Trigger Probability" title="Probability" data-i18n="[title]Probability" class="text_pole wideMax100px margin0" type="number" name="probability" placeholder="" min="0" max="100" />
                                         </div>
                                     </div>
                                 </div>
@@ -7246,16 +7246,16 @@
         <div id="openai_logit_bias_template" class="template_element">
             <div class="openai_logit_bias_form">
                 <span class="drag-handle">☰</span>
-                <input class="openai_logit_bias_text text_pole" data-i18n="[placeholder]Text or token ids" placeholder="Text or [token ids]" />
-                <input class="openai_logit_bias_value text_pole" type="number" min="-100" value="0" max="100" />
+                <input aria-label="Logit Bias Text" class="openai_logit_bias_text text_pole" data-i18n="[placeholder]Text or token ids" placeholder="Text or [token ids]" />
+                <input aria-label="Logit Bias Value" class="openai_logit_bias_value text_pole" type="number" min="-100" value="0" max="100" />
                 <i class="menu_button fa-solid fa-xmark openai_logit_bias_remove"></i>
             </div>
         </div>
         <div id="logit_bias_template" class="template_element">
             <div class="logit_bias_form">
                 <span class="drag-handle">☰</span>
-                <input class="logit_bias_text text_pole" data-i18n="[placeholder]Type here..." placeholder="type here..." />
-                <input class="logit_bias_value text_pole" type="number" min="-100" value="0" max="100" step="0.01" />
+                <input aria-label="Logit Bias Text" class="logit_bias_text text_pole" data-i18n="[placeholder]Type here..." placeholder="type here..." />
+                <input aria-label="Logit Bias Value" class="logit_bias_value text_pole" type="number" min="-100" value="0" max="100" step="0.01" />
                 <i class="menu_button fa-solid fa-xmark logit_bias_remove"></i>
             </div>
         </div>
@@ -7376,7 +7376,7 @@
         </div>
         <div id="message_template" class="template_element">
             <div class="mes" mesid="" ch_name="" is_user="" is_system="" bookmark_link="">
-                <div class="for_checkbox"></div><input type="checkbox" class="del_checkbox">
+                <div class="for_checkbox"></div><input type="checkbox" class="del_checkbox" aria-label="Select message">
                 <div class="mesAvatarWrapper">
                     <div class="avatar">
                         <img src="">
@@ -7481,7 +7481,7 @@
                 <h3 data-i18n="Welcome to SillyTavern!">Welcome to SillyTavern!</h3>
                 <div id="onboarding-UI-language-block" class="flex-container alignItemsBaseline">
                     <span data-i18n="UI Language">Language:</span>
-                    <select id="onboarding_ui_language_select" class="flex1 margin0">
+                    <select id="onboarding_ui_language_select" class="flex1 margin0" aria-label="UI Language">
                         <option value="en">English</option>
                     </select>
                 </div>
@@ -7652,7 +7652,7 @@
                             <span data-i18n="Delete">Delete</span>
                         </div>
                     </div>
-                    <textarea data-macros name="alternate_greetings" data-i18n="[placeholder](This will be the first message from the character that starts every chat)" placeholder="(This will be the first message from the character that starts every chat)" class="text_pole textarea_compact alternate_greeting_text mdHotkeys" value="" autocomplete="off" rows="12"></textarea>
+                    <textarea aria-label="Alternate Greeting" data-macros name="alternate_greetings" data-i18n="[placeholder](This will be the first message from the character that starts every chat)" placeholder="(This will be the first message from the character that starts every chat)" class="text_pole textarea_compact alternate_greeting_text mdHotkeys" value="" autocomplete="off" rows="12"></textarea>
                 </details>
             </div>
         </div>
