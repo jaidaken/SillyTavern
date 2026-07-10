@@ -38,18 +38,33 @@
         return (BigInt(buf.ptr) << 32n) | BigInt(buf.len);
     }
 
+    function freeRaw(buf) {
+        if (buf.len !== 0) wasm.__zx_free(buf.ptr, buf.len);
+    }
+
+    // Wasm adopts both buffers only once __st_append_message runs, so a throwing body write would
+    // otherwise strand the name buffer with no owner on either side.
     function appendMessage(name, body) {
         const n = writeBytes(name);
-        const b = writeBytes(body);
+        let b;
+        try {
+            b = writeBytes(body);
+        } catch (err) {
+            freeRaw(n);
+            throw err;
+        }
         wasm.__st_append_message(n.ptr, n.len, b.ptr, b.len);
     }
 
+    // Themes and the custom-CSS box are the only style surfaces, and neither passes through here,
+    // so a message body gets no styling power: no <style> element, no style attribute, no scoping.
     const MESSAGE_CONFIG = {
         RETURN_DOM: false,
         RETURN_DOM_FRAGMENT: false,
         RETURN_TRUSTED_TYPE: false,
         MESSAGE_SANITIZE: true,
-        ADD_TAGS: ['custom-style'],
+        FORBID_TAGS: ['style'],
+        FORBID_ATTR: ['style'],
     };
 
     const URL_ATTRS = new Set(['href', 'src', 'xlink:href', 'action', 'formaction']);
@@ -95,7 +110,6 @@
 
     const HIGHLIGHT_CACHE_MAX = 128;
     const highlightCache = new Map();
-    let previousKeys = [];
 
     function highlightKey(lang, source) {
         return (lang || '') + '\u0000' + source;
@@ -110,17 +124,20 @@
     }
 
     // <template> content is inert: no scripts run, no subresources load, so hljs writes into it safely.
-    // Only the growing streaming body reaches here per frame, and highlightAuto walks every grammar.
     function highlightBlocks(html) {
         const tpl = document.createElement('template');
         tpl.innerHTML = html;
-        const keys = [];
-        tpl.content.querySelectorAll('pre > code').forEach(function (el, i) {
+        const blocks = tpl.content.querySelectorAll('pre > code');
+
+        // streamRender is up only inside the rerender a stream chunk drives, and that rerender
+        // re-sanitizes the streaming body alone; bytes land at its end, so its last block is growing.
+        const growing = streamRender ? blocks.length - 1 : -1;
+
+        blocks.forEach(function (el, i) {
             const tag = Array.from(el.classList).find(function (c) { return c.startsWith('language-'); });
             const lang = tag ? tag.slice(9) : null;
             const source = el.textContent;
             const key = highlightKey(lang, source);
-            keys.push(key);
             el.classList.add('hljs');
 
             const hit = highlightCache.get(key);
@@ -129,9 +146,9 @@
                 return;
             }
 
-            // Still growing: next frame would throw this work away. DOMPurify already escaped the
-            // text, and leaving it alone renders the tail as plain text until the fence settles.
-            if (streamActive && previousKeys[i] !== key) return;
+            // Next frame would throw this work away, and highlightAuto walks every grammar. DOMPurify
+            // already escaped the text, so the tail renders as plain text until the fence settles.
+            if (i === growing) return;
 
             const out = (lang && hljs.getLanguage(lang))
                 ? hljs.highlight(source, { language: lang, ignoreIllegals: true })
@@ -139,7 +156,6 @@
             cacheHighlight(key, out.value);
             el.innerHTML = out.value;
         });
-        previousKeys = keys;
         return tpl.innerHTML;
     }
 
@@ -163,6 +179,7 @@
     const stats = { chunks: 0, tokens: 0, flushes: 0, sanitizes: 0, mdBytes: 0 };
 
     let streamActive = false;
+    let streamRender = false;
 
     // ziex re-renders synchronously on every state write (reactivity.zig:98), so raw bytes are
     // coalesced into one write per animation frame. Decoding and SSE framing happen in Zig.
@@ -193,11 +210,19 @@
                 merged.set(chunk, at);
                 at += chunk.length;
             }
+            // Dropping pending before the alloc lands would lose the chunk when __zx_alloc fails.
+            const buf = writeRaw(merged);
             pending = [];
             pendingLen = 0;
             stats.flushes += 1;
-            const buf = writeRaw(merged);
-            wasm.__st_stream_append(buf.ptr, buf.len);
+
+            // __st_stream_append rerenders synchronously, so env.sanitize sees the streaming body.
+            streamRender = true;
+            try {
+                wasm.__st_stream_append(buf.ptr, buf.len);
+            } finally {
+                streamRender = false;
+            }
         }
 
         // rAF is paused in hidden tabs and in headless dumps, so a timer guarantees progress.
@@ -212,7 +237,6 @@
             const n = writeBytes(name);
             wasm.__st_stream_begin(n.ptr, n.len);
             begun = true;
-            previousKeys = [];
 
             const response = await fetch(url, { headers: { Accept: 'text/event-stream' } });
             if (!response.ok || !response.body) throw new Error('stream failed: ' + response.status);
