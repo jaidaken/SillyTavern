@@ -18,6 +18,10 @@ pub const PanelId = enum {
 
 pub const Side = enum { left, right };
 
+/// How a panel presents. A dock is a full-height side panel that reflows the chat; a dropdown is a
+/// small menu that drops from the top bar and overlays the content (like the original's wand menu).
+pub const PanelKind = enum { dock, dropdown };
+
 pub const Panel = struct {
     id: PanelId,
     /// The drawer button's element id ("d-<panel>"), read back in ui.onDrawer.
@@ -26,6 +30,7 @@ pub const Panel = struct {
     icon: []const u8,
     title: []const u8,
     side: Side,
+    kind: PanelKind = .dock,
 };
 
 pub const panels = [_]Panel{
@@ -35,7 +40,7 @@ pub const panels = [_]Panel{
     .{ .id = .world_info, .dom_id = "d-world_info", .icon = "i-book", .title = "World Info", .side = .left },
     .{ .id = .settings, .dom_id = "d-settings", .icon = "i-cog", .title = "User Settings", .side = .left },
     .{ .id = .backgrounds, .dom_id = "d-backgrounds", .icon = "i-image", .title = "Backgrounds", .side = .left },
-    .{ .id = .extensions, .dom_id = "d-extensions", .icon = "i-cubes", .title = "Extensions", .side = .left },
+    .{ .id = .extensions, .dom_id = "d-extensions", .icon = "i-cubes", .title = "Extensions", .side = .right, .kind = .dropdown },
     .{ .id = .persona, .dom_id = "d-persona", .icon = "i-user", .title = "Persona Management", .side = .right },
     .{ .id = .characters, .dom_id = "d-characters", .icon = "i-card", .title = "Character Management", .side = .right },
 };
@@ -63,10 +68,17 @@ pub const PanelState = struct {
         return null;
     }
 
-    /// The panel currently open on `side`, if any. Lets the layout render one dock per side.
+    /// The dock currently open on `side`, if any. Dropdown-kind panels never dock, so they are
+    /// excluded here and surface through activeDropdown instead.
     pub fn openOn(self: PanelState, side: Side) ?Panel {
         const p = self.activePanel() orelse return null;
-        return if (p.side == side) p else null;
+        return if (p.kind == .dock and p.side == side) p else null;
+    }
+
+    /// The active panel when it presents as a top-bar dropdown rather than a dock.
+    pub fn activeDropdown(self: PanelState) ?Panel {
+        const p = self.activePanel() orelse return null;
+        return if (p.kind == .dropdown) p else null;
     }
 
     pub fn widthFor(self: PanelState, side: Side) f32 {
@@ -136,6 +148,20 @@ test "toggle opens then closes, and is exclusive across sides" {
     // Toggling the open panel closes it.
     s.toggle(.characters);
     try testing.expect(s.activePanel() == null);
+}
+
+test "a dropdown-kind panel surfaces through activeDropdown, never as a dock" {
+    var s: PanelState = .{};
+    s.toggle(.extensions);
+    try testing.expect(s.isActive(.extensions));
+    // Extensions is a dropdown, so it never docks on either side.
+    try testing.expect(s.openOn(.left) == null);
+    try testing.expect(s.openOn(.right) == null);
+    try testing.expect(s.activeDropdown().?.id == .extensions);
+    // A dock-kind panel does not surface as a dropdown.
+    s.toggle(.settings);
+    try testing.expect(s.activeDropdown() == null);
+    try testing.expect(s.openOn(.left).?.id == .settings);
 }
 
 test "width clamps to the allowed range" {

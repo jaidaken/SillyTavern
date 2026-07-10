@@ -27,6 +27,9 @@ pub fn activePanel() ?Panel {
 pub fn openOn(side: Side) ?Panel {
     return state.openOn(side);
 }
+pub fn activeDropdown() ?Panel {
+    return state.activeDropdown();
+}
 pub fn widthFor(side: Side) f32 {
     return state.widthFor(side);
 }
@@ -76,4 +79,9 @@ pub fn onClose(_: zx.client.Event) void {
 /// Called from the resize glue with the new pixel width for a side. Clamps and rerenders.
 export fn __st_set_panel_width(is_left: u32, width: f64) callconv(.c) void {
     setWidth(if (is_left != 0) .left else .right, @floatCast(width));
+}
+
+/// Called from the glue to dismiss the open panel (used for click-outside on a dropdown).
+export fn __st_close_panel() callconv(.c) void {
+    close();
 }

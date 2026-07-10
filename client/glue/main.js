@@ -324,6 +324,30 @@
             document.addEventListener('pointerup', onUp);
         });
 
+        // App-level motion switch. Defaults on so gentle transitions show even when the OS reports
+        // prefers-reduced-motion; a future user setting can flip this to "off" to honour the OS.
+        document.documentElement.dataset.motion = 'on';
+
+        // Composer auto-grow: the textarea expands to fit its content up to the CSS max-height, then
+        // scrolls. Delegated on input so it survives ziex re-renders replacing the element.
+        document.addEventListener('input', function (e) {
+            const t = e.target;
+            if (!t || t.id !== 'send_textarea') return;
+            t.style.height = 'auto';
+            t.style.height = t.scrollHeight + 'px';
+        });
+
+        // Click-outside closes an open top-bar dropdown (docks are persistent and stay put). Only
+        // fires work when a `.dropdown` is actually in the DOM.
+        document.addEventListener('pointerdown', function (e) {
+            const dd = document.querySelector('.dropdown');
+            if (!dd) return;
+            const t = e.target;
+            if (dd.contains(t)) return;
+            if (t.closest && t.closest('.drawers > button')) return; // let the button's own toggle handle it
+            if (wasm && wasm.__st_close_panel) wasm.__st_close_panel();
+        });
+
         const params = new URLSearchParams(window.location.search);
 
         // Proves a message that has no SSR marker still renders: the acceptance gate for streaming.

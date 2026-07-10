@@ -47,6 +47,8 @@ body {
     padding: 0 0.6rem 0 0.9rem;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
+    position: relative;
+    z-index: 20;
 }
 
 .brand {
@@ -225,6 +227,60 @@ body {
     background: color-mix(in oklch, var(--accent) 30%, transparent);
 }
 
+/* ---- Top-bar dropdown (elevation via lighter surface + border, no shadow: WD16) ---- */
+.dropdown {
+    position: absolute;
+    top: calc(var(--topbar-h) - 6px);
+    right: 0.6rem;
+    z-index: 30;
+    min-width: 15rem;
+    max-width: min(20rem, calc(100vw - 1.2rem));
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.dropdown-head {
+    padding: 0.6rem 0.85rem;
+    font-size: 0.72rem;
+    font-weight: 650;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+}
+
+.dropdown-body {
+    display: flex;
+    flex-direction: column;
+    padding: 0.3rem;
+}
+
+.dropdown-item {
+    text-align: left;
+    padding: 0.5rem 0.65rem;
+    background: transparent;
+    border: 0;
+    border-radius: 8px;
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+}
+
+.dropdown-item:hover {
+    background: var(--surface);
+    color: var(--accent);
+}
+
+.dropdown-note {
+    padding: 0.5rem 0.85rem 0.65rem;
+    font-size: 0.74rem;
+    line-height: 1.4;
+    color: var(--muted);
+    border-top: 1px solid var(--border);
+}
+
 /* ---- Composer ---- */
 #composer {
     flex: 0 0 auto;
@@ -398,10 +454,64 @@ body {
 .i-send { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>'); }
 .i-stop { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="black" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>'); }
 
-@media (prefers-reduced-motion: no-preference) {
-    .drawers > button,
-    .composer-btn,
-    .panel-close {
-        transition: background 120ms ease, color 120ms ease;
+/* ---- Motion (WD18-25) ---- */
+/* --move scales the MOVEMENT (transform) only; the opacity fade always plays, so reduced motion is
+   gentler rather than absent (WD25). Defaults to moving; the OS reduced-motion pref drops movement,
+   but the app sets data-motion="on" so gentle motion shows regardless (see glue/main.js). */
+:root {
+    --move: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :root {
+        --move: 0;
     }
+}
+
+:root[data-motion="on"] {
+    --move: 1;
+}
+
+:root[data-motion="off"] {
+    --move: 0;
+}
+
+/* Colour transitions only (WD25 keeps colour under reduced motion), so these are always on. */
+.drawers > button,
+.composer-btn,
+.panel-close,
+.dropdown-item {
+    transition: background 120ms ease, color 120ms ease;
+}
+
+.composer-input {
+    transition: border-color 120ms ease;
+}
+
+.panel {
+    animation: panel-in 220ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.panel-right {
+    animation-name: panel-in-right;
+}
+
+.dropdown {
+    animation: dropdown-in 180ms cubic-bezier(0.23, 1, 0.32, 1);
+    transform-origin: top right;
+}
+
+@keyframes panel-in {
+    from { opacity: 0; transform: translateX(calc(var(--move) * -12px)); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes panel-in-right {
+    from { opacity: 0; transform: translateX(calc(var(--move) * 12px)); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes dropdown-in {
+    from { opacity: 0; transform: translateY(calc(var(--move) * -6px)) scale(calc(1 - var(--move) * 0.03)); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
 }
