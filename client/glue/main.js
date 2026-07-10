@@ -169,8 +169,22 @@
         sanitize: function (ptr, len) {
             stats.sanitizes += 1;
             stats.mdBytes += len;
-            const clean = DOMPurify.sanitize(readString(ptr, len), MESSAGE_CONFIG);
-            return writeString(highlightBlocks(clean));
+            // Never throw back into the wasm door: a sanitize failure fails closed (drop the body,
+            // never unsanitized); a highlight failure degrades to the sanitized-but-unhighlighted HTML.
+            let out;
+            try {
+                const clean = DOMPurify.sanitize(readString(ptr, len), MESSAGE_CONFIG);
+                try {
+                    out = highlightBlocks(clean);
+                } catch (err) {
+                    console.error('[st-client] highlight failed', err);
+                    out = clean;
+                }
+            } catch (err) {
+                console.error('[st-client] sanitize failed', err);
+                out = '';
+            }
+            return writeString(out);
         },
         // Zig cannot await, so the rejection has to be absorbed here or it surfaces as unhandled.
         sse_start: function (ptr, len) {
