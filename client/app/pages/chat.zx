@@ -1,43 +1,33 @@
-// The app shell: top bar with the drawer buttons, a scrollable chat, and the composer. A
-// proof-of-concept layout; the buttons are inert until the send loop and the drawers are wired.
-// The live message list lives in store.zig, so rerender() resolves to exactly this component.
+// Composes the app shell from components: TopBar, the left/right SidePanel docks (rendered only
+// when open), the chat message list, and the Composer. Panel state lives in ui.zig; this file only
+// arranges the pieces. The live message list lives in store.zig, so rerender() resolves here.
 pub fn ChatView(ctx: *zx.ComponentCtx(void)) zx.Component {
     // Retires the streaming HTML this render's diff no longer reads. Must precede every renderMessage.
     sanitized.renderTick();
     return (
         <div @allocator={ctx.allocator} id="app">
-            <header id="topbar">
-                <div class="brand">SillyTavern<span class="brand-beta">beta</span></div>
-                <nav class="drawers" aria-label="Panels">
-                    <button class="drawer-btn" title="AI Response Configuration" aria-label="AI Response Configuration"><span class="ico ico-sliders"></span></button>
-                    <button class="drawer-btn" title="API Connections" aria-label="API Connections"><span class="ico ico-plug"></span></button>
-                    <button class="drawer-btn" title="AI Response Formatting" aria-label="AI Response Formatting"><span class="ico ico-font"></span></button>
-                    <button class="drawer-btn" title="World Info" aria-label="World Info"><span class="ico ico-book"></span></button>
-                    <button class="drawer-btn" title="User Settings" aria-label="User Settings"><span class="ico ico-cog"></span></button>
-                    <button class="drawer-btn" title="Backgrounds" aria-label="Backgrounds"><span class="ico ico-image"></span></button>
-                    <button class="drawer-btn" title="Extensions" aria-label="Extensions"><span class="ico ico-cubes"></span></button>
-                    <button class="drawer-btn" title="Persona Management" aria-label="Persona Management"><span class="ico ico-user"></span></button>
-                    <button class="drawer-btn" title="Character Management" aria-label="Character Management"><span class="ico ico-card"></span></button>
-                </nav>
-            </header>
-
-            <main id="chat">
-                <div class="chat-inner">
-                    {for (convo) |m| (
-                        <MessageView msg={m} />
-                    )}
-                    {for (store.slice(), 0..) |m, i| (
-                        <MessageView msg={m} cacheable={!store.isStreaming(i)} />
-                    )}
+            <TopBar />
+            <div id="content">
+                {if (ui.openOn(.left)) |p| (
+                    <SidePanel panel={p} />
+                )}
+                <div id="center">
+                    <main id="chat">
+                        <div class="chat-inner">
+                            {for (convo) |m| (
+                                <MessageView msg={m} />
+                            )}
+                            {for (store.slice(), 0..) |m, i| (
+                                <MessageView msg={m} cacheable={!store.isStreaming(i)} />
+                            )}
+                        </div>
+                    </main>
+                    <Composer />
                 </div>
-            </main>
-
-            <footer id="composer">
-                <button class="composer-btn" title="Options" aria-label="Options"><span class="ico ico-menu"></span></button>
-                <textarea id="send_textarea" class="composer-input" rows="1" placeholder="Type a message..." aria-label="Message"></textarea>
-                <button class="composer-btn is-send" title="Send" aria-label="Send"><span class="ico ico-send"></span></button>
-                <button class="composer-btn is-stop" title="Stop" aria-label="Stop"><span class="ico ico-stop"></span></button>
-            </footer>
+                {if (ui.openOn(.right)) |p| (
+                    <SidePanel panel={p} />
+                )}
+            </div>
         </div>
     );
 }
@@ -46,14 +36,17 @@ const zx = @import("zx");
 const fixtures = @import("./fixtures.zig");
 const sanitized = @import("./sanitized.zig");
 const store = @import("./store.zig");
+const ui = @import("./ui.zig");
+const TopBar = @import("./topbar.zx").TopBar;
+const SidePanel = @import("./sidepanel.zx").SidePanel;
+const Composer = @import("./composer.zx").Composer;
 pub const MessageView = @import("./message.zx").MessageView;
 
 // The example conversation shown in the shell; the first three roleplay fixtures read as a real chat.
-// The .zx transpiler appends `.len`, so this must already be a slice.
 const convo: []const store.Message = fixtures.sections[0].messages[0..3];
 
 // ziex transpiles app/pages into a cache dir, so only an import from THIS graph reaches the same
-// store instance ChatView reads. Nothing else references bridge.zig; this forces its wasm @exports.
+// store and ui instances ChatView reads. Nothing else references bridge.zig; this forces its exports.
 comptime {
     _ = @import("./bridge.zig");
 }

@@ -298,6 +298,32 @@
         window.stAppendMessage = appendMessage;
         window.stStartStream = startStream;
 
+        // Panel resize: drag a .panel-resize handle. Width is set live during the drag to avoid a
+        // rerender per pointermove; the final width is persisted to Zig state on release.
+        document.addEventListener('pointerdown', function (e) {
+            const handle = e.target && e.target.closest ? e.target.closest('.panel-resize') : null;
+            if (!handle) return;
+            const panel = handle.parentElement;
+            if (!panel) return;
+            e.preventDefault();
+            const isLeft = handle.dataset.side === 'left';
+            const rect = panel.getBoundingClientRect();
+            let lastW = rect.width;
+            function onMove(ev) {
+                let w = isLeft ? (ev.clientX - rect.left) : (rect.right - ev.clientX);
+                w = Math.max(240, Math.min(620, w));
+                panel.style.width = w + 'px';
+                lastW = w;
+            }
+            function onUp() {
+                document.removeEventListener('pointermove', onMove);
+                document.removeEventListener('pointerup', onUp);
+                if (wasm && wasm.__st_set_panel_width) wasm.__st_set_panel_width(isLeft ? 1 : 0, lastW);
+            }
+            document.addEventListener('pointermove', onMove);
+            document.addEventListener('pointerup', onUp);
+        });
+
         const params = new URLSearchParams(window.location.search);
 
         // Proves a message that has no SSR marker still renders: the acceptance gate for streaming.

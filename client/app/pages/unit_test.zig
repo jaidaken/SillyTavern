@@ -20,6 +20,8 @@ comptime {
     _ = @import("utf8.zig");
     _ = @import("stream.zig");
     _ = @import("html.zig");
+    _ = @import("completion.zig");
+    _ = @import("ui_state.zig");
 }
 
 const sink_call = "html.sink(";

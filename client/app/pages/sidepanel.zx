@@ -1,0 +1,25 @@
+// A docked side panel: title bar with a close button, a body (placeholder until each subsystem is
+// wired), and a drag handle on the inner edge. Width comes from ui state; the drag is handled by
+// the glue via delegation and calls back into ui.setWidth, so the width lives in Zig.
+pub const PanelProps = struct {
+    panel: ui.Panel,
+};
+
+pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
+    const p = props.panel;
+    return (
+        <aside @allocator={allocator} class={ui.sideClass(p.side)} style={ui.widthStyle(allocator, p.side)}>
+            <div class="panel-head">
+                <span class="panel-title">{p.title}</span>
+                <button class="panel-close" title="Close" aria-label="Close panel" onclick={ui.onClose}></button>
+            </div>
+            <div class="panel-body">
+                <p class="panel-empty">Controls for this panel land here as each subsystem is wired.</p>
+            </div>
+            <div class="panel-resize" data-side={ui.sideStr(p.side)} aria-hidden="true"></div>
+        </aside>
+    );
+}
+
+const zx = @import("zx");
+const ui = @import("./ui.zig");

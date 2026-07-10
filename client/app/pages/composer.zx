@@ -1,0 +1,13 @@
+// The composer: options menu, the message input, and send/stop. Inert until the send loop is wired.
+pub fn Composer(allocator: zx.Allocator) zx.Component {
+    return (
+        <footer @allocator={allocator} id="composer">
+            <button class="composer-btn i-menu" title="Options" aria-label="Options"></button>
+            <textarea id="send_textarea" class="composer-input" rows="1" placeholder="Type a message..." aria-label="Message"></textarea>
+            <button class="composer-btn is-send i-send" title="Send" aria-label="Send"></button>
+            <button class="composer-btn is-stop i-stop" title="Stop" aria-label="Stop"></button>
+        </footer>
+    );
+}
+
+const zx = @import("zx");

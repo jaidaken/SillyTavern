@@ -1,0 +1,19 @@
+// The top bar: brand plus the drawer buttons, generated from the ui.panels data. One shared
+// onDrawer handler reads the clicked button's id and toggles its panel.
+pub fn TopBar(allocator: zx.Allocator) zx.Component {
+    return (
+        <header @allocator={allocator} id="topbar">
+            <div class="brand">SillyTavern<span class="brand-beta">beta</span></div>
+            <nav class="drawers" aria-label="Panels">
+                {for (panel_list) |p| (
+                    <button id={p.dom_id} class={ui.drawerClass(allocator, p.id, p.icon)} title={p.title} aria-label={p.title} onclick={ui.onDrawer}></button>
+                )}
+            </nav>
+        </header>
+    );
+}
+
+const zx = @import("zx");
+const ui = @import("./ui.zig");
+// The .zx transpiler appends `.len`, so the loop target must already be a slice.
+const panel_list: []const ui.Panel = &ui.panels;
