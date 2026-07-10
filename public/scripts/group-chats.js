@@ -819,7 +819,6 @@ export function getGroupBlock(group) {
     template.find('.ch_name').text(group.name).attr('title', `[Group] ${group.name}`);
     template.find('.group_fav_icon').css('display', 'none');
     template.addClass(group.fav ? 'is_fav' : '');
-    template.find('.ch_fav').val(String(group.fav));
     template.find('.group_select_counter').text(count + ' ' + (count != 1 ? t`characters` : t`character`));
     template.find('.group_select_block_list').text(namesList.join(', '));
 
@@ -1692,7 +1691,6 @@ function getGroupCharacterBlock(character) {
     template.find('.avatar img').attr({ 'src': avatar, 'title': character.avatar });
     template.find('.ch_name').text(character.name);
     template.attr('data-chid', characters.indexOf(character));
-    template.find('.ch_fav').val(String(isFav));
     template.toggleClass('is_fav', isFav);
 
     const auxFieldName = power_user.aux_field || 'character_version';

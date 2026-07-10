@@ -985,7 +985,6 @@ function getCharacterBlock(item, id) {
     }
     template.find('.ch_fav_icon').css('display', 'none');
     template.toggleClass('is_fav', item.fav || item.fav == 'true');
-    template.find('.ch_fav').val(item.fav);
 
     const isAssistant = item.avatar === getPermanentAssistantAvatar();
     if (!isAssistant) {
@@ -7544,7 +7543,6 @@ export function buildAvatarList(block, entities, { templateId = 'inline_avatar_t
         avatarTemplate.attr('title', `[Character] ${entity.item.name}\nFile: ${entity.item.avatar}`);
         if (highlightFavs) {
             avatarTemplate.toggleClass('is_fav', entity.item.fav || entity.item.fav == 'true');
-            avatarTemplate.find('.ch_fav').val(entity.item.fav);
         }
 
         // If this is a group, we need to hack slightly. We still want to keep most of the css classes and layout, but use a group avatar instead.
