@@ -31,7 +31,7 @@ const raw_attr_tokens = [_][]const u8{ "@escaping", "=", "{", ".none", "}" };
 const attr_head = raw_attr_tokens[0];
 
 /// Proves the scan reached the real directory rather than an empty one; it reads whatever it finds.
-const known_zx_count = 4;
+const known_zx_count = 8;
 const zx_anchor = "message.zx";
 
 /// A test binary inherits the cwd `zig build` was invoked from, which is the client root on every

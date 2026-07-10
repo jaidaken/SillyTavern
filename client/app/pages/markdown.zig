@@ -42,8 +42,7 @@ pub const Error = std.mem.Allocator.Error;
 pub fn toHtml(allocator: std.mem.Allocator, src: []const u8) Error![]const u8 {
     if (src.len == 0) return allocator.alloc(u8, 0);
 
-    // No errdefer: every exit below already owns the decision to free, and pairing the two
-    // double-freed on the OOM path.
+    // No errdefer: each exit below deinits the sink itself; an errdefer would double-free on OOM.
     var sink = Sink{ .allocator = allocator };
 
     const rc = c.md_html(

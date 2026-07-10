@@ -19,22 +19,11 @@ pub fn build(b: *std.Build) !void {
         }),
     });
 
-    // link_libc must stay unset here: ziex swaps any libc-requiring import for a server-only stub
-    // in the wasm build (init.zig:518). wasm gets malloc/free from libc_shim, native from the exe.
     const md4c = b.createModule(.{ .root_source_file = b.path("app/pages/markdown.zig") });
-    md4c.addIncludePath(b.path("vendor/md4c"));
-    // Declarations only: wasm resolves them in libc_shim.zig, native links real libc.
-    md4c.addIncludePath(b.path("vendor/md4c-libc"));
-    md4c.addCSourceFiles(.{
-        .root = b.path("vendor/md4c"),
-        .files = &.{ "md4c.c", "md4c-html.c", "entity.c" },
-        .flags = &.{ "-std=c99", "-DNDEBUG", "-fno-sanitize=undefined" },
-    });
-    md4c.addImport("libc_shim", b.createModule(.{
-        .root_source_file = b.path("app/pages/libc_shim.zig"),
-    }));
-
+    addMd4c(b, md4c);
     app_exe.root_module.addImport("markdown", md4c);
+    // The exe links libc; the md4c module deliberately does not, so ziex can stub its libc imports
+    // for the wasm build (init.zig:518). wasm gets malloc/free from libc_shim, native from the exe.
     app_exe.root_module.link_libc = true;
 
     const install_glue = b.addInstallDirectory(.{
@@ -55,16 +44,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = .Debug,
     });
-    test_mod.addIncludePath(b.path("vendor/md4c"));
-    test_mod.addIncludePath(b.path("vendor/md4c-libc"));
-    test_mod.addCSourceFiles(.{
-        .root = b.path("vendor/md4c"),
-        .files = &.{ "md4c.c", "md4c-html.c", "entity.c" },
-        .flags = &.{ "-std=c99", "-DNDEBUG", "-fno-sanitize=undefined" },
-    });
-    test_mod.addImport("libc_shim", b.createModule(.{
-        .root_source_file = b.path("app/pages/libc_shim.zig"),
-    }));
+    addMd4c(b, test_mod);
     test_mod.link_libc = true;
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = test_mod })).step);
 
@@ -92,4 +72,20 @@ pub fn build(b: *std.Build) !void {
         },
     });
     _ = &ziex_b;
+}
+
+/// Attach the md4c C sources, its include paths, and the libc_shim import to `mod`. Shared by the
+/// app module and the test module so the source set and flags have one owner.
+fn addMd4c(b: *std.Build, mod: *std.Build.Module) void {
+    mod.addIncludePath(b.path("vendor/md4c"));
+    // Declarations only: wasm resolves them in libc_shim.zig, native links real libc.
+    mod.addIncludePath(b.path("vendor/md4c-libc"));
+    mod.addCSourceFiles(.{
+        .root = b.path("vendor/md4c"),
+        .files = &.{ "md4c.c", "md4c-html.c", "entity.c" },
+        .flags = &.{ "-std=c99", "-DNDEBUG", "-fno-sanitize=undefined" },
+    });
+    mod.addImport("libc_shim", b.createModule(.{
+        .root_source_file = b.path("app/pages/libc_shim.zig"),
+    }));
 }

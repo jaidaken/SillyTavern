@@ -148,7 +148,8 @@ pub fn sideStr(side: Side) []const u8 {
 
 /// Inline width for a dock, e.g. "width:340px". Falls back to the default width on OOM.
 pub fn widthStyle(alloc: std.mem.Allocator, w: f32) []const u8 {
-    return std.fmt.allocPrint(alloc, "width:{d}px", .{w}) catch "width:340px";
+    return std.fmt.allocPrint(alloc, "width:{d}px", .{w}) catch
+        std.fmt.comptimePrint("width:{d}px", .{@as(u32, @intFromFloat(default_width))});
 }
 
 /// Drawer button class: the icon class, plus "is-open" when its panel is active. Falls back to the
