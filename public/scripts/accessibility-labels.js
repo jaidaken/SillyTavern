@@ -227,7 +227,10 @@ function labelSelect2SearchField(el) {
         const text = resolveSelect2ComboboxText(el.closest('.select2-container'));
         el.setAttribute('aria-label', text || 'Search');
     }
-    ensureFieldIdentity(el);
+    // Backstop for the synchronous lib/select2-a11y-labels.js wrap: give the field a
+    // stable id + name so Chrome's form audit is satisfied even if the wrap missed it.
+    const id = ensureId(el, 'select2-search');
+    if (!el.getAttribute('name')) el.setAttribute('name', id);
 }
 
 // the visible combobox widget (role=combobox) is a separate element from the search input; both need the name.
