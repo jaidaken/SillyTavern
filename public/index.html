@@ -6740,7 +6740,7 @@
                     <span data-i18n="Exporting a character would also export the selected Lorebook file embedded in the JSON data.">Exporting a character would also export the selected Lorebook file embedded in the JSON data.</span>
                 </div>
                 <div class="range-block-range wide100p">
-                    <select aria-label="Primary Lorebook" class="character_world_info_selector wide100p">
+                    <select aria-label="Primary Lorebook" name="character_world_info" class="character_world_info_selector wide100p">
                         <option value="">--- None ---</option>
                     </select>
                 </div>
@@ -6754,7 +6754,7 @@
                     <span data-i18n="NOTE: These choices are optional and won't be preserved on character export!">NOTE: These choices are optional and won't be preserved on character export!</span>
                 </div>
                 <div class="range-block-range wide100p">
-                    <select aria-label="Auxiliary Lorebooks" class="character_extra_world_info_selector wide100p" multiple>
+                    <select aria-label="Auxiliary Lorebooks" name="character_extra_world_info" class="character_extra_world_info_selector wide100p" multiple>
                         <option value="" data-i18n="-- World Info not found --">-- World Info not found --</option>
                     </select>
                 </div>
@@ -7231,7 +7231,7 @@
                         <small class="ch_additional_info ch_avatar_url"></small>
                     </div>
                     <i class="ch_fav_icon fa-solid fa-star"></i>
-                    <input class="ch_fav" value="" hidden />
+                    <input type="hidden" class="ch_fav" value="" />
                     <div class="ch_description"></div>
                     <div class="tags tags_inline"></div>
                 </div>
@@ -7246,16 +7246,16 @@
         <div id="openai_logit_bias_template" class="template_element">
             <div class="openai_logit_bias_form">
                 <span class="drag-handle">☰</span>
-                <input aria-label="Logit Bias Text" class="openai_logit_bias_text text_pole" data-i18n="[placeholder]Text or token ids" placeholder="Text or [token ids]" />
-                <input aria-label="Logit Bias Value" class="openai_logit_bias_value text_pole" type="number" min="-100" value="0" max="100" />
+                <input aria-label="Logit Bias Text" name="openai_logit_bias_text" autocomplete="off" class="openai_logit_bias_text text_pole" data-i18n="[placeholder]Text or token ids" placeholder="Text or [token ids]" />
+                <input aria-label="Logit Bias Value" name="openai_logit_bias_value" class="openai_logit_bias_value text_pole" type="number" min="-100" value="0" max="100" />
                 <i class="menu_button fa-solid fa-xmark openai_logit_bias_remove"></i>
             </div>
         </div>
         <div id="logit_bias_template" class="template_element">
             <div class="logit_bias_form">
                 <span class="drag-handle">☰</span>
-                <input aria-label="Logit Bias Text" class="logit_bias_text text_pole" data-i18n="[placeholder]Type here..." placeholder="type here..." />
-                <input aria-label="Logit Bias Value" class="logit_bias_value text_pole" type="number" min="-100" value="0" max="100" step="0.01" />
+                <input aria-label="Logit Bias Text" name="logit_bias_text" autocomplete="off" class="logit_bias_text text_pole" data-i18n="[placeholder]Type here..." placeholder="type here..." />
+                <input aria-label="Logit Bias Value" name="logit_bias_value" class="logit_bias_value text_pole" type="number" min="-100" value="0" max="100" step="0.01" />
                 <i class="menu_button fa-solid fa-xmark logit_bias_remove"></i>
             </div>
         </div>
@@ -7286,7 +7286,7 @@
                                 <label for="completion_prompt_manager_popup_entry_form_name">
                                     <span data-i18n="prompt_manager_name">Name</span>
                                 </label>
-                                <input id="completion_prompt_manager_popup_entry_form_name" class="text_pole" type="text" name="name" />
+                                <input id="completion_prompt_manager_popup_entry_form_name" class="text_pole" type="text" name="name" autocomplete="off" />
                                 <div class="text_muted" data-i18n="A name for this prompt.">A name for this prompt.</div>
                             </div>
                             <div class="completion_prompt_manager_popup_entry_form_control flex1">
@@ -7538,7 +7538,7 @@
                     </div>
                     <div class="tags tags_inline"></div>
                 </div>
-                <input class="ch_fav" value="" hidden />
+                <input type="hidden" class="ch_fav" value="" />
                 <div class="queue_position"></div>
                 <div class="group_member_icon">
                     <div title="Temporarily disable automatic replies from this character" data-action="disable" class="right_menu_button fa-solid fa-lg fa-comment-slash" data-i18n="[title]Temporarily disable automatic replies from this character"></div>
@@ -7566,7 +7566,7 @@
                     </div>
                     <small class="character_name_block_sub_line" data-i18n="in this group">in this group</small>
                     <i class='group_fav_icon fa-solid fa-star'></i>
-                    <input class="ch_fav" value="" hidden />
+                    <input type="hidden" class="ch_fav" value="" />
                     <div class="group_select_block_list ch_description"></div>
                     <div class="tags tags_inline"></div>
                 </div>
