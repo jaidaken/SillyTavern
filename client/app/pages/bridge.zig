@@ -68,6 +68,12 @@ fn streamTokens() callconv(.c) usize {
     return live.tokens;
 }
 
+/// Non-zero once the framer has sealed (a `[DONE]` or an end), so the glue can stop reading a socket
+/// the backend may hold open past the sentinel instead of latching its stream state forever.
+fn streamDone() callconv(.c) u32 {
+    return @intFromBool(live.state == .done);
+}
+
 comptime {
     if (is_wasm) {
         @export(&appendMessage, .{ .name = "__st_append_message" });
@@ -75,5 +81,6 @@ comptime {
         @export(&streamAppend, .{ .name = "__st_stream_append" });
         @export(&streamEnd, .{ .name = "__st_stream_end" });
         @export(&streamTokens, .{ .name = "__st_stream_tokens" });
+        @export(&streamDone, .{ .name = "__st_stream_done" });
     }
 }

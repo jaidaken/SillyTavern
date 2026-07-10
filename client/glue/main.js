@@ -230,6 +230,13 @@
                 } finally {
                     streamRender = false;
                 }
+
+                // The framer seals on a [DONE] sentinel. Stop reading a socket the backend may hold
+                // open past it, instead of latching streamActive until the connection eventually drops.
+                if (wasm.__st_stream_done && wasm.__st_stream_done()) {
+                    ended = true;
+                    if (reader) reader.cancel().catch(function () {});
+                }
             } catch (err) {
                 // rAF and setTimeout drop this frame's throw, so cancelling the reader here is the
                 // only way the finally below runs and releases streamActive.
