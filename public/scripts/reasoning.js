@@ -1211,7 +1211,7 @@ function setReasoningEventHandlers() {
         if (mesEditArea.length) {
             const summary = $(mes).find('.mes_reasoning_summary');
             if (!summary.attr('open')) {
-                summary.find('.mes_reasoning_edit').trigger('click');
+                $(mes).find('.mes_reasoning_edit').trigger('click');
             }
         }
     });
