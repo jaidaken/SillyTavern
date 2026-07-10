@@ -1,0 +1,23 @@
+// Shared panel chrome composed by both the docked SidePanel and the TopDrawer, so the title bar and
+// the placeholder body live in one place instead of being hand-written in each.
+pub const HeadProps = struct {
+    title: []const u8,
+};
+
+pub fn PanelHead(allocator: zx.Allocator, props: HeadProps) zx.Component {
+    return (
+        <div @allocator={allocator} class="panel-head">
+            <span class="panel-title">{props.title}</span>
+            <button class="panel-close" type="button" title="Close" aria-label="Close" onclick={ui.onClose}></button>
+        </div>
+    );
+}
+
+pub fn PanelEmpty(allocator: zx.Allocator) zx.Component {
+    return (
+        <p @allocator={allocator} class="panel-empty">Controls for this panel land here as each subsystem is wired.</p>
+    );
+}
+
+const zx = @import("zx");
+const ui = @import("./ui.zig");

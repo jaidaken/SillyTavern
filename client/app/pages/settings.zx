@@ -1,0 +1,21 @@
+// The User Settings drawer body. First real control: the motion preference, which honours the OS
+// reduced-motion by default and can be overridden. Split out of TopDrawer so the generic drawer
+// holds only chrome and a body slot, not a growing per-panel if/else chain.
+pub fn SettingsBody(allocator: zx.Allocator) zx.Component {
+    return (
+        <div @allocator={allocator} class="settings-body">
+            <div class="setting-row">
+                <span class="setting-label">Motion</span>
+                <div class="seg" role="group" aria-label="Motion">
+                    <button class={ui.motionSegClass(.system)} data-motion-set="system" type="button">System</button>
+                    <button class={ui.motionSegClass(.on)} data-motion-set="on" type="button">On</button>
+                    <button class={ui.motionSegClass(.off)} data-motion-set="off" type="button">Off</button>
+                </div>
+            </div>
+            <p class="setting-note">System follows your OS reduced-motion preference.</p>
+        </div>
+    );
+}
+
+const zx = @import("zx");
+const ui = @import("./ui.zig");
