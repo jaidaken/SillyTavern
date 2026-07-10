@@ -86,10 +86,16 @@ body {
     background: color-mix(in oklch, var(--accent) 30%, transparent);
 }
 
+:where(button, textarea, [tabindex]):focus-visible {
+    outline: 2px solid color-mix(in oklch, var(--accent) 70%, transparent);
+    outline-offset: 2px;
+}
+
 #app {
     height: 100dvh;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
 }
 
 /* ---- Top bar ---- */
@@ -172,6 +178,7 @@ body {
     flex: 1 1 auto;
     display: flex;
     min-height: 0;
+    overflow: hidden;
 }
 
 #center {

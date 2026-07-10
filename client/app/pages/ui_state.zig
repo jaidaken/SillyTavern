@@ -43,7 +43,7 @@ pub const panels = [_]Panel{
     .{ .id = .settings, .dom_id = "d-settings", .icon = "i-cog", .title = "User Settings", .side = .left },
     .{ .id = .backgrounds, .dom_id = "d-backgrounds", .icon = "i-image", .title = "Backgrounds", .side = .left },
     .{ .id = .extensions, .dom_id = "d-extensions", .icon = "i-cubes", .title = "Extensions", .side = .right },
-    .{ .id = .persona, .dom_id = "d-persona", .icon = "i-user", .title = "Persona Management", .side = .right },
+    .{ .id = .persona, .dom_id = "d-persona", .icon = "i-user", .title = "Persona Management", .side = .right, .kind = .dock },
     .{ .id = .characters, .dom_id = "d-characters", .icon = "i-card", .title = "Character Management", .side = .right, .kind = .dock },
 };
 
@@ -178,9 +178,9 @@ test "toggle opens then closes, and is exclusive across the two docks" {
     try testing.expect(s.activePanel() == null);
 }
 
-test "the seven middle panels are drawers; only ai_config and characters dock" {
+test "the middle panels are drawers; ai_config docks left, persona and characters dock right" {
     var s: PanelState = .{};
-    const drawers = [_]PanelId{ .connections, .formatting, .world_info, .settings, .backgrounds, .extensions, .persona };
+    const drawers = [_]PanelId{ .connections, .formatting, .world_info, .settings, .backgrounds, .extensions };
     for (drawers) |id| {
         s.toggle(id);
         try testing.expect(s.activeDrawer().?.id == id);
@@ -188,11 +188,16 @@ test "the seven middle panels are drawers; only ai_config and characters dock" {
         try testing.expect(s.openOn(.right) == null);
         s.close();
     }
-    // The two docks never surface as drawers.
+    // ai_config docks on the left; persona and characters dock on the right, one at a time.
     s.toggle(.ai_config);
     try testing.expect(s.activeDrawer() == null);
-    s.toggle(.characters);
+    try testing.expect(s.openOn(.left).?.id == .ai_config);
+    s.toggle(.persona);
     try testing.expect(s.activeDrawer() == null);
+    try testing.expect(s.openOn(.right).?.id == .persona);
+    s.toggle(.characters);
+    try testing.expect(s.openOn(.right).?.id == .characters);
+    try testing.expect(!s.isActive(.persona));
 }
 
 test "width clamps to the allowed range" {
