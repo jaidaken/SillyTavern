@@ -18,48 +18,53 @@ pub const panels = ui_state.panels;
 pub const min_width = ui_state.min_width;
 pub const max_width = ui_state.max_width;
 
-var state: ui_state.PanelState = .{};
-var motion: ui_state.MotionPref = .system;
+/// The single reactive UI state: which panel is open with its dock widths, plus the motion pref.
+/// ui.zig holds the one instance; ui_state.zig owns the pure model and helpers.
+const Ui = struct {
+    panels: ui_state.PanelState = .{},
+    motion: ui_state.MotionPref = .system,
+};
+var ui: Ui = .{};
 
 // Read-only views the components use during render; no rerender, so they are safe to call anywhere.
 pub fn isActive(id: PanelId) bool {
-    return state.isActive(id);
+    return ui.panels.isActive(id);
 }
 pub fn activePanel() ?Panel {
-    return state.activePanel();
+    return ui.panels.activePanel();
 }
 pub fn openOn(side: Side) ?Panel {
-    return state.openOn(side);
+    return ui.panels.openOn(side);
 }
 pub fn activeDrawer() ?Panel {
-    return state.activeDrawer();
+    return ui.panels.activeDrawer();
 }
 pub fn widthFor(side: Side) f32 {
-    return state.widthFor(side);
+    return ui.panels.widthFor(side);
 }
 pub fn motionClass() []const u8 {
-    return ui_state.motionClass(motion);
+    return ui_state.motionClass(ui.motion);
 }
 pub fn motionSegClass(which: MotionPref) []const u8 {
-    return ui_state.motionSegClass(motion, which);
+    return ui_state.motionSegClass(ui.motion, which);
 }
 
 // Mutations re-render only the Shell region so it reflects the new state.
 pub fn toggle(id: PanelId) void {
-    state.toggle(id);
+    ui.panels.toggle(id);
     regions.bumpShell();
 }
 pub fn close() void {
-    state.close();
+    ui.panels.close();
     regions.bumpShell();
 }
 pub fn setWidth(side: Side, w: f32) void {
-    state.setWidth(side, w);
+    ui.panels.setWidth(side, w);
     regions.bumpShell();
 }
 
 pub fn widthStyle(alloc: std.mem.Allocator, side: Side) []const u8 {
-    return ui_state.widthStyle(alloc, state.widthFor(side));
+    return ui_state.widthStyle(alloc, ui.panels.widthFor(side));
 }
 pub fn sideClass(side: Side) []const u8 {
     return ui_state.sideClass(side);
@@ -68,7 +73,7 @@ pub fn sideStr(side: Side) []const u8 {
     return ui_state.sideStr(side);
 }
 pub fn drawerClass(alloc: std.mem.Allocator, id: PanelId, icon: []const u8) []const u8 {
-    return ui_state.drawerClass(alloc, state.isActive(id), icon);
+    return ui_state.drawerClass(alloc, ui.panels.isActive(id), icon);
 }
 
 /// Drawer button click. Reads the clicked button's element id and toggles its panel. One handler
@@ -76,8 +81,10 @@ pub fn drawerClass(alloc: std.mem.Allocator, id: PanelId, icon: []const u8) []co
 pub fn onDrawer(ev: zx.client.Event) void {
     // `ref` is void on the server render build; the check is comptime, so that path is pruned there.
     if (zx.platform.role != .client) return;
-    const target = ev.getEvent().ref.get(js.Object, "target") catch return;
-    const id = target.getAlloc(js.String, zx.allocator, "id") catch return;
+    // target, not currentTarget: ziex calls this after native dispatch ends, when currentTarget is
+    // already null. The button is empty (icon is a ::before pseudo), so target is always the button.
+    const button = ev.getEvent().ref.get(js.Object, "target") catch return;
+    const id = button.getAlloc(js.String, zx.allocator, "id") catch return;
     defer zx.allocator.free(id);
     if (ui_state.panelIdFromDomId(id)) |panel_id| toggle(panel_id);
 }
@@ -99,7 +106,7 @@ export fn __st_close_panel() callconv(.c) void {
 /// Set the motion preference from the glue (0 = system, 1 = on, 2 = off). The glue owns persistence
 /// and seeds this at boot from localStorage; Zig owns the reactive class the CSS reads.
 export fn __st_set_motion(pref: u32) callconv(.c) void {
-    motion = switch (pref) {
+    ui.motion = switch (pref) {
         1 => .on,
         2 => .off,
         else => .system,

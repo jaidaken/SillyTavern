@@ -227,3 +227,16 @@ shared page-allocator const, quotes hardcoded refs, completion.zig tokenText pyr
 filename inversion, bridge.zig alias comment, unit_test known_zx_count=8 (should be 10), ui.zig two-globals
 + drawerClass redundant param + default_width not re-exported. ACCEPT items: ui_state linear scan (N=9),
 qsort shellsort, intCast note, digit-led ordered list.
+
+## Addendum 2026-07-10 (wave-1 integration findings)
+
+- [OPEN] Lone streamed code fence never highlights. A single fenced code block that arrives while
+  streaming is skipped by the growing-block highlight skip, and once the message settles the
+  memo-reconcile skip (patch 06) means MessageView never re-renders it, so `highlightBlocks` never runs
+  on the sealed block. Found by m-gate (verify.sh needed a 2-fence payload to get any hljs spans). A 2+
+  fence message DOES highlight; only a lone fence stays plain. Fix candidate: force one highlight pass on
+  stream-seal (bypass the memo skip for the sealing message), or run hljs on settle regardless. Client bug.
+- [FIXED this wave, commit pending] onDrawer read `currentTarget`, which ziex nulls before it calls the
+  Zig handler (handler runs after native dispatch ends), so every drawer/dock button toggled nothing.
+  Introduced by m-zigcore, caught by the render-harness toggle checks (dockOpened false, shell delta 0),
+  reverted to `target` (safe: the button is empty, icon is a ::before pseudo). ui.zig onDrawer.

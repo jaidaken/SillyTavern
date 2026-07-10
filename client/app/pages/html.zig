@@ -41,18 +41,34 @@ pub fn sink(html: SanitizedHtml) []const u8 {
     return html.bytes;
 }
 
+/// The dupe-failure sentinel. `adopt` returns this empty slice when it cannot allocate, so that
+/// `Cache.put` can tell a genuine failure (retry next render) apart from a legitimately empty
+/// DOMPurify result (cache it). The address of a file-private var is unique, so no real buffer and
+/// no `""` literal can alias it.
+var failed_anchor: u8 = 0;
+
+fn failedBytes() []const u8 {
+    return @as([*]const u8, @ptrCast(&failed_anchor))[0..0];
+}
+
+fn isFailed(html: SanitizedHtml) bool {
+    return html.bytes.ptr == @as([*]const u8, @ptrCast(&failed_anchor));
+}
+
 /// The door packs its result as `(ptr << 32) | len`, and returns 0 for an empty result, having
 /// allocated nothing. `__zx_alloc` draws from `std.heap.wasm_allocator`, so the door buffer is
 /// released here once its bytes are copied. Without this, streaming leaks one buffer per token.
 ///
-/// A failed dupe yields no bytes, which `Cache.put` refuses to store, so the next render retries.
+/// A zero door result is a real, cacheable `""` (DOMPurify stripped the body to nothing); a failed
+/// dupe is `failedBytes()`, which `Cache.put` refuses to store so the next render retries. The two
+/// must not both collapse to a bare `""`, or a stripped body re-sanitizes on every render forever.
 fn adopt(allocator: std.mem.Allocator, packed_result: u64) []const u8 {
     const addr: usize = @intCast(packed_result >> 32);
     if (addr == 0) return "";
     const len: usize = @intCast(packed_result & 0xFFFF_FFFF);
     const door_buf = @as([*]u8, @ptrFromInt(addr))[0..len];
     defer std.heap.wasm_allocator.free(door_buf);
-    return allocator.dupe(u8, door_buf) catch "";
+    return allocator.dupe(u8, door_buf) catch failedBytes();
 }
 
 /// The sole mint. Every `SanitizedHtml` in the program is born here, downstream of DOMPurify.
@@ -90,9 +106,9 @@ const Cache = struct {
 
     /// `k` is `key(body)` in production; a test passes it directly to stage a hash collision.
     fn put(self: *Cache, k: u64, body: []const u8, html: SanitizedHtml) void {
-        // Entries never expire, so caching a failed sanitize would blank this message for the life
-        // of the page; skipping the insert lets the next render produce the real HTML.
-        if (html.bytes.len == 0) return;
+        // A failed sanitize has no real bytes; caching it blanks the message for the page's life, so
+        // skip it and let the next render retry. A legitimately empty DOMPurify result is cached.
+        if (isFailed(html)) return;
 
         const gop = self.map.getOrPut(self.allocator, k) catch {
             self.ring.retain(html.bytes);
@@ -310,9 +326,29 @@ test "retire_ring_frees_every_outstanding_generation_at_deinit" {
     try testing.expectEqual(@as(usize, 4), counting.frees);
 }
 
-/// A sanitize the door could not fulfil, as `adopt` returns it when the dupe fails.
+/// A sanitize the door could not fulfil: `adopt` returns the failure sentinel when the dupe fails.
 fn failedSanitize() SanitizedHtml {
-    return .{ .bytes = "", .witness_token = witness() };
+    return .{ .bytes = failedBytes(), .witness_token = witness() };
+}
+
+test "is_failed_separates_the_dupe_failure_sentinel_from_a_legitimately_empty_result" {
+    try testing.expect(isFailed(failedSanitize()));
+    try testing.expect(!isFailed(.{ .bytes = "", .witness_token = witness() }));
+    try testing.expect(!isFailed(.{ .bytes = "<p>x</p>", .witness_token = witness() }));
+}
+
+test "a_legitimately_empty_sanitize_is_cached_so_a_stripped_body_is_not_re_rendered_every_frame" {
+    var r = RetireRing{ .allocator = testing.allocator };
+    defer r.deinit();
+    var c = Cache{ .allocator = testing.allocator, .ring = &r };
+    defer c.deinit();
+
+    const body = "<script>alert(1)</script>";
+    // DOMPurify strips this to nothing; the empty result is real, not a failure, so it must cache.
+    c.put(key(body), body, .{ .bytes = "", .witness_token = witness() });
+    const hit = c.get(body);
+    try testing.expect(hit != null);
+    try testing.expectEqualStrings("", sink(hit.?));
 }
 
 test "a_failed_sanitize_is_not_cached_so_a_later_render_still_produces_the_real_html" {

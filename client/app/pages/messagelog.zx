@@ -11,12 +11,12 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
     sanitized.renderTick();
     return (
         <main @allocator={ctx.allocator} id="chat">
-            <div class="chat-inner">
+            <div class="chat-inner" role="log" aria-live="polite">
                 {for (convo, 0..) |m, i| (
                     <MessageView msg={m} key={i} memo={store.signal(m)} />
                 )}
                 {for (store.slice(), 0..) |m, i| (
-                    <MessageView msg={m} cacheable={!store.isStreaming(i)} key={convo.len + i} memo={store.signal(m)} />
+                    <MessageView msg={m} cacheable={!store.isStreaming(i)} key={convo.len + i} memo={store.signal(m)} streaming={store.isStreaming(i)} />
                 )}
             </div>
         </main>

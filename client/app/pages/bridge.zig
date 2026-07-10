@@ -31,21 +31,26 @@ fn doorBuf(addr: usize, len: usize) []u8 {
 fn appendMessage(name_ptr: usize, name_len: usize, body_ptr: usize, body_len: usize) callconv(.c) void {
     const name = doorBuf(name_ptr, name_len);
     const body = doorBuf(body_ptr, body_len);
-    store.global.append(name, body) catch {
+    store.global.append(name, body) catch |err| {
         store.global.allocator.free(name);
         store.global.allocator.free(body);
+        std.log.err("append_message: {s}, message dropped", .{@errorName(err)});
         return;
     };
     regions.bumpMessageLog();
 }
 
-fn streamBegin(name_ptr: usize, name_len: usize) callconv(.c) void {
+/// Returns 0 when the stream started, non-zero when `begin` refused it (already streaming) or ran
+/// out of memory. The glue honors this instead of flushing tokens into a stream that never opened.
+fn streamBegin(name_ptr: usize, name_len: usize) callconv(.c) u32 {
     const name = doorBuf(name_ptr, name_len);
-    live.begin(name) catch {
+    live.begin(name) catch |err| {
         store.global.allocator.free(name);
-        return;
+        std.log.err("stream_begin: {s}, stream not started", .{@errorName(err)});
+        return 1;
     };
     regions.bumpMessageLog();
+    return 0;
 }
 
 /// Raw SSE bytes, one buffer per animation frame. Decoding and framing happen in `stream.zig`.
@@ -56,7 +61,10 @@ fn streamBegin(name_ptr: usize, name_len: usize) callconv(.c) void {
 fn streamAppend(ptr: usize, len: usize) callconv(.c) void {
     const buf = doorBuf(ptr, len);
     defer store.global.allocator.free(buf);
-    live.feed(buf) catch live.end();
+    live.feed(buf) catch |err| {
+        std.log.err("stream_append: {s}, stream sealed early", .{@errorName(err)});
+        live.end();
+    };
     regions.bumpMessageLog();
 }
 

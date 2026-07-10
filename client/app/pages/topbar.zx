@@ -3,10 +3,10 @@
 pub fn TopBar(allocator: zx.Allocator) zx.Component {
     return (
         <header @allocator={allocator} id="topbar">
-            <div class="brand">SillyTavern<span class="brand-beta">beta</span></div>
+            <h1 class="brand">SillyTavern<span class="brand-beta">beta</span></h1>
             <nav class="drawers" aria-label="Panels">
                 {for (panel_list) |p| (
-                    <button id={p.dom_id} class={ui.drawerClass(allocator, p.id, p.icon)} title={p.title} aria-label={p.title} onclick={ui.onDrawer}></button>
+                    <button id={p.dom_id} type="button" class={ui.drawerClass(allocator, p.id, p.icon)} aria-label={p.title} aria-expanded={if (ui.isActive(p.id)) "true" else "false"} aria-controls="panel-view" onclick={ui.onDrawer}></button>
                 )}
             </nav>
             {if (ui.activeDrawer()) |p| (

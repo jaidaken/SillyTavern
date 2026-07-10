@@ -21,9 +21,14 @@ const Store = store_mod.Store;
 
 const data_prefix = "data:";
 
+/// One SSE `data:` line is one token payload, far below this. The cap bounds a peer that streams
+/// bytes without ever sending `\n`, which would otherwise grow `line` until the wasm heap dies.
+const max_line_len = 1 << 20;
+
 pub const State = enum { idle, streaming, done };
 
 pub const Error = error{StreamInProgress} || Allocator.Error;
+pub const FeedError = error{LineTooLong} || Allocator.Error;
 
 pub const Stream = struct {
     allocator: Allocator,
@@ -64,9 +69,11 @@ pub const Stream = struct {
     /// were, so the same bytes may be fed again. A `drain` that runs out of memory keeps the lines
     /// it could not emit and never re-emits the ones it did.
     ///
-    /// A `[DONE]` anywhere in the fed bytes seals the stream here, once `drain` has finished with
-    /// `line`. Bytes after it are ignored: the backend may hold the socket open indefinitely.
-    pub fn feed(self: *Stream, bytes: []const u8) Allocator.Error!void {
+    /// A `[DONE]` anywhere in the fed bytes seals the stream: `drain` stops at the sentinel and the
+    /// bytes after it are discarded, so a backend that holds the socket open past `[DONE]` adds no
+    /// tokens. A pending line that grows past `max_line_len` with no newline seals the message and
+    /// returns `error.LineTooLong` rather than truncate the run-on bytes into a token.
+    pub fn feed(self: *Stream, bytes: []const u8) FeedError!void {
         if (self.state != .streaming) return;
 
         {
@@ -79,11 +86,19 @@ pub const Stream = struct {
             try self.decoder.feedInto(self.allocator, &self.line, bytes);
         }
 
-        // Seals even when the drain runs out of memory: the sentinel arrived, and the tokens behind
-        // it are already lost to the failure. end() emits whatever complete lines survived.
-        errdefer if (self.saw_done) self.end();
         try self.drain();
-        if (self.saw_done) self.end();
+
+        if (self.saw_done) {
+            self.end();
+            return;
+        }
+
+        // The residual is the current unterminated line; drain has already consumed every complete
+        // one. Past the cap the peer is not framing, so seal rather than keep growing `line`.
+        if (self.line.items.len > max_line_len) {
+            self.seal();
+            return error.LineTooLong;
+        }
     }
 
     /// Ends the stream and seals the message. Always reaches `.done`, even out of memory: losing a
@@ -93,6 +108,13 @@ pub const Stream = struct {
     /// token must not cost the tokens received after it.
     pub fn end(self: *Stream) void {
         if (self.state != .streaming) return;
+
+        // A `[DONE]` already seen means every remaining byte is post-sentinel and must not become a
+        // token; seal without emitting.
+        if (self.saw_done) {
+            self.seal();
+            return;
+        }
 
         if (self.decoder.flush(self.allocator)) |tail| {
             defer self.allocator.free(tail);
@@ -109,6 +131,13 @@ pub const Stream = struct {
         }
         // The last line carries a token even with no trailing newline to close it.
         self.emit(rest[start..]) catch {};
+        self.seal();
+    }
+
+    /// Discards any pending line and reaches `.done` without emitting it. Used at the `[DONE]`
+    /// sentinel and when a line exceeds `max_line_len`, where the buffered bytes must not become a
+    /// token.
+    fn seal(self: *Stream) void {
         self.line.clearAndFree(self.allocator);
         self.store.endStream();
         self.state = .done;
@@ -122,6 +151,8 @@ pub const Stream = struct {
         while (std.mem.indexOfScalarPos(u8, self.line.items, start, '\n')) |nl| {
             try self.emit(self.line.items[start..nl]);
             start = nl + 1;
+            // Stop at the sentinel: lines after `[DONE]` in the same feed must not be emitted.
+            if (self.saw_done) break;
         }
     }
 
@@ -308,6 +339,44 @@ test "stream_seals_on_the_done_sentinel_with_no_external_end" {
     try f.stream.feed(dl("after"));
     try testing.expectEqualStrings("real", f.body(0));
     try testing.expectEqual(@as(usize, 1), f.stream.tokens);
+}
+
+test "a_single_feed_ignores_tokens_after_the_done_sentinel" {
+    var f: Fixture = undefined;
+    f.init(testing.allocator);
+    defer f.deinit();
+
+    try f.open(testing.allocator, "Seraphina");
+    // The whole frame coalesces into one feed, so the sentinel and the trailing token arrive
+    // together; only the token before [DONE] may survive.
+    try f.stream.feed(dl("tok") ++ "data: [DONE]\n" ++ dl("after"));
+
+    try testing.expectEqual(State.done, f.stream.state);
+    try testing.expectEqual(@as(?usize, null), f.store.stream_index);
+    try testing.expectEqualStrings("tok", f.body(0));
+    try testing.expectEqual(@as(usize, 1), f.stream.tokens);
+}
+
+test "a_pending_line_past_the_cap_seals_without_a_bogus_token" {
+    var f: Fixture = undefined;
+    f.init(testing.allocator);
+    defer f.deinit();
+
+    try f.open(testing.allocator, "Seraphina");
+
+    const big = try testing.allocator.alloc(u8, max_line_len + 16);
+    defer testing.allocator.free(big);
+    @memset(big, 'x');
+    @memcpy(big[0..data_prefix.len], data_prefix);
+
+    // No newline ever arrives, so a peer could grow `line` without bound. The cap seals the stream
+    // and surfaces the error instead of turning the run-on bytes into a token.
+    try testing.expectError(error.LineTooLong, f.stream.feed(big));
+
+    try testing.expectEqual(State.done, f.stream.state);
+    try testing.expectEqual(@as(?usize, null), f.store.stream_index);
+    try testing.expectEqual(@as(usize, 0), f.stream.tokens);
+    try testing.expectEqualStrings("", f.body(0));
 }
 
 test "stream_seals_on_a_done_sentinel_split_across_chunks" {

@@ -1,10 +1,10 @@
 pub fn Page(ctx: zx.PageContext) !zx.Component {
     return (
-        <main @allocator={ctx.arena} id="chat-root">
+        <div @allocator={ctx.arena} id="chat-root">
             <Shell @rendering={.client} />
             <MessageLog @rendering={.client} />
             <Composer @rendering={.client} />
-        </main>
+        </div>
     );
 }
 

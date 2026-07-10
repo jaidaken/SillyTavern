@@ -5,17 +5,24 @@ pub fn SettingsBody(allocator: zx.Allocator) zx.Component {
     return (
         <div @allocator={allocator} class="settings-body">
             <div class="setting-row">
-                <span class="setting-label">Motion</span>
-                <div class="seg" role="group" aria-label="Motion">
-                    <button class={ui.motionSegClass(.system)} data-motion-set="system" type="button">System</button>
-                    <button class={ui.motionSegClass(.on)} data-motion-set="on" type="button">On</button>
-                    <button class={ui.motionSegClass(.off)} data-motion-set="off" type="button">Off</button>
+                <span class="setting-label" id="motion-label">Motion</span>
+                <div class="seg" role="radiogroup" aria-labelledby="motion-label" aria-describedby="motion-note">
+                    <button class={ui.motionSegClass(.system)} data-motion-set="system" type="button" role="radio" aria-checked={motionChecked(.system)}>System</button>
+                    <button class={ui.motionSegClass(.on)} data-motion-set="on" type="button" role="radio" aria-checked={motionChecked(.on)}>On</button>
+                    <button class={ui.motionSegClass(.off)} data-motion-set="off" type="button" role="radio" aria-checked={motionChecked(.off)}>Off</button>
                 </div>
             </div>
-            <p class="setting-note">System follows your OS reduced-motion preference.</p>
+            <p class="setting-note" id="motion-note">System follows your OS reduced-motion preference.</p>
         </div>
     );
 }
 
 const zx = @import("zx");
+const std = @import("std");
 const ui = @import("./ui.zig");
+
+// aria-checked keys off the segment's active class, so motionSegClass stays the single source of the
+// current motion pref for both the styling and the radio state.
+fn motionChecked(which: ui.MotionPref) []const u8 {
+    return if (std.mem.endsWith(u8, ui.motionSegClass(which), "is-active")) "true" else "false";
+}

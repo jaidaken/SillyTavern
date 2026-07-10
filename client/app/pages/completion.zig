@@ -16,6 +16,12 @@ pub const Event = union(enum) {
     empty,
 };
 
+/// A single SSE `data:` payload is one token's JSON, far below this. The cap bounds
+/// `parseFromSlice` so one very long line cannot allocate a `Value` tree without limit; the stream
+/// framer bounds an unterminated line, this bounds a terminated but oversized one. A payload this
+/// large is not a real token.
+const max_payload_len = 1 << 20;
+
 /// `payload` is the bytes after `data: ` on one SSE line, already trimmed of the prefix and CR.
 /// Caller owns `Event.token`.
 pub fn parsePayload(allocator: std.mem.Allocator, payload: []const u8) !Event {
@@ -23,6 +29,7 @@ pub fn parsePayload(allocator: std.mem.Allocator, payload: []const u8) !Event {
     if (trimmed.len == 0) return .empty;
     if (std.mem.eql(u8, trimmed, "[DONE]")) return .done;
     if (trimmed[0] != '{') return .empty;
+    if (trimmed.len > max_payload_len) return .empty;
 
     // Malformed JSON is a keepalive-shaped payload, not a failure; a real OOM must propagate so the
     // stream retries the line rather than silently dropping the token.
@@ -118,4 +125,47 @@ test "malformed json is swallowed as empty, never a crash" {
     try testing.expectEqual(Event.empty, try parsePayload(testing.allocator,
         \\{"choices":[]}
     ));
+}
+
+test "an oversized token payload is dropped rather than parsed" {
+    const prefix = "{\"content\":\"";
+    const suffix = "\"}";
+    const buf = try testing.allocator.alloc(u8, prefix.len + max_payload_len + suffix.len);
+    defer testing.allocator.free(buf);
+    @memcpy(buf[0..prefix.len], prefix);
+    @memset(buf[prefix.len..][0..max_payload_len], 'x');
+    @memcpy(buf[prefix.len + max_payload_len ..], suffix);
+
+    // Without the cap this is a well-formed token and would parse; the cap drops it before the
+    // Value tree is built.
+    try testing.expectEqual(Event.empty, try parsePayload(testing.allocator, buf));
+}
+
+fn parseAndFree(allocator: std.mem.Allocator, payload: []const u8) !void {
+    const ev = try parsePayload(allocator, payload);
+    switch (ev) {
+        .token => |tok| allocator.free(tok),
+        else => {},
+    }
+}
+
+test "parsePayload_cleans_up_on_every_allocation_failure" {
+    const payload: []const u8 = "{\"content\":\"a token that gets duped\"}";
+    try testing.checkAllAllocationFailures(testing.allocator, parseAndFree, .{payload});
+}
+
+test "parsePayload_never_leaks_and_only_reports_done_for_the_sentinel" {
+    var prng = std.Random.DefaultPrng.init(0x5eed);
+    const rand = prng.random();
+    var buf: [128]u8 = undefined;
+    for (0..5000) |_| {
+        const len = rand.intRangeAtMost(usize, 0, buf.len);
+        rand.bytes(buf[0..len]);
+        const ev = parsePayload(testing.allocator, buf[0..len]) catch continue;
+        switch (ev) {
+            .token => |tok| testing.allocator.free(tok),
+            .done => try testing.expect(std.mem.eql(u8, std.mem.trim(u8, buf[0..len], " \t"), "[DONE]")),
+            .empty => {},
+        }
+    }
 }

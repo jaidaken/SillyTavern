@@ -4,6 +4,7 @@ pub fn Layout(ctx: zx.LayoutContext, children: zx.Component) zx.Component {
             <head>
                 <meta charset="UTF-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+                <meta name="color-scheme" content="dark" />
                 <title>SillyTavern</title>
                 <link rel="icon" type="image/png" href="/glue/favicon.png" />
                 <link rel="stylesheet" href="/glue/vendor/hljs-theme.css" />
@@ -11,6 +12,7 @@ pub fn Layout(ctx: zx.LayoutContext, children: zx.Component) zx.Component {
             </head>
 
             <body>
+                <a class="skip-link" href="#send_textarea">Skip to message input</a>
                 {children}
             </body>
         </html>

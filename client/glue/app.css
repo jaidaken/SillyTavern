@@ -26,17 +26,17 @@
     --border:      oklch(0.305 0.010 65);
     --border-soft: oklch(0.255 0.008 65);
     --text:        oklch(0.905 0.006 75);
-    --muted:       oklch(0.635 0.010 70);
-    --faint:       oklch(0.500 0.010 70);
+    --muted:       oklch(0.784 0.010 70);
+    --faint:       oklch(0.704 0.010 70);
+    --code-bg:     oklch(0.135 0.006 65);
 
     /* One warm accent (lamplight amber), used sparingly for interactive + focus. */
     --accent:      oklch(0.770 0.130 68);
-    --accent-dim:  oklch(0.700 0.110 68);
     --on-accent:   oklch(0.180 0.020 65);
 
     /* Roleplay text roles (speech vs action), carried from SillyTavern's convention. */
-    --st-quote:    oklch(0.780 0.130 62);
-    --st-em:       oklch(0.640 0.012 70);
+    --st-quote:    oklch(0.840 0.110 62);
+    --st-em:       oklch(0.838 0.012 70);
 
     /* Type */
     --font-ui:    "IBM Plex Sans", system-ui, sans-serif;
@@ -47,14 +47,13 @@
     --text-base: 1rem;
     --text-md:   1.0625rem;
     --text-lg:   1.25rem;
-    --text-xl:   1.5rem;
     --lh-tight: 1.2;
     --lh-ui:    1.45;
     --lh-prose: 1.62;
     --measure:  40rem;
 
     /* Space */
-    --s-1: 0.25rem; --s-2: 0.5rem; --s-3: 0.75rem; --s-4: 1rem; --s-5: 1.5rem; --s-6: 2rem;
+    --s-2: 0.5rem; --s-3: 0.75rem; --s-4: 1rem; --s-5: 1.5rem; --s-6: 2rem;
 
     /* Radius: tight and intentional, not pill-everything. */
     --r-1: 3px; --r-2: 5px; --r-3: 8px;
@@ -86,9 +85,41 @@ body {
     background: color-mix(in oklch, var(--accent) 30%, transparent);
 }
 
-:where(button, textarea, [tabindex]):focus-visible {
+:where(a, button, input, select, textarea, summary, [tabindex], [contenteditable]):focus-visible {
     outline: 2px solid color-mix(in oklch, var(--accent) 70%, transparent);
     outline-offset: 2px;
+}
+
+/* Skip link: off-screen until focused, then anchored top-left over the topbar (WD36/WD37). */
+.skip-link {
+    position: absolute;
+    top: -3rem;
+    left: var(--s-2);
+    z-index: 40;
+    padding: var(--s-2) var(--s-3);
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--r-2);
+    text-decoration: none;
+    transition: top 120ms ease;
+}
+
+.skip-link:focus {
+    top: var(--s-2);
+}
+
+/* Present to assistive tech, removed from the visual flow (the composer's <label for=send_textarea>). */
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
 }
 
 /* ---- App grid: topbar row, [left dock | centre column | right dock], composer row ----
@@ -126,6 +157,7 @@ body {
 }
 
 .brand {
+    margin: 0;
     font-family: var(--font-serif);
     font-size: 1.1rem;
     font-weight: 600;
@@ -235,6 +267,7 @@ body {
 }
 
 .panel-title {
+    margin: 0;
     font-family: var(--font-mono);
     font-weight: 500;
     font-size: var(--text-xs);
@@ -443,6 +476,12 @@ body {
     filter: brightness(1.06);
 }
 
+/* Stop (halt generation): the active-control convention already used by .seg-btn.is-active. */
+.composer-btn.is-stop {
+    background: var(--surface-2);
+    color: var(--accent);
+}
+
 /* ---- Messages: the reading surface (book flow, not chat cards) ---- */
 .mes {
     padding-block: var(--s-4);
@@ -481,6 +520,7 @@ body {
     font-size: var(--text-md);
     line-height: var(--lh-prose);
     color: var(--text);
+    overflow-wrap: break-word;
 }
 
 .mes_text > *:first-child { margin-top: 0; }
@@ -506,14 +546,30 @@ body {
     color: var(--st-em);
 }
 
-.mes_code {
-    overflow-x: auto;
-    border-radius: var(--r-2);
+.mes_text a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.15em;
+}
+
+.mes_text a:hover {
+    color: var(--st-quote);
 }
 
 .mes_text h1,
 .mes_text h2 {
     font-size: var(--text-lg);
+    font-weight: 600;
+    line-height: var(--lh-tight);
+    margin: 0.7em 0 0.3em;
+}
+
+.mes_text h3,
+.mes_text h4,
+.mes_text h5,
+.mes_text h6 {
+    font-size: var(--text-md);
     font-weight: 600;
     line-height: var(--lh-tight);
     margin: 0.7em 0 0.3em;
@@ -528,6 +584,9 @@ body {
 }
 
 .mes_text table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
     border-collapse: collapse;
     margin: 0.5em 0;
     font-family: var(--font-ui);
@@ -542,7 +601,7 @@ body {
 }
 
 .mes_text pre {
-    background: oklch(0.135 0.006 65);
+    background: var(--code-bg);
     border: 1px solid var(--border-soft);
     border-radius: var(--r-2);
     padding: 0.75rem 1rem;
@@ -550,6 +609,12 @@ body {
     font-family: var(--font-mono);
     font-size: var(--text-sm);
     line-height: 1.5;
+}
+
+/* hljs paints its own cool bg + 1em padding on code.hljs; strip both so only the warm pre shows. */
+.mes_text pre code.hljs {
+    background: transparent;
+    padding: 0;
 }
 
 .mes_text :not(pre) > code {
@@ -618,7 +683,6 @@ body {
 }
 
 .drawers > button,
-.composer-btn,
 .panel-close,
 .seg-btn {
     transition: background 120ms ease, color 120ms ease;

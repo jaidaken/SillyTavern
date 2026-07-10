@@ -60,8 +60,8 @@
         }
     }
 
-    // Themes and the custom-CSS box are the only style surfaces, and neither passes through here,
-    // so a message body gets no styling power: no <style> element, no style attribute, no scoping.
+    // Themes and the custom-CSS box are the only style surfaces; a body gets no styling power and
+    // no id/name/data-* it could forge to hijack a delegated listener (send_textarea, data-motion-set).
     const MESSAGE_CONFIG = {
         RETURN_DOM: false,
         RETURN_DOM_FRAGMENT: false,
@@ -69,9 +69,11 @@
         MESSAGE_SANITIZE: true,
         FORBID_TAGS: ['style'],
         FORBID_ATTR: ['style'],
+        ALLOW_DATA_ATTR: false,
+        SANITIZE_NAMED_PROPS: true,
     };
 
-    const URL_ATTRS = new Set(['href', 'src', 'xlink:href', 'action', 'formaction']);
+    const URL_ATTRS = new Set(['href', 'src', 'action']);
 
     function isSafeUri(value) {
         const v = String(value).replace(/[\u0000-\u0020]/g, '').toLowerCase();
@@ -88,10 +90,13 @@
 
     function installHooks() {
         DOMPurify.addHook('afterSanitizeAttributes', function (node) {
-            if ('target' in node) {
-                node.setAttribute('target', '_blank');
-                node.setAttribute('rel', 'noopener');
-            }
+            if (!('target' in node)) return;
+            // A fragment link stays in the document, so leave it alone; an outbound link opens a new
+            // tab and gets both noopener and noreferrer, not noopener alone.
+            const href = node.getAttribute && node.getAttribute('href');
+            if (href && href.charAt(0) === '#') return;
+            node.setAttribute('target', '_blank');
+            node.setAttribute('rel', 'noopener noreferrer');
         });
 
         DOMPurify.addHook('uponSanitizeAttribute', function (node, data) {
@@ -103,10 +108,10 @@
         DOMPurify.addHook('uponSanitizeAttribute', function (node, data, config) {
             if (!config.MESSAGE_SANITIZE) return;
             if (data.attrName !== 'class' || !data.attrValue) return;
-            // hljs* and language-* are ours, applied after md4c; namespacing them breaks the theme.
+            // language-* is md4c's, emitted upstream of this gate and read by highlightBlocks to pick a
+            // grammar; hljs classes are added after the gate so a body's own never need to survive it.
             data.attrValue = data.attrValue.split(/\s+/).filter(Boolean).map(function (v) {
-                if (v.startsWith('fa-') || v.startsWith('note-') || v === 'monospace') return v;
-                if (v.startsWith('hljs') || v.startsWith('language-')) return v;
+                if (v.startsWith('language-')) return v;
                 return 'custom-' + v;
             }).join(' ');
         });
@@ -184,7 +189,14 @@
                 console.error('[st-client] sanitize failed', err);
                 out = '';
             }
-            return writeString(out);
+            // writeString allocates, and a null __zx_alloc would throw the result back into the door,
+            // unwinding past every Zig defer (double-free + leak). Fail closed to the empty contract (0).
+            try {
+                return writeString(out);
+            } catch (err) {
+                console.error('[st-client] sanitize writeback failed', err);
+                return 0n;
+            }
         },
         // Zig cannot await, so the rejection has to be absorbed here or it surfaces as unhandled.
         sse_start: function (ptr, len) {
@@ -198,6 +210,9 @@
 
     let streamActive = false;
     let streamRender = false;
+    // Set true in boot only when a ?rendercount / ?growth / ?stream param is present; gates every
+    // probe surface (window globals, metrics DOM, the harness blocks) off the production path.
+    let devMode = false;
 
     // ziex re-renders synchronously on every state write (reactivity.zig:98), so raw bytes are
     // coalesced into one write per animation frame. Decoding and SSE framing happen in Zig.
@@ -270,7 +285,9 @@
 
         try {
             const n = writeBytes(name);
-            wasm.__st_stream_begin(n.ptr, n.len);
+            // Nonzero = the store refused (stream already live, or alloc failed); the door owns n either
+            // way. Do not arm begun, so no fetch runs and no caret spins on a stream that never opened.
+            if (wasm.__st_stream_begin(n.ptr, n.len) !== 0) throw new Error('stream begin refused');
             begun = true;
 
             const response = await fetch(url, { headers: { Accept: 'text/event-stream' } });
@@ -296,10 +313,12 @@
             // terminal render to see the tail as settled. A begin that threw has nothing to close.
             if (begun) {
                 wasm.__st_stream_end();
-                stats.tokens = wasm.__st_stream_tokens();
-                window.__stStats = stats;
-                const el = document.getElementById('probe-metrics');
-                if (el) el.textContent = JSON.stringify(stats);
+                if (devMode) {
+                    stats.tokens = wasm.__st_stream_tokens();
+                    window.__stStats = stats;
+                    const el = document.getElementById('probe-metrics');
+                    if (el) el.textContent = JSON.stringify(stats);
+                }
             }
         }
     }
@@ -444,9 +463,6 @@
             throw new Error('[st-client] door.init exposed no wasm exports: __zx_alloc unreachable');
         }
 
-        window.stAppendMessage = appendMessage;
-        window.stStartStream = startStream;
-
         // Panel resize: drag a .panel-resize handle. Width is set live during the drag to avoid a
         // rerender per pointermove; the final width is persisted to Zig state on release.
         document.addEventListener('pointerdown', function (e) {
@@ -482,11 +498,46 @@
             if (handle.setPointerCapture) handle.setPointerCapture(pointerId);
         });
 
+        // Keyboard resize (WCAG 2.1.1): the focusable separator must move on arrow keys. Right/Up
+        // widen, Left/Down narrow, shift coarser; Zig re-renders the panel + its aria-valuenow.
+        document.addEventListener('keydown', function (e) {
+            const handle = e.target && e.target.closest ? e.target.closest('.panel-resize') : null;
+            if (!handle) return;
+            const dir = (e.key === 'ArrowRight' || e.key === 'ArrowUp') ? 1
+                : (e.key === 'ArrowLeft' || e.key === 'ArrowDown') ? -1 : 0;
+            if (dir === 0) return;
+            e.preventDefault();
+            const panel = handle.parentElement;
+            if (!panel) return;
+            const isLeft = handle.dataset.side === 'left';
+            const cur = panel.getBoundingClientRect().width;
+            const next = Math.max(240, Math.min(620, cur + dir * (e.shiftKey ? 48 : 16)));
+            if (wasm && wasm.__st_set_panel_width) wasm.__st_set_panel_width(isLeft ? 1 : 0, next);
+        });
+
+        // Drawer overlay: an open drawer covers the content, so the chat log and composer go inert
+        // while it is up. The drawer lives in #shell (re-renders on toggle), so observe it and sync.
+        function syncDrawerInert() {
+            const open = !!document.querySelector('.top-drawer');
+            const chat = document.getElementById('chat');
+            const composer = document.getElementById('composer');
+            if (chat) chat.inert = open;
+            if (composer) composer.inert = open;
+        }
+        const shellEl = document.getElementById('shell');
+        if (shellEl) {
+            new MutationObserver(syncDrawerInert).observe(shellEl, { childList: true, subtree: true });
+            syncDrawerInert();
+        }
+
         // Motion preference. Zig owns the reactive class the CSS reads; the glue owns persistence.
         // Default "system" honours the OS prefers-reduced-motion; the settings drawer overrides it.
         const MOTION = { system: 0, on: 1, off: 2 };
         function applyMotion(name) {
-            if (wasm && wasm.__st_set_motion) wasm.__st_set_motion(MOTION[name] != null ? MOTION[name] : 0);
+            // hasOwn, not MOTION[name] != null: a bare lookup reaches Object.prototype, so "toString"
+            // would resolve to a function and pass a null check.
+            const code = Object.hasOwn(MOTION, name) ? MOTION[name] : 0;
+            if (wasm && wasm.__st_set_motion) wasm.__st_set_motion(code);
         }
         let savedMotion = 'system';
         try { savedMotion = localStorage.getItem('st-motion') || 'system'; } catch (_) {}
@@ -522,6 +573,14 @@
 
         const params = new URLSearchParams(window.location.search);
 
+        // Everything below is the dev + probe harness (render-harness.sh, verify.sh). A production
+        // page carries none of these params, so the test globals and probe blocks never load for it.
+        devMode = params.has('rendercount') || params.has('growth') || params.has('stream');
+        if (!devMode) return;
+
+        window.stAppendMessage = appendMessage;
+        window.stStartStream = startStream;
+
         if (params.has('rendercount')) {
             renderCountProbe(params);
             return;
@@ -531,9 +590,6 @@
         if (params.has('growth')) {
             window.__stBoot = Object.assign({}, stats);
             appendMessage('Seraphina', 'FIXTURE_FOUR appended at runtime, no marker existed for it.');
-        }
-
-        if (params.has('growth')) {
             const m = document.createElement('pre');
             m.id = 'probe-metrics';
             document.body.appendChild(m);

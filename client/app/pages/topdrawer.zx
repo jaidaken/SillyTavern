@@ -8,7 +8,7 @@ pub const DrawerProps = struct {
 pub fn TopDrawer(allocator: zx.Allocator, props: DrawerProps) zx.Component {
     const p = props.panel;
     return (
-        <section @allocator={allocator} class="top-drawer" aria-label={p.title}>
+        <section @allocator={allocator} id="panel-view" class="top-drawer" aria-labelledby="panel-heading">
             <PanelHead title={p.title} />
             <div class="panel-body">
                 {if (p.id == .settings) (

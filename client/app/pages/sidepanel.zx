@@ -7,12 +7,12 @@ pub const PanelProps = struct {
 pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
     const p = props.panel;
     return (
-        <aside @allocator={allocator} class={ui.sideClass(p.side)} style={ui.widthStyle(allocator, p.side)}>
+        <aside @allocator={allocator} id="panel-view" aria-labelledby="panel-heading" class={ui.sideClass(p.side)} style={ui.widthStyle(allocator, p.side)}>
             <PanelHead title={p.title} />
             <div class="panel-body">
                 <PanelEmpty />
             </div>
-            <div class="panel-resize" data-side={ui.sideStr(p.side)} aria-hidden="true"></div>
+            <div class="panel-resize" data-side={ui.sideStr(p.side)} role="separator" tabindex="0" aria-orientation="vertical" aria-label="Resize panel" aria-valuenow={ui.widthFor(p.side)} aria-valuemin={ui.min_width} aria-valuemax={ui.max_width}></div>
         </aside>
     );
 }

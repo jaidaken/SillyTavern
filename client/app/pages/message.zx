@@ -1,6 +1,9 @@
 pub const MessageProps = struct {
     msg: store.Message,
     cacheable: bool = true,
+    // True while this message is the one receiving stream tokens: sets aria-busy so a screen reader
+    // announces the finished body once on settle, not once per token.
+    streaming: bool = false,
     // Read by ziex before resolving (keyFromProps / memoFromProps), not by MessageView itself: key is
     // the stable sequence index for reconcile matching, memo is the content signal for the memo skip.
     key: usize = 0,
@@ -15,7 +18,7 @@ pub fn MessageView(allocator: zx.Allocator, props: MessageProps) zx.Component {
     const body: html.SanitizedHtml = sanitized.renderMessage(allocator, props.msg.body, props.cacheable);
 
     return (
-        <div @allocator={allocator} class="mes">
+        <div @allocator={allocator} class="mes" aria-busy={if (props.streaming) "true" else "false"}>
             <div class="mes_name">{props.msg.name}</div>
             <div class="mes_text" @escaping={.none}>{html.sink(body)}</div>
         </div>

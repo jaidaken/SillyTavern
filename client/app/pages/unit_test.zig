@@ -61,7 +61,21 @@ fn freeZxSources(gpa: std.mem.Allocator, sources: []ZxSource) void {
     gpa.free(sources);
 }
 
-fn loadZxSources(gpa: std.mem.Allocator, io: std.Io) ![]ZxSource {
+/// html.zig is the one legitimate mint of a witness, and unit_test.zig carries `witness_token` in
+/// its own scan strings, so the `.zig` forgery scan skips both.
+const witness_mint_files = [_][]const u8{ "html.zig", "unit_test.zig" };
+
+/// A floor proving the `.zig` scan reached the real page directory rather than an empty one.
+const known_zig_min = 8;
+
+fn isExcluded(name: []const u8, exclude: []const []const u8) bool {
+    for (exclude) |ex| {
+        if (std.mem.eql(u8, name, ex)) return true;
+    }
+    return false;
+}
+
+fn loadSources(gpa: std.mem.Allocator, io: std.Io, suffix: []const u8, exclude: []const []const u8) ![]ZxSource {
     var dir = try openZxDir(io);
     defer dir.close(io);
 
@@ -77,7 +91,8 @@ fn loadZxSources(gpa: std.mem.Allocator, io: std.Io) ![]ZxSource {
     var it = dir.iterate();
     while (try it.next(io)) |entry| {
         if (entry.kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.name, ".zx")) continue;
+        if (!std.mem.endsWith(u8, entry.name, suffix)) continue;
+        if (isExcluded(entry.name, exclude)) continue;
 
         const name = try gpa.dupe(u8, entry.name);
         errdefer gpa.free(name);
@@ -88,8 +103,20 @@ fn loadZxSources(gpa: std.mem.Allocator, io: std.Io) ![]ZxSource {
     return sources.toOwnedSlice(gpa);
 }
 
+fn loadZxSources(gpa: std.mem.Allocator, io: std.Io) ![]ZxSource {
+    return loadSources(gpa, io, ".zx", &[_][]const u8{});
+}
+
+/// Every `app/pages/*.zig` except the witness mint and this test file, for the forgery scan.
+fn loadForgeableZigSources(gpa: std.mem.Allocator, io: std.Io) ![]ZxSource {
+    return loadSources(gpa, io, ".zig", &witness_mint_files);
+}
+
 /// `@escaping = { .none }` opens the same raw-HTML slot as `@escaping={.none}`, so an exact-string
 /// match would wave a spaced attribute through. Returns the index just past the attribute.
+///
+/// Only the literal `.none` is matched: were ziex to accept a non-literal `@escaping` value (a
+/// comptime const), that element would go uncounted here and its children unscanned.
 fn matchRawAttr(text: []const u8, at: usize) ?usize {
     var i = at;
     for (raw_attr_tokens) |token| {
@@ -294,6 +321,11 @@ fn loadAndFreeZxSources(gpa: std.mem.Allocator, io: std.Io) !void {
     freeZxSources(gpa, sources);
 }
 
+fn loadAndFreeZigSources(gpa: std.mem.Allocator, io: std.Io) !void {
+    const sources = try loadForgeableZigSources(gpa, io);
+    freeZxSources(gpa, sources);
+}
+
 test "match_raw_attr_accepts_a_spaced_attribute_and_rejects_other_escaping_modes" {
     try std.testing.expectEqual(@as(?usize, 17), matchRawAttr("@escaping={.none}", 0));
     try std.testing.expectEqual(@as(?usize, 21), matchRawAttr("@escaping = { .none }", 0));
@@ -404,6 +436,23 @@ test "no_zx_source_forges_the_sanitized_witness" {
     defer freeZxSources(gpa, sources);
     try std.testing.expect(sources.len >= known_zx_count);
 
+    for (sources) |src| {
+        try std.testing.expectEqual(@as(usize, 0), countOccurrences(src.text, "witness_token"));
+    }
+}
+
+test "loading_the_forgeable_zig_sources_cleans_up_on_every_allocation_failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, loadAndFreeZigSources, .{std.testing.io});
+}
+
+test "no_zig_source_outside_the_mint_forges_the_sanitized_witness" {
+    const gpa = std.testing.allocator;
+    const sources = try loadForgeableZigSources(gpa, std.testing.io);
+    defer freeZxSources(gpa, sources);
+    try std.testing.expect(sources.len >= known_zig_min);
+
+    // html.zig admits `.witness_token = undefined` compiles with no field privacy, so any occurrence
+    // of the field name in app-page Zig outside the mint is a forge reaching the raw-HTML sink.
     for (sources) |src| {
         try std.testing.expectEqual(@as(usize, 0), countOccurrences(src.text, "witness_token"));
     }
