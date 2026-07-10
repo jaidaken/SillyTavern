@@ -45,9 +45,9 @@
                 </div>
                 <div id="summarySettingsBlock" style="display:none;">
                     <div data-summary-source="main">
-                        <label data-i18n="ext_sum_prompt_builder">
+                        <span data-i18n="ext_sum_prompt_builder">
                             Prompt builder
-                        </label>
+                        </span>
                         <label class="checkbox_label" for="memory_prompt_builder_raw_blocking" data-i18n="[title]ext_sum_prompt_builder_1_desc" title="Extension will build its own prompt using messages that were not summarized yet. Blocks the chat until the summary is generated.">
                             <input id="memory_prompt_builder_raw_blocking" type="radio" name="memory_prompt_builder" value="1" />
                             <span data-i18n="ext_sum_prompt_builder_1">Raw, blocking</span>
@@ -111,7 +111,7 @@
                         <label for="memory_template" data-i18n="ext_sum_injection_template">Injection Template</label>
                         <textarea id="memory_template" class="text_pole textarea_compact" rows="2" data-i18n="[placeholder]ext_sum_memory_template_placeholder" placeholder="&lcub;&lcub;summary&rcub;&rcub; will resolve to the current summary contents."></textarea>
                     </div>
-                    <label for="memory_position" data-i18n="ext_sum_injection_position">Injection Position</label>
+                    <span data-i18n="ext_sum_injection_position">Injection Position</span>
                     <label class="checkbox_label" for="memory_include_wi_scan" data-i18n="[title]ext_sum_include_wi_scan_desc" title="Include the latest summary in the WI scan.">
                         <input id="memory_include_wi_scan" type="checkbox" />
                         <span data-i18n="ext_sum_include_wi_scan">Include in World Info Scanning</span>

@@ -1402,7 +1402,7 @@
 
                                     <div data-tg-type="koboldcpp, llamacpp, ooba, tabby" id="adaptive_p_block" class="wide100p">
                                         <h4 class="wide100p textAlignCenter">
-                                            <label data-i18n="Adaptive-P">Adaptive-P</label>
+                                            <span data-i18n="Adaptive-P">Adaptive-P</span>
                                             <a href="https://github.com/MrJackSpade/adaptive-p-docs" target="_blank">
                                                 <div class="fa-solid fa-circle-info opacity50p"></div>
                                             </a>
@@ -1423,7 +1423,7 @@
 
                                     <div data-tg-type="mancer, ooba, koboldcpp, aphrodite, tabby" data-tg-samplers="smoothing_factor" id="smoothingBlock" name="smoothingBlock" class="wide100p">
                                         <h4 class="wide100p textAlignCenter">
-                                            <label data-i18n="Smooth Sampling">Smooth Sampling</label>
+                                            <span data-i18n="Smooth Sampling">Smooth Sampling</span>
                                             <div class=" fa-solid fa-circle-info opacity50p " data-i18n="[title]Smooth_Sampling_desc" title="Allows you to use quadratic/cubic transformations to adjust the distribution. Lower Smoothing Factor values will be more creative, usually between 0.2-0.3 is the sweetspot (assuming the curve = 1). Higher Smoothing Curve values will make the curve steeper, which will punish low probability choices more aggressively. 1.0 curve is equivalent to only using Smoothing Factor."></div>
                                         </h4>
                                         <div data-tg-type="mancer, ooba, koboldcpp, aphrodite, tabby" class="flex-container flexFlowRow gap10px flexShrink">
@@ -1442,7 +1442,7 @@
 
                                     <div data-tg-type="koboldcpp, aphrodite, mancer, tabby, ooba, llamacpp" data-tg-samplers="xtc_probability" id="xtc_block" class="wide100p">
                                         <h4 class="wide100p textAlignCenter">
-                                            <label data-i18n="Exclude Top Choices (XTC)">Exclude Top Choices (XTC)</label>
+                                            <span data-i18n="Exclude Top Choices (XTC)">Exclude Top Choices (XTC)</span>
                                             <a href="https://github.com/oobabooga/text-generation-webui/pull/6335" target="_blank">
                                                 <div class=" fa-solid fa-circle-info opacity50p"></div>
                                             </a>
@@ -1463,7 +1463,7 @@
 
                                     <div data-tg-type="aphrodite, mancer, ooba, koboldcpp, tabby, llamacpp, dreamgen" data-tg-samplers="dry_multiplier" id="dryBlock" class="wide100p">
                                         <h4 class="wide100p textAlignCenter" title="DRY penalizes tokens that would extend the end of the input into a sequence that has previously occurred in the input. Set multiplier to 0 to disable." data-i18n="[title]DRY_Repetition_Penalty_desc">
-                                            <label data-i18n="DRY Repetition Penalty">DRY Repetition Penalty</label>
+                                            <span data-i18n="DRY Repetition Penalty">DRY Repetition Penalty</span>
                                             <a href="https://github.com/oobabooga/text-generation-webui/pull/5677" target="_blank">
                                                 <div class=" fa-solid fa-circle-info opacity50p"></div>
                                             </a>
@@ -1527,7 +1527,7 @@
                                     </div>
                                     <div data-tg-type="ooba,infermaticai,koboldcpp,llamacpp,tabby" data-tg-samplers="mirostat_mode" id="mirostat_block_ooba" class="wide100p">
                                         <h4 class="wide100p textAlignCenter">
-                                            <label data-i18n="Mirostat (mode=1 is only for llama.cpp)">Mirostat</label>
+                                            <span data-i18n="Mirostat (mode=1 is only for llama.cpp)">Mirostat</span>
                                             <div class=" fa-solid fa-circle-info opacity50p " data-i18n="[title]Mirostat_desc" title="Mirostat is a thermostat for output perplexity.&#13;Mirostat matches the output perplexity to that of the input, thus avoiding the repetition trap&#13;(where, as the autoregressive inference produces text, the perplexity of the output tends toward zero)&#13;and the confusion trap (where the perplexity diverges).&#13;For details, see the paper Mirostat: A Neural Text Decoding Algorithm that Directly Controls Perplexity by Basu et al. (2020).&#13;Mode chooses the Mirostat version. 0=disable, 1=Mirostat 1.0 (llama.cpp only), 2=Mirostat 2.0.&#13;Tau = Variability parameter for Mirostat outputs.&#13;Eta = Learning rate of Mirostat."></div>
                                         </h4>
                                         <div class="flex-container flexFlowRow gap10px flexShrink">
@@ -1550,14 +1550,14 @@
                                     </div>
                                     <div data-tg-type="ooba" data-tg-samplers="num_beams" id="beamSearchBlock" name="beamSearchBlock" class="wide100p">
                                         <h4 class="wide100p textAlignCenter">
-                                            <label>
+                                            <span>
                                                 <span data-i18n="Beam search">Beam Search</span>
                                                 <div class=" fa-solid fa-circle-info opacity50p " title="A greedy, brute-force algorithm used in LLM sampling to find the most likely sequence of words or tokens. It expands multiple candidate sequences at once, maintaining a fixed number (beam width) of top sequences at each step." data-i18n="[title]A greedy, brute-force algorithm used in LLM sampling to find the most likely sequence of words or tokens. It expands multiple candidate sequences at once, maintaining a fixed number (beam width) of top sequences at each step."></div>
-                                            </label>
+                                            </span>
                                         </h4>
                                         <div class="flex-container flexFlowRow alignitemscenter gap10px flexShrink">
                                             <div class="alignitemscenter flex-container marginBot5 flexFlowColumn flexGrow flexShrink gap0">
-                                                <label>
+                                                <label for="num_beams_textgenerationwebui">
                                                     <small data-i18n="# of Beams"># of Beams</small>
                                                     <div class="fa-solid fa-circle-info opacity50p" data-i18n="[title]The number of sequences generated at each step with Beam Search." title="The number of sequences generated at each step with Beam Search."></div>
                                                 </label>
@@ -1565,7 +1565,7 @@
                                                 <input aria-label="# of Beams" class="neo-range-input" type="number" min="1" max="20" step="1" data-for="num_beams_textgenerationwebui" id="num_beams_counter_textgenerationwebui">
                                             </div>
                                             <div data-tg-samplers="length_penalty" class="alignitemscenter flex-container marginBot5 flexFlowColumn flexGrow flexShrink gap0">
-                                                <label>
+                                                <label for="length_penalty_textgenerationwebui">
                                                     <small data-i18n="Length Penalty">Length Penalty</small>
                                                     <div class="fa-solid fa-circle-info opacity50p" data-i18n="[title]Penalize sequences based on their length." title="Penalize sequences based on their length."></div>
                                                 </label>
@@ -1587,7 +1587,7 @@
                                             <div class=" fa-solid fa-circle-info opacity50p " data-i18n="Contrastive_search_txt" title="A sampler that encourages diversity while maintaining coherence, by exploiting the isotropicity of the representation space of most LLMs. For details, see the paper A Contrastive Framework for Neural Text Generation by Su et al. (2022)."></div>
                                         </h4>
                                         <div class="alignitemscenter flex-container flexFlowColumn wide100p gap0">
-                                            <label>
+                                            <label for="penalty_alpha_textgenerationwebui">
                                                 <small data-i18n="Penalty Alpha">Penalty Alpha</small>
                                                 <div class="fa-solid fa-circle-info opacity50p " title="Strength of the Contrastive Search regularization term. Set to 0 to disable CS." data-i18n="[title]Strength of the Contrastive Search regularization term. Set to 0 to disable CS"></div>
                                             </label>
@@ -1641,7 +1641,7 @@
                                         </div>
                                     </div>
                                     <div data-tg-type="mancer, ooba, koboldcpp, vllm, aphrodite, llamacpp, ollama, infermaticai, huggingface, generic" data-tg-samplers="seed" class="flex-container flexFlowColumn alignitemscenter flexBasis48p flexGrow flexShrink gap0">
-                                        <label>
+                                        <label for="seed_textgenerationwebui">
                                             <small data-i18n="Seed">Seed</small>
                                             <div class="fa-solid fa-circle-info opacity50p " data-i18n="[title]Seed_desc" title="A random seed to use for deterministic and reproducable outputs. Set to -1 to use a random seed."></div>
                                         </label>
@@ -2595,11 +2595,11 @@
                                     <a href="https://github.com/oobabooga/text-generation-webui" target="_blank">
                                         oobabooga/text-generation-webui
                                     </a>
-                                    <label for="">
+                                    <span>
                                         <span data-i18n="Make sure you run it with">Make sure you run it with</span>
                                         <code>--api</code>
                                         <span data-i18n="flag">flag</span>
-                                    </label>
+                                    </span>
 
                                 </div>
                                 <h4 data-i18n="API key (optional)">API key (optional)</h4>
@@ -4273,7 +4273,7 @@
                                     <i data-preset-manager-delete="instruct" class="menu_button fa-solid fa-trash-can" title="Delete template" data-i18n="[title]Delete template"></i>
                                 </div>
                             </div>
-                            <label>
+                            <label for="instruct_activation_regex">
                                 <small>
                                     <span data-i18n="Activation Regex">Activation Regex</span>
                                     <span class="fa-solid fa-circle-question" data-i18n="[title]instruct_template_activation_regex_desc" title="When connecting to an API or choosing a model, automatically activate this Instruct Template if the model name matches the provided regular expression."></span>
@@ -5263,7 +5263,7 @@
                                 <input id="world_import_dialog" type="checkbox" />
                                 <small data-i18n="Lorebook Import Dialog">Lorebook Import Dialog</small>
                             </label>
-                            <label class="checkbox_label" for=" enable_auto_select_input" title="Enable auto-select of input text in some text fields when clicking/selecting them. Applies to popup input textboxes, and possible other custom input fields." data-i18n="[title]Enable auto-select of input text in some text fields when clicking/selecting them. Applies to popup input textboxes, and possible other custom input fields.">
+                            <label class="checkbox_label" for="enable_auto_select_input" title="Enable auto-select of input text in some text fields when clicking/selecting them. Applies to popup input textboxes, and possible other custom input fields." data-i18n="[title]Enable auto-select of input text in some text fields when clicking/selecting them. Applies to popup input textboxes, and possible other custom input fields.">
                                 <input id="enable_auto_select_input" type="checkbox" />
                                 <small data-i18n="Auto-select Input Text">Auto-select Input Text</small>
                             </label>
@@ -5568,7 +5568,7 @@
                                         </div>
                                     </div>
                                     <div title="Determines which keys select an item from the AutoComplete suggestions">
-                                        <label>
+                                        <label for="stscript_autocomplete_select">
                                             <small data-i18n="Keyboard">Keyboard:</small>
                                         </label>
                                         <select aria-label="Stscript Autocomplete" id="stscript_autocomplete_select">
@@ -5583,9 +5583,9 @@
                                         <input aria-label="Stscript Autocomplete Font Scale" class="neo-range-input" type="number" min="0.5" max="2" step="0.01" data-for="stscript_autocomplete_font_scale" id="stscript_autocomplete_font_scale_counter">
                                     </div>
                                     <div title="Sets the width of the autocomplete." data-i18n="[title]Sets the width of the autocomplete.">
-                                        <label for="stscript_autocomplete_width">
+                                        <span>
                                             <small data-i18n="Autocomplete Width">Width</small>
-                                        </label>
+                                        </span>
                                         <div class="doubleRangeContainer">
                                             <div class="doubleRangeInputContainer">
                                                 <input aria-label="Width" type="range" id="stscript_autocomplete_width_left" min="0" max="2" step="1">
@@ -5610,7 +5610,7 @@
                             <div name="STscriptToggles">
                                 <h4 data-i18n="STscript Settings">STscript Settings</h4>
                                 <div title="Sets default flags for the STscript parser." data-i18n="[title]Sets default flags for the STscript parser.">
-                                    <label><small data-i18n="Parser Flags">Parser Flags</small></label>
+                                    <span><small data-i18n="Parser Flags">Parser Flags</small></span>
                                     <label class="checkbox_label" title="Switch to stricter escaping, allowing all delimiting characters to be escaped with a backslash, and backslashes to be escaped as well." data-i18n="[title]Switch to stricter escaping, allowing all delimiting characters to be escaped with a backslash, and backslashes to be escaped as well.">
                                         <input id="stscript_parser_flag_strict_escaping" type="checkbox" />
                                         <span>
@@ -6889,7 +6889,7 @@
                     </div>
                     <div name="contentAndCharFilterBlock" class="world_entry_thin_controls flex2">
                         <div class="world_entry_form_control flex1">
-                            <label for="content ">
+                            <span>
                                 <small>
                                     <span class="alignitemscenter flex-container flexnowrap wide100p justifySpaceBetween">
                                         <span class="alignitemscenter flex-container">
@@ -6939,7 +6939,7 @@
                                         What this keyword should mean to the AI, sent verbatim
                                     </span>
                                 </small>
-                            </label>
+                            </span>
                             <textarea aria-label="Entry Content" class="text_pole mdHotkeys" name="content" rows="8" data-i18n="[placeholder]What this keyword should mean to the AI, sent verbatim" placeholder="What this keyword should mean to the AI, sent verbatim"></textarea>
                         </div>
                     </div>
@@ -6955,7 +6955,7 @@
                                     <span class="fa-solid fa-circle-question note-link-span"></span>
                                 </a>
                             </small>
-                            <label class="checkbox_label flexNoGap margin-r5" for="groupOverride">
+                            <label class="checkbox_label flexNoGap margin-r5">
                                 <input type="checkbox" name="groupOverride" />
                                 <span>
                                     <small title="Prioritize this entry: When checked, this entry is prioritized out of all selections.&#13;If multiple are prioritized, the one with the highest 'Order' is chosen.&#13;" data-i18n="[title]Prioritize this entry: When checked, this entry is prioritized out of all selections.If multiple are prioritized, the one with the highest 'Order' is chosen.">
@@ -7025,7 +7025,7 @@
                             <small for="characterFilter" data-i18n="Filter to Characters or Tags">
                                 Filter to Characters or Tags
                             </small>
-                            <label class="checkbox_label flexNoGap margin-r5" for="character_exclusion">
+                            <label class="checkbox_label flexNoGap margin-r5">
                                 <input type="checkbox" name="character_exclusion" />
                                 <span>
                                     <small title="Switch the Character/Tags filter around to exclude the listed characters and tags from matching for this entry" data-i18n="[title]Switch the Character/Tags filter around to exclude the listed characters and tags from matching for this entry">
@@ -7051,7 +7051,7 @@
                                 </span>
                             </small>
                             <!-- Not a real control. Used to make label heights even. -->
-                            <label class="checkbox_label" for="__invisible">
+                            <label class="checkbox_label">
                                 <input type="checkbox" name="__invisible">
                                 <span><small>&nbsp;</small></span>
                             </label>
@@ -7155,7 +7155,7 @@
                                     </div>
                                     <div class="WIEnteryHeaderControls flex-container">
                                         <div name="PositionBlock" class="world_entry_form_control world_entry_form_radios wi-enter-footer-text">
-                                            <label for="position" class="WIEntryHeaderTitleMobile" data-i18n="Position:">Position:</label>
+                                            <span class="WIEntryHeaderTitleMobile" data-i18n="Position:">Position:</span>
                                             <select aria-label="Insertion Position" name="position" class="text_pole widthNatural margin0" data-i18n="[title]T_Position" title="↑Char: Before Character Definitions&#13;↓Char: After Character Definitions&#13;↑EM: Before Example Messages&#13;↓EM: After Example Messages&#13;↑AN: Before Author's Note&#13;↓AN: After Author's Note&#13;@D ⚙️: at Depth (System)&#13;@D 👤: at Depth (User)&#13;@D 🤖: at Depth (Assistant)">
                                                 <option value="0" data-role="" data-i18n="Before Char Defs">
                                                     ↑Char
@@ -7190,15 +7190,15 @@
                                             </select>
                                         </div>
                                         <div class="world_entry_form_control wi-enter-footer-text flex-container flexNoGap">
-                                            <label for="depth" class="WIEntryHeaderTitleMobile" data-i18n="Depth:">Depth:</label>
+                                            <span class="WIEntryHeaderTitleMobile" data-i18n="Depth:">Depth:</span>
                                             <input aria-label="Insertion Depth" title="Depth" class="text_pole wideMax100px margin0" type="number" name="depth" data-i18n="[title]Depth" placeholder="" min="0" max="9999" />
                                         </div>
                                         <div class="world_entry_form_control wi-enter-footer-text  flex-container flexNoGap">
-                                            <label for="order" class="WIEntryHeaderTitleMobile" data-i18n="Order:">Order:</label>
+                                            <span class="WIEntryHeaderTitleMobile" data-i18n="Order:">Order:</span>
                                             <input aria-label="Insertion Order" title="Order" data-i18n="[title]Order" class="text_pole wideMax100px margin0" type="number" name="order" placeholder="" min="0" max="9999" />
                                         </div>
                                         <div class="world_entry_form_control wi-enter-footer-text flex-container flexNoGap probabilityContainer">
-                                            <label for="order" class="WIEntryHeaderTitleMobile" data-i18n="Trigger %:">Trigger %:</label>
+                                            <span class="WIEntryHeaderTitleMobile" data-i18n="Trigger %:">Trigger %:</span>
                                             <input aria-label="Trigger Probability" title="Probability" data-i18n="[title]Probability" class="text_pole wideMax100px margin0" type="number" name="probability" placeholder="" min="0" max="100" />
                                         </div>
                                     </div>
@@ -8001,9 +8001,9 @@
                             </div>
                             <br />
                             <div class="flex-container flexFlowColumn">
-                                <label for="cfg_prompt_combine">
+                                <span>
                                     <span data-i18n="Always Include">Always Include</span>
-                                </label>
+                                </span>
                                 <label class="checkbox_label">
                                     <input type="checkbox" name="cfg_prompt_combine" value="0" />
                                     <span data-i18n="Chat Negatives">Chat Negatives</span>
