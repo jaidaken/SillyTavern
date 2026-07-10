@@ -3426,17 +3426,6 @@ input[type=search]:focus::-webkit-search-cancel-button {
     flex-wrap: wrap;
 }
 
-.ch_fav_icon {
-    filter: drop-shadow(1px 1px 2px black);
-    color: var(--golden);
-    font-size: 14px;
-    order: -1;
-    margin-left: -75px;
-    padding-right: 54px;
-    margin-top: 3px;
-    position: relative;
-}
-
 #rm_group_top_bar:not(:has(#rm_group_activation_strategy option[value="0"]:checked)) label:has(#rm_group_allow_self_responses) {
     display: none;
 }

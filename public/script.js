@@ -981,7 +981,6 @@ function getCharacterBlock(item, id) {
     if (power_user.show_card_avatar_urls) {
         template.find('.ch_avatar_url').text(item.avatar);
     }
-    template.find('.ch_fav_icon').css('display', 'none');
     template.toggleClass('is_fav', item.fav || item.fav == 'true');
 
     const isAssistant = item.avatar === getPermanentAssistantAvatar();
