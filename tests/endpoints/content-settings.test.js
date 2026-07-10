@@ -218,9 +218,9 @@ describe('SillyTavern content, files and settings endpoints', () => {
             expect(response.status).toBe(400);
         }, CASE_TIMEOUT_MS);
 
-        test('assets_delete_of_a_missing_asset_returns_bad_request', async () => {
+        test('assets_delete_of_a_missing_asset_returns_not_found', async () => {
             const response = await client.postJson('/api/assets/delete', { category: 'bgm', filename: 'never-existed.mp3' });
-            expect(response.status).toBe(400);
+            expect(response.status).toBe(404);
         }, CASE_TIMEOUT_MS);
 
         test('assets_character_lists_the_named_character_folder_contents', async () => {

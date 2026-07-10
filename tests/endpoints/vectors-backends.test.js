@@ -392,8 +392,7 @@ describe('SillyTavern vectors, classify, speech and backend proxy endpoints', ()
             const response = await client.postJson('/api/backends/kobold/status', { api_server: upstreamBase });
             expect(response.status).toBe(200);
             const body = await response.json();
-            expect(body).toEqual({ koboldUnitedVersion: '0.0.0', model: 'no_connection' });
-            expect(body.koboldCppVersion).toBeUndefined();
+            expect(body).toEqual({ koboldUnitedVersion: '0.0.0', koboldCppVersion: '0.0', model: 'no_connection' });
         }, CASE_TIMEOUT_MS);
 
         test('kobold_status_is_rejected_for_anonymous_client', async () => {
@@ -402,10 +401,16 @@ describe('SillyTavern vectors, classify, speech and backend proxy endpoints', ()
             expect(response.status).toBe(403);
         }, CASE_TIMEOUT_MS);
 
-        test('kobold_status_without_api_server_returns_a_clean_server_error', async () => {
+        test('kobold_status_without_api_server_is_rejected_with_bad_request', async () => {
             const response = await client.postJson('/api/backends/kobold/status', {});
-            expect(response.status).toBe(500);
-            expect(await response.json()).toEqual({ error: true, message: 'Internal Server Error' });
+            expect(response.status).toBe(400);
+            expect(await response.text()).toBe('Bad Request');
+        }, CASE_TIMEOUT_MS);
+
+        test('kobold_status_with_a_non_string_api_server_is_rejected_with_bad_request', async () => {
+            const response = await client.postJson('/api/backends/kobold/status', { api_server: 12345 });
+            expect(response.status).toBe(400);
+            expect(await response.text()).toBe('Bad Request');
         }, CASE_TIMEOUT_MS);
 
         test('kobold_generate_against_an_upstream_without_the_generate_route_is_rejected_with_the_upstream_error', async () => {
@@ -420,10 +425,10 @@ describe('SillyTavern vectors, classify, speech and backend proxy endpoints', ()
             expect(response.status).toBe(403);
         }, CASE_TIMEOUT_MS);
 
-        test('kobold_generate_without_api_server_returns_a_clean_server_error', async () => {
+        test('kobold_generate_without_api_server_is_rejected_with_bad_request', async () => {
             const response = await client.postJson('/api/backends/kobold/generate', {});
-            expect(response.status).toBe(500);
-            expect(await response.json()).toEqual({ error: true, message: 'Internal Server Error' });
+            expect(response.status).toBe(400);
+            expect(await response.text()).toBe('Bad Request');
         }, CASE_TIMEOUT_MS);
 
         test('kobold_embed_without_a_server_is_rejected', async () => {

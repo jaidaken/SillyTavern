@@ -11,6 +11,9 @@ export const router = express.Router();
 
 router.post('/generate', async function (request, response_generate) {
     if (!request.body) return response_generate.sendStatus(400);
+    if (typeof request.body.api_server !== 'string' || !request.body.api_server) {
+        return response_generate.sendStatus(400);
+    }
 
     if (request.body.api_server.indexOf('localhost') != -1) {
         request.body.api_server = request.body.api_server.replace('localhost', '127.0.0.1');
@@ -143,6 +146,9 @@ router.post('/generate', async function (request, response_generate) {
 
 router.post('/status', async function (request, response) {
     if (!request.body) return response.sendStatus(400);
+    if (typeof request.body.api_server !== 'string' || !request.body.api_server) {
+        return response.sendStatus(400);
+    }
     let api_server = request.body.api_server;
     if (api_server.indexOf('localhost') != -1) {
         api_server = api_server.replace('localhost', '127.0.0.1');
@@ -180,7 +186,7 @@ router.post('/status', async function (request, response) {
     ]);
 
     result.koboldUnitedVersion = koboldUnitedResponse.result;
-    result.koboldCppVersion = koboldExtraResponse.result;
+    result.koboldCppVersion = koboldExtraResponse.version;
     result.model = !koboldModelResponse || koboldModelResponse.result === 'ReadOnly' ?
         'no_connection' :
         koboldModelResponse.result;

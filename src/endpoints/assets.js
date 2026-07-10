@@ -286,7 +286,7 @@ router.post('/delete', async (request, response) => {
     try {
         if (!fs.existsSync(file_path)) {
             log.content.error('Asset not found.');
-            return response.sendStatus(400);
+            return response.sendStatus(404);
         }
 
         await fs.promises.unlink(file_path);
