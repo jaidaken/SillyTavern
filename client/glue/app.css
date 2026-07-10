@@ -1,82 +1,202 @@
 :root {
     color-scheme: dark;
-    --bg: oklch(0.18 0.012 265);
-    --surface: oklch(0.24 0.015 265);
-    --text: oklch(0.92 0.008 265);
-    --muted: oklch(0.68 0.02 265);
+    --bg: oklch(0.16 0.012 265);
+    --surface: oklch(0.215 0.015 265);
+    --surface-2: oklch(0.27 0.017 265);
+    --border: oklch(0.32 0.02 265);
+    --text: oklch(0.93 0.008 265);
+    --muted: oklch(0.66 0.02 265);
+    --accent: oklch(0.72 0.13 255);
+    --topbar-h: 3rem;
+
+    /* Message colours, from SillyTavern public/style.css lines 71-74. */
+    --st-em: rgb(145, 145, 145);
+    --st-quote: rgb(225, 138, 36);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    height: 100%;
 }
 
 body {
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font-family: system-ui, sans-serif;
-    line-height: 1.45;
+    font-family: system-ui, -apple-system, sans-serif;
+    line-height: 1.5;
 }
 
-#chat-root {
-    max-width: 68ch;
-    margin: 0 auto;
-    padding: 2rem 1rem;
+#app {
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
 }
 
-.mes {
+/* ---- Top bar ---- */
+#topbar {
+    flex: 0 0 auto;
+    height: var(--topbar-h);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 0.6rem 0 0.9rem;
     background: var(--surface);
+    border-bottom: 1px solid var(--border);
+}
+
+.brand {
+    font-weight: 650;
+    letter-spacing: 0.01em;
+    display: flex;
+    align-items: baseline;
+    gap: 0.45rem;
+}
+
+.brand-beta {
+    font-size: 0.6rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--accent);
+    border: 1px solid color-mix(in oklch, var(--accent) 45%, transparent);
+    border-radius: 999px;
+    padding: 0.08rem 0.42rem;
+}
+
+.drawers {
+    display: flex;
+    gap: 0.1rem;
+}
+
+.drawer-btn {
+    width: 2.15rem;
+    height: 2.15rem;
+    display: grid;
+    place-items: center;
+    background: transparent;
+    border: 0;
     border-radius: 8px;
-    padding: 0.75rem 1rem;
-    margin-block-end: 0.75rem;
+    color: var(--muted);
+    cursor: pointer;
+}
+
+.drawer-btn:hover {
+    background: var(--surface-2);
+    color: var(--text);
+}
+
+.ico {
+    width: 1.15rem;
+    height: 1.15rem;
+    display: block;
+    background: currentColor;
+    -webkit-mask: var(--i) center / contain no-repeat;
+    mask: var(--i) center / contain no-repeat;
+}
+
+/* ---- Chat area ---- */
+#chat {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+}
+
+.chat-inner {
+    max-width: 48rem;
+    margin: 0 auto;
+    padding: 1.25rem 1rem 2rem;
+}
+
+/* ---- Composer ---- */
+#composer {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: flex-end;
+    gap: 0.4rem;
+    padding: 0.6rem;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+}
+
+.composer-input {
+    flex: 1 1 auto;
+    min-height: 2.6rem;
+    max-height: 40vh;
+    resize: none;
+    padding: 0.62rem 0.85rem;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    font: inherit;
+    line-height: 1.4;
+}
+
+.composer-input::placeholder {
+    color: var(--muted);
+}
+
+.composer-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.composer-btn {
+    flex: 0 0 auto;
+    width: 2.6rem;
+    height: 2.6rem;
+    display: grid;
+    place-items: center;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    color: var(--muted);
+    cursor: pointer;
+}
+
+.composer-btn:hover {
+    background: var(--surface-2);
+    color: var(--text);
+}
+
+.composer-btn.is-send {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: oklch(0.16 0.01 265);
+}
+
+.composer-btn.is-send:hover {
+    filter: brightness(1.08);
+    background: var(--accent);
+    color: oklch(0.16 0.01 265);
+}
+
+/* ---- Messages ---- */
+.mes {
+    padding: 0.65rem 0.9rem;
+    margin-block-end: 0.5rem;
+    border-radius: 10px;
+    background: var(--surface);
+    border: 1px solid transparent;
 }
 
 .mes_name {
-    color: var(--muted);
-    font-size: 0.85rem;
-    font-weight: 600;
+    color: var(--accent);
+    font-size: 0.8rem;
+    font-weight: 650;
+    letter-spacing: 0.01em;
     margin-block-end: 0.25rem;
 }
 
 .mes_code {
     overflow-x: auto;
     border-radius: 6px;
-}
-
-.demo {
-    margin-block-end: 2.5rem;
-}
-
-.demo_title {
-    font-size: 1.05rem;
-    font-weight: 600;
-    letter-spacing: 0.01em;
-    margin: 0 0 0.35rem;
-    color: var(--text);
-}
-
-.demo_note {
-    margin: 0 0 1rem;
-    color: var(--muted);
-    font-size: 0.9rem;
-    max-width: 60ch;
-}
-
-.controls {
-    display: flex;
-    gap: 0.5rem;
-    margin-block-end: 1rem;
-}
-
-.btn {
-    background: var(--surface);
-    color: var(--text);
-    border: 1px solid oklch(0.34 0.02 265);
-    border-radius: 6px;
-    padding: 0.45rem 0.85rem;
-    font: inherit;
-    font-size: 0.9rem;
-    cursor: pointer;
-}
-
-.btn:hover {
-    background: oklch(0.3 0.02 265);
 }
 
 .mes_text h1,
@@ -88,7 +208,7 @@ body {
 .mes_text blockquote {
     margin: 0.5rem 0;
     padding-left: 0.8rem;
-    border-left: 3px solid oklch(0.4 0.03 265);
+    border-left: 3px solid var(--border);
     color: var(--muted);
 }
 
@@ -99,20 +219,20 @@ body {
 
 .mes_text th,
 .mes_text td {
-    border: 1px solid oklch(0.34 0.02 265);
+    border: 1px solid var(--border);
     padding: 0.25rem 0.6rem;
     text-align: left;
 }
 
 .mes_text pre {
-    background: oklch(0.14 0.01 265);
-    border-radius: 6px;
+    background: oklch(0.13 0.01 265);
+    border-radius: 8px;
     padding: 0.75rem 1rem;
     overflow-x: auto;
 }
 
 .mes_text :not(pre) > code {
-    background: oklch(0.28 0.015 265);
+    background: var(--surface-2);
     border-radius: 4px;
     padding: 0.1rem 0.3rem;
     font-size: 0.9em;
@@ -120,7 +240,7 @@ body {
 
 .mes_text hr {
     border: 0;
-    border-top: 1px solid oklch(0.32 0.02 265);
+    border-top: 1px solid var(--border);
     margin: 0.9rem 0;
 }
 
@@ -138,13 +258,6 @@ body {
     margin-inline-end: 0.4rem;
 }
 
-/* Values copied from SillyTavern public/style.css lines 71-74. */
-:root {
-    --st-body: rgb(220, 220, 210);
-    --st-em: rgb(145, 145, 145);
-    --st-quote: rgb(225, 138, 36);
-}
-
 .mes_text q {
     color: var(--st-quote);
     quotes: none;
@@ -158,4 +271,25 @@ body {
 .mes_text em,
 .mes_text i {
     color: var(--st-em);
+}
+
+/* ---- Icons (Feather-style line masks) ---- */
+.ico-sliders { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>'); }
+.ico-plug { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'); }
+.ico-font { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>'); }
+.ico-book { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>'); }
+.ico-cog { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'); }
+.ico-image { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>'); }
+.ico-cubes { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>'); }
+.ico-user { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>'); }
+.ico-card { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><circle cx="8" cy="10" r="2"/><path d="M14 9h4M14 13h4M6 16h5"/></svg>'); }
+.ico-menu { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>'); }
+.ico-send { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>'); }
+.ico-stop { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="black" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>'); }
+
+@media (prefers-reduced-motion: no-preference) {
+    .drawer-btn,
+    .composer-btn {
+        transition: background 120ms ease, color 120ms ease;
+    }
 }
