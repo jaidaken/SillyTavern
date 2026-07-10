@@ -14,11 +14,11 @@ pub fn ChatView(ctx: *zx.ComponentCtx(void)) zx.Component {
                 <div id="center">
                     <main id="chat">
                         <div class="chat-inner">
-                            {for (convo) |m| (
-                                <MessageView msg={m} />
+                            {for (convo, 0..) |m, i| (
+                                <MessageView msg={m} key={i} memo={store.signal(m)} />
                             )}
                             {for (store.slice(), 0..) |m, i| (
-                                <MessageView msg={m} cacheable={!store.isStreaming(i)} />
+                                <MessageView msg={m} cacheable={!store.isStreaming(i)} key={convo.len + i} memo={store.signal(m)} />
                             )}
                         </div>
                     </main>

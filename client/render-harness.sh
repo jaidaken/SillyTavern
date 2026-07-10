@@ -65,10 +65,10 @@ check("stream delivered every token", s["streamTokens"] == want_tokens,
       f"{s['streamTokens']} of {want_tokens}")
 check("render count constant across tokens", s["constant"],
       f"min {s['perTokenMin']}, max {s['perTokenMax']}")
-check("per-token count == on-screen messages", s["perTokenMax"] == n and s["perTokenMin"] == n,
-      f"{s['perTokenMax']} renders/token, {n} on screen")
-check("on-screen count above 1 (baseline is meaningful)", n > 1, f"{n} messages")
-print(f"  baseline: {n} MessageView renders per token over {n} on-screen messages "
+check("memoized: only the streaming message re-renders", s["perTokenMax"] == 1 and s["perTokenMin"] == 1,
+      f"{s['perTokenMax']} renders/token, {n} on screen, memo skips {n - s['perTokenMax']}")
+check("on-screen count above 1 (reduction is meaningful)", n > 1, f"{n} messages")
+print(f"  memoized: {s['perTokenMax']} MessageView render(s) per token over {n} on-screen messages "
       f"({want_tokens} tokens, {s['perTokenSum']} total)", file=sys.stderr)
 # stdout carries only the baseline number for the caller.
 print(n)

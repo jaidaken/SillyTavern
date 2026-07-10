@@ -1,0 +1,197 @@
+diff --git c/src/Component.zig w/src/Component.zig
+index d9a78cc4..5e4c5a9a 100644
+--- c/src/Component.zig
++++ w/src/Component.zig
+@@ -41,6 +41,9 @@ pub const Component = union(enum) {
+         caching: ?BuiltinAttribute.Caching = null,
+         name: []const u8,
+         key: ?[]const u8 = null,
++        // Content signal for reconcile-level memoization. A u64 value (never a pointer): the
++        // reconciler reads it before resolving, so it must survive resolution. 0 = not memoizable.
++        memo: u64 = 0,
+ 
+         pub fn init(comptime func: anytype, name: []const u8, allocator: Allocator, props: anytype) ComponentFn {
+             const FuncInfo = @typeInfo(@TypeOf(func));
+@@ -183,6 +186,7 @@ pub const Component = union(enum) {
+                 .deinitFn = Wrapper.deinit,
+                 .name = name,
+                 .key = keyFromProps(allocator, props),
++                .memo = memoFromProps(props),
+             };
+         }
+ 
+@@ -268,6 +272,15 @@ fn keyFromProps(allocator: Allocator, props: anytype) ?[]const u8 {
+     return std.fmt.allocPrint(allocator, "{any}", .{@field(props, "key")}) catch null;
+ }
+ 
++/// The reconcile-memo content signal from a `memo` prop, or 0 when the component carries none.
++/// Read before resolution, so it must be a value the reconciler can compare without calling the
++/// component; the app supplies a pointer-and-length hash so a sealed message stays stable and a
++/// streaming one changes every token.
++fn memoFromProps(props: anytype) u64 {
++    if (!@hasField(@TypeOf(props), "memo")) return 0;
++    return @field(props, "memo");
++}
++
+ pub const Element = struct {
+     pub const Attribute = struct {
+         name: []const u8,
+diff --git c/src/runtime/core/vdom.zig w/src/runtime/core/vdom.zig
+index 0139388b..119f44a4 100644
+--- c/src/runtime/core/vdom.zig
++++ w/src/runtime/core/vdom.zig
+@@ -8,6 +8,9 @@ pub const VNode = struct {
+     children: std.ArrayListUnmanaged(*VNode),
+     key: ?[]const u8 = null,
+     owner_component_id: []const u8 = "",
++    // Content signal captured pre-resolution so reconcileChildren can skip an unchanged keyed
++    // component before resolving. A value not a pointer (the component_fn dies at resolution); 0 = never skip.
++    memo: u64 = 0,
+ 
+     pub const Id = u64;
+ 
+@@ -88,10 +91,15 @@ pub const VNode = struct {
+                 _ = text;
+             },
+             .component_fn => {
++                const memo = memoOf(component);
++                const captured_key = extractKey(component);
+                 const next_owner_component_id = componentOwnerId(allocator, component, owner_component_id, sibling_index);
+                 const resolved = try resolveComponent(allocator, component, owner_component_id, sibling_index);
+                 allocator.destroy(self);
+-                return try createFromComponent(allocator, resolved, next_owner_component_id, 0);
++                const node = try createFromComponent(allocator, resolved, next_owner_component_id, 0);
++                node.memo = memo;
++                if (captured_key) |k| node.key = k;
++                return node;
+             },
+             .component_csr => |component_csr| {
+                 _ = component_csr;
+@@ -383,6 +391,23 @@ fn createVNodeFromComponent(allocator: zx.Allocator, component: zx.Component, ow
+     return try VNode.createFromComponent(allocator, component, owner_component_id, 0);
+ }
+ 
++/// The reconcile-memo signal of an unresolved child, or 0 when it is not a memoizable component.
++fn memoOf(component: zx.Component) u64 {
++    return switch (component) {
++        .component_fn => |comp_fn| comp_fn.memo,
++        else => 0,
++    };
++}
++
++/// Build a vnode from an already-resolved child while preserving the memo signal and key from its
++/// unresolved form, which resolution would otherwise drop (the resolved element carries neither).
++fn createMemoizedChild(allocator: zx.Allocator, resolved: zx.Component, unresolved: zx.Component, owner_component_id: []const u8) anyerror!*VNode {
++    const node = try VNode.createFromComponent(allocator, resolved, owner_component_id, 0);
++    node.memo = memoOf(unresolved);
++    if (VNode.extractKey(unresolved)) |k| node.key = k;
++    return node;
++}
++
+ fn concatRawText(allocator: zx.Allocator, children: ?[]const zx.Component) ![]const u8 {
+     const list = children orelse return "";
+     var aw = std.Io.Writer.Allocating.init(allocator);
+@@ -489,19 +514,37 @@ fn reconcileChildren(
+     // Pass 1: sync prefix while keys match
+     while (old_idx < old_children.len and new_idx < new_children_slice.len) {
+         const old_child = old_children[old_idx];
+-        const resolved = try resolveComponent(allocator, new_children_slice[new_idx], old_velement.owner_component_id, new_idx);
++        const new_child = new_children_slice[new_idx];
+ 
+-        if (!old_child.keysMatch(resolved)) break;
++        // Memo fast path: an unchanged keyed component is kept verbatim, never resolved, never
++        // diffed, no patch. The un-freed prior render keeps its retained pointers valid.
++        const new_memo = memoOf(new_child);
++        if (new_memo != 0 and new_memo == old_child.memo and old_child.keysMatch(new_child)) {
++            last_placed_index = old_idx;
++            old_idx += 1;
++            new_idx += 1;
++            continue;
++        }
++
++        const resolved = try resolveComponent(allocator, new_child, old_velement.owner_component_id, new_idx);
++
++        // Match on the UNRESOLVED child: a component's key lives on its component_fn, not the
++        // resolved element, so keying off `resolved` breaks pass 1 and forces a pass-2 re-resolve.
++        if (!old_child.keysMatch(new_child)) break;
+ 
+         if (areComponentsSameType(old_child.component, resolved)) {
+             try diff(allocator, old_child, resolved, parent, patches);
++            // Refresh so a now-stable child (e.g. a just-sealed message) skips on the next render;
++            // diff resets key to the resolved element's (null for a component), so restore it too.
++            old_child.memo = new_memo;
++            old_child.key = VNode.extractKey(new_child);
+             last_placed_index = old_idx;
+         } else {
+             try patches.append(allocator, Patch{
+                 .type = .REPLACE,
+                 .data = .{ .REPLACE = .{
+                     .old_vnode_id = old_child.id,
+-                    .new_vnode = try createVNodeFromComponent(allocator, resolved, componentOwnerId(allocator, new_children_slice[new_idx], old_velement.owner_component_id, new_idx)),
++                    .new_vnode = try createMemoizedChild(allocator, resolved, new_child, componentOwnerId(allocator, new_child, old_velement.owner_component_id, new_idx)),
+                     .parent_id = parent.id,
+                 } },
+             });
+@@ -528,8 +571,9 @@ fn reconcileChildren(
+     // Old children exhausted → insert remaining new
+     if (old_idx >= old_children.len) {
+         while (new_idx < new_children_slice.len) : (new_idx += 1) {
+-            const resolved = try resolveComponent(allocator, new_children_slice[new_idx], old_velement.owner_component_id, new_idx);
+-            const new_vnode = try createVNodeFromComponent(allocator, resolved, componentOwnerId(allocator, new_children_slice[new_idx], old_velement.owner_component_id, new_idx));
++            const nc = new_children_slice[new_idx];
++            const resolved = try resolveComponent(allocator, nc, old_velement.owner_component_id, new_idx);
++            const new_vnode = try createMemoizedChild(allocator, resolved, nc, componentOwnerId(allocator, nc, old_velement.owner_component_id, new_idx));
+             try patches.append(allocator, Patch{
+                 .type = .PLACEMENT,
+                 .data = .{ .PLACEMENT = .{
+@@ -580,15 +624,34 @@ fn reconcileChildren(
+ 
+     for (remaining_new, 0..) |nc, ni| {
+         const abs_new_idx = new_idx + ni;
+-        const resolved = try resolveComponent(allocator, nc, old_velement.owner_component_id, abs_new_idx);
+-        const new_key = VElement.extractKey(resolved);
++        // Key and memo come from the UNRESOLVED child so a keyed component matches and can skip
++        // before resolution; the resolved element carries neither.
++        const new_memo = memoOf(nc);
++        const new_key = VNode.extractKey(nc);
+ 
+         const found_oi: ?usize = if (new_key) |k| key_map.get(k) else index_map.get(abs_new_idx);
+ 
+         if (found_oi) |oi| {
+             const old_child = old_children[oi];
++
++            // Memo fast path: an unchanged keyed component keeps its old vnode and any MOVE it needs,
++            // but is never resolved or diffed.
++            if (new_memo != 0 and new_memo == old_child.memo) {
++                source[ni] = @intCast(oi);
++                used_old[oi - old_idx] = true;
++                if (oi < last_placed_index) {
++                    needs_move[ni] = true;
++                } else {
++                    last_placed_index = oi;
++                }
++                continue;
++            }
++
++            const resolved = try resolveComponent(allocator, nc, old_velement.owner_component_id, abs_new_idx);
+             if (areComponentsSameType(old_child.component, resolved)) {
+                 try diff(allocator, old_child, resolved, parent, patches);
++                old_child.memo = new_memo;
++                old_child.key = new_key;
+                 source[ni] = @intCast(oi);
+                 used_old[oi - old_idx] = true;
+                 if (oi < last_placed_index) {
+@@ -602,10 +665,11 @@ fn reconcileChildren(
+                     .type = .DELETION,
+                     .data = .{ .DELETION = .{ .vnode_id = old_child.id, .parent_id = parent.id } },
+                 });
+-                new_vnodes[ni] = try createVNodeFromComponent(allocator, resolved, componentOwnerId(allocator, nc, old_velement.owner_component_id, abs_new_idx));
++                new_vnodes[ni] = try createMemoizedChild(allocator, resolved, nc, componentOwnerId(allocator, nc, old_velement.owner_component_id, abs_new_idx));
+             }
+         } else {
+-            new_vnodes[ni] = try createVNodeFromComponent(allocator, resolved, componentOwnerId(allocator, nc, old_velement.owner_component_id, abs_new_idx));
++            const resolved = try resolveComponent(allocator, nc, old_velement.owner_component_id, abs_new_idx);
++            new_vnodes[ni] = try createMemoizedChild(allocator, resolved, nc, componentOwnerId(allocator, nc, old_velement.owner_component_id, abs_new_idx));
+         }
+     }
+ 

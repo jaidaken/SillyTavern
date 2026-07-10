@@ -142,6 +142,18 @@ pub fn isStreaming(index: usize) bool {
     return global.isStreaming(index);
 }
 
+/// Reconcile-memo content signal: a hash of the name and body pointer+length. A sealed message's
+/// bytes never move, so its signal is stable and the reconciler skips it; a streaming message's
+/// body grows every token, so its signal changes and it is never skipped. Never 0, since 0 tells
+/// the reconciler "no signal, always resolve".
+pub fn signal(m: Message) u64 {
+    var h: u64 = 0xcbf29ce484222325;
+    inline for (.{ @intFromPtr(m.name.ptr), m.name.len, @intFromPtr(m.body.ptr), m.body.len }) |v| {
+        h = (h ^ @as(u64, v)) *% 0x100000001b3;
+    }
+    return h | 1;
+}
+
 pub fn appendCopy(name: []const u8, body: []const u8) Allocator.Error!void {
     return global.appendCopy(name, body);
 }
@@ -408,6 +420,82 @@ fn streamScenario(gpa: Allocator, tokens: usize) !void {
 
 test "store_releases_everything_on_any_allocation_failure" {
     try testing.checkAllAllocationFailures(testing.allocator, streamScenario, .{@as(usize, 8)});
+}
+
+test "signal_is_stable_across_reads_of_a_sealed_message" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+
+    try s.beginStream(try testing.allocator.dupe(u8, "Seraphina"));
+    try s.appendTail("a sealed line");
+    s.endStream();
+
+    const first = signal(s.slice()[0]);
+    const second = signal(s.slice()[0]);
+    try testing.expectEqual(first, second);
+
+    for (0..32) |_| try s.appendCopy("You", "filler");
+    try testing.expectEqual(first, signal(s.slice()[0]));
+}
+
+test "signal_changes_on_every_token_while_the_body_streams" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+
+    try s.beginStream(try testing.allocator.dupe(u8, "Seraphina"));
+
+    var seen = std.AutoHashMapUnmanaged(u64, void).empty;
+    defer seen.deinit(testing.allocator);
+
+    var prev = signal(s.slice()[0]);
+    try seen.put(testing.allocator, prev, {});
+    for (0..200) |i| {
+        var buf: [8]u8 = undefined;
+        try s.appendTail(try std.fmt.bufPrint(&buf, "t{d} ", .{i}));
+        const now = signal(s.slice()[0]);
+        try testing.expect(now != prev);
+        try seen.put(testing.allocator, now, {});
+        prev = now;
+    }
+    // Every per-token signal was distinct, so the streaming message is never wrongly skipped.
+    try testing.expectEqual(@as(u32, 201), seen.count());
+}
+
+test "signal_distinguishes_two_messages_with_different_bodies" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+
+    try s.appendCopy("You", "the lantern gutters");
+    try s.appendCopy("You", "a wreck, or a warning");
+
+    try testing.expect(signal(s.slice()[0]) != signal(s.slice()[1]));
+}
+
+test "signal_is_never_zero_even_for_an_empty_body" {
+    const empty: Message = .{ .name = "You", .body = "" };
+    try testing.expect(signal(empty) != 0);
+}
+
+fn signalScenario(gpa: Allocator) !void {
+    var s = Store.init(gpa);
+    defer s.deinit();
+
+    try s.appendCopy("You", "hello");
+    const name = try gpa.dupe(u8, "Seraphina");
+    s.beginStream(name) catch |err| {
+        gpa.free(name);
+        return err;
+    };
+    for (0..8) |_| {
+        try s.appendTail("x");
+        _ = signal(s.slice()[s.slice().len - 1]);
+    }
+    s.endStream();
+    for (s.slice()) |m| _ = signal(m);
+}
+
+test "signal_path_leaves_no_leak_under_any_allocation_failure" {
+    try testing.checkAllAllocationFailures(testing.allocator, signalScenario, .{});
 }
 
 test "store_leaves_no_leak_under_a_debug_allocator" {

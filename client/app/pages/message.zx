@@ -1,6 +1,10 @@
 pub const MessageProps = struct {
     msg: store.Message,
     cacheable: bool = true,
+    // Read by ziex before resolving (keyFromProps / memoFromProps), not by MessageView itself: key is
+    // the stable sequence index for reconcile matching, memo is the content signal for the memo skip.
+    key: usize = 0,
+    memo: u64 = 0,
 };
 
 // Plain component, not @rendering={.client}: a client component needs a <!--$id--> marker
