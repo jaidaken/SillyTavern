@@ -19,7 +19,10 @@ export function markdownDinkusExclusionRule(state) {
         return;
     }
 
+    // Normalize CRLF/CR first (markdown-it's normalize rule runs after this one), so a
+    // dinkus with Windows line endings still matches an exclusion by strict equality.
     state.src = state.src
+        .replace(/\r\n?/g, '\n')
         .split('\n')
         .map((line) => (exclusions.includes(line) ? escapeToNumericEntities(line) : line))
         .join('\n');
