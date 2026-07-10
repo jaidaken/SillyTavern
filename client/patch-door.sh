@@ -12,9 +12,6 @@ python3 - "$DOOR" <<'PY'
 import sys, pathlib
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
 
-if "var stringCache" not in s and "function stringCacheKey" not in s:
-    print("patch-door: already patched, nothing to do"); sys.exit(0)
-
 cache = """var stringCache = new Map;
 function stringCacheKey(ptr, len) {
   return ptr * 65536 + len;
@@ -33,8 +30,15 @@ uncached = """function readString(ptr, len) {
   return textDecoder.decode(getMemoryView().subarray(ptr, ptr + len));
 }"""
 
+# Patched state is the PRESENCE of the uncached body, never the absence of the cache markers:
+# a reformatted or minified door has both markers absent while still carrying the D1 bug.
+if uncached in s:
+    print("patch-door: already patched, nothing to do")
+    sys.exit(0)
+
 if cache not in s:
-    print("patch-door: cache block not found verbatim; door version changed, update patch-door.sh", file=sys.stderr)
+    print("patch-door: neither the uncached readString nor the cache block found verbatim; "
+          "door version changed, update patch-door.sh", file=sys.stderr)
     sys.exit(1)
 
 p.write_text(s.replace(cache, uncached, 1))

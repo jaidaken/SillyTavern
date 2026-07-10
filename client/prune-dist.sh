@@ -3,6 +3,10 @@
 set -euo pipefail
 
 DIST="${1:-dist}"
+# A trailing slash would make the rel= strip pattern never match, so every file misses KEEP
+# and the rm below wipes the tree. Strip them before any use.
+while [ "$DIST" != "/" ] && [ "${DIST%/}" != "$DIST" ]; do DIST="${DIST%/}"; done
+[ -n "$DIST" ] && [ "$DIST" != "/" ] || { echo "refusing to prune: $DIST" >&2; exit 1; }
 [ -d "$DIST" ] || { echo "no such dir: $DIST" >&2; exit 1; }
 
 KEEP=(

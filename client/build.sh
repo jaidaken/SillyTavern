@@ -7,7 +7,8 @@ cd "$(dirname "$0")"
 
 OPT="${OPT:-ReleaseSmall}"
 
-[ -d .ziex/.git ] || ./setup-ziex.sh
+# Always run: setup-ziex is idempotent, and a reused .ziex may be unpinned or unpatched.
+./setup-ziex.sh
 zig build "-Doptimize=$OPT"
 zig build export "-Doptimize=$OPT"
 ./patch-door.sh

@@ -34,9 +34,13 @@ atleast() {
     fi
 }
 
-[ -f dist/index.html ] || { echo "no dist/: run 'zig build export' first" >&2; exit 1; }
+DOOR="dist/vendor/ziex/wasm/index.js"
 
-setsid timeout 120 python3 devserve.py --port "$PORT" --dist dist --dev >/dev/null 2>&1 &
+[ -f dist/index.html ] || { echo "no dist/: run 'zig build export' first" >&2; exit 1; }
+[ -f "$DOOR" ] || { echo "no $DOOR: run 'zig build export' first" >&2; exit 1; }
+
+# Budget: two sleeps plus three chrome loads capped at 60s each, so the server must outlive 182s.
+setsid timeout 300 python3 devserve.py --port "$PORT" --dist dist --dev >/dev/null 2>&1 &
 SRV=$!
 sleep 2
 
@@ -47,6 +51,10 @@ chrome() {
 
 count() { grep -o "$1" "$2" 2>/dev/null | wc -l; }
 
+echo "== build artifacts =="
+check "door patched, no stringCache" "$(count 'stringCache' "$DOOR")" 0
+
+echo
 echo "== served html (pre-hydration) =="
 check "hydration markers in index.html" "$(count '<!--\$' dist/index.html)" 1
 check "ssr placeholder, one per message" "$(count 'ST_SSR_PLACEHOLDER' dist/index.html)" 7
