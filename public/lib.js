@@ -13,7 +13,10 @@ import Bowser from 'bowser';
 import DiffMatchPatch from 'diff-match-patch';
 import { isProbablyReaderable, Readability } from '@mozilla/readability';
 import SVGInject from '@iconfu/svg-inject';
-import showdown from 'showdown';
+import MarkdownIt from 'markdown-it';
+import { full as markdownItEmoji } from 'markdown-it-emoji';
+// The package main pulls in fs/path for a disk-probe autofill feature we never enable; its own browser bundle has none of that.
+import markdownItImsize from 'markdown-it-imsize/dist/markdown-it-imsize.js';
 import moment from 'moment';
 import seedrandom from 'seedrandom';
 import * as Popper from '@popperjs/core';
@@ -63,9 +66,9 @@ export function initLibraryShims() {
         // @ts-ignore
         window.SVGInject = SVGInject;
     }
-    if (!('showdown' in window)) {
+    if (!('MarkdownIt' in window)) {
         // @ts-ignore
-        window.showdown = showdown;
+        window.MarkdownIt = MarkdownIt;
     }
     if (!('moment' in window)) {
         // @ts-ignore
@@ -94,7 +97,9 @@ export default {
     Readability,
     isProbablyReaderable,
     SVGInject,
-    showdown,
+    MarkdownIt,
+    markdownItEmoji,
+    markdownItImsize,
     moment,
     seedrandom,
     Popper,
@@ -122,7 +127,9 @@ export {
     Readability,
     isProbablyReaderable,
     SVGInject,
-    showdown,
+    MarkdownIt,
+    markdownItEmoji,
+    markdownItImsize,
     moment,
     seedrandom,
     Popper,

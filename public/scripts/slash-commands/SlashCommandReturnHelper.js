@@ -1,4 +1,4 @@
-import { DOMPurify, showdown } from '../../lib.js';
+import { DOMPurify, MarkdownIt } from '../../lib.js';
 import { sendSystemMessage, system_message_types } from '../../script.js';
 import { callGenericPopup, POPUP_TYPE } from '../popup.js';
 import { escapeHtml } from '../utils.js';
@@ -58,7 +58,7 @@ export const slashCommandReturnHelper = {
             case 'chat-html':
             case 'toast-text':
             case 'toast-html': {
-                const htmlOrNotHtml = shouldHtml ? DOMPurify.sanitize((new showdown.Converter()).makeHtml(stringValue)) : escapeHtml(stringValue);
+                const htmlOrNotHtml = shouldHtml ? DOMPurify.sanitize((new MarkdownIt({ html: true })).render(stringValue)) : escapeHtml(stringValue);
 
                 if (type.startsWith('popup')) await callGenericPopup(htmlOrNotHtml, POPUP_TYPE.TEXT, '', { allowVerticalScrolling: true, wide: true });
                 if (type.startsWith('chat')) sendSystemMessage(system_message_types.GENERIC, htmlOrNotHtml);
