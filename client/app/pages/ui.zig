@@ -86,7 +86,7 @@ pub fn onClose(_: zx.client.Event) void {
     close();
 }
 
-/// Called from the resize glue with the new pixel width for a side. Clamps and rerenders.
+/// Called from the resize glue with the new pixel width for a side. Clamps and re-renders the Shell region.
 export fn __st_set_panel_width(is_left: u32, width: f64) callconv(.c) void {
     setWidth(if (is_left != 0) .left else .right, @floatCast(width));
 }

@@ -56,7 +56,8 @@ pub const default_width: f32 = 340;
 pub const MotionPref = enum { system, on, off };
 
 /// Which side panel or drawer is open (at most one), and the width of each dock. A plain value:
-/// ui.zig holds the single reactive instance and rerenders after each mutation.
+/// ui.zig holds the single reactive instance; a mutation calls regions.bumpShell to re-render the
+/// Shell region only, not the whole page.
 pub const PanelState = struct {
     active: ?PanelId = null,
     left_w: f32 = default_width,
@@ -124,7 +125,8 @@ pub fn motionPrefFromStr(s: []const u8) ?MotionPref {
     return null;
 }
 
-/// Class on #app that drives the CSS motion switch. Empty for `system` so the media query governs.
+/// Class on #shell that drives the CSS motion switch via :root:has(#shell.motion-*). Empty for
+/// `system` so the media query governs.
 pub fn motionClass(m: MotionPref) []const u8 {
     return switch (m) {
         .system => "",
@@ -235,7 +237,7 @@ test "panelIdFromDomId rejects unknown or unprefixed ids" {
     try testing.expectEqual(PanelId.settings, panelIdFromDomId("d-settings").?);
 }
 
-test "motion pref parses and maps to the right #app class" {
+test "motion pref parses and maps to the right #shell class" {
     try testing.expectEqual(MotionPref.system, motionPrefFromStr("system").?);
     try testing.expectEqual(MotionPref.on, motionPrefFromStr("on").?);
     try testing.expectEqual(MotionPref.off, motionPrefFromStr("off").?);
