@@ -532,6 +532,13 @@ export class Popup {
             log.ui.warn('Unknown popup text type. Should be jQuery, HTMLElement or string.', content);
         }
 
+        if (!this.content.id) this.content.id = `popup-content-${this.id}`;
+        if (!this.mainInput.id) {
+            this.mainInput.id = `popup-input-${this.id}`;
+            this.mainInput.name = this.mainInput.id;
+        }
+        this.mainInput.setAttribute('aria-labelledby', this.content.id);
+
         // Already prepare the auto-focus control by adding the "autofocus" attribute, this should be respected by showModal()
         this.setAutoFocus({ applyAutoFocus: true });
 

@@ -260,6 +260,9 @@ export class QuickReply {
                             this.settingsDomLabel = lbl;
                             lbl.classList.add('qr--set-itemLabel');
                             lbl.classList.add('text_pole');
+                            lbl.id = `qr--set--itemLabel${this.id}`;
+                            lbl.name = lbl.id;
+                            lbl.setAttribute('aria-label', 'Quick Reply label');
                             lbl.value = this.label;
                             lbl.addEventListener('input', () => this.updateLabel(lbl.value));
                             lblContainer.append(lbl);

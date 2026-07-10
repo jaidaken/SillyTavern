@@ -35,6 +35,9 @@ export class QuickReplySetLink {
             }
             const set = document.createElement('select'); {
                 set.classList.add('qr--set');
+                set.id = `qr--set-link-${this.index}`;
+                set.name = set.id;
+                set.setAttribute('aria-label', 'Quick Reply set');
                 // fix for jQuery sortable breaking childrens' touch events
                 set.addEventListener('touchstart', (evt) => evt.stopPropagation());
                 set.addEventListener('change', () => {
