@@ -24,7 +24,12 @@ pub fn parsePayload(allocator: std.mem.Allocator, payload: []const u8) !Event {
     if (std.mem.eql(u8, trimmed, "[DONE]")) return .done;
     if (trimmed[0] != '{') return .empty;
 
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{}) catch return .empty;
+    // Malformed JSON is a keepalive-shaped payload, not a failure; a real OOM must propagate so the
+    // stream retries the line rather than silently dropping the token.
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return .empty,
+    };
     defer parsed.deinit();
 
     const text = tokenText(parsed.value) orelse return .empty;

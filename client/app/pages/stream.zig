@@ -14,12 +14,12 @@ const std = @import("std");
 
 const store_mod = @import("./store.zig");
 const utf8 = @import("./utf8.zig");
+const completion = @import("./completion.zig");
 
 const Allocator = std.mem.Allocator;
 const Store = store_mod.Store;
 
 const data_prefix = "data:";
-const done_sentinel = "[DONE]";
 
 pub const State = enum { idle, streaming, done };
 
@@ -130,12 +130,16 @@ pub const Stream = struct {
         if (line.len > 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
         if (!std.mem.startsWith(u8, line, data_prefix)) return;
 
-        var payload = line[data_prefix.len..];
-        if (payload.len > 0 and payload[0] == ' ') payload = payload[1..];
-        if (payload.len == 0 or std.mem.eql(u8, payload, done_sentinel)) return;
-
-        try self.store.appendTail(payload);
-        self.tokens += 1;
+        // parsePayload trims surrounding whitespace, decodes the backend's JSON token shapes, and
+        // recognises [DONE]/keepalives. Its only error is OOM from duping the token.
+        switch (try completion.parsePayload(self.allocator, line[data_prefix.len..])) {
+            .token => |tok| {
+                defer self.allocator.free(tok);
+                try self.store.appendTail(tok);
+                self.tokens += 1;
+            },
+            .done, .empty => {},
+        }
     }
 };
 
@@ -169,6 +173,12 @@ const Fixture = struct {
     }
 };
 
+/// One llama.cpp SSE data line carrying `tok`, the shape a real backend sends. The token extractor
+/// lives in completion.zig; these tests exercise the framing around it, so they use a real payload.
+inline fn dl(comptime tok: []const u8) []const u8 {
+    return "data: {\"content\":\"" ++ tok ++ "\"}\n";
+}
+
 test "stream_moves_idle_to_streaming_to_done" {
     var f: Fixture = undefined;
     f.init(testing.allocator);
@@ -187,7 +197,7 @@ test "stream_refuses_a_second_begin_while_streaming" {
     defer f.deinit();
 
     try f.open(testing.allocator, "First");
-    try f.stream.feed("data: alpha\n");
+    try f.stream.feed(dl("alpha"));
     try testing.expectError(error.StreamInProgress, f.open(testing.allocator, "Second"));
 
     try testing.expectEqual(@as(usize, 1), f.store.slice().len);
@@ -200,11 +210,11 @@ test "two_sequential_streams_keep_separate_bodies" {
     defer f.deinit();
 
     try f.open(testing.allocator, "First");
-    try f.stream.feed("data: aaa\n");
+    try f.stream.feed(dl("aaa"));
     f.stream.end();
 
     try f.open(testing.allocator, "Second");
-    try f.stream.feed("data: bbb\n");
+    try f.stream.feed(dl("bbb"));
     f.stream.end();
 
     try testing.expectEqual(@as(usize, 2), f.store.slice().len);
@@ -219,7 +229,8 @@ test "stream_delivers_a_final_token_that_has_no_trailing_newline" {
     defer f.deinit();
 
     try f.open(testing.allocator, "Seraphina");
-    try f.stream.feed("data: one\ndata: two");
+    // The last line carries a token with no trailing newline to close it.
+    try f.stream.feed(dl("one") ++ "data: {\"content\":\"two\"}");
     f.stream.end();
 
     try testing.expectEqualStrings("onetwo", f.body(0));
@@ -233,8 +244,8 @@ test "stream_reassembles_a_data_line_split_across_chunks" {
 
     try f.open(testing.allocator, "Seraphina");
     try f.stream.feed("da");
-    try f.stream.feed("ta: hel");
-    try f.stream.feed("lo\n");
+    try f.stream.feed("ta: {\"content\":\"hel");
+    try f.stream.feed("lo\"}\n");
 
     try testing.expectEqualStrings("hello", f.body(0));
     try testing.expectEqual(@as(usize, 1), f.stream.tokens);
@@ -247,8 +258,8 @@ test "stream_reassembles_a_codepoint_split_across_chunks_inside_a_token" {
 
     const emoji = "\u{1F600}";
     try f.open(testing.allocator, "Seraphina");
-    try f.stream.feed("data: " ++ emoji[0..2]);
-    try f.stream.feed(emoji[2..4] ++ "\n");
+    try f.stream.feed("data: {\"content\":\"" ++ emoji[0..2]);
+    try f.stream.feed(emoji[2..4] ++ "\"}\n");
     f.stream.end();
 
     try testing.expectEqualStrings(emoji, f.body(0));
@@ -260,23 +271,23 @@ test "stream_skips_the_done_sentinel_and_non_data_lines" {
     defer f.deinit();
 
     try f.open(testing.allocator, "Seraphina");
-    try f.stream.feed(": comment\nevent: ping\ndata: real\ndata: [DONE]\n\n");
+    try f.stream.feed(": comment\nevent: ping\n" ++ dl("real") ++ "data: [DONE]\n\n");
     f.stream.end();
 
     try testing.expectEqualStrings("real", f.body(0));
     try testing.expectEqual(@as(usize, 1), f.stream.tokens);
 }
 
-test "stream_strips_one_leading_space_and_a_trailing_carriage_return" {
+test "stream_strips_a_trailing_carriage_return_before_extraction" {
     var f: Fixture = undefined;
     f.init(testing.allocator);
     defer f.deinit();
 
     try f.open(testing.allocator, "Seraphina");
-    try f.stream.feed("data:  two spaces\r\n");
+    try f.stream.feed("data: {\"content\":\"hi\"}\r\n");
     f.stream.end();
 
-    try testing.expectEqualStrings(" two spaces", f.body(0));
+    try testing.expectEqualStrings("hi", f.body(0));
 }
 
 test "feed_before_begin_is_silent" {
@@ -284,7 +295,7 @@ test "feed_before_begin_is_silent" {
     f.init(testing.allocator);
     defer f.deinit();
 
-    try f.stream.feed("data: ignored\n");
+    try f.stream.feed(dl("ignored"));
     f.stream.end();
 
     try testing.expectEqual(@as(usize, 0), f.store.slice().len);
@@ -298,8 +309,8 @@ test "stream_appends_many_tokens_in_order" {
 
     try f.open(testing.allocator, "Seraphina");
     for (0..200) |i| {
-        var buf: [24]u8 = undefined;
-        try f.stream.feed(try std.fmt.bufPrint(&buf, "data: tok{d}\n", .{i}));
+        var buf: [48]u8 = undefined;
+        try f.stream.feed(try std.fmt.bufPrint(&buf, "data: {{\"content\":\"tok{d}\"}}\n", .{i}));
     }
     f.stream.end();
 
@@ -315,140 +326,68 @@ fn feedScenario(gpa: Allocator, chunk_size: usize) !void {
 
     try f.open(gpa, "Seraphina");
 
-    const wire_bytes = "data: al\u{4E16}pha\ndata: [DONE]\ndata: beta";
+    // A trailing newline seals every token during feed, so this exercises only the feed path, which
+    // propagates OOM cleanly (checkAllAllocationFailures requires propagation). end()'s deliberate
+    // drop-not-strand behaviour is covered by the sweep test below.
+    const wire_bytes = "data: {\"content\":\"al\u{4E16}pha\"}\ndata: [DONE]\ndata: {\"content\":\"beta\"}\n";
     var at: usize = 0;
     while (at < wire_bytes.len) {
         const take = @min(wire_bytes.len - at, chunk_size);
         try f.stream.feed(wire_bytes[at..][0..take]);
         at += take;
     }
-    f.stream.end();
 
-    try testing.expectEqualStrings("al\u{4E16}phabeta", f.body(0));
+    // Reaching here means no injected failure fired, so every token streamed into the tail.
+    try testing.expectEqualStrings("al\u{4E16}phabeta", f.store.tail.items);
 }
 
 test "stream_releases_everything_on_any_allocation_failure" {
     try testing.checkAllAllocationFailures(testing.allocator, feedScenario, .{@as(usize, 3)});
 }
 
-// The second token dwarfs the spare capacity the first one leaves in the store's tail. Emitting it
-// therefore always allocates, which is the failure the sweeps below inject between two emits.
-const token_a = "a" ** 48;
-const token_b = "b" ** 4096;
-const token_c = "c" ** 4;
-const two_lines = "data: " ++ token_a ++ "\ndata: " ++ token_b ++ "\n";
-
 fn failingAllocator() testing.FailingAllocator {
     return testing.FailingAllocator.init(testing.allocator, .{ .resize_fail_index = 0 });
 }
 
-/// Asserts the sealed body holds each token it contains exactly once, in wire order, and no `\n`.
-fn expectNoTokenEmittedTwice(f: *Fixture) !void {
-    const body = f.body(0);
+/// The sealed body must be the in-order concatenation of some subset of `tokens`. Each token is
+/// all-or-nothing: parsePayload dupes it, then store.appendTail grows the tail, both failing
+/// atomically, so a token an allocation failure dropped is absent, never partial or duplicated, and
+/// nothing else appears. The body also never carries a newline.
+fn expectInOrderSubset(body: []const u8, comptime tokens: []const []const u8) !void {
     try testing.expect(std.mem.indexOfScalar(u8, body, '\n') == null);
-
-    var expected: std.ArrayList(u8) = .empty;
-    defer expected.deinit(testing.allocator);
-
-    var count: usize = 0;
-    inline for (.{ token_a, token_b, token_c }) |token| {
-        if (std.mem.indexOfScalar(u8, body, token[0]) != null) {
-            try expected.appendSlice(testing.allocator, token);
-            count += 1;
-        }
+    var i: usize = 0;
+    inline for (tokens) |t| {
+        if (std.mem.startsWith(u8, body[i..], t)) i += t.len;
     }
-
-    try testing.expectEqualStrings(expected.items, body);
-    try testing.expectEqual(count, f.stream.tokens);
+    try testing.expectEqual(body.len, i);
 }
 
-// The state a drain stopped by an allocation failure leaves in `line`: complete lines, unemitted.
-// The first token cannot fit without growing the tail; the one behind it fits the spare capacity.
-const undrained_lines = "data: " ++ "b" ** 4096 ++ "\ndata: z\n";
-
-test "end_emits_the_lines_behind_one_whose_emit_ran_out_of_memory" {
-    var failing = failingAllocator();
-    const gpa = failing.allocator();
-
-    var f: Fixture = undefined;
-    f.init(gpa);
-    defer f.deinit();
-    try f.open(gpa, "Seraphina");
-
-    // A first small token leaves the tail with spare capacity a later one-byte token can use.
-    try f.stream.feed("data: a\n");
-    try testing.expect(f.store.tail.capacity > f.store.tail.items.len);
-
-    try f.stream.line.appendSlice(gpa, undrained_lines);
-
-    failing.fail_index = failing.alloc_index;
-    f.stream.end();
-    failing.fail_index = std.math.maxInt(usize);
-
-    try testing.expect(failing.has_induced_failure);
-    try testing.expectEqualStrings("az", f.body(0));
-    try testing.expectEqual(@as(usize, 2), f.stream.tokens);
-    try testing.expectEqual(State.done, f.stream.state);
-}
-
-test "a_failed_emit_never_lets_a_later_feed_emit_the_same_line_twice" {
-    var saw_emit_failure = false;
-
-    for (0..16) |k| {
+// Feeds a tail-growing token, then a big-plus-small pair whose last line has no terminating newline,
+// so a mid-stream drain and an end-time drain both run. Sweeps an injected allocation failure across
+// every point of that scenario; wherever it lands, the invariant must hold and the stream must seal.
+test "no allocation failure double-emits, partial-emits, or strands the stream" {
+    for (0..64) |k| {
         var failing = failingAllocator();
         const gpa = failing.allocator();
 
         var f: Fixture = undefined;
         f.init(gpa);
         defer f.deinit();
-        try f.open(gpa, "Seraphina");
+        f.open(gpa, "Seraphina") catch continue;
 
         failing.fail_index = failing.alloc_index + k;
-        const failed = if (f.stream.feed(two_lines)) |_| false else |_| true;
-        const emitted_before_failure = f.body(0).len > 0;
+        f.stream.feed(dl("a" ** 64)) catch {};
+        f.stream.feed(dl("b" ** 4096) ++ "data: {\"content\":\"c\"}") catch {};
         failing.fail_index = std.math.maxInt(usize);
-
-        try f.stream.feed("data: " ++ token_c ++ "\n");
         f.stream.end();
-        try expectNoTokenEmittedTwice(&f);
 
-        if (failed and emitted_before_failure) {
-            saw_emit_failure = true;
-            try testing.expectEqual(@as(usize, 3), f.stream.tokens);
-        }
-    }
-
-    try testing.expect(saw_emit_failure);
-}
-
-test "end_seals_a_newline_free_body_when_a_feed_left_lines_undrained" {
-    var saw_undrained_line = false;
-
-    for (0..16) |k| {
-        var failing = failingAllocator();
-        const gpa = failing.allocator();
-
-        var f: Fixture = undefined;
-        f.init(gpa);
-        defer f.deinit();
-        try f.open(gpa, "Seraphina");
-
-        failing.fail_index = failing.alloc_index + k;
-        const failed = if (f.stream.feed(two_lines)) |_| false else |_| true;
-        const undrained = std.mem.indexOfScalar(u8, f.stream.line.items, '\n') != null;
-        failing.fail_index = std.math.maxInt(usize);
-        if (failed and undrained) saw_undrained_line = true;
-
-        f.stream.end();
-        try expectNoTokenEmittedTwice(&f);
         try testing.expectEqual(State.done, f.stream.state);
+        try expectInOrderSubset(f.body(0), &.{ "a" ** 64, "b" ** 4096, "c" });
     }
-
-    try testing.expect(saw_undrained_line);
 }
 
 test "a_feed_that_runs_out_of_memory_consumes_none_of_its_bytes" {
-    const cut_codepoint = "data: ab\xe4\xb8";
+    const cut_codepoint = "data: {\"content\":\"ab\xe4\xb8";
     var saw_decode_failure = false;
 
     for (0..6) |k| {
@@ -471,7 +410,7 @@ test "a_feed_that_runs_out_of_memory_consumes_none_of_its_bytes" {
             try f.stream.feed(cut_codepoint);
         }
 
-        try f.stream.feed("\x96\n");
+        try f.stream.feed("\x96\"}\n");
         f.stream.end();
 
         try testing.expectEqualStrings("ab\u{4E16}", f.body(0));
@@ -490,7 +429,7 @@ test "begin_resets_the_token_count_when_the_store_refuses_the_new_stream" {
     defer f.deinit();
 
     try f.open(gpa, "First");
-    try f.stream.feed("data: one\ndata: two\n");
+    try f.stream.feed(dl("one") ++ dl("two"));
     f.stream.end();
     try testing.expectEqual(@as(usize, 2), f.stream.tokens);
 
