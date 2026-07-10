@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import yargs from 'yargs';
 import { serverEvents, EVENT_NAMES } from '../server-events.js';
+import { log } from '../log.js';
 
 const cliArguments = yargs(process.argv)
     .usage('Usage: <your-start-script> [options]')
@@ -23,7 +24,7 @@ let appUrl;
 
 function createSillyTavernWindow() {
     if (!appUrl) {
-        console.error('The server has not started yet.');
+        log.sys.error('The server has not started yet.');
         return;
     }
     new BrowserWindow({

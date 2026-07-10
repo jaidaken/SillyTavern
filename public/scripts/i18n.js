@@ -224,15 +224,15 @@ async function getMissingTranslations() {
     // Map to { language: { key: value } }
     const missingDataMap = Object.fromEntries(uniqueMissingData.map(({ key, value }) => [key, value]));
 
-    console.log(`Missing Translations (${uniqueMissingData.length}):`);
+    log.ui.info(`Missing Translations (${uniqueMissingData.length}):`);
     console.table(uniqueMissingData);
-    console.log(`Full map of missing data (${Object.keys(missingDataMap).length}):`);
-    console.log(missingDataMap);
+    log.ui.info(`Full map of missing data (${Object.keys(missingDataMap).length}):`);
+    log.ui.info(missingDataMap);
 
     if (trackMissingDynamicTranslate) {
         const trackMissingDynamicTranslateMap = Object.fromEntries(Array.from(trackMissingDynamicTranslate).map(key => [key, key]));
-        console.log(`Dynamic translations missing (${Object.keys(trackMissingDynamicTranslateMap).length}):`);
-        console.log(trackMissingDynamicTranslateMap);
+        log.ui.info(`Dynamic translations missing (${Object.keys(trackMissingDynamicTranslateMap).length}):`);
+        log.ui.info(trackMissingDynamicTranslateMap);
     }
 
     toastr.success(`Found ${uniqueMissingData.length} missing translations. See browser console for details.`);
