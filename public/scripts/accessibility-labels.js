@@ -122,6 +122,36 @@ function ensureId(el, prefix) {
     return el.id;
 }
 
+// synthetic id (never name, which app JS may read) for library-generated fields
+// that have neither; runs after labeling so it is never used as a label source.
+function ensureFieldIdentity(el) {
+    if (!el.id && !el.getAttribute('name')) el.id = `a11y-fid-${++labelIdCounter}`;
+}
+
+// guaranteed last-resort name by control kind, for anonymous library fields.
+const TYPE_FALLBACK_LABELS = {
+    search: 'Search', number: 'Number', range: 'Slider', color: 'Color',
+    date: 'Date', time: 'Time', 'datetime-local': 'Date and time', month: 'Month',
+    week: 'Week', email: 'Email address', url: 'URL', tel: 'Phone number',
+    password: 'Password', text: 'Text field',
+};
+function labelViaTypeFallback(el) {
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    const tag = el.tagName.toLowerCase();
+    const label = TYPE_FALLBACK_LABELS[type]
+        || (tag === 'select' ? 'Selection' : tag === 'textarea' ? 'Text area' : 'Text field');
+    el.setAttribute('aria-label', label);
+}
+
+// Chrome flags credential fields with no autocomplete attribute; this app never
+// wants a browser to autofill them, so default those types to off when unset.
+function ensureAutocomplete(el) {
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    if ((type === 'password' || type === 'email') && !el.hasAttribute('autocomplete')) {
+        el.setAttribute('autocomplete', 'off');
+    }
+}
+
 function labelViaCaption(el) {
     const caption = findPrecedingCaption(el);
     if (!caption) return false;
@@ -168,7 +198,8 @@ function labelPrimaryField(el) {
     if (hasAccessibleName(el)) return;
     if (labelViaCaption(el)) return;
     if (labelViaTextHint(el)) return;
-    labelViaIdentifierFallback(el);
+    if (labelViaIdentifierFallback(el)) return;
+    labelViaTypeFallback(el);
 }
 
 // counters (range-block / neo-range number inputs) inherit their slider's resolved label via data-for.
@@ -193,9 +224,11 @@ function resolveSelect2ComboboxText(container) {
 
 // select2's search input is library-owned and gets recreated on state changes, so it gets a copied aria-label, not a stable id.
 function labelSelect2SearchField(el) {
-    if (el.getAttribute('aria-label')) return;
-    const text = resolveSelect2ComboboxText(el.closest('.select2-container'));
-    if (text) el.setAttribute('aria-label', text);
+    if (!el.getAttribute('aria-label')) {
+        const text = resolveSelect2ComboboxText(el.closest('.select2-container'));
+        el.setAttribute('aria-label', text || 'Search');
+    }
+    ensureFieldIdentity(el);
 }
 
 // the visible combobox widget (role=combobox) is a separate element from the search input; both need the name.
@@ -220,8 +253,13 @@ function labelFieldsIn(root) {
                 continue;
             }
             labelPrimaryField(el);
+            ensureFieldIdentity(el);
+            ensureAutocomplete(el);
         }
-        for (const el of counters) labelCounterField(el);
+        for (const el of counters) {
+            labelCounterField(el);
+            ensureFieldIdentity(el);
+        }
 
         for (const el of findElements(root, '.select2-search__field')) labelSelect2SearchField(el);
         for (const el of findElements(root, '.select2-container')) labelSelect2Selection(el);
