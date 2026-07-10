@@ -17,9 +17,12 @@ const c = @cImport({
     @cInclude("md4c-html.h");
 });
 
-/// GitHub dialect plus hard line breaks. A single newline becomes <br>, matching showdown's
-/// simpleLineBreaks, which roleplay prose depends on.
-const parser_flags: c_uint = c.MD_DIALECT_GITHUB | c.MD_FLAG_HARD_SOFT_BREAKS | c.MD_FLAG_LATEXMATHSPANS;
+/// GitHub dialect plus hard line breaks, and nothing else. A single newline becomes <br>, matching
+/// showdown's simpleLineBreaks, which roleplay prose depends on.
+///
+/// MD_FLAG_LATEXMATHSPANS stays off: it emits <x-equation>, which the sanitizer strips, so `$x$`
+/// would render as nothing at all rather than as the literal text a roleplay message means by it.
+const parser_flags: c_uint = c.MD_DIALECT_GITHUB | c.MD_FLAG_HARD_SOFT_BREAKS;
 
 const Sink = struct {
     buf: std.ArrayList(u8) = .empty,

@@ -42,18 +42,22 @@
         if (buf.len !== 0) wasm.__zx_free(buf.ptr, buf.len);
     }
 
-    // Wasm adopts both buffers only once __st_append_message runs, so a throwing body write would
-    // otherwise strand the name buffer with no owner on either side.
+    // Wasm adopts both buffers only once __st_append_message returns, so anything that throws before
+    // that leaves them with no owner on either side.
     function appendMessage(name, body) {
         const n = writeBytes(name);
-        let b;
+        let b = null;
+        let adopted = false;
         try {
             b = writeBytes(body);
-        } catch (err) {
-            freeRaw(n);
-            throw err;
+            wasm.__st_append_message(n.ptr, n.len, b.ptr, b.len);
+            adopted = true;
+        } finally {
+            if (!adopted) {
+                freeRaw(n);
+                if (b) freeRaw(b);
+            }
         }
-        wasm.__st_append_message(n.ptr, n.len, b.ptr, b.len);
     }
 
     // Themes and the custom-CSS box are the only style surfaces, and neither passes through here,
@@ -100,7 +104,7 @@
             if (!config.MESSAGE_SANITIZE) return;
             if (data.attrName !== 'class' || !data.attrValue) return;
             // hljs* and language-* are ours, applied after md4c; namespacing them breaks the theme.
-            data.attrValue = data.attrValue.split(' ').map(function (v) {
+            data.attrValue = data.attrValue.split(/\s+/).filter(Boolean).map(function (v) {
                 if (v.startsWith('fa-') || v.startsWith('note-') || v === 'monospace') return v;
                 if (v.startsWith('hljs') || v.startsWith('language-')) return v;
                 return 'custom-' + v;
@@ -193,6 +197,7 @@
         let timer = 0;
         let ended = false;
         let begun = false;
+        let reader = null;
 
         function cancelScheduled() {
             if (raf) cancelAnimationFrame(raf);
@@ -210,18 +215,27 @@
                 merged.set(chunk, at);
                 at += chunk.length;
             }
-            // Dropping pending before the alloc lands would lose the chunk when __zx_alloc fails.
-            const buf = writeRaw(merged);
-            pending = [];
-            pendingLen = 0;
-            stats.flushes += 1;
 
-            // __st_stream_append rerenders synchronously, so env.sanitize sees the streaming body.
-            streamRender = true;
             try {
-                wasm.__st_stream_append(buf.ptr, buf.len);
-            } finally {
-                streamRender = false;
+                // Dropping pending before the alloc lands would lose the chunk when __zx_alloc fails.
+                const buf = writeRaw(merged);
+                pending = [];
+                pendingLen = 0;
+                stats.flushes += 1;
+
+                // __st_stream_append rerenders synchronously, so env.sanitize sees the streaming body.
+                streamRender = true;
+                try {
+                    wasm.__st_stream_append(buf.ptr, buf.len);
+                } finally {
+                    streamRender = false;
+                }
+            } catch (err) {
+                // rAF and setTimeout drop this frame's throw, so cancelling the reader here is the
+                // only way the finally below runs and releases streamActive.
+                console.error('[st-client] stream flush failed', err);
+                ended = true;
+                if (reader) reader.cancel().catch(function () {});
             }
         }
 
@@ -241,7 +255,7 @@
             const response = await fetch(url, { headers: { Accept: 'text/event-stream' } });
             if (!response.ok || !response.body) throw new Error('stream failed: ' + response.status);
 
-            const reader = response.body.getReader();
+            reader = response.body.getReader();
             for (;;) {
                 const step = await reader.read();
                 if (step.done) break;
@@ -282,17 +296,36 @@
 
         // ziex's init() runs mainClient before it returns, and the first client render calls
         // env.sanitize, so __zx_alloc must be reachable before init() resolves.
-        const original = WebAssembly.instantiateStreaming.bind(WebAssembly);
-        WebAssembly.instantiateStreaming = async function (source, imports) {
-            const result = await original(source, imports);
-            wasm = result.instance.exports;
+        const originalStreaming = WebAssembly.instantiateStreaming.bind(WebAssembly);
+        const originalPlain = WebAssembly.instantiate.bind(WebAssembly);
+
+        // instantiate(Module) resolves to a bare Instance; instantiate(BufferSource) to {module, instance}.
+        function capture(result) {
+            const instance = (result && result.instance) ? result.instance : result;
+            if (instance && instance.exports) wasm = instance.exports;
             return result;
+        }
+
+        WebAssembly.instantiateStreaming = async function (source, imports) {
+            return capture(await originalStreaming(source, imports));
+        };
+        WebAssembly.instantiate = async function (source, imports) {
+            return capture(await originalPlain(source, imports));
         };
 
+        let started;
         try {
-            await door.init({ importObject: { env: env } });
+            started = await door.init({ importObject: { env: env } });
         } finally {
-            WebAssembly.instantiateStreaming = original;
+            WebAssembly.instantiateStreaming = originalStreaming;
+            WebAssembly.instantiate = originalPlain;
+        }
+
+        // The door's own instance is authoritative: a second module instantiated during init would
+        // otherwise leave the glue writing into whichever one happened to resolve last.
+        if (started && started.source && started.source.instance) wasm = started.source.instance.exports;
+        if (!wasm || typeof wasm.__zx_alloc !== 'function') {
+            throw new Error('[st-client] door.init exposed no wasm exports: __zx_alloc unreachable');
         }
 
         window.stAppendMessage = appendMessage;
@@ -308,6 +341,7 @@
             e.preventDefault();
             const isLeft = handle.dataset.side === 'left';
             const rect = panel.getBoundingClientRect();
+            const pointerId = e.pointerId;
             let lastW = rect.width;
             function onMove(ev) {
                 let w = isLeft ? (ev.clientX - rect.left) : (rect.right - ev.clientX);
@@ -315,13 +349,21 @@
                 panel.style.width = w + 'px';
                 lastW = w;
             }
-            function onUp() {
+            // pointercancel too: a browser-stolen drag (touch scroll, focus loss) never sends pointerup.
+            function onEnd() {
                 document.removeEventListener('pointermove', onMove);
-                document.removeEventListener('pointerup', onUp);
+                document.removeEventListener('pointerup', onEnd);
+                document.removeEventListener('pointercancel', onEnd);
+                if (handle.hasPointerCapture && handle.hasPointerCapture(pointerId)) {
+                    handle.releasePointerCapture(pointerId);
+                }
                 if (wasm && wasm.__st_set_panel_width) wasm.__st_set_panel_width(isLeft ? 1 : 0, lastW);
             }
             document.addEventListener('pointermove', onMove);
-            document.addEventListener('pointerup', onUp);
+            document.addEventListener('pointerup', onEnd);
+            document.addEventListener('pointercancel', onEnd);
+            // Captured moves still bubble to document, and the capture guarantees a terminal event.
+            if (handle.setPointerCapture) handle.setPointerCapture(pointerId);
         });
 
         // Motion preference. Zig owns the reactive class the CSS reads; the glue owns persistence.

@@ -35,6 +35,9 @@ pub const Stream = struct {
     /// for the next `feed` or `end` to retry.
     line: std.ArrayList(u8) = .empty,
     tokens: usize = 0,
+    /// Set by `emit` on `[DONE]`, acted on by `feed` once `drain` has stopped reading `line`.
+    /// Sealing from inside `emit` would free the buffer `drain` is iterating.
+    saw_done: bool = false,
 
     pub fn deinit(self: *Stream) void {
         self.line.deinit(self.allocator);
@@ -49,6 +52,7 @@ pub const Stream = struct {
         self.decoder = .{};
         self.line.clearRetainingCapacity();
         self.tokens = 0;
+        self.saw_done = false;
 
         try self.store.beginStream(name);
         self.state = .streaming;
@@ -59,6 +63,9 @@ pub const Stream = struct {
     /// A decode that runs out of memory consumes nothing: the carry and `line` are put back as they
     /// were, so the same bytes may be fed again. A `drain` that runs out of memory keeps the lines
     /// it could not emit and never re-emits the ones it did.
+    ///
+    /// A `[DONE]` anywhere in the fed bytes seals the stream here, once `drain` has finished with
+    /// `line`. Bytes after it are ignored: the backend may hold the socket open indefinitely.
     pub fn feed(self: *Stream, bytes: []const u8) Allocator.Error!void {
         if (self.state != .streaming) return;
 
@@ -72,7 +79,11 @@ pub const Stream = struct {
             try self.decoder.feedInto(self.allocator, &self.line, bytes);
         }
 
+        // Seals even when the drain runs out of memory: the sentinel arrived, and the tokens behind
+        // it are already lost to the failure. end() emits whatever complete lines survived.
+        errdefer if (self.saw_done) self.end();
         try self.drain();
+        if (self.saw_done) self.end();
     }
 
     /// Ends the stream and seals the message. Always reaches `.done`, even out of memory: losing a
@@ -138,7 +149,9 @@ pub const Stream = struct {
                 try self.store.appendTail(tok);
                 self.tokens += 1;
             },
-            .done, .empty => {},
+            // Only flagged: `drain` is iterating `line`, which `end` frees.
+            .done => self.saw_done = true,
+            .empty => {},
         }
     }
 };
@@ -265,15 +278,64 @@ test "stream_reassembles_a_codepoint_split_across_chunks_inside_a_token" {
     try testing.expectEqualStrings(emoji, f.body(0));
 }
 
-test "stream_skips_the_done_sentinel_and_non_data_lines" {
+test "stream_emits_no_token_for_comment_or_event_lines" {
     var f: Fixture = undefined;
     f.init(testing.allocator);
     defer f.deinit();
 
     try f.open(testing.allocator, "Seraphina");
-    try f.stream.feed(": comment\nevent: ping\n" ++ dl("real") ++ "data: [DONE]\n\n");
+    try f.stream.feed(": comment\nevent: ping\n" ++ dl("real") ++ "\n");
     f.stream.end();
 
+    try testing.expectEqualStrings("real", f.body(0));
+    try testing.expectEqual(@as(usize, 1), f.stream.tokens);
+}
+
+test "stream_seals_on_the_done_sentinel_with_no_external_end" {
+    var f: Fixture = undefined;
+    f.init(testing.allocator);
+    defer f.deinit();
+
+    try f.open(testing.allocator, "Seraphina");
+    try f.stream.feed(dl("real") ++ "data: [DONE]\n\n");
+
+    // A backend that holds the socket open after [DONE] must not strand the message in .streaming.
+    try testing.expectEqual(State.done, f.stream.state);
+    try testing.expectEqual(@as(?usize, null), f.store.stream_index);
+    try testing.expectEqualStrings("real", f.body(0));
+    try testing.expectEqual(@as(usize, 1), f.stream.tokens);
+
+    try f.stream.feed(dl("after"));
+    try testing.expectEqualStrings("real", f.body(0));
+    try testing.expectEqual(@as(usize, 1), f.stream.tokens);
+}
+
+test "stream_seals_on_a_done_sentinel_split_across_chunks" {
+    var f: Fixture = undefined;
+    f.init(testing.allocator);
+    defer f.deinit();
+
+    try f.open(testing.allocator, "Seraphina");
+    try f.stream.feed(dl("real") ++ "data: [DO");
+    try testing.expectEqual(State.streaming, f.stream.state);
+    try f.stream.feed("NE]\n");
+
+    try testing.expectEqual(State.done, f.stream.state);
+    try testing.expectEqualStrings("real", f.body(0));
+}
+
+test "stream_seals_on_a_done_sentinel_that_has_no_trailing_newline" {
+    var f: Fixture = undefined;
+    f.init(testing.allocator);
+    defer f.deinit();
+
+    try f.open(testing.allocator, "Seraphina");
+    try f.stream.feed(dl("real") ++ "data: [DONE]");
+    // No newline closes the sentinel, so only end() sees it. The seal must still happen once.
+    try testing.expectEqual(State.streaming, f.stream.state);
+    f.stream.end();
+
+    try testing.expectEqual(State.done, f.stream.state);
     try testing.expectEqualStrings("real", f.body(0));
     try testing.expectEqual(@as(usize, 1), f.stream.tokens);
 }
@@ -328,8 +390,9 @@ fn feedScenario(gpa: Allocator, chunk_size: usize) !void {
 
     // A trailing newline seals every token during feed, so this exercises only the feed path, which
     // propagates OOM cleanly (checkAllAllocationFailures requires propagation). end()'s deliberate
-    // drop-not-strand behaviour is covered by the sweep test below.
-    const wire_bytes = "data: {\"content\":\"al\u{4E16}pha\"}\ndata: [DONE]\ndata: {\"content\":\"beta\"}\n";
+    // drop-not-strand behaviour is covered by the sweep test below. [DONE] comes last: it seals the
+    // stream, and the tokens behind it would never be read.
+    const wire_bytes = "data: {\"content\":\"al\u{4E16}pha\"}\ndata: {\"content\":\"beta\"}\ndata: [DONE]\n";
     var at: usize = 0;
     while (at < wire_bytes.len) {
         const take = @min(wire_bytes.len - at, chunk_size);
@@ -337,8 +400,9 @@ fn feedScenario(gpa: Allocator, chunk_size: usize) !void {
         at += take;
     }
 
-    // Reaching here means no injected failure fired, so every token streamed into the tail.
-    try testing.expectEqualStrings("al\u{4E16}phabeta", f.store.tail.items);
+    // Reaching here means no injected failure fired, so every token streamed into the sealed body.
+    try testing.expectEqual(State.done, f.stream.state);
+    try testing.expectEqualStrings("al\u{4E16}phabeta", f.body(0));
 }
 
 test "stream_releases_everything_on_any_allocation_failure" {

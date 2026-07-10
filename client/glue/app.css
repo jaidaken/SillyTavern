@@ -400,8 +400,12 @@ body {
 }
 
 .composer-input:focus {
-    outline: none;
     border-color: var(--accent);
+}
+
+/* Border alone marks a pointer focus; the global :focus-visible ring stays for the keyboard. */
+.composer-input:focus:not(:focus-visible) {
+    outline: none;
 }
 
 .composer-btn {
