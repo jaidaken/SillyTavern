@@ -63,6 +63,9 @@ const tabItemSelectors = [
 /** @type {Record<string, (element: Element) => void>} */
 const a11yRules = {
     [buttonSelectors]: (element) => {
+        // role=button is invalid on a <label>; those .menu_button labels wrap a real
+        // control that is already clickable and focusable, so they need no button role.
+        if (element.tagName === 'LABEL') return;
         element.setAttribute('role', 'button');
     },
     [listSelectors]: (element) => {

@@ -2632,7 +2632,7 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
         'type': mes.extra?.type ?? '',
     });
 
-    messageElement.find('.avatar img').attr('src', avatarImg);
+    messageElement.find('.avatar img').attr({ 'src': avatarImg, 'alt': mes.name });
     messageElement.find('.ch_name .name_text').text(mes.name);
     messageElement.find('.timestamp').text(timestamp).attr('title', `${mes.extra?.api ? mes.extra.api + ' - ' : ''}${mes.extra?.model ?? ''}`);
     messageElement.find('.mesIDDisplay').text(`#${messageId}`);
