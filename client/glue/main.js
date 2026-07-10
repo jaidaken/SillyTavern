@@ -324,9 +324,23 @@
             document.addEventListener('pointerup', onUp);
         });
 
-        // App-level motion switch. Defaults on so gentle transitions show even when the OS reports
-        // prefers-reduced-motion; a future user setting can flip this to "off" to honour the OS.
-        document.documentElement.dataset.motion = 'on';
+        // Motion preference. Zig owns the reactive class the CSS reads; the glue owns persistence.
+        // Default "system" honours the OS prefers-reduced-motion; the settings drawer overrides it.
+        const MOTION = { system: 0, on: 1, off: 2 };
+        function applyMotion(name) {
+            if (wasm && wasm.__st_set_motion) wasm.__st_set_motion(MOTION[name] != null ? MOTION[name] : 0);
+        }
+        let savedMotion = 'system';
+        try { savedMotion = localStorage.getItem('st-motion') || 'system'; } catch (_) {}
+        applyMotion(savedMotion);
+
+        document.addEventListener('click', function (e) {
+            const btn = e.target && e.target.closest ? e.target.closest('[data-motion-set]') : null;
+            if (!btn) return;
+            const name = btn.getAttribute('data-motion-set');
+            try { localStorage.setItem('st-motion', name); } catch (_) {}
+            applyMotion(name);
+        });
 
         // Composer auto-grow: the textarea expands to fit its content up to the CSS max-height, then
         // scrolls. Delegated on input so it survives ziex re-renders replacing the element.
@@ -337,10 +351,10 @@
             t.style.height = t.scrollHeight + 'px';
         });
 
-        // Click-outside closes an open top-bar dropdown (docks are persistent and stay put). Only
-        // fires work when a `.dropdown` is actually in the DOM.
+        // Click-outside closes an open top-bar drawer (docks are persistent and stay put). Only does
+        // work when a `.top-drawer` is actually in the DOM.
         document.addEventListener('pointerdown', function (e) {
-            const dd = document.querySelector('.dropdown');
+            const dd = document.querySelector('.top-drawer');
             if (!dd) return;
             const t = e.target;
             if (dd.contains(t)) return;

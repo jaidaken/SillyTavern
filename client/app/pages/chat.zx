@@ -5,7 +5,7 @@ pub fn ChatView(ctx: *zx.ComponentCtx(void)) zx.Component {
     // Retires the streaming HTML this render's diff no longer reads. Must precede every renderMessage.
     sanitized.renderTick();
     return (
-        <div @allocator={ctx.allocator} id="app">
+        <div @allocator={ctx.allocator} id="app" class={ui.motionClass()}>
             <TopBar />
             <div id="content">
                 {if (ui.openOn(.left)) |p| (

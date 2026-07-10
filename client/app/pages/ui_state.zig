@@ -1,6 +1,6 @@
-//! Pure UI state model: the panel catalogue and the open/width state, with no ziex dependency so it
-//! is unit-testable in the native `zig build test`. ui.zig wraps this with the reactive `rerender`
-//! calls and the DOM event handlers; everything that can be pure logic lives here.
+//! Pure UI state model: the panel catalogue, the open/width state, and the motion preference, with
+//! no ziex dependency so it is unit-testable in the native `zig build test`. ui.zig wraps this with
+//! the reactive `rerender` calls and the DOM event handlers; everything pure lives here.
 
 const std = @import("std");
 
@@ -18,9 +18,10 @@ pub const PanelId = enum {
 
 pub const Side = enum { left, right };
 
-/// How a panel presents. A dock is a full-height side panel that reflows the chat; a dropdown is a
-/// small menu that drops from the top bar and overlays the content (like the original's wand menu).
-pub const PanelKind = enum { dock, dropdown };
+/// How a panel presents, matching the original front end: a dock is a full-height side panel that
+/// reflows the chat (AI config on the left, characters on the right); a drawer drops from the top bar
+/// and overlays the content (everything else). See the original's #top-settings-holder.
+pub const PanelKind = enum { dock, drawer };
 
 pub const Panel = struct {
     id: PanelId,
@@ -29,28 +30,33 @@ pub const Panel = struct {
     /// CSS class selecting the button's ::before mask icon.
     icon: []const u8,
     title: []const u8,
+    /// Which side a dock sits on. Ignored for drawer-kind panels.
     side: Side,
-    kind: PanelKind = .dock,
+    kind: PanelKind = .drawer,
 };
 
 pub const panels = [_]Panel{
-    .{ .id = .ai_config, .dom_id = "d-ai_config", .icon = "i-sliders", .title = "AI Response Configuration", .side = .left },
+    .{ .id = .ai_config, .dom_id = "d-ai_config", .icon = "i-sliders", .title = "AI Response Configuration", .side = .left, .kind = .dock },
     .{ .id = .connections, .dom_id = "d-connections", .icon = "i-plug", .title = "API Connections", .side = .left },
     .{ .id = .formatting, .dom_id = "d-formatting", .icon = "i-font", .title = "AI Response Formatting", .side = .left },
     .{ .id = .world_info, .dom_id = "d-world_info", .icon = "i-book", .title = "World Info", .side = .left },
     .{ .id = .settings, .dom_id = "d-settings", .icon = "i-cog", .title = "User Settings", .side = .left },
     .{ .id = .backgrounds, .dom_id = "d-backgrounds", .icon = "i-image", .title = "Backgrounds", .side = .left },
-    .{ .id = .extensions, .dom_id = "d-extensions", .icon = "i-cubes", .title = "Extensions", .side = .right, .kind = .dropdown },
+    .{ .id = .extensions, .dom_id = "d-extensions", .icon = "i-cubes", .title = "Extensions", .side = .right },
     .{ .id = .persona, .dom_id = "d-persona", .icon = "i-user", .title = "Persona Management", .side = .right },
-    .{ .id = .characters, .dom_id = "d-characters", .icon = "i-card", .title = "Character Management", .side = .right },
+    .{ .id = .characters, .dom_id = "d-characters", .icon = "i-card", .title = "Character Management", .side = .right, .kind = .dock },
 };
 
 pub const min_width: f32 = 240;
 pub const max_width: f32 = 620;
 pub const default_width: f32 = 340;
 
-/// Which side panel is open (at most one), and the width of each dock. A plain value: ui.zig holds
-/// the single reactive instance and rerenders after each mutation.
+/// Motion policy. `system` honours the OS prefers-reduced-motion (the default); `on`/`off` override
+/// it from the in-app setting.
+pub const MotionPref = enum { system, on, off };
+
+/// Which side panel or drawer is open (at most one), and the width of each dock. A plain value:
+/// ui.zig holds the single reactive instance and rerenders after each mutation.
 pub const PanelState = struct {
     active: ?PanelId = null,
     left_w: f32 = default_width,
@@ -68,17 +74,17 @@ pub const PanelState = struct {
         return null;
     }
 
-    /// The dock currently open on `side`, if any. Dropdown-kind panels never dock, so they are
-    /// excluded here and surface through activeDropdown instead.
+    /// The dock currently open on `side`, if any. Drawer-kind panels never dock, so they are excluded
+    /// here and surface through activeDrawer instead.
     pub fn openOn(self: PanelState, side: Side) ?Panel {
         const p = self.activePanel() orelse return null;
         return if (p.kind == .dock and p.side == side) p else null;
     }
 
-    /// The active panel when it presents as a top-bar dropdown rather than a dock.
-    pub fn activeDropdown(self: PanelState) ?Panel {
+    /// The active panel when it presents as a top-bar drawer rather than a dock.
+    pub fn activeDrawer(self: PanelState) ?Panel {
         const p = self.activePanel() orelse return null;
-        return if (p.kind == .dropdown) p else null;
+        return if (p.kind == .drawer) p else null;
     }
 
     pub fn widthFor(self: PanelState, side: Side) f32 {
@@ -110,6 +116,28 @@ pub fn panelIdFromDomId(id: []const u8) ?PanelId {
     return null;
 }
 
+/// Maps "system"/"on"/"off" (the value of a data-motion-set button) to a MotionPref.
+pub fn motionPrefFromStr(s: []const u8) ?MotionPref {
+    inline for (@typeInfo(MotionPref).@"enum".fields) |f| {
+        if (std.mem.eql(u8, f.name, s)) return @field(MotionPref, f.name);
+    }
+    return null;
+}
+
+/// Class on #app that drives the CSS motion switch. Empty for `system` so the media query governs.
+pub fn motionClass(m: MotionPref) []const u8 {
+    return switch (m) {
+        .system => "",
+        .on => "motion-on",
+        .off => "motion-off",
+    };
+}
+
+/// Segmented-button class for the motion setting: highlights the button matching the current pref.
+pub fn motionSegClass(current: MotionPref, which: MotionPref) []const u8 {
+    return if (current == which) "seg-btn is-active" else "seg-btn";
+}
+
 pub fn sideClass(side: Side) []const u8 {
     return if (side == .left) "panel panel-left" else "panel panel-right";
 }
@@ -132,17 +160,17 @@ pub fn drawerClass(alloc: std.mem.Allocator, is_open: bool, icon: []const u8) []
 
 const testing = std.testing;
 
-test "toggle opens then closes, and is exclusive across sides" {
+test "toggle opens then closes, and is exclusive across the two docks" {
     var s: PanelState = .{};
     try testing.expect(s.activePanel() == null);
-    s.toggle(.settings);
-    try testing.expect(s.isActive(.settings));
-    try testing.expect(s.openOn(.left).?.id == .settings);
+    s.toggle(.ai_config);
+    try testing.expect(s.isActive(.ai_config));
+    try testing.expect(s.openOn(.left).?.id == .ai_config);
     try testing.expect(s.openOn(.right) == null);
-    // A different panel replaces the open one.
+    // The other dock replaces it and sits on the right.
     s.toggle(.characters);
     try testing.expect(s.isActive(.characters));
-    try testing.expect(!s.isActive(.settings));
+    try testing.expect(!s.isActive(.ai_config));
     try testing.expect(s.openOn(.right).?.id == .characters);
     try testing.expect(s.openOn(.left) == null);
     // Toggling the open panel closes it.
@@ -150,18 +178,21 @@ test "toggle opens then closes, and is exclusive across sides" {
     try testing.expect(s.activePanel() == null);
 }
 
-test "a dropdown-kind panel surfaces through activeDropdown, never as a dock" {
+test "the seven middle panels are drawers; only ai_config and characters dock" {
     var s: PanelState = .{};
-    s.toggle(.extensions);
-    try testing.expect(s.isActive(.extensions));
-    // Extensions is a dropdown, so it never docks on either side.
-    try testing.expect(s.openOn(.left) == null);
-    try testing.expect(s.openOn(.right) == null);
-    try testing.expect(s.activeDropdown().?.id == .extensions);
-    // A dock-kind panel does not surface as a dropdown.
-    s.toggle(.settings);
-    try testing.expect(s.activeDropdown() == null);
-    try testing.expect(s.openOn(.left).?.id == .settings);
+    const drawers = [_]PanelId{ .connections, .formatting, .world_info, .settings, .backgrounds, .extensions, .persona };
+    for (drawers) |id| {
+        s.toggle(id);
+        try testing.expect(s.activeDrawer().?.id == id);
+        try testing.expect(s.openOn(.left) == null);
+        try testing.expect(s.openOn(.right) == null);
+        s.close();
+    }
+    // The two docks never surface as drawers.
+    s.toggle(.ai_config);
+    try testing.expect(s.activeDrawer() == null);
+    s.toggle(.characters);
+    try testing.expect(s.activeDrawer() == null);
 }
 
 test "width clamps to the allowed range" {
@@ -172,7 +203,6 @@ test "width clamps to the allowed range" {
     try testing.expectEqual(max_width, s.widthFor(.left));
     s.setWidth(.left, 400);
     try testing.expectEqual(@as(f32, 400), s.widthFor(.left));
-    // The other side is independent.
     try testing.expectEqual(default_width, s.widthFor(.right));
 }
 
@@ -197,4 +227,16 @@ test "panelIdFromDomId rejects unknown or unprefixed ids" {
     try testing.expect(panelIdFromDomId("settings") == null);
     try testing.expect(panelIdFromDomId("") == null);
     try testing.expectEqual(PanelId.settings, panelIdFromDomId("d-settings").?);
+}
+
+test "motion pref parses and maps to the right #app class" {
+    try testing.expectEqual(MotionPref.system, motionPrefFromStr("system").?);
+    try testing.expectEqual(MotionPref.on, motionPrefFromStr("on").?);
+    try testing.expectEqual(MotionPref.off, motionPrefFromStr("off").?);
+    try testing.expect(motionPrefFromStr("bogus") == null);
+    try testing.expectEqualStrings("", motionClass(.system));
+    try testing.expectEqualStrings("motion-on", motionClass(.on));
+    try testing.expectEqualStrings("motion-off", motionClass(.off));
+    try testing.expectEqualStrings("seg-btn is-active", motionSegClass(.on, .on));
+    try testing.expectEqualStrings("seg-btn", motionSegClass(.on, .off));
 }

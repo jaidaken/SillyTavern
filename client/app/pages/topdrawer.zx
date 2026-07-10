@@ -1,0 +1,39 @@
+// A top-bar drawer: drops from the bar and overlays the content, like the original's top-settings
+// panels (API connections, formatting, world info, user settings, backgrounds, extensions, persona).
+// Title bar with a close button, then a body. The body is a placeholder for most panels; the User
+// Settings drawer carries the first real control, the motion preference.
+pub const DrawerProps = struct {
+    panel: ui.Panel,
+};
+
+pub fn TopDrawer(allocator: zx.Allocator, props: DrawerProps) zx.Component {
+    const p = props.panel;
+    return (
+        <section @allocator={allocator} class="top-drawer" role="dialog" aria-label={p.title}>
+            <div class="panel-head">
+                <span class="panel-title">{p.title}</span>
+                <button class="panel-close" title="Close" aria-label="Close" onclick={ui.onClose}></button>
+            </div>
+            <div class="panel-body">
+                {if (p.id == .settings) (
+                    <div class="settings-body">
+                        <div class="setting-row">
+                            <span class="setting-label">Motion</span>
+                            <div class="seg" role="group" aria-label="Motion">
+                                <button class={ui.motionSegClass(.system)} data-motion-set="system" type="button">System</button>
+                                <button class={ui.motionSegClass(.on)} data-motion-set="on" type="button">On</button>
+                                <button class={ui.motionSegClass(.off)} data-motion-set="off" type="button">Off</button>
+                            </div>
+                        </div>
+                        <p class="setting-note">System follows your OS reduced-motion preference.</p>
+                    </div>
+                ) else (
+                    <p class="panel-empty">Controls for this panel land here as each subsystem is wired.</p>
+                )}
+            </div>
+        </section>
+    );
+}
+
+const zx = @import("zx");
+const ui = @import("./ui.zig");

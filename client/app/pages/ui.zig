@@ -11,11 +11,13 @@ const ui_state = @import("./ui_state.zig");
 pub const PanelId = ui_state.PanelId;
 pub const Side = ui_state.Side;
 pub const Panel = ui_state.Panel;
+pub const MotionPref = ui_state.MotionPref;
 pub const panels = ui_state.panels;
 pub const min_width = ui_state.min_width;
 pub const max_width = ui_state.max_width;
 
 var state: ui_state.PanelState = .{};
+var motion: ui_state.MotionPref = .system;
 
 // Read-only views the components use during render; no rerender, so they are safe to call anywhere.
 pub fn isActive(id: PanelId) bool {
@@ -27,11 +29,17 @@ pub fn activePanel() ?Panel {
 pub fn openOn(side: Side) ?Panel {
     return state.openOn(side);
 }
-pub fn activeDropdown() ?Panel {
-    return state.activeDropdown();
+pub fn activeDrawer() ?Panel {
+    return state.activeDrawer();
 }
 pub fn widthFor(side: Side) f32 {
     return state.widthFor(side);
+}
+pub fn motionClass() []const u8 {
+    return ui_state.motionClass(motion);
+}
+pub fn motionSegClass(which: MotionPref) []const u8 {
+    return ui_state.motionSegClass(motion, which);
 }
 
 // Mutations rerender so the shell reflects the new state.
@@ -81,7 +89,18 @@ export fn __st_set_panel_width(is_left: u32, width: f64) callconv(.c) void {
     setWidth(if (is_left != 0) .left else .right, @floatCast(width));
 }
 
-/// Called from the glue to dismiss the open panel (used for click-outside on a dropdown).
+/// Called from the glue to dismiss the open panel (used for click-outside on a drawer).
 export fn __st_close_panel() callconv(.c) void {
     close();
+}
+
+/// Set the motion preference from the glue (0 = system, 1 = on, 2 = off). The glue owns persistence
+/// and seeds this at boot from localStorage; Zig owns the reactive class the CSS reads.
+export fn __st_set_motion(pref: u32) callconv(.c) void {
+    motion = switch (pref) {
+        1 => .on,
+        2 => .off,
+        else => .system,
+    };
+    zx.client.rerender();
 }
