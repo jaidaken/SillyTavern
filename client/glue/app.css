@@ -321,12 +321,13 @@ body {
     touch-action: none;
 }
 
+/* Flush against the panel's inner edge: .panel clips overflow, so an outset handle loses 4 of its 9px. */
 .panel-left .panel-resize {
-    right: -4px;
+    right: 0;
 }
 
 .panel-right .panel-resize {
-    left: -4px;
+    left: 0;
 }
 
 .panel-resize:hover {
@@ -633,12 +634,18 @@ body {
 
 .mes_text img {
     max-width: 100%;
+    height: auto;
     vertical-align: middle;
 }
 
+.mes_text ul,
+.mes_text ol {
+    padding-inline-start: var(--s-5);
+}
+
+/* Match the bullet-list indent (no negative pull): checklist and bullet items align in one column. */
 .mes_text li.task-list-item {
     list-style: none;
-    margin-inline-start: -1.2rem;
 }
 
 .mes_text li.task-list-item input {
@@ -733,7 +740,7 @@ body {
 
 /* Composer buttons also ease transform + filter, so the send press and hover brighten do not snap. */
 .composer-btn {
-    transition: background 120ms ease, color 120ms ease, filter 120ms ease, transform 90ms ease;
+    transition: background 120ms ease, color 120ms ease, filter 120ms ease, transform 120ms ease;
 }
 
 .composer-btn:active {
