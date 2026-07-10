@@ -67,7 +67,9 @@
         RETURN_DOM_FRAGMENT: false,
         RETURN_TRUSTED_TYPE: false,
         MESSAGE_SANITIZE: true,
-        FORBID_TAGS: ['style'],
+        // A message body is model output, so form controls would let it draw a fake login box that
+        // posts credentials off-origin; chat prose has no legitimate use for them.
+        FORBID_TAGS: ['style', 'form', 'input', 'button', 'textarea', 'select', 'option'],
         FORBID_ATTR: ['style'],
         ALLOW_DATA_ATTR: false,
         SANITIZE_NAMED_PROPS: true,
@@ -132,40 +134,58 @@
         highlightCache.set(key, value);
     }
 
+    // Highlight one pre>code in place. Source is read from textContent, so a re-run reproduces the
+    // same output: the seal pass can call it idempotently on already-highlighted blocks.
+    function highlightElement(el, skipGrow) {
+        const tag = Array.from(el.classList).find(function (c) { return c.startsWith('language-'); });
+        const lang = tag ? tag.slice(9) : null;
+        const source = el.textContent;
+        const key = highlightKey(lang, source);
+        el.classList.add('hljs');
+
+        const hit = highlightCache.get(key);
+        if (hit !== undefined) {
+            // allow-raw-html-sink: cached hljs output, hljs-escaped; body already DOMPurify-sanitized.
+            el.innerHTML = hit;
+            return;
+        }
+
+        // Growing block changes next frame and highlightAuto walks every grammar, so leave it plain
+        // here; highlightSealedBlocks runs hljs on it once the stream seals.
+        if (skipGrow) return;
+
+        const out = (lang && hljs.getLanguage(lang))
+            ? hljs.highlight(source, { language: lang, ignoreIllegals: true })
+            : hljs.highlightAuto(source);
+        cacheHighlight(key, out.value);
+        // allow-raw-html-sink: hljs output, hljs-escaped; body already DOMPurify-sanitized.
+        el.innerHTML = out.value;
+    }
+
     // <template> content is inert: no scripts run, no subresources load, so hljs writes into it safely.
     function highlightBlocks(html) {
         const tpl = document.createElement('template');
+        // allow-raw-html-sink: html is the DOMPurify-sanitized string; template content is inert.
         tpl.innerHTML = html;
         const blocks = tpl.content.querySelectorAll('pre > code');
 
-        // streamRender is up only inside the rerender a stream chunk drives, and that rerender
-        // re-sanitizes the streaming body alone; bytes land at its end, so its last block is growing.
+        // streamRender is up only inside the rerender a stream chunk drives, so the streaming body's
+        // last block is the growing one; skip it, the seal pass highlights it at stream end.
         const growing = streamRender ? blocks.length - 1 : -1;
 
         blocks.forEach(function (el, i) {
-            const tag = Array.from(el.classList).find(function (c) { return c.startsWith('language-'); });
-            const lang = tag ? tag.slice(9) : null;
-            const source = el.textContent;
-            const key = highlightKey(lang, source);
-            el.classList.add('hljs');
-
-            const hit = highlightCache.get(key);
-            if (hit !== undefined) {
-                el.innerHTML = hit;
-                return;
-            }
-
-            // Next frame would throw this work away, and highlightAuto walks every grammar. DOMPurify
-            // already escaped the text, so the tail renders as plain text until the fence settles.
-            if (i === growing) return;
-
-            const out = (lang && hljs.getLanguage(lang))
-                ? hljs.highlight(source, { language: lang, ignoreIllegals: true })
-                : hljs.highlightAuto(source);
-            cacheHighlight(key, out.value);
-            el.innerHTML = out.value;
+            highlightElement(el, i === growing);
         });
         return tpl.innerHTML;
+    }
+
+    // A lone streamed fence stays plain: the growing-block skip never highlights it and the memo skip
+    // means MessageView never re-renders it once sealed. Highlight the sealed message's blocks here.
+    function highlightSealedBlocks(root) {
+        if (!root || !hljs) return;
+        root.querySelectorAll('pre > code').forEach(function (el) {
+            highlightElement(el, false);
+        });
     }
 
     const env = {
@@ -313,6 +333,11 @@
             // terminal render to see the tail as settled. A begin that threw has nothing to close.
             if (begun) {
                 wasm.__st_stream_end();
+                // The sealed message never re-renders (memo skip), so highlight its now-settled
+                // growing code block in place; the streamed message is the last .mes in the log.
+                const chat = document.getElementById('chat');
+                const mes = chat ? chat.querySelectorAll('.mes') : null;
+                if (mes && mes.length) highlightSealedBlocks(mes[mes.length - 1]);
                 if (devMode) {
                     stats.tokens = wasm.__st_stream_tokens();
                     window.__stStats = stats;
