@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# End-to-end gate. Covers what `zig build test` cannot: hydration, the sanitize boundary, the
-# render cache, and streaming, all against a real browser.
-#
-# Usage: ./verify.sh   (expects `zig build -Doptimize=ReleaseSmall && zig build export` already run)
+# End-to-end regression gate: zig fmt + unit tests, then the served three-region DOM, the sanitize
+# boundary, markdown + highlighting, the render cache, and streaming, all against a real browser.
+# The three rendered fixtures are roleplay prose, so the hostile and markdown vectors are NOT among
+# them; this gate drives them through the real pipeline (quotes -> md4c -> DOMPurify) via a custom
+# /dev/stream?prefix= URL, so a sanitizer or highlighter regression actually fails a check.
+# Usage: ./verify.sh   (expects ./build.sh already run: patched door + pruned dist)
 set -uo pipefail
 
 cd "$(dirname "$0")"
@@ -10,9 +12,20 @@ cd "$(dirname "$0")"
 PORT="${PORT:-8899}"
 FAILURES=0
 DOM=$(mktemp)
+SAN_DOM=$(mktemp)
+MD_DOM=$(mktemp)
 STREAM_DOM=$(mktemp)
 PROFILE=$(mktemp -d)
-trap 'rm -rf "$DOM" "$STREAM_DOM" "$PROFILE"; [ -n "${SRV:-}" ] && kill -TERM "$SRV" 2>/dev/null' EXIT
+SRV=""
+NODEV=""
+cleanup() {
+    # setsid makes each server its own process-group leader, so a group kill reaps the timeout
+    # wrapper, python, and its handler threads together; a bare kill would orphan them.
+    [ -n "$SRV" ] && kill -TERM -- -"$SRV" 2>/dev/null
+    [ -n "$NODEV" ] && kill -TERM -- -"$NODEV" 2>/dev/null
+    rm -rf "$DOM" "$SAN_DOM" "$MD_DOM" "$STREAM_DOM" "$PROFILE"
+}
+trap cleanup EXIT
 
 check() {
     local label="$1" actual="$2" expected="$3"
@@ -34,60 +47,128 @@ atleast() {
     fi
 }
 
+count() { grep -o "$1" "$2" 2>/dev/null | wc -l; }
+
 DOOR="dist/vendor/ziex/wasm/index.js"
+WASM="dist/assets/_/main.wasm"
 
-[ -f dist/index.html ] || { echo "no dist/: run 'zig build export' first" >&2; exit 1; }
-[ -f "$DOOR" ] || { echo "no $DOOR: run 'zig build export' first" >&2; exit 1; }
+# Preflight. A missing artifact must name itself, not surface later as a browser check that reads
+# exactly like a real regression (empty DOM, everything zero).
+[ -f dist/index.html ] || { echo "no dist/index.html: run ./build.sh first" >&2; exit 1; }
+[ -f "$DOOR" ] || { echo "no $DOOR: run ./build.sh first" >&2; exit 1; }
+[ -f "$WASM" ] || { echo "no $WASM: the wasm module is missing, run ./build.sh first" >&2; exit 1; }
+command -v google-chrome-stable >/dev/null 2>&1 || {
+    echo "google-chrome-stable not on PATH: the browser gate cannot run" >&2; exit 1
+}
 
-# Budget: two sleeps plus three chrome loads capped at 60s each, so the server must outlive 182s.
-setsid timeout 300 python3 devserve.py --port "$PORT" --dist dist --dev >/dev/null 2>&1 &
+echo "== zig gates =="
+if zig build check; then echo "  ok    zig fmt --check"; else echo "  FAIL  zig fmt --check"; FAILURES=$((FAILURES + 1)); fi
+if zig build test;  then echo "  ok    zig build test";  else echo "  FAIL  zig build test";  FAILURES=$((FAILURES + 1)); fi
+
+echo
+echo "== build artifacts =="
+# Patched state is the PRESENCE of the uncached readString body, never the absence of a cache
+# marker: a reformatted door has both cache markers absent while still carrying the D1 stale read.
+door_uncached=$(grep -Fc 'return textDecoder.decode(getMemoryView().subarray(ptr, ptr + len));' "$DOOR")
+atleast "door patched: uncached readString body" "$door_uncached" 1
+check   "main.wasm present" "$([ -f "$WASM" ] && echo yes || echo no)" "yes"
+
+echo
+echo "== served html (pre-hydration) =="
+# Three client regions (Shell, MessageLog, Composer), each with one SSR marker; three fixtures, each
+# body a placeholder the client replaces.
+check "region hydration markers in index.html" "$(count '<!--\$' dist/index.html)" 3
+check "ssr placeholder, one per message" "$(count 'ST_SSR_PLACEHOLDER' dist/index.html)" 3
+
+# Start the server for every browser check. --dev exposes /dev/stream and /dev/hold. setsid so the
+# whole tree dies with the group kill in cleanup.
+setsid timeout 320 python3 devserve.py --port "$PORT" --dist dist --dev >"$PROFILE/srv.log" 2>&1 &
 SRV=$!
-sleep 2
+# Poll readiness rather than sleep: a loaded box or an already-bound port must fail loudly, not race.
+ready=no
+for _ in $(seq 1 100); do
+    if curl -sS --max-time 2 -o /dev/null "http://127.0.0.1:$PORT/" 2>/dev/null; then ready=yes; break; fi
+    if ! kill -0 "$SRV" 2>/dev/null; then break; fi
+    sleep 0.2
+done
+if [ "$ready" != yes ]; then
+    echo "server never became ready on port $PORT; last log:" >&2
+    tail -5 "$PROFILE/srv.log" >&2
+    exit 1
+fi
 
 chrome() {
     timeout 60 google-chrome-stable --headless --disable-gpu --no-sandbox \
         --user-data-dir="$PROFILE" --dump-dom --virtual-time-budget="$2" "$1" 2>/dev/null
 }
 
-count() { grep -o "$1" "$2" 2>/dev/null | wc -l; }
-
-echo "== build artifacts =="
-check "door patched, no stringCache" "$(count 'stringCache' "$DOOR")" 0
+# The two adversarial stream URLs. Each drives one hostile body through the real render pipeline via
+# a custom /dev/stream URL: no fixtures.zig edit, and the sanitizer/highlighter see attacker bytes.
+read -r SAN_URL MD_URL < <(python3 - "$PORT" <<'PY'
+import sys, urllib.parse
+port = sys.argv[1]
+png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+san = ('<img src="data:image/png;base64,' + png + '" onerror="alert(1)"> '
+       '<img src="data:image/svg+xml;base64,AAAA"> '
+       '<a href="javascript:alert(1)">js</a> '
+       '<a href="https://ziglang.org">real</a> '
+       '<span class="danger">card</span> '
+       'She said "hello there" and `"code quote"` stays put.')
+md = ('# Heading one\n\n'
+      '| Col A | Col B |\n| --- | --- |\n| one | two |\n\n'
+      '- [x] a done task\n- [ ] an open task\n\n'
+      'She said "hello there", and inline `"code quote"` stays put.\n\n'
+      '```js\nconst greeting = "not a quote";\nfunction f(x) { return x + 1; }\n```\n\n'
+      '```python\ndef greet(name):\n    return "hi " + name\n```\n')
+def top(inner_query):
+    stream = "/dev/stream?" + inner_query
+    return "http://127.0.0.1:%s/?hold=6000&stream=%s" % (port, urllib.parse.quote(stream, safe=""))
+# One token carries every sanitize vector; two tokens for the markdown body so the first code fence
+# is not the streaming tail and actually gets highlighted.
+print(top("n=1&prefix=" + urllib.parse.quote(san, safe="")),
+      top("n=2&prefix=" + urllib.parse.quote(md, safe="")))
+PY
+)
 
 echo
-echo "== served html (pre-hydration) =="
-check "hydration markers in index.html" "$(count '<!--\$' dist/index.html)" 1
-check "ssr placeholder, one per message" "$(count 'ST_SSR_PLACEHOLDER' dist/index.html)" 7
-
-echo
-echo "== rendered dom =="
+echo "== rendered dom (default) =="
 chrome "http://127.0.0.1:$PORT/" 9000 > "$DOM"
 check "ssr placeholder replaced" "$(count 'ST_SSR_PLACEHOLDER' "$DOM")" 0
-check "messages rendered" "$(count 'class="mes"' "$DOM")" 7
-check "demo sections" "$(count 'class="demo"' "$DOM")" 4
+check "messages rendered" "$(count 'class="mes"' "$DOM")" 3
+check "shell region present" "$(count 'id="shell"' "$DOM")" 1
+check "messagelog region present" "$(count 'id="chat"' "$DOM")" 1
+check "composer region present" "$(count 'id="composer"' "$DOM")" 1
+# The three roleplay fixtures carry real quotes, a blockquote, emphasis, and a hard break.
+check   "quotes open and close balance" "$(count '<q>' "$DOM")" "$(count '</q>' "$DOM")"
+check   "quotes wrapped" "$(count '<q>' "$DOM")" 4
+atleast "blockquotes" "$(count '<blockquote>' "$DOM")" 1
+atleast "hard line breaks" "$(count '<br' "$DOM")" 1
+atleast "emphasis" "$(count '<em>' "$DOM")" 1
 
 echo
-echo "== sanitize boundary =="
-check "onerror attribute stripped" "$(count 'onerror=' "$DOM")" 0
-check "javascript: href stripped" "$(count 'href="javascript:' "$DOM")" 0
-check "svg data uri stripped" "$(count 'src="data:image/svg' "$DOM")" 0
-check "png data uri preserved" "$(count 'src="data:image/png' "$DOM")" 1
-check "author class namespaced" "$(count 'class="custom-danger"' "$DOM")" 1
-atleast "rel=noopener forced on links" "$(count 'rel="noopener"' "$DOM")" 2
+echo "== sanitize boundary (hostile body driven through the render) =="
+chrome "$SAN_URL" 30000 > "$SAN_DOM"
+# The hostile message must have rendered at all: three fixtures plus the streamed one. If the body
+# were dropped, the strip checks below would pass vacuously, so this is the anti-vacuous guard.
+check   "hostile message rendered" "$(count 'class="mes"' "$SAN_DOM")" 4
+check   "onerror attribute stripped" "$(count 'onerror=' "$SAN_DOM")" 0
+check   "javascript: href stripped" "$(count 'href="javascript:' "$SAN_DOM")" 0
+check   "svg data uri stripped" "$(count 'src="data:image/svg' "$SAN_DOM")" 0
+atleast "png data uri preserved" "$(count 'src="data:image/png' "$SAN_DOM")" 1
+atleast "author class namespaced to custom-" "$(count 'class="custom-danger"' "$SAN_DOM")" 1
+atleast "rel=noopener forced on links" "$(count 'rel="noopener"' "$SAN_DOM")" 1
+atleast "real link href preserved" "$(count 'href="https://ziglang.org"' "$SAN_DOM")" 1
 
 echo
-echo "== markdown =="
-atleast "headings" "$(count '<h1>' "$DOM")" 1
-atleast "blockquotes" "$(count '<blockquote>' "$DOM")" 2
-atleast "tables" "$(count '<table>' "$DOM")" 1
-atleast "hard line breaks" "$(count '<br' "$DOM")" 3
-atleast "task list items" "$(count 'task-list-item' "$DOM")" 2
-
-echo
-echo "== quote colouring =="
-check "q opens and closes balance" "$(count '<q>' "$DOM")" "$(count '</q>' "$DOM")"
-atleast "quotes wrapped" "$(count '<q>' "$DOM")" 11
-python3 - "$DOM" <<'PY'
+echo "== markdown and highlighting (markdown body driven through the render) =="
+chrome "$MD_URL" 30000 > "$MD_DOM"
+atleast "headings" "$(count '<h1>' "$MD_DOM")" 1
+atleast "tables" "$(count '<table>' "$MD_DOM")" 1
+atleast "task list items" "$(count 'task-list-item' "$MD_DOM")" 2
+atleast "hljs token spans" "$(count 'class="hljs-' "$MD_DOM")" 10
+check   "hljs classes not namespaced" "$(count 'custom-hljs' "$MD_DOM")" 0
+check   "language classes not namespaced" "$(count 'custom-language-' "$MD_DOM")" 0
+python3 - "$MD_DOM" <<'PY'
 import re, sys
 h = open(sys.argv[1], encoding="utf-8", errors="replace").read()
 leak = any("<q>" in m.group(1) for m in re.finditer(r"<(?:code|pre)[^>]*>(.*?)</(?:code|pre)>", h, re.S))
@@ -97,18 +178,22 @@ PY
 [ $? -eq 0 ] || FAILURES=$((FAILURES + 1))
 
 echo
-echo "== highlighting =="
-atleast "hljs token spans" "$(count 'class="hljs-' "$DOM")" 10
-check "no namespaced hljs classes" "$(count 'custom-hljs' "$DOM")" 0
-
-echo
 echo "== dev endpoints are opt-in =="
 setsid timeout 20 python3 devserve.py --port $((PORT + 1)) --dist dist >/dev/null 2>&1 &
 NODEV=$!
-sleep 2
-code=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$((PORT + 1))/dev/stream" 2>/dev/null)
-kill -TERM "$NODEV" 2>/dev/null
-check "/dev/stream 404 without --dev" "$code" "404"
+nodev_ready=no
+for _ in $(seq 1 50); do
+    if curl -sS --max-time 2 -o /dev/null "http://127.0.0.1:$((PORT + 1))/" 2>/dev/null; then nodev_ready=yes; break; fi
+    if ! kill -0 "$NODEV" 2>/dev/null; then break; fi
+    sleep 0.2
+done
+if [ "$nodev_ready" = yes ]; then
+    code=$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$((PORT + 1))/dev/stream" 2>/dev/null)
+    check "/dev/stream 404 without --dev" "$code" "404"
+else
+    echo "  FAIL  no-dev server never became ready"; FAILURES=$((FAILURES + 1))
+fi
+kill -TERM -- -"$NODEV" 2>/dev/null
 
 echo
 echo "== streaming and the render cache =="
@@ -131,11 +216,11 @@ def check(label, ok, detail):
 
 check("all tokens delivered", s["tokens"] == 200, s["tokens"])
 check("writes coalesced per frame", s["flushes"] < 60, f"{s['flushes']} flushes for 200 tokens")
-# 7 fixtures at boot + 1 at stream start + one per frame for the uncached tail.
-budget = 8 + s["flushes"] + 2
+# Three fixtures sanitize at boot, then one sanitize per flush for the uncached streaming tail.
+budget = 3 + s["flushes"] + 2
 check("render cache holds", s["sanitizes"] <= budget, f"{s['sanitizes']} sanitizes, budget {budget}")
 check("tail text present", "tok199" in h, "tok199")
-check("streamed message appended", len(re.findall(r'class="mes"', h)) == 8, len(re.findall(r'class="mes"', h)))
+check("streamed message appended", len(re.findall(r'class="mes"', h)) == 4, len(re.findall(r'class="mes"', h)))
 sys.exit(1 if fail else 0)
 PY
 [ $? -eq 0 ] || FAILURES=$((FAILURES + 1))
@@ -148,19 +233,22 @@ import re, sys
 h = open(sys.argv[1], encoding="utf-8", errors="replace").read()
 msgs = re.findall(r'<div class="mes_name">([^<]*)</div><div class="mes_text"[^>]*>(.*?)</div>', h, re.S)
 want = {"First": (True, False), "Second": (False, True)}
+seen = set()
 fail = 0
 for name, body in msgs:
     if name not in want:
         continue
+    seen.add(name)
     txt = re.sub(r"<[^>]+>", "", body)
     got = ("aaa0" in txt, "bbb0" in txt)
     ok = got == want[name]
     print(f"  {'ok   ' if ok else 'FAIL '} {name + ' message owns its tokens':<52} aaa={got[0]} bbb={got[1]}")
     if not ok:
         fail += 1
-if len(msgs) < 2:
-    print("  FAIL  two streamed messages not found")
-    fail += 1
+for name in want:
+    if name not in seen:
+        print(f"  FAIL  {name + ' streamed message not found':<52}")
+        fail += 1
 sys.exit(1 if fail else 0)
 PY2
 [ $? -eq 0 ] || FAILURES=$((FAILURES + 1))
@@ -171,4 +259,5 @@ if [ "$FAILURES" -eq 0 ]; then
 else
     echo "verify.sh: $FAILURES check(s) failed"
 fi
-exit "$FAILURES"
+# `exit "$FAILURES"` would wrap mod 256, so 256 failures would report success. Cap at 1.
+[ "$FAILURES" -eq 0 ] && exit 0 || exit 1

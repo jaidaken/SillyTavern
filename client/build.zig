@@ -27,7 +27,7 @@ pub fn build(b: *std.Build) !void {
     app_exe.root_module.addImport("build_options", build_opts.createModule());
 
     const md4c = b.createModule(.{ .root_source_file = b.path("app/pages/markdown.zig") });
-    addMd4c(b, md4c);
+    addMd4c(b, md4c, optimize);
     app_exe.root_module.addImport("markdown", md4c);
     // The exe links libc; the md4c module deliberately does not, so ziex can stub its libc imports
     // for the wasm build (init.zig:518). wasm gets malloc/free from libc_shim, native from the exe.
@@ -51,7 +51,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = .Debug,
     });
-    addMd4c(b, test_mod);
+    addMd4c(b, test_mod, .Debug);
     test_mod.link_libc = true;
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = test_mod })).step);
 
@@ -83,14 +83,20 @@ pub fn build(b: *std.Build) !void {
 
 /// Attach the md4c C sources, its include paths, and the libc_shim import to `mod`. Shared by the
 /// app module and the test module so the source set and flags have one owner.
-fn addMd4c(b: *std.Build, mod: *std.Build.Module) void {
+fn addMd4c(b: *std.Build, mod: *std.Build.Module, optimize: std.builtin.OptimizeMode) void {
     mod.addIncludePath(b.path("vendor/md4c"));
     // Declarations only: wasm resolves them in libc_shim.zig, native links real libc.
     mod.addIncludePath(b.path("vendor/md4c-libc"));
+    // -DNDEBUG compiles out md4c's internal asserts. Keep them in the Debug test build so the
+    // alloc-failure oracle exercises an assert-checked md4c, not a stripped one.
+    const md4c_flags: []const []const u8 = if (optimize == .Debug)
+        &.{ "-std=c99", "-fno-sanitize=undefined" }
+    else
+        &.{ "-std=c99", "-DNDEBUG", "-fno-sanitize=undefined" };
     mod.addCSourceFiles(.{
         .root = b.path("vendor/md4c"),
         .files = &.{ "md4c.c", "md4c-html.c", "entity.c" },
-        .flags = &.{ "-std=c99", "-DNDEBUG", "-fno-sanitize=undefined" },
+        .flags = md4c_flags,
     });
     mod.addImport("libc_shim", b.createModule(.{
         .root_source_file = b.path("app/pages/libc_shim.zig"),
