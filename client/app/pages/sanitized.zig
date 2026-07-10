@@ -14,8 +14,6 @@ const is_wasm = builtin.target.cpu.arch == .wasm32;
 
 pub const renderTick = html.renderTick;
 
-extern "env" fn sse_start(ptr: [*]const u8, len: usize) void;
-
 /// Quote-wrap, markdown, sanitize. `cacheable` must be false for a body still being streamed.
 pub fn renderMessage(allocator: std.mem.Allocator, body: []const u8, cacheable: bool) html.SanitizedHtml {
     if (comptime !is_wasm) return html.sanitizeHtml(allocator, body);
@@ -46,10 +44,4 @@ pub fn renderMessage(allocator: std.mem.Allocator, body: []const u8, cacheable: 
     const clean = html.sanitizeHtml(std.heap.wasm_allocator, rendered);
     if (cacheable) html.cachePut(body, clean) else html.retain(clean);
     return clean;
-}
-
-/// Asks the door to open an SSE stream. The door calls back into `bridge.zig` per frame.
-pub fn beginSse(url: []const u8) void {
-    if (comptime !is_wasm) return;
-    sse_start(url.ptr, url.len);
 }

@@ -62,11 +62,18 @@ fn isFailed(html: SanitizedHtml) bool {
 /// A zero door result is a real, cacheable `""` (DOMPurify stripped the body to nothing); a failed
 /// dupe is `failedBytes()`, which `Cache.put` refuses to store so the next render retries. The two
 /// must not both collapse to a bare `""`, or a stripped body re-sanitizes on every render forever.
+const Packed = struct { addr: usize, len: usize };
+
+/// The pure half of `adopt`: the `(ptr << 32) | len` split. Extracted so it is testable without a
+/// wasm heap, since `adopt` itself dereferences the address and frees through `wasm_allocator`.
+fn unpack(packed_result: u64) Packed {
+    return .{ .addr = @intCast(packed_result >> 32), .len = @intCast(packed_result & 0xFFFF_FFFF) };
+}
+
 fn adopt(allocator: std.mem.Allocator, packed_result: u64) []const u8 {
-    const addr: usize = @intCast(packed_result >> 32);
-    if (addr == 0) return "";
-    const len: usize = @intCast(packed_result & 0xFFFF_FFFF);
-    const door_buf = @as([*]u8, @ptrFromInt(addr))[0..len];
+    const p = unpack(packed_result);
+    if (p.addr == 0) return "";
+    const door_buf = @as([*]u8, @ptrFromInt(p.addr))[0..p.len];
     defer std.heap.wasm_allocator.free(door_buf);
     return allocator.dupe(u8, door_buf) catch failedBytes();
 }
@@ -246,6 +253,15 @@ test "the_witness_type_is_unnameable_outside_this_file" {
 test "sanitize_html_on_the_server_yields_the_placeholder_the_client_replaces" {
     const got = sanitizeHtml(testing.allocator, "<img src=x onerror=alert(1)>");
     try testing.expectEqualStrings(ssr_placeholder, sink(got));
+}
+
+test "unpack_splits_the_door_result_into_its_high_address_and_low_length" {
+    try testing.expectEqual(Packed{ .addr = 0, .len = 0 }, unpack(0));
+    try testing.expectEqual(Packed{ .addr = 0x1234, .len = 0x5678 }, unpack(0x0000_1234_0000_5678));
+    // A zero address with a non-zero low word is still address zero: adopt reads it as the empty result.
+    try testing.expectEqual(Packed{ .addr = 0, .len = 0x90AB }, unpack(0x0000_0000_0000_90AB));
+    // Both halves at their 32-bit maximum must survive the split without borrowing each other's bits.
+    try testing.expectEqual(Packed{ .addr = 0xFFFF_FFFF, .len = 0xFFFF_FFFF }, unpack(0xFFFF_FFFF_FFFF_FFFF));
 }
 
 /// Counts frees so a test can pin exactly which render retires a generation.

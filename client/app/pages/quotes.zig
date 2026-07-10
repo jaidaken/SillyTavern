@@ -124,6 +124,24 @@ fn paragraphEnd(src: []const u8, from: usize) usize {
     return src.len;
 }
 
+/// Memoizes `paragraphEnd` within one `wrap`. That scan is O(paragraph length) and `wrapInline`
+/// queries it once per raw tag and once per backtick run, so a paragraph dense in either would
+/// rescan it each time, giving O(n^2) over the body. A query landing inside the cached span returns
+/// the same boundary: a hit means no blank line lies between the two positions, so both resolve to
+/// the same paragraph end.
+const ParaCache = struct {
+    from: usize = 0,
+    end: usize = 0,
+    primed: bool = false,
+
+    fn endOf(self: *ParaCache, src: []const u8, from: usize) usize {
+        if (self.primed and from >= self.from and from <= self.end) return self.end;
+        const e = paragraphEnd(src, from);
+        self.* = .{ .from = from, .end = e, .primed = true };
+        return e;
+    }
+};
+
 /// A run of N backticks closes on the next run of exactly N, per CommonMark. No such run means
 /// the backticks are literal text, not a code span.
 fn codeSpanEnd(src: []const u8, from: usize, n: usize, limit: usize) ?usize {
@@ -151,7 +169,7 @@ fn startsBlock(src: []const u8, at: usize) bool {
     return indentCols(src[ls..]) < 4;
 }
 
-fn rawElementEnd(src: []const u8, at: usize) ?usize {
+fn rawElementEnd(src: []const u8, at: usize, pc: *ParaCache) ?usize {
     for (raw_elements) |el| {
         if (!std.ascii.startsWithIgnoreCase(src[at + 1 ..], el.name)) continue;
         const after = at + 1 + el.name.len;
@@ -162,7 +180,7 @@ fn rawElementEnd(src: []const u8, at: usize) ?usize {
                 else => continue,
             }
         }
-        const limit = if (el.block) src.len else paragraphEnd(src, @min(after, src.len));
+        const limit = if (el.block) src.len else pc.endOf(src, @min(after, src.len));
         if (after <= limit) {
             if (std.ascii.findIgnoreCasePos(src[0..limit], after, el.closer)) |e| return e + el.closer.len;
         }
@@ -173,7 +191,7 @@ fn rawElementEnd(src: []const u8, at: usize) ?usize {
 }
 
 /// End of the raw tag opened at `at`, or null when the `<` opens no tag and is literal text.
-fn rawTagEnd(src: []const u8, at: usize) ?usize {
+fn rawTagEnd(src: []const u8, at: usize, pc: *ParaCache) ?usize {
     if (at + 1 >= src.len) return null;
     if (std.mem.startsWith(u8, src[at..], "<!--")) {
         const e = std.mem.indexOfPos(u8, src, at + 4, "-->") orelse return null;
@@ -193,7 +211,7 @@ fn rawTagEnd(src: []const u8, at: usize) ?usize {
     if (c == '/' and (at + 2 >= src.len or !std.ascii.isAlphabetic(src[at + 2]))) return null;
 
     // Raw HTML may not contain a blank line, which bounds an unterminated attribute value.
-    const limit = paragraphEnd(src, at);
+    const limit = pc.endOf(src, at);
     var k = at + 1;
     var quote: u8 = 0;
     while (k < limit) : (k += 1) {
@@ -220,13 +238,14 @@ fn wrapInline(
     src: []const u8,
     start: usize,
     line_end: usize,
+    pc: *ParaCache,
 ) std.mem.Allocator.Error!usize {
     var j = start;
     outer: while (j < line_end) {
         const ch = src[j];
 
         if (ch == '<') {
-            const end = rawElementEnd(src, j) orelse rawTagEnd(src, j);
+            const end = rawElementEnd(src, j, pc) orelse rawTagEnd(src, j, pc);
             if (end) |e| {
                 try out.appendSlice(allocator, src[j..e]);
                 if (e > line_end) return e;
@@ -242,7 +261,7 @@ fn wrapInline(
         if (ch == '`') {
             var n: usize = 0;
             while (j + n < src.len and src[j + n] == '`') n += 1;
-            if (codeSpanEnd(src, j + n, n, paragraphEnd(src, j + n))) |e| {
+            if (codeSpanEnd(src, j + n, n, pc.endOf(src, j + n))) |e| {
                 try out.appendSlice(allocator, src[j..e]);
                 if (e > line_end) return e;
                 j = e;
@@ -282,6 +301,7 @@ pub fn wrap(allocator: std.mem.Allocator, src: []const u8) std.mem.Allocator.Err
     var i: usize = 0;
     var in_indented_code = false;
     var paragraph_open = false;
+    var pc: ParaCache = .{};
 
     while (i < src.len) {
         const le = lineEndAt(src, i);
@@ -318,7 +338,7 @@ pub fn wrap(allocator: std.mem.Allocator, src: []const u8) std.mem.Allocator.Err
             paragraph_open = opensParagraph(line);
         }
 
-        i = try wrapInline(allocator, &out, src, i, le);
+        i = try wrapInline(allocator, &out, src, i, le, &pc);
         if (i == le and le < src.len) {
             try out.append(allocator, '\n');
             i = le + 1;
@@ -489,4 +509,39 @@ test "wrap_only_ever_inserts_q_tags_into_random_bytes" {
         try testing.expect(out.len >= n);
         try expectStripsBackToSource(out, buf[0..n]);
     }
+}
+
+test "wrap_never_inserts_a_q_tag_inside_a_fenced_code_block" {
+    var prng = std.Random.DefaultPrng.init(0xC0DE_B10C);
+    const rand = prng.random();
+    // No backtick, so a random payload can never close the fence early and leak a quote into prose.
+    const alphabet = "\"<> \n\tabc\u{201C}\u{201D}\u{00AB}\u{00BB}";
+
+    var buf: [96]u8 = undefined;
+    var round: usize = 0;
+    while (round < 2000) : (round += 1) {
+        const n = rand.uintLessThan(usize, buf.len);
+        for (buf[0..n]) |*ch| ch.* = alphabet[rand.uintLessThan(usize, alphabet.len)];
+
+        var src: std.ArrayList(u8) = .empty;
+        defer src.deinit(testing.allocator);
+        try src.appendSlice(testing.allocator, "```\n");
+        try src.appendSlice(testing.allocator, buf[0..n]);
+        try src.appendSlice(testing.allocator, "\n```\n");
+
+        const out = try wrap(testing.allocator, src.items);
+        defer testing.allocator.free(out);
+        // The whole body is one fenced block, so no quote inside it may be wrapped: the headline
+        // invariant of the module is that a quote in code never becomes a <q>.
+        try testing.expect(std.mem.indexOf(u8, out, "<q>") == null);
+    }
+}
+
+test "wrap_marks_the_quote_in_a_paragraph_dense_with_tags_and_code_spans" {
+    // Every tag and code span queries the paragraph-end memoizer, so one paragraph full of them
+    // exercises the cache hit path; the trailing quote must still wrap and each construct pass through.
+    try expectWrap(
+        "<b>x</b> `a` <i>y</i> `b` <b>z</b> she said \"hi\"",
+        "<b>x</b> `a` <i>y</i> `b` <b>z</b> she said <q>\"hi\"</q>",
+    );
 }

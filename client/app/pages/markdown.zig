@@ -122,7 +122,18 @@ test "toHtml_releases_everything_on_any_allocation_failure" {
     try testing.checkAllAllocationFailures(testing.allocator, toHtmlAndDiscard, .{"# h\n\n*a* **b**\n\n```zig\nx\n```\n"});
 }
 
-test "toHtml_never_panics_on_random_bytes" {
+/// md4c is a deterministic parser, so the same bytes must render to identical HTML twice. Asserting
+/// it catches a nondeterministic parse (an uninitialised read, a stray pointer) that a discard-only
+/// smoke test would sail past.
+fn expectDeterministic(src: []const u8) !void {
+    const a = try toHtml(testing.allocator, src);
+    defer testing.allocator.free(a);
+    const b = try toHtml(testing.allocator, src);
+    defer testing.allocator.free(b);
+    try testing.expectEqualStrings(a, b);
+}
+
+test "toHtml_is_deterministic_over_markdown_shaped_random_bytes" {
     var prng = std.Random.DefaultPrng.init(0x6d64_3463);
     const rand = prng.random();
     const alphabet = "*_`~#[]()<>|-\n! \\\"abc";
@@ -132,7 +143,21 @@ test "toHtml_never_panics_on_random_bytes" {
     while (round < 1500) : (round += 1) {
         const n = rand.uintLessThan(usize, buf.len);
         for (buf[0..n]) |*ch| ch.* = alphabet[rand.uintLessThan(usize, alphabet.len)];
-        const html = try toHtml(testing.allocator, buf[0..n]);
-        testing.allocator.free(html);
+        try expectDeterministic(buf[0..n]);
+    }
+}
+
+test "toHtml_is_deterministic_over_arbitrary_bytes_including_nul_and_utf8" {
+    // The streaming path feeds md4c raw UTF-8, and an untrusted peer can send NUL and lone
+    // continuation bytes, none of which the markdown-shaped alphabet above exercises.
+    var prng = std.Random.DefaultPrng.init(0x00c0_ffee);
+    const rand = prng.random();
+
+    var buf: [128]u8 = undefined;
+    var round: usize = 0;
+    while (round < 1500) : (round += 1) {
+        const n = rand.uintLessThan(usize, buf.len);
+        rand.bytes(buf[0..n]);
+        try expectDeterministic(buf[0..n]);
     }
 }
