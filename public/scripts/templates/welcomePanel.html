@@ -17,15 +17,15 @@
             Recent Chats
         </div>
         <div class="welcomeShortcuts">
-            <a class="menu_button menu_button_icon" target="_blank" href="https://docs.sillytavern.app/">
+            <a class="menu_button menu_button_icon" target="_blank" href="https://docs.sillytavern.app/" aria-label="Docs">
                 <i class="fa-solid fa-question-circle"></i>
                 <span data-i18n="Docs">Docs</span>
             </a>
-            <a class="menu_button menu_button_icon" target="_blank" href="https://github.com/SillyTavern/SillyTavern">
+            <a class="menu_button menu_button_icon" target="_blank" href="https://github.com/SillyTavern/SillyTavern" aria-label="GitHub">
                 <i class="fa-brands fa-github"></i>
                 <span data-i18n="GitHub">GitHub</span>
             </a>
-            <a class="menu_button menu_button_icon" target="_blank" href="https://discord.gg/sillytavern">
+            <a class="menu_button menu_button_icon" target="_blank" href="https://discord.gg/sillytavern" aria-label="Discord">
                 <i class="fa-brands fa-discord"></i>
                 <span data-i18n="Discord">Discord</span>
             </a>
@@ -37,13 +37,13 @@
         </div>
     </div>
     <div class="welcomeRecent">
-        <div class="recentChatList">
         {{#if empty}}
-            <div class="noRecentChat">
-                <i class="fa-solid fa-comment-dots"></i>
-                <span data-i18n="No recent chats">No recent chats</span>
-            </div>
+        <div class="noRecentChat">
+            <i class="fa-solid fa-comment-dots"></i>
+            <span data-i18n="No recent chats">No recent chats</span>
+        </div>
         {{/if}}
+        <div class="recentChatList">
         {{#each chats}}
             {{#with this}}
             <div class="recentChat {{#if hidden}}hidden{{/if}} {{#if is_group}}group{{/if}}" data-file="{{chat_name}}" data-avatar="{{avatar}}" data-group="{{group}}">
@@ -91,11 +91,11 @@
             </div>
             {{/with}}
         {{/each}}
-        {{#if more}}
-            <button class="menu_button menu_button_icon showMoreChats">
-                <small class="fa-solid fa-chevron-down fa-fw fa-1x"></small>
-            </button>
-        {{/if}}
         </div>
+        {{#if more}}
+        <button class="menu_button menu_button_icon showMoreChats" aria-label="Show more chats">
+            <small class="fa-solid fa-chevron-down fa-fw fa-1x"></small>
+        </button>
+        {{/if}}
     </div>
 </div>

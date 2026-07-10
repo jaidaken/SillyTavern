@@ -9,7 +9,6 @@ const EXCLUDED_TYPES = new Set(['submit', 'button', 'reset', 'image', 'checkbox'
 const SKIP_ROOT_SELECTOR = 'template, .template_element';
 const MAX_CAPTION_TEXT_LENGTH = 150;
 const MAX_CLIMB_DEPTH = 6;
-const OBSERVER_DEBOUNCE_MS = 200;
 // third-party page-size select from public/lib/pagination.js; no label markup of its own.
 const PAGINATION_SIZE_SELECT = '.J-paginationjs-size-select';
 
@@ -272,38 +271,18 @@ function labelFieldsIn(root) {
     }
 }
 
-const OBSERVER_MAX_WAIT_MS = 1000;
-
-let debounceTimer = null;
-let maxWaitTimer = null;
-function runObserverPass(nodes) {
-    clearTimeout(debounceTimer);
-    clearTimeout(maxWaitTimer);
-    debounceTimer = null;
-    maxWaitTimer = null;
-    for (const node of nodes) labelFieldsIn(node);
-    nodes.length = 0;
-}
-
-// plain debounce lets continuous churn (rapid successive mutations) defer the pass forever; maxWait guarantees it still runs.
-function scheduleObserverPass(nodes) {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => runObserverPass(nodes), OBSERVER_DEBOUNCE_MS);
-    if (!maxWaitTimer) maxWaitTimer = setTimeout(() => runObserverPass(nodes), OBSERVER_MAX_WAIT_MS);
-}
-
 function setLabelObserver() {
     labelFieldsIn(document.body);
 
-    const pendingNodes = [];
+    // Label synchronously (no debounce): Chrome flags a field the instant it renders,
+    // so a deferred pass leaves stale Issues-panel entries for late-created fields.
     const observer = new MutationObserver((mutationsList) => {
         for (const mutation of mutationsList) {
             if (mutation.type !== 'childList') continue;
             for (const addedNode of mutation.addedNodes) {
-                if (addedNode.nodeType === Node.ELEMENT_NODE) pendingNodes.push(addedNode);
+                if (addedNode.nodeType === Node.ELEMENT_NODE) labelFieldsIn(addedNode);
             }
         }
-        if (pendingNodes.length) scheduleObserverPass(pendingNodes);
     });
 
     observer.observe(document.body, {
