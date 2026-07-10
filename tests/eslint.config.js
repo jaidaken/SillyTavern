@@ -11,8 +11,8 @@ export default [
         ],
     },
     js.configs.recommended,
-    jest.configs['flat/recommended'],
-    playwright.configs['flat/recommended'],
+    { ...jest.configs['flat/recommended'], files: ['**/*.test.js'] },
+    { ...playwright.configs['flat/recommended'], files: ['**/*.e2e.js'] },
     {
         languageOptions: {
             ecmaVersion: 'latest',
@@ -26,7 +26,7 @@ export default [
         },
         settings: {
             jest: {
-                version: 29,
+                version: 30,
             },
         },
         rules: {
