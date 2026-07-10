@@ -6,15 +6,16 @@
 //! Every buffer arriving here was allocated by the door through `__zx_alloc`, which draws from
 //! `std.heap.wasm_allocator`, the same allocator the store frees with.
 //!
-//! These fns are not driven by the native test suite: they call `zx.client.rerender`, and a
-//! native harness would have to supply a wasm-free `zx`. Their door free paths are instead
-//! compile-checked by the wasm build, which analyzes them through the `@export` block below.
+//! These fns are not driven by the native test suite: they call `regions.bumpMessageLog`, which
+//! re-renders only the MessageLog region through `zx`, and a native harness would have to supply a
+//! wasm-free `zx`. Their door free paths are instead compile-checked by the wasm build, which
+//! analyzes them through the `@export` block below.
 
 const std = @import("std");
 const builtin = @import("builtin");
-const zx = @import("zx");
 const store = @import("./store.zig");
 const stream_mod = @import("./stream.zig");
+const regions = @import("./regions.zig");
 const instrument = @import("./instrument.zig");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
@@ -35,7 +36,7 @@ fn appendMessage(name_ptr: usize, name_len: usize, body_ptr: usize, body_len: us
         store.global.allocator.free(body);
         return;
     };
-    zx.client.rerender();
+    regions.bumpMessageLog();
 }
 
 fn streamBegin(name_ptr: usize, name_len: usize) callconv(.c) void {
@@ -44,7 +45,7 @@ fn streamBegin(name_ptr: usize, name_len: usize) callconv(.c) void {
         store.global.allocator.free(name);
         return;
     };
-    zx.client.rerender();
+    regions.bumpMessageLog();
 }
 
 /// Raw SSE bytes, one buffer per animation frame. Decoding and framing happen in `stream.zig`.
@@ -56,12 +57,12 @@ fn streamAppend(ptr: usize, len: usize) callconv(.c) void {
     const buf = doorBuf(ptr, len);
     defer store.global.allocator.free(buf);
     live.feed(buf) catch live.end();
-    zx.client.rerender();
+    regions.bumpMessageLog();
 }
 
 fn streamEnd() callconv(.c) void {
     live.end();
-    zx.client.rerender();
+    regions.bumpMessageLog();
 }
 
 /// Tokens the Zig framer actually delivered, for the headless harness to assert against.
@@ -81,6 +82,20 @@ fn messageViewRenders() callconv(.c) usize {
     return instrument.messageViewRenders();
 }
 
+/// Per-region render totals, for the harness to prove scoping: a token must bump only MessageLog, a
+/// panel toggle only Shell. Instrument-gated, so they never ship in the production wasm.
+fn shellRenders() callconv(.c) usize {
+    return instrument.shellRenders();
+}
+
+fn messageLogRenders() callconv(.c) usize {
+    return instrument.messageLogRenders();
+}
+
+fn composerRenders() callconv(.c) usize {
+    return instrument.composerRenders();
+}
+
 comptime {
     if (is_wasm) {
         @export(&appendMessage, .{ .name = "__st_append_message" });
@@ -91,6 +106,9 @@ comptime {
         @export(&streamDone, .{ .name = "__st_stream_done" });
         if (instrument.enabled) {
             @export(&messageViewRenders, .{ .name = "__st_mv_renders" });
+            @export(&shellRenders, .{ .name = "__st_shell_renders" });
+            @export(&messageLogRenders, .{ .name = "__st_messagelog_renders" });
+            @export(&composerRenders, .{ .name = "__st_composer_renders" });
         }
     }
 }

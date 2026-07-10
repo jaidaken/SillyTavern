@@ -1,12 +1,14 @@
-//! Reactive glue over the pure ui_state model: holds the single global PanelState, rerenders after
-//! each mutation (the same pattern store.zig uses), and reads the clicked drawer button from the DOM
-//! event. The state model and all pure helpers live in ui_state.zig so they are natively testable;
-//! this file only adds the ziex-facing parts, which are covered by client/verify.sh in a browser.
+//! Reactive glue over the pure ui_state model: holds the single global PanelState, re-renders the
+//! Shell region after each mutation (regions.bumpShell, so a panel toggle never rebuilds MessageLog
+//! or Composer), and reads the clicked drawer button from the DOM event. The state model and all
+//! pure helpers live in ui_state.zig so they are natively testable; this file only adds the
+//! ziex-facing parts, which are covered by client/verify.sh in a browser.
 
 const std = @import("std");
 const zx = @import("zx");
 const js = zx.client.js;
 const ui_state = @import("./ui_state.zig");
+const regions = @import("./regions.zig");
 
 pub const PanelId = ui_state.PanelId;
 pub const Side = ui_state.Side;
@@ -42,18 +44,18 @@ pub fn motionSegClass(which: MotionPref) []const u8 {
     return ui_state.motionSegClass(motion, which);
 }
 
-// Mutations rerender so the shell reflects the new state.
+// Mutations re-render only the Shell region so it reflects the new state.
 pub fn toggle(id: PanelId) void {
     state.toggle(id);
-    zx.client.rerender();
+    regions.bumpShell();
 }
 pub fn close() void {
     state.close();
-    zx.client.rerender();
+    regions.bumpShell();
 }
 pub fn setWidth(side: Side, w: f32) void {
     state.setWidth(side, w);
-    zx.client.rerender();
+    regions.bumpShell();
 }
 
 pub fn widthStyle(alloc: std.mem.Allocator, side: Side) []const u8 {
@@ -102,5 +104,5 @@ export fn __st_set_motion(pref: u32) callconv(.c) void {
         2 => .off,
         else => .system,
     };
-    zx.client.rerender();
+    regions.bumpShell();
 }

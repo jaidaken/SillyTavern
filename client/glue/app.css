@@ -91,16 +91,29 @@ body {
     outline-offset: 2px;
 }
 
-#app {
+/* ---- App grid: topbar row, [left dock | centre column | right dock], composer row ----
+   The three sibling client regions place onto this one grid. A dock opening reflows the centre
+   column here (the empty dock column collapses to 0), so the MessageLog region is reflowed by CSS
+   without its vtree being rebuilt. */
+#chat-root {
     height: 100dvh;
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr) auto;
     overflow: hidden;
+}
+
+/* Shell is a layout-transparent wrapper: its box vanishes so the topbar and the docks it owns lay
+   out directly in #chat-root's grid, keeping the three regions DOM-disjoint siblings (never nested,
+   which would collapse them to lockstep re-render). */
+#shell {
+    display: contents;
 }
 
 /* ---- Top bar ---- */
 #topbar {
-    flex: 0 0 auto;
+    grid-column: 1 / -1;
+    grid-row: 1;
     height: var(--topbar-h);
     display: flex;
     align-items: center;
@@ -173,23 +186,12 @@ body {
     mask: var(--i) center / contain no-repeat;
 }
 
-/* ---- Content row: docks + centre ---- */
-#content {
-    flex: 1 1 auto;
-    display: flex;
-    min-height: 0;
-    overflow: hidden;
-}
-
-#center {
-    flex: 1 1 auto;
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-}
-
+/* ---- Chat log: the centre column of the grid, scrolls independently ---- */
 #chat {
-    flex: 1 1 auto;
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+    min-height: 0;
     overflow-y: auto;
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
@@ -204,7 +206,7 @@ body {
 /* ---- Side panels (AI config left, characters right) ---- */
 .panel {
     position: relative;
-    flex: 0 0 auto;
+    grid-row: 2 / 4;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -213,10 +215,12 @@ body {
 }
 
 .panel-left {
+    grid-column: 1;
     border-right: 1px solid var(--border);
 }
 
 .panel-right {
+    grid-column: 3;
     border-left: 1px solid var(--border);
 }
 
@@ -370,7 +374,8 @@ body {
 
 /* ---- Composer (you write prose here, so it reads in the prose face) ---- */
 #composer {
-    flex: 0 0 auto;
+    grid-column: 2;
+    grid-row: 3;
     display: flex;
     align-items: flex-end;
     gap: var(--s-2);
@@ -592,7 +597,8 @@ body {
 /* ---- Motion (WD18-25) ---- */
 /* --move scales MOVEMENT (transform) only; the opacity fade always plays, so reduced motion is
    gentler rather than absent (WD25). Default follows the OS pref; the settings toggle overrides via
-   #app.motion-on / #app.motion-off. */
+   the Shell region's class. The override lives on :root via :has() so --move cascades to all three
+   sibling regions (the old #app common ancestor is gone), and the id+class beats the media query. */
 :root {
     --move: 1;
 }
@@ -603,11 +609,11 @@ body {
     }
 }
 
-#app.motion-on {
+:root:has(#shell.motion-on) {
     --move: 1;
 }
 
-#app.motion-off {
+:root:has(#shell.motion-off) {
     --move: 0;
 }
 

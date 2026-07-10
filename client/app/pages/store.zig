@@ -131,7 +131,7 @@ const is_wasm = builtin.target.cpu.arch == .wasm32;
 /// Bootstrap allocator for the page-lifetime globals. Everything else takes one as a parameter.
 pub const page_gpa = if (is_wasm) std.heap.wasm_allocator else std.heap.page_allocator;
 
-/// The one store the page renders. `bridge.zig` drives it from the door; `chat.zx` reads it.
+/// The one store the page renders. `bridge.zig` drives it from the door; `messagelog.zx` reads it.
 pub var global: Store = .{ .allocator = page_gpa };
 
 pub fn slice() []const Message {

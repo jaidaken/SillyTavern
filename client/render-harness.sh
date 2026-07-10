@@ -70,6 +70,27 @@ check("memoized: only the streaming message re-renders", s["perTokenMax"] == 1 a
 check("on-screen count above 1 (reduction is meaningful)", n > 1, f"{n} messages")
 print(f"  memoized: {s['perTokenMax']} MessageView render(s) per token over {n} on-screen messages "
       f"({want_tokens} tokens, {s['perTokenSum']} total)", file=sys.stderr)
+
+if s.get("regions"):
+    ts, tm, tc = s["tokenShell"], s["tokenMlog"], s["tokenComposer"]
+    check("token scopes to MessageLog: Shell flat", ts["max"] == 0, f"shell delta max {ts['max']}")
+    check("token scopes to MessageLog: Composer flat", tc["max"] == 0, f"composer delta max {tc['max']}")
+    check("token re-renders MessageLog exactly once", tm["min"] == 1 and tm["max"] == 1,
+          f"mlog delta min {tm['min']} max {tm['max']}")
+    tg = s.get("toggle")
+    if tg:
+        check("panel toggle opened a dock", tg["dockOpened"], "dock present")
+        check("panel toggle scopes to Shell only",
+              tg["shell"] >= 1 and tg["mlog"] == 0 and tg["composer"] == 0,
+              f"shell {tg['shell']}, mlog {tg['mlog']}, composer {tg['composer']}")
+        check("composer node survives toggle (identity)", tg["composerNodeSame"], "same textarea node")
+        check("composer text survives toggle", tg["composerTextPreserved"], "draft preserved")
+        check("chat log node survives toggle (not rebuilt)", tg["chatNodeSame"], "same #chat node")
+    else:
+        check("panel-toggle metrics present", False, "toggle block missing")
+else:
+    check("per-region counters present", False, "regions flag false (region exports missing)")
+
 # stdout carries only the baseline number for the caller.
 print(n)
 sys.exit(1 if fail else 0)

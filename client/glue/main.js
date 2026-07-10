@@ -304,10 +304,21 @@
         }
     }
 
-    // Render-count replay driver: one token per feed, synchronous (no rAF, no wall-clock), so the
-    // __st_mv_renders delta per feed is the exact MessageView count. Needs a -Dinstrument wasm.
+    // Render-count replay driver: one token per feed, synchronous, so counter deltas are exact.
+    // Reads the per-region counters to prove scoping (token -> MessageLog only, toggle -> Shell only).
     function renderCountProbe(params) {
         if (!wasm.__st_mv_renders) throw new Error('__st_mv_renders missing: build with -Dinstrument');
+        const hasRegions = !!(wasm.__st_shell_renders && wasm.__st_messagelog_renders && wasm.__st_composer_renders);
+
+        function snap() {
+            return {
+                mv: wasm.__st_mv_renders(),
+                shell: hasRegions ? wasm.__st_shell_renders() : -1,
+                mlog: hasRegions ? wasm.__st_messagelog_renders() : -1,
+                composer: hasRegions ? wasm.__st_composer_renders() : -1,
+            };
+        }
+        const stat = function (a) { return { min: Math.min.apply(null, a), max: Math.max.apply(null, a) }; };
 
         const extra = Math.max(0, parseInt(params.get('msgs') || '0', 10) || 0);
         const tokens = Math.max(1, parseInt(params.get('tokens') || '60', 10) || 60);
@@ -321,13 +332,48 @@
 
         const onscreen = document.querySelectorAll('.mes').length;
         const perToken = [];
+        const perTokenShell = [];
+        const perTokenMlog = [];
+        const perTokenComposer = [];
         for (let i = 0; i < tokens; i++) {
             const buf = writeRaw(encoder.encode('data: {"content":"tok' + i + ' "}\n\n'));
-            const pre = wasm.__st_mv_renders();
+            const pre = snap();
             wasm.__st_stream_append(buf.ptr, buf.len);
-            perToken.push(wasm.__st_mv_renders() - pre);
+            const post = snap();
+            perToken.push(post.mv - pre.mv);
+            perTokenShell.push(post.shell - pre.shell);
+            perTokenMlog.push(post.mlog - pre.mlog);
+            perTokenComposer.push(post.composer - pre.composer);
         }
         wasm.__st_stream_end();
+
+        // Panel-toggle scoping + composer/scroll survival (the structurally-fixed left-dock bug):
+        // type a draft, note the log node, open a dock. Only Shell must re-render; the composer
+        // textarea node and its value and the chat log node must all survive the toggle.
+        const DRAFT = 'unsent draft that must survive a panel toggle';
+        let toggle = null;
+        const textarea = document.getElementById('send_textarea');
+        if (hasRegions && textarea) {
+            textarea.value = DRAFT;
+            const chatBefore = document.getElementById('chat');
+            const scrollBefore = chatBefore ? chatBefore.scrollTop : 0;
+            const drawerBtn = document.querySelector('.drawers > button');
+            const pre = snap();
+            if (drawerBtn) drawerBtn.click();
+            const post = snap();
+            const textareaAfter = document.getElementById('send_textarea');
+            const chatAfter = document.getElementById('chat');
+            toggle = {
+                shell: post.shell - pre.shell,
+                mlog: post.mlog - pre.mlog,
+                composer: post.composer - pre.composer,
+                dockOpened: !!document.querySelector('.panel'),
+                composerNodeSame: textareaAfter === textarea,
+                composerTextPreserved: !!textareaAfter && textareaAfter.value === DRAFT,
+                chatNodeSame: !!chatAfter && chatAfter === chatBefore,
+                scrollPreserved: chatAfter ? chatAfter.scrollTop === scrollBefore : true,
+            };
+        }
 
         const min = Math.min.apply(null, perToken);
         const max = Math.max.apply(null, perToken);
@@ -340,6 +386,11 @@
             perTokenSum: perToken.reduce(function (a, b) { return a + b; }, 0),
             constant: min === max,
             streamTokens: wasm.__st_stream_tokens ? wasm.__st_stream_tokens() : -1,
+            regions: hasRegions,
+            tokenShell: stat(perTokenShell),
+            tokenMlog: stat(perTokenMlog),
+            tokenComposer: stat(perTokenComposer),
+            toggle: toggle,
         };
         window.__stRenderCount = result;
         const el = document.createElement('pre');

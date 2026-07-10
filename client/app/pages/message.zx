@@ -9,7 +9,7 @@ pub const MessageProps = struct {
 
 // Plain component, not @rendering={.client}: a client component needs a <!--$id--> marker
 // in the served HTML, so a message arriving at runtime could never hydrate. Each message is
-// its own element and text node inside ChatView's vtree instead.
+// its own element and text node inside MessageLog's vtree instead.
 pub fn MessageView(allocator: zx.Allocator, props: MessageProps) zx.Component {
     instrument.bump();
     const body: html.SanitizedHtml = sanitized.renderMessage(allocator, props.msg.body, props.cacheable);

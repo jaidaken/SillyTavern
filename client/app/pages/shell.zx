@@ -1,0 +1,29 @@
+// The Shell region: top bar, the top-bar drawers, and the left/right side-panel docks. One of the
+// three sibling client components mounted by page.zx (Shell, MessageLog, Composer), each with its
+// own SSR marker and render boundary. #shell is display:contents in the CSS so its children lay out
+// directly in #chat-root's grid (docks flank the centre column), keeping the regions DOM-disjoint
+// siblings rather than nesting one client component inside another (which would collapse to
+// lockstep re-render). A ui panel/motion mutation calls regions.bumpShell(), which re-renders only
+// this region; MessageLog and Composer are untouched, so composer text, caret, and scroll survive.
+pub fn Shell(ctx: *zx.ComponentCtx(void)) zx.Component {
+    regions.shell = ctx.state(u32, 0);
+    instrument.bumpShell();
+    return (
+        <div @allocator={ctx.allocator} id="shell" class={ui.motionClass()}>
+            <TopBar key="topbar" />
+            {if (ui.openOn(.left)) |p| (
+                <SidePanel panel={p} key="dock-left" />
+            )}
+            {if (ui.openOn(.right)) |p| (
+                <SidePanel panel={p} key="dock-right" />
+            )}
+        </div>
+    );
+}
+
+const zx = @import("zx");
+const ui = @import("./ui.zig");
+const regions = @import("./regions.zig");
+const instrument = @import("./instrument.zig");
+const TopBar = @import("./topbar.zx").TopBar;
+const SidePanel = @import("./sidepanel.zx").SidePanel;

@@ -1,5 +1,9 @@
 // The composer: options menu, the message input, and send/stop. Inert until the send loop is wired.
+// Its own sibling client region, so a Shell panel toggle or a MessageLog token never re-renders it:
+// the textarea's typed value, caret, and auto-grow height survive both. It has no state mutation of
+// its own yet, so it publishes no region handle; it never re-renders after its first mount.
 pub fn Composer(allocator: zx.Allocator) zx.Component {
+    instrument.bumpComposer();
     return (
         <footer @allocator={allocator} id="composer">
             <button class="composer-btn i-menu" title="Options" aria-label="Options"></button>
@@ -11,3 +15,4 @@ pub fn Composer(allocator: zx.Allocator) zx.Component {
 }
 
 const zx = @import("zx");
+const instrument = @import("./instrument.zig");
