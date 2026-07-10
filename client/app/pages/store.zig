@@ -114,8 +114,8 @@ pub const Store = struct {
         const len = self.tail.items.len;
         self.tail = .empty;
 
-        // remap only ever shrinks in place here, so sealing cannot fail and cannot copy. Keeping
-        // the spare capacity is the correct fallback; it is freed with the body at deinit.
+        // remap may relocate rather than shrink in place, and nothing retains the pre-seal pointer,
+        // so either outcome is correct. Its refusal keeps the spare capacity, freed at deinit.
         if (self.allocator.remap(full, len)) |shrunk| {
             msg.body = shrunk;
             msg.body_owned = shrunk;

@@ -75,8 +75,11 @@ pub const Stream = struct {
         try self.drain();
     }
 
-    /// Ends the stream and seals the message. Always reaches `.done`, even out of memory: losing
-    /// the last token beats stranding the message in `.streaming` forever.
+    /// Ends the stream and seals the message. Always reaches `.done`, even out of memory: losing a
+    /// token beats stranding the message in `.streaming` forever.
+    ///
+    /// Every line still held is emitted, not just the first: an allocation failure that costs one
+    /// token must not cost the tokens received after it.
     pub fn end(self: *Stream) void {
         if (self.state != .streaming) return;
 
@@ -85,13 +88,16 @@ pub const Stream = struct {
             self.line.appendSlice(self.allocator, tail) catch {};
         } else |_| {}
 
-        // Retries whatever a failed drain left behind, so what remains is a bare partial line.
-        self.drain() catch {};
-
+        // A failed drain left complete lines here, so each is emitted on its own: one failing emit
+        // must not discard the tokens behind it, which nothing can resend.
         const rest = self.line.items;
-        const cut = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
+        var start: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, rest, start, '\n')) |nl| {
+            self.emit(rest[start..nl]) catch {};
+            start = nl + 1;
+        }
         // The last line carries a token even with no trailing newline to close it.
-        self.emit(rest[0..cut]) catch {};
+        self.emit(rest[start..]) catch {};
         self.line.clearAndFree(self.allocator);
         self.store.endStream();
         self.state = .done;
@@ -354,6 +360,35 @@ fn expectNoTokenEmittedTwice(f: *Fixture) !void {
 
     try testing.expectEqualStrings(expected.items, body);
     try testing.expectEqual(count, f.stream.tokens);
+}
+
+// The state a drain stopped by an allocation failure leaves in `line`: complete lines, unemitted.
+// The first token cannot fit without growing the tail; the one behind it fits the spare capacity.
+const undrained_lines = "data: " ++ "b" ** 4096 ++ "\ndata: z\n";
+
+test "end_emits_the_lines_behind_one_whose_emit_ran_out_of_memory" {
+    var failing = failingAllocator();
+    const gpa = failing.allocator();
+
+    var f: Fixture = undefined;
+    f.init(gpa);
+    defer f.deinit();
+    try f.open(gpa, "Seraphina");
+
+    // A first small token leaves the tail with spare capacity a later one-byte token can use.
+    try f.stream.feed("data: a\n");
+    try testing.expect(f.store.tail.capacity > f.store.tail.items.len);
+
+    try f.stream.line.appendSlice(gpa, undrained_lines);
+
+    failing.fail_index = failing.alloc_index;
+    f.stream.end();
+    failing.fail_index = std.math.maxInt(usize);
+
+    try testing.expect(failing.has_induced_failure);
+    try testing.expectEqualStrings("az", f.body(0));
+    try testing.expectEqual(@as(usize, 2), f.stream.tokens);
+    try testing.expectEqual(State.done, f.stream.state);
 }
 
 test "a_failed_emit_never_lets_a_later_feed_emit_the_same_line_twice" {

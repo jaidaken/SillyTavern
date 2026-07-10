@@ -108,6 +108,185 @@ fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
     return n;
 }
 
+/// The result of auditing one `.zx` source: how many raw-HTML elements it opened, and the first
+/// child of one that the sink does not wrap. ziex concatenates every text child of an element into
+/// its innerHTML, so a raw element is only safe when EVERY child is individually sunk.
+const RawScan = struct { count: usize = 0, offender: ?[]const u8 = null };
+
+fn isNameChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_' or c == '-';
+}
+
+fn byteAt(text: []const u8, i: usize) u8 {
+    return if (i < text.len) text[i] else 0;
+}
+
+/// Index just past the closing quote of the string opened at `at`.
+fn skipString(text: []const u8, at: usize) usize {
+    var i = at + 1;
+    while (i < text.len) : (i += 1) {
+        if (text[i] == '\\') {
+            i += 1;
+            continue;
+        }
+        if (text[i] == text[at]) return i + 1;
+    }
+    return text.len;
+}
+
+/// Index just past the `}` matching the `{` at `at`.
+fn braceEnd(text: []const u8, at: usize) ?usize {
+    var depth: usize = 0;
+    var i = at;
+    while (i < text.len) {
+        switch (text[i]) {
+            '"', '\'' => {
+                i = skipString(text, i);
+                continue;
+            },
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if (depth == 0) return i + 1;
+            },
+            else => {},
+        }
+        i += 1;
+    }
+    return null;
+}
+
+/// Index of the `>` closing the open tag, skipping the braces and quotes of later attributes so a
+/// `>` inside an attribute value cannot end the tag early.
+fn openTagEnd(text: []const u8, from: usize) ?usize {
+    var i = from;
+    while (i < text.len) {
+        switch (text[i]) {
+            '"', '\'' => {
+                i = skipString(text, i);
+                continue;
+            },
+            '{' => {
+                i = braceEnd(text, i) orelse return null;
+                continue;
+            },
+            '>' => return i,
+            else => {},
+        }
+        i += 1;
+    }
+    return null;
+}
+
+/// The element name opening the tag that carries the attribute at `attr_at`.
+fn tagNameBefore(text: []const u8, attr_at: usize) ?[]const u8 {
+    const lt = std.mem.lastIndexOfScalar(u8, text[0..attr_at], '<') orelse return null;
+    var end = lt + 1;
+    while (end < text.len and isNameChar(text[end])) end += 1;
+    if (end == lt + 1) return null;
+    return text[lt + 1 .. end];
+}
+
+/// Index of the `</name>` closing the element whose children start at `from`.
+fn childrenEnd(text: []const u8, from: usize, name: []const u8) ?usize {
+    var depth: usize = 1;
+    var i = from;
+    while (i < text.len) : (i += 1) {
+        if (text[i] != '<') continue;
+        if (byteAt(text, i + 1) == '/') {
+            if (!std.mem.startsWith(u8, text[i + 2 ..], name)) continue;
+            if (isNameChar(byteAt(text, i + 2 + name.len))) continue;
+            depth -= 1;
+            if (depth == 0) return i;
+        } else {
+            if (!std.mem.startsWith(u8, text[i + 1 ..], name)) continue;
+            if (isNameChar(byteAt(text, i + 1 + name.len))) continue;
+            depth += 1;
+        }
+    }
+    return null;
+}
+
+/// True when `expr` is one whole `html.sink(...)` call rather than a call with anything appended.
+fn isSinkCall(expr: []const u8) bool {
+    if (!std.mem.startsWith(u8, expr, sink_call)) return false;
+
+    var depth: usize = 0;
+    var i = sink_call.len - 1;
+    while (i < expr.len) {
+        switch (expr[i]) {
+            '"', '\'' => {
+                i = skipString(expr, i);
+                continue;
+            },
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if (depth == 0) return i == expr.len - 1;
+            },
+            else => {},
+        }
+        i += 1;
+    }
+    return false;
+}
+
+/// Audits every `@escaping={.none}` element in `text`. A line-wide substring test would wave
+/// through a second unsinked child, a sink hiding in an attribute, and a sink in a trailing
+/// comment; each child expression is checked on its own instead.
+fn scanRawChildren(text: []const u8) RawScan {
+    var scan: RawScan = .{};
+    var at: usize = 0;
+
+    while (std.mem.indexOfPos(u8, text, at, attr_head)) |found| {
+        at = found + attr_head.len;
+        const attr_end = matchRawAttr(text, found) orelse continue;
+        scan.count += 1;
+        at = attr_end;
+
+        const name = tagNameBefore(text, found) orelse {
+            scan.offender = text[found..attr_end];
+            return scan;
+        };
+        const gt = openTagEnd(text, attr_end) orelse {
+            scan.offender = text[found..attr_end];
+            return scan;
+        };
+        // A self-closing raw element has no children to sink.
+        if (text[gt - 1] == '/') continue;
+
+        const kids_start = gt + 1;
+        const kids_end = childrenEnd(text, kids_start, name) orelse {
+            scan.offender = text[kids_start..];
+            return scan;
+        };
+
+        var j = kids_start;
+        while (j < kids_end) {
+            if (std.ascii.isWhitespace(text[j])) {
+                j += 1;
+                continue;
+            }
+            // Literal text and nested tags reach innerHTML unsanitized, so only an expression fits.
+            if (text[j] != '{') {
+                scan.offender = std.mem.trim(u8, text[j..kids_end], &std.ascii.whitespace);
+                return scan;
+            }
+            const expr_end = braceEnd(text, j) orelse {
+                scan.offender = text[j..kids_end];
+                return scan;
+            };
+            const expr = std.mem.trim(u8, text[j + 1 .. expr_end - 1], &std.ascii.whitespace);
+            if (!isSinkCall(expr)) {
+                scan.offender = expr;
+                return scan;
+            }
+            j = expr_end;
+        }
+    }
+    return scan;
+}
+
 fn loadAndFreeZxSources(gpa: std.mem.Allocator, io: std.Io) !void {
     const sources = try loadZxSources(gpa, io);
     freeZxSources(gpa, sources);
@@ -134,24 +313,75 @@ test "every_raw_html_element_in_the_zx_sources_is_fed_by_the_sink" {
 
     var total: usize = 0;
     for (sources) |src| {
-        var at: usize = 0;
-        while (std.mem.indexOfPos(u8, src.text, at, attr_head)) |found| {
-            at = found + attr_head.len;
-            const attr_end = matchRawAttr(src.text, found) orelse continue;
-            total += 1;
-            at = attr_end;
-
-            // The child expression follows the attribute on the same element, before the next tag.
-            const rest = src.text[attr_end..];
-            const end = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
-            const line = rest[0..end];
-            if (std.mem.indexOf(u8, line, sink_call) == null) {
-                std.debug.print("\n{s}: raw HTML not fed by {s}:\n{s}\n", .{ src.name, sink_call, line });
-                return error.UnsanitizedRawHtmlSink;
-            }
+        const scan = scanRawChildren(src.text);
+        total += scan.count;
+        if (scan.offender) |child| {
+            std.debug.print("\n{s}: raw HTML child not fed by {s}:\n{s}\n", .{ src.name, sink_call, child });
+            return error.UnsanitizedRawHtmlSink;
         }
     }
     try std.testing.expectEqual(@as(usize, 1), total);
+}
+
+test "the_raw_child_scan_rejects_a_second_child_the_old_line_scan_waved_through" {
+    // ziex concatenates both children into innerHTML, so `evil` renders unsanitized.
+    const two_children = "<div @escaping={.none}>{html.sink(body)}{evil}</div>";
+    // The retired per-line check passed this source: the substring is present on the line.
+    try std.testing.expect(std.mem.indexOf(u8, two_children, sink_call) != null);
+
+    const scan = scanRawChildren(two_children);
+    try std.testing.expectEqual(@as(usize, 1), scan.count);
+    try std.testing.expectEqualStrings("evil", scan.offender.?);
+}
+
+test "the_raw_child_scan_rejects_a_sink_that_only_decorates_an_attribute_or_a_comment" {
+    const in_attribute = "<div @escaping={.none} title=\"html.sink(\">{evil}</div>";
+    try std.testing.expect(std.mem.indexOf(u8, in_attribute, sink_call) != null);
+    try std.testing.expectEqualStrings("evil", scanRawChildren(in_attribute).offender.?);
+
+    const in_comment = "<div @escaping={.none}>{evil}</div> // html.sink(body)";
+    try std.testing.expect(std.mem.indexOf(u8, in_comment, sink_call) != null);
+    try std.testing.expectEqualStrings("evil", scanRawChildren(in_comment).offender.?);
+
+    const literal_text = "<div @escaping={.none}>plain <b>text</b></div>";
+    try std.testing.expectEqualStrings("plain <b>text</b>", scanRawChildren(literal_text).offender.?);
+}
+
+test "the_raw_child_scan_rejects_an_expression_that_only_starts_as_a_sink_call" {
+    try std.testing.expectEqualStrings(
+        "html.sink(body) ++ evil",
+        scanRawChildren("<div @escaping={.none}>{html.sink(body) ++ evil}</div>").offender.?,
+    );
+    try std.testing.expectEqualStrings(
+        "sink(body)",
+        scanRawChildren("<div @escaping={.none}>{sink(body)}</div>").offender.?,
+    );
+    try std.testing.expectEqualStrings(
+        "evil",
+        scanRawChildren("<div @escaping={.none}>{evil}{html.sink(body)}</div>").offender.?,
+    );
+}
+
+test "the_raw_child_scan_accepts_every_child_individually_sunk" {
+    const spread_over_lines =
+        \\<div class="mes_text" @escaping={.none}>
+        \\    {html.sink(body)}
+        \\</div>
+    ;
+    const scan = scanRawChildren(spread_over_lines);
+    try std.testing.expectEqual(@as(usize, 1), scan.count);
+    try std.testing.expectEqual(@as(?[]const u8, null), scan.offender);
+
+    const nested_call = "<div @escaping={.none}>{html.sink(render(a, b))}{html.sink(tail)}</div>";
+    try std.testing.expectEqual(@as(?[]const u8, null), scanRawChildren(nested_call).offender);
+
+    const self_closing = "<img @escaping={.none} />";
+    try std.testing.expectEqual(@as(usize, 1), scanRawChildren(self_closing).count);
+    try std.testing.expectEqual(@as(?[]const u8, null), scanRawChildren(self_closing).offender);
+
+    const escaped_element = "<div @escaping={.html}>{anything}</div>";
+    try std.testing.expectEqual(@as(usize, 0), scanRawChildren(escaped_element).count);
+    try std.testing.expectEqual(@as(?[]const u8, null), scanRawChildren(escaped_element).offender);
 }
 
 test "no_zx_source_unwraps_sanitized_html_outside_the_sink" {

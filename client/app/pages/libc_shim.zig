@@ -1,6 +1,7 @@
 //! md4c is C and expects a libc. On wasm32-freestanding there is none: compiler_rt supplies
 //! mem{cpy,move,set,cmp}, but the allocator and string helpers must be provided here.
-//! Every block carries an 8-byte size header because Zig's free() needs the original length.
+//! Every block carries a `@sizeOf(usize)` size header, 4 bytes on wasm32, because Zig's free()
+//! needs the original length. The payload is therefore usize-aligned, not max_align_t-aligned.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -129,26 +130,25 @@ fn elem(base: [*]u8, width: usize, i: usize) [*]u8 {
     return base + i * width;
 }
 
-/// Shell sort with Ciura gaps: no recursion, no scratch allocation beyond one element.
+fn swapElems(a: [*]u8, b: [*]u8, width: usize) void {
+    var i: usize = 0;
+    while (i < width) : (i += 1) std.mem.swap(u8, &a[i], &b[i]);
+}
+
+/// Shell sort with Ciura gaps: no recursion, and no allocation, because C's qsort cannot fail.
 fn qsort(base: ?*anyopaque, n: usize, width: usize, cmp: Cmp) callconv(.c) void {
     const b: [*]u8 = @ptrCast(base orelse return);
     if (n < 2 or width == 0) return;
-
-    const tmp = alloc(width) orelse return;
-    defer release(tmp);
-    const t: [*]u8 = @ptrCast(tmp);
 
     const gaps = [_]usize{ 701, 301, 132, 57, 23, 10, 4, 1 };
     for (gaps) |gap| {
         if (gap >= n) continue;
         var i: usize = gap;
         while (i < n) : (i += 1) {
-            @memcpy(t[0..width], elem(b, width, i)[0..width]);
             var j: usize = i;
-            while (j >= gap and cmp(elem(b, width, j - gap), t) > 0) : (j -= gap) {
-                @memcpy(elem(b, width, j)[0..width], elem(b, width, j - gap)[0..width]);
+            while (j >= gap and cmp(elem(b, width, j - gap), elem(b, width, j)) > 0) : (j -= gap) {
+                swapElems(elem(b, width, j - gap), elem(b, width, j), width);
             }
-            @memcpy(elem(b, width, j)[0..width], t[0..width]);
         }
     }
 }
@@ -226,6 +226,18 @@ test "qsort_sorts_a_sequence_longer_than_the_largest_ciura_gap" {
     for (&data, 0..) |*v, i| v.* = @intCast(800 - i);
     qsort(&data, data.len, @sizeOf(u32), cmpU32);
     for (data, 0..) |v, i| try testing.expectEqual(@as(u32, @intCast(i + 1)), v);
+}
+
+fn cmpTriple(a: ?*const anyopaque, b: ?*const anyopaque) callconv(.c) c_int {
+    const x: [*]const u8 = @ptrCast(a.?);
+    const y: [*]const u8 = @ptrCast(b.?);
+    return compareN(x, y, 3);
+}
+
+test "qsort_sorts_elements_whose_width_is_not_a_multiple_of_its_alignment" {
+    var data = [_]u8{ 'd', 'd', 'd', 'a', 'a', 'a', 'c', 'c', 'c', 'b', 'b', 'b' };
+    qsort(&data, 4, 3, cmpTriple);
+    try testing.expectEqualStrings("aaabbbcccddd", &data);
 }
 
 test "strncmp_and_strchr_match_c_semantics" {
