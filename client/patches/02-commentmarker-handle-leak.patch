@@ -1,5 +1,5 @@
 diff --git i/src/runtime/client/window/document.zig w/src/runtime/client/window/document.zig
-index c804dacf..bb4b9f63 100644
+index c804dacf..a3846cbf 100644
 --- i/src/runtime/client/window/document.zig
 +++ w/src/runtime/client/window/document.zig
 @@ -260,6 +260,17 @@ pub const CommentMarker = struct {
@@ -20,7 +20,7 @@ index c804dacf..bb4b9f63 100644
      /// Insert a new DOM node after the start comment (before existing content)
      pub fn insertContent(self: CommentMarker, node: HTMLNode) !void {
          if (!is_wasm) return;
-@@ -317,23 +328,35 @@ pub fn findCommentMarker(self: Document, id: []const u8) error{ MarkerNotFound,
+@@ -317,23 +328,38 @@ pub fn findCommentMarker(self: Document, id: []const u8) error{ MarkerNotFound,
  
      // Use TreeWalker to find comment nodes
      const body: real_js.Object = self.ref.get(real_js.Object, "body") catch return error.MarkerNotFound;
@@ -49,14 +49,19 @@ index c804dacf..bb4b9f63 100644
          // Get comment text content
          const text = node.getAlloc(real_js.String, allocator, "textContent") catch continue;
  
-         // Check for start marker: $id or $id {...} or $id [...]
-         if (std.mem.startsWith(u8, text, start_prefix)) {
+-        // Check for start marker: $id or $id {...} or $id [...]
+-        if (std.mem.startsWith(u8, text, start_prefix)) {
++        // The char after $id must end it or be a space so $app does not match $app_side, and only
++        // the first start is kept so a second match cannot overwrite and leak the retained handle.
++        const is_start = std.mem.startsWith(u8, text, start_prefix) and
++            (text.len == start_prefix.len or text[start_prefix.len] == ' ');
++        if (start_comment == null and is_start) {
              start_comment = node;
 +            retained = true;
              // Extract JSON payload after $id (if present)
              // Format: $id {"prop":"value"} or $id [val1, val2] -> extract JSON
              const rest = text[start_prefix.len..];
-@@ -356,6 +379,7 @@ pub fn findCommentMarker(self: Document, id: []const u8) error{ MarkerNotFound,
+@@ -356,6 +382,7 @@ pub fn findCommentMarker(self: Document, id: []const u8) error{ MarkerNotFound,
          } else if (std.mem.eql(u8, text, end_marker)) {
              allocator.free(text);
              end_comment = node;

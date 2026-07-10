@@ -5,6 +5,10 @@
 //!
 //! Every buffer arriving here was allocated by the door through `__zx_alloc`, which draws from
 //! `std.heap.wasm_allocator`, the same allocator the store frees with.
+//!
+//! These fns are not driven by the native test suite: they call `zx.client.rerender`, and a
+//! native harness would have to supply a wasm-free `zx`. Their door free paths are instead
+//! compile-checked by the wasm build, which analyzes them through the `@export` block below.
 
 const std = @import("std");
 const builtin = @import("builtin");
