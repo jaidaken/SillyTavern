@@ -88,7 +88,7 @@
         "slidetoggle": "^4.0.0",
         "tiktoken": "^1.0.22",
         "url-join": "^5.0.0",
-        "vectra": "^0.2.2",
+        "vectra": "^0.15.0",
         "wavefile": "^11.0.0",
         "webpack": "5.107.2",
         "write-file-atomic": "^8.0.0",
@@ -101,9 +101,6 @@
         "node": ">=26.0.0"
     },
     "overrides": {
-        "vectra": {
-            "openai": "^4.17.0"
-        },
         "node-fetch": {
             "whatwg-url": "^14.0.0"
         }

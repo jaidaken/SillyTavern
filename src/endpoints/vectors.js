@@ -305,9 +305,32 @@ async function getIndex(directories, collectionId, source, sourceSettings) {
 
     if (!await store.isIndexCreated()) {
         await store.createIndex();
+    } else {
+        await migrateNumericHashes(store);
     }
 
     return store;
+}
+
+/**
+ * Rewrites legacy numeric metadata.hash values to strings; vectra's $in filter only matches strings. Idempotent.
+ * @param {vectra.LocalIndex} store - The index to migrate
+ */
+async function migrateNumericHashes(store) {
+    const items = await store.listItems();
+    const legacyItems = items.filter(x => typeof x.metadata?.hash === 'number');
+
+    if (legacyItems.length === 0) {
+        return;
+    }
+
+    await store.beginUpdate();
+
+    for (const item of legacyItems) {
+        await store.upsertItem({ id: item.id, vector: item.vector, metadata: { ...item.metadata, hash: String(item.metadata.hash) } });
+    }
+
+    await store.endUpdate();
 }
 
 /**
@@ -328,7 +351,7 @@ async function insertVectorItems(directories, collectionId, source, sourceSettin
     for (let i = 0; i < items.length; i++) {
         const item = items[i];
         const vector = vectors[i];
-        await store.upsertItem({ vector: vector, metadata: { hash: item.hash, text: item.text, index: item.index } });
+        await store.upsertItem({ vector: vector, metadata: { hash: String(item.hash), text: item.text, index: item.index } });
     }
 
     await store.endUpdate();
@@ -361,7 +384,7 @@ async function getSavedHashes(directories, collectionId, source, sourceSettings)
  */
 async function deleteVectorItems(directories, collectionId, source, sourceSettings, hashes) {
     const store = await getIndex(directories, collectionId, source, sourceSettings);
-    const items = await store.listItemsByMetadata({ hash: { '$in': hashes } });
+    const items = await store.listItemsByMetadata({ hash: { '$in': hashes.map(String) } });
 
     await store.beginUpdate();
 
@@ -387,8 +410,8 @@ async function queryCollection(directories, collectionId, source, sourceSettings
     const store = await getIndex(directories, collectionId, source, sourceSettings);
     const vector = await getVector(source, sourceSettings, searchText, true, directories);
 
-    const result = await store.queryItems(vector, topK);
-    const metadata = result.filter(x => x.score >= threshold).map(x => x.item.metadata);
+    const result = await store.queryItems(vector, '', topK);
+    const metadata = result.filter(x => x.score >= threshold).map(x => ({ ...x.item.metadata, hash: Number(x.item.metadata.hash) }));
     const hashes = result.map(x => Number(x.item.metadata.hash));
     return { metadata, hashes };
 }
@@ -411,7 +434,7 @@ async function multiQueryCollection(directories, collectionIds, source, sourceSe
 
     for (const collectionId of collectionIds) {
         const store = await getIndex(directories, collectionId, source, sourceSettings);
-        const result = await store.queryItems(vector, topK);
+        const result = await store.queryItems(vector, '', topK);
         results.push(...result.map(result => ({ collectionId, result })));
     }
 
@@ -432,7 +455,7 @@ async function multiQueryCollection(directories, collectionIds, source, sourceSe
         }
 
         groupedResults[result.collectionId].hashes.push(Number(result.result.item.metadata.hash));
-        groupedResults[result.collectionId].metadata.push(result.result.item.metadata);
+        groupedResults[result.collectionId].metadata.push({ ...result.result.item.metadata, hash: Number(result.result.item.metadata.hash) });
     }
 
     return groupedResults;
