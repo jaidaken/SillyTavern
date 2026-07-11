@@ -5,7 +5,7 @@ import { Buffer } from 'node:buffer';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import writeFileAtomic from 'write-file-atomic';
 import yaml from 'yaml';
 import _ from 'lodash';
 import mime from 'mime-types';
@@ -72,10 +72,10 @@ class DiskCache {
 
     /**
      * Returns the list of hashed keys in the cache.
-     * @returns {string[]}
+     * @returns {Promise<string[]>}
      */
     get hashedKeys() {
-        return fs.readdirSync(this.cachePath);
+        return fs.promises.readdir(this.cachePath);
     }
 
     /**
@@ -133,14 +133,14 @@ class DiskCache {
             const cache = await this.instance();
             const validKeys = new Set();
             for (const dir of directoriesList) {
-                const files = fs.readdirSync(dir.characters, { withFileTypes: true });
+                const files = await fs.promises.readdir(dir.characters, { withFileTypes: true });
                 for (const file of files.filter(f => f.isFile() && path.extname(f.name) === '.png')) {
                     const filePath = path.join(dir.characters, file.name);
-                    const cacheKey = getCacheKey(filePath);
+                    const cacheKey = await getCacheKey(filePath);
                     validKeys.add(path.parse(cache.getDatumPath(cacheKey)).base);
                 }
             }
-            for (const key of this.hashedKeys) {
+            for (const key of await this.hashedKeys) {
                 if (!validKeys.has(key)) {
                     await cache.removeItem(key);
                 }
@@ -162,11 +162,11 @@ export const diskCache = new DiskCache();
 /**
  * Gets the cache key for the specified image file.
  * @param {string} inputFile - Path to the image file
- * @returns {string} - Cache key
+ * @returns {Promise<string>} - Cache key
  */
-function getCacheKey(inputFile) {
-    if (fs.existsSync(inputFile)) {
-        const stat = fs.statSync(inputFile);
+async function getCacheKey(inputFile) {
+    const stat = await fs.promises.stat(inputFile).catch(() => null);
+    if (stat) {
         return `${inputFile}-${stat.mtimeMs}`;
     }
 
@@ -180,7 +180,7 @@ function getCacheKey(inputFile) {
  * @returns {Promise<string | undefined>} - Character card data
  */
 async function readCharacterData(inputFile, inputFormat = 'png') {
-    const cacheKey = getCacheKey(inputFile);
+    const cacheKey = await getCacheKey(inputFile);
     if (memoryCache.has(cacheKey)) {
         return memoryCache.get(cacheKey);
     }
@@ -257,7 +257,7 @@ async function writeCharacterData(inputFile, data, outputFile, request, crop = u
         const outputImage = write(inputImage, data);
         const outputImagePath = path.join(request.user.directories.characters, `${outputFile}.png`);
 
-        writeFileAtomicSync(outputImagePath, outputImage);
+        await writeFileAtomic(outputImagePath, outputImage);
         return true;
     } catch (err) {
         log.chars.error(err);
@@ -330,7 +330,7 @@ async function tryReadImage(imgPath, crop) {
     } catch (error) {
         // If it's an unsupported type of image (APNG) - just read the file as buffer
         log.chars.error(`Failed to read image: ${imgPath}`, error);
-        return fs.readFileSync(imgPath);
+        return await fs.promises.readFile(imgPath);
     }
 }
 
@@ -338,17 +338,17 @@ async function tryReadImage(imgPath, crop) {
  * calculateChatSize - Calculates the total chat size for a given character.
  *
  * @param  {string} charDir The directory where the chats are stored.
- * @return { {chatSize: number, dateLastChat: number} }         The total chat size.
+ * @return {Promise<{chatSize: number, dateLastChat: number}>}         The total chat size.
  */
-const calculateChatSize = (charDir) => {
+const calculateChatSize = async (charDir) => {
     let chatSize = 0;
     let dateLastChat = 0;
 
-    if (fs.existsSync(charDir)) {
-        const chats = fs.readdirSync(charDir);
+    if (await fs.promises.stat(charDir).catch(() => null)) {
+        const chats = await fs.promises.readdir(charDir);
         if (Array.isArray(chats) && chats.length) {
             for (const chat of chats) {
-                const chatStat = fs.statSync(path.join(charDir, chat));
+                const chatStat = await fs.promises.stat(path.join(charDir, chat));
                 chatSize += chatStat.size;
                 dateLastChat = Math.max(dateLastChat, chatStat.mtimeMs);
             }
@@ -414,12 +414,12 @@ const processCharacter = async (item, directories, { shallow }) => {
         jsonObject.avatar = item;
         const character = jsonObject;
         character.json_data = imgData;
-        const charStat = fs.statSync(path.join(directories.characters, item));
+        const charStat = await fs.promises.stat(path.join(directories.characters, item));
         character.date_added = charStat.ctimeMs;
         character.create_date = jsonObject.create_date || new Date(Math.round(charStat.ctimeMs)).toISOString();
         const chatsDirectory = path.join(directories.chats, item.replace('.png', ''));
 
-        const { chatSize, dateLastChat } = calculateChatSize(chatsDirectory);
+        const { chatSize, dateLastChat } = await calculateChatSize(chatsDirectory);
         character.chat_size = chatSize;
         character.date_last_chat = dateLastChat;
         character.data_size = calculateDataSize(jsonObject?.data);
@@ -728,8 +728,8 @@ function convertWorldInfoToCharacterBook(name, entries) {
  * @returns {Promise<string>} Internal name of the character
  */
 async function importFromYaml(uploadPath, context, preservedFileName) {
-    const fileText = fs.readFileSync(uploadPath, 'utf8');
-    fs.unlinkSync(uploadPath);
+    const fileText = await fs.promises.readFile(uploadPath, 'utf8');
+    await fs.promises.unlink(uploadPath);
     const yamlData = yaml.parse(fileText);
     log.chars.info('Importing from YAML');
     yamlData.name = sanitize(yamlData.name);
@@ -762,10 +762,10 @@ async function importFromYaml(uploadPath, context, preservedFileName) {
  * @returns {Promise<string>} Internal name of the character
  */
 async function importFromCharX(uploadPath, { request }, preservedFileName) {
-    const fileBuffer = fs.readFileSync(uploadPath);
+    const fileBuffer = await fs.promises.readFile(uploadPath);
     // Create a properly-sized ArrayBuffer (Node's buffer pool can cause oversized .buffer)
     const data = fileBuffer.buffer.slice(fileBuffer.byteOffset, fileBuffer.byteOffset + fileBuffer.byteLength);
-    fs.unlinkSync(uploadPath);
+    await fs.promises.unlink(uploadPath);
 
     const parser = new CharXParser(data);
     const { card, avatar, auxiliaryAssets, extractedBuffers } = await parser.parse();
@@ -813,12 +813,12 @@ async function importFromByaf(uploadPath, { request }, preservedFileName) {
         /**
          * @param {Partial<ByafScenario>} scenario
         */
-        const createChatAsCurrentPersona = (scenario) => {
+        const createChatAsCurrentPersona = async (scenario) => {
             const chatName = sanitize(`${scenario.title || card.name} - ${humanizedDateTime()} imported.jsonl`, { replacement: sanitizeSafeCharacterReplacements });
             const filePath = path.join(request.user.directories.chats, path.basename(fileName), chatName);
             const dir = path.dirname(filePath);
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-            writeFileAtomicSync(filePath, ByafParser.getChatFromScenario(scenario, request.body.user_name, card.name, byafData.chatBackgrounds), 'utf8');
+            await fs.promises.mkdir(dir, { recursive: true });
+            await writeFileAtomic(filePath, ByafParser.getChatFromScenario(scenario, request.body.user_name, card.name, byafData.chatBackgrounds), 'utf8');
             log.chars.info(`Created ${chatName} chat from BYAF import`);
             return chatName;
         };
@@ -828,11 +828,11 @@ async function importFromByaf(uploadPath, { request }, preservedFileName) {
             const extension = path.extname(bg.paths?.[0]) || '.png';
             const baseName = `${path.basename(fileName)}_bg`;
             const filePath = path.join(request.user.directories.userImages, fileName);
-            if (!fs.existsSync(filePath)) fs.mkdirSync(filePath, { recursive: true });
+            await fs.promises.mkdir(filePath, { recursive: true });
             const file = getUniqueName(baseName, (name) => fs.existsSync(path.join(filePath, `${name}${extension}`)));
             if (Buffer.isBuffer(bg.data)) {
                 const newFile = `${file}${extension}`;
-                writeFileAtomicSync(path.join(filePath, newFile), bg.data);
+                await writeFileAtomic(path.join(filePath, newFile), bg.data);
                 bg.name = clientRelativePath(request.user.directories.root, path.join(filePath, newFile)); // Update background name to the new file
                 log.chars.info(`Created ${newFile} background from BYAF import`);
             }
@@ -842,7 +842,7 @@ async function importFromByaf(uploadPath, { request }, preservedFileName) {
         // Create chats for each scenario
         if (Array.isArray(byafData.scenarios)) {
             for (const scenario of byafData.scenarios) {
-                chats.push(createChatAsCurrentPersona(scenario));
+                chats.push(await createChatAsCurrentPersona(scenario));
             }
         }
 
@@ -857,11 +857,11 @@ async function importFromByaf(uploadPath, { request }, preservedFileName) {
             // even if the expression system did not tolerate additional icons that are not mapped to expressions.
             // This will not yet allow changing icons within the UI but at least the icons will be available for manual selection, rather than being lost.
             const altImagesFolder = path.join(request.user.directories.characters, sanitize(card.name));
-            if (!fs.existsSync(altImagesFolder)) fs.mkdirSync(altImagesFolder, { recursive: true });
+            await fs.promises.mkdir(altImagesFolder, { recursive: true });
             const extension = path.extname(icon.filename) || '.png';
             const file = getUniqueName(`${sanitize(icon.label, { replacement: sanitizeSafeCharacterReplacements }) || 'alt'}`, (name) => fs.existsSync(path.join(altImagesFolder, `${name}${extension}`)));
             if (Buffer.isBuffer(icon.image)) {
-                writeFileAtomicSync(path.join(altImagesFolder, `${file}${extension}`), icon.image);
+                await writeFileAtomic(path.join(altImagesFolder, `${file}${extension}`), icon.image);
                 log.chars.info(`Created ${file}${extension} alternate icon from BYAF import`);
             }
         }
@@ -880,8 +880,8 @@ async function importFromByaf(uploadPath, { request }, preservedFileName) {
  * @returns {Promise<string>} Internal name of the character
  */
 async function importFromJson(uploadPath, { request }, preservedFileName) {
-    const data = fs.readFileSync(uploadPath, 'utf8');
-    fs.unlinkSync(uploadPath);
+    const data = await fs.promises.readFile(uploadPath, 'utf8');
+    await fs.promises.unlink(uploadPath);
 
     let jsonData = JSON.parse(data);
 
@@ -984,7 +984,7 @@ async function importFromPng(uploadPath, { request }, preservedFileName) {
         jsonData.create_date = new Date().toISOString();
         const char = JSON.stringify(jsonData);
         const result = await writeCharacterData(uploadPath, char, pngName, request);
-        fs.unlinkSync(uploadPath);
+        await fs.promises.unlink(uploadPath);
         return result ? pngName : '';
     } else if (jsonData.name !== undefined) {
         log.chars.info('Found a v1 character file.');
@@ -1011,7 +1011,7 @@ async function importFromPng(uploadPath, { request }, preservedFileName) {
         char = convertToV2(char, request.user.directories);
         const charJSON = JSON.stringify(char);
         const result = await writeCharacterData(uploadPath, charJSON, pngName, request);
-        fs.unlinkSync(uploadPath);
+        await fs.promises.unlink(uploadPath);
         return result ? pngName : '';
     }
 
@@ -1031,7 +1031,7 @@ router.post('/create', getFileNameValidationFunction('file_name'), async functio
         const avatarName = `${internalName}.png`;
         const chatsPath = path.join(request.user.directories.chats, internalName);
 
-        if (!fs.existsSync(chatsPath)) fs.mkdirSync(chatsPath);
+        if (!(await fs.promises.stat(chatsPath).catch(() => null))) await fs.promises.mkdir(chatsPath);
 
         if (!request.file) {
             await writeCharacterData(DEFAULT_AVATAR_PATH, char, internalName, request);
@@ -1040,7 +1040,7 @@ router.post('/create', getFileNameValidationFunction('file_name'), async functio
             const crop = tryParse(request.query.crop);
             const uploadPath = path.join(request.file.destination, request.file.filename);
             await writeCharacterData(uploadPath, char, internalName, request, crop);
-            fs.unlinkSync(uploadPath);
+            await fs.promises.unlink(uploadPath);
             return response.send(avatarName);
         }
     } catch (err) {
@@ -1079,13 +1079,13 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
         await writeCharacterData(oldAvatarPath, newData, newInternalName, request);
 
         // Rename chats folder
-        if (fs.existsSync(oldChatsPath) && !fs.existsSync(newChatsPath)) {
-            fs.cpSync(oldChatsPath, newChatsPath, { recursive: true });
-            fs.rmSync(oldChatsPath, { recursive: true, force: true });
+        if (await fs.promises.stat(oldChatsPath).catch(() => null) && !(await fs.promises.stat(newChatsPath).catch(() => null))) {
+            await fs.promises.cp(oldChatsPath, newChatsPath, { recursive: true });
+            await fs.promises.rm(oldChatsPath, { recursive: true, force: true });
         }
 
         // Remove the old character file
-        fs.unlinkSync(oldAvatarPath);
+        await fs.promises.unlink(oldAvatarPath);
 
         // Return new avatar name to ST
         return response.send({ avatar: newAvatarName });
@@ -1123,7 +1123,7 @@ router.post('/edit', validateAvatarUrlMiddleware, async function (request, respo
             const newAvatarPath = path.join(request.file.destination, request.file.filename);
             invalidateThumbnail(request.user.directories, 'avatar', request.body.avatar_url);
             await writeCharacterData(newAvatarPath, char, targetFile, request, crop);
-            fs.unlinkSync(newAvatarPath);
+            await fs.promises.unlink(newAvatarPath);
 
             // Bust cache to reload the new avatar
             cacheBuster.bust(request, response);
@@ -1147,11 +1147,11 @@ router.post('/edit-avatar', validateAvatarUrlMiddleware, async function (request
         }
 
         const uploadPath = path.join(request.file.destination, request.file.filename);
-        if (!fs.existsSync(uploadPath)) {
+        if (!(await fs.promises.stat(uploadPath).catch(() => null))) {
             return response.status(400).send('Error: uploaded file does not exist');
         }
         const characterPath = path.join(request.user.directories.characters, request.body.avatar_url);
-        if (!fs.existsSync(characterPath)) {
+        if (!(await fs.promises.stat(characterPath).catch(() => null))) {
             return response.status(400).send('Error: character file does not exist');
         }
         const data = await readCharacterData(characterPath);
@@ -1164,7 +1164,7 @@ router.post('/edit-avatar', validateAvatarUrlMiddleware, async function (request
         await writeCharacterData(uploadPath, data, fileName, request, crop);
 
         // Remove uploaded temp file
-        fs.unlinkSync(uploadPath);
+        await fs.promises.unlink(uploadPath);
 
         // Reset images caches
         cacheBuster.bust(request, response);
@@ -1343,7 +1343,7 @@ router.post('/merge-attributes', getFileNameValidationFunction('avatar'), async 
                 targetAvatars = avatars;
             } else {
                 // Empty array → scan all characters in the directory
-                const files = fs.readdirSync(request.user.directories.characters);
+                const files = await fs.promises.readdir(request.user.directories.characters);
                 targetAvatars = files.filter(file => path.extname(file).toLowerCase() === '.png');
             }
 
@@ -1421,11 +1421,14 @@ router.post('/delete', validateAvatarUrlMiddleware, async function (request, res
     }
 
     const avatarPath = path.join(request.user.directories.characters, request.body.avatar_url);
-    if (!fs.existsSync(avatarPath)) {
-        return response.sendStatus(400);
+    try {
+        await fs.promises.unlink(avatarPath);
+    } catch (error) {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+            return response.sendStatus(400);
+        }
+        throw error;
     }
-
-    fs.unlinkSync(avatarPath);
     invalidateThumbnail(request.user.directories, 'avatar', request.body.avatar_url);
     let dir_name = (request.body.avatar_url.replace('.png', ''));
 
@@ -1462,7 +1465,7 @@ router.post('/delete', validateAvatarUrlMiddleware, async function (request, res
  */
 router.post('/all', async function (request, response) {
     try {
-        const files = fs.readdirSync(request.user.directories.characters);
+        const files = await fs.promises.readdir(request.user.directories.characters);
         const pngFiles = files.filter(file => file.endsWith('.png'));
         const processingPromises = pngFiles.map(file => processCharacter(file, request.user.directories, { shallow: useShallowCharacters }));
         const data = (await Promise.all(processingPromises)).filter(c => c.name);
@@ -1480,7 +1483,7 @@ router.post('/get', validateAvatarUrlMiddleware, async function (request, respon
         const item = request.body.avatar_url;
         const filePath = path.join(request.user.directories.characters, item);
 
-        if (!fs.existsSync(filePath)) {
+        if (!(await fs.promises.stat(filePath).catch(() => null))) {
             return response.sendStatus(404);
         }
 
@@ -1500,11 +1503,11 @@ router.post('/chats', validateAvatarUrlMiddleware, async function (request, resp
         const characterDirectory = (request.body.avatar_url).replace('.png', '');
         const chatsDirectory = path.join(request.user.directories.chats, characterDirectory);
 
-        if (!fs.existsSync(chatsDirectory)) {
+        if (!(await fs.promises.stat(chatsDirectory).catch(() => null))) {
             return response.send({ error: true });
         }
 
-        const files = fs.readdirSync(chatsDirectory, { withFileTypes: true });
+        const files = await fs.promises.readdir(chatsDirectory, { withFileTypes: true });
         const jsonFiles = files.filter(file => file.isFile() && path.extname(file.name) === '.jsonl').map(file => file.name);
 
         if (jsonFiles.length === 0) {
@@ -1603,7 +1606,7 @@ router.post('/duplicate', validateAvatarUrlMiddleware, async function (request, 
             return response.sendStatus(400);
         }
         let filename = path.join(request.user.directories.characters, sanitize(request.body.avatar_url));
-        if (!fs.existsSync(filename)) {
+        if (!(await fs.promises.stat(filename).catch(() => null))) {
             log.chars.error('file for dupe not found', filename);
             return response.sendStatus(404);
         }
@@ -1625,13 +1628,13 @@ router.post('/duplicate', validateAvatarUrlMiddleware, async function (request, 
 
         newFilename = path.join(request.user.directories.characters, `${baseName}_${suffix}${path.extname(filename)}`);
 
-        while (fs.existsSync(newFilename)) {
+        while (await fs.promises.stat(newFilename).catch(() => null)) {
             let suffixStr = '_' + suffix;
             newFilename = path.join(request.user.directories.characters, `${baseName}${suffixStr}${path.extname(filename)}`);
             suffix++;
         }
 
-        fs.copyFileSync(filename, newFilename);
+        await fs.promises.copyFile(filename, newFilename);
         log.chars.info(`${filename} was copied to ${newFilename}`);
         response.send({ path: path.parse(newFilename).base });
     } catch (error) {
@@ -1648,7 +1651,7 @@ router.post('/export', validateAvatarUrlMiddleware, async function (request, res
 
         let filename = path.join(request.user.directories.characters, sanitize(request.body.avatar_url));
 
-        if (!fs.existsSync(filename)) {
+        if (!(await fs.promises.stat(filename).catch(() => null))) {
             return response.sendStatus(404);
         }
 
