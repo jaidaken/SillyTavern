@@ -14,6 +14,9 @@ Audit + design notes for the WASM/Zig SillyTavern client rebuild.
   audits (W05 235 + prior backlog + resolved Phase 0). One line per finding, grouped by subsystem.
 - [ziex-refactor-plan.md](ziex-refactor-plan.md) - deep design for the ziex reactive-model refactor:
   mechanism, probe MAJOR result, memoization + region decomposition, the UAF coupling constraint, test plan.
+- [tier1-reading-surface-spec.md](tier1-reading-surface-spec.md) - APPROVED, ready-to-build spec: native
+  justified prose (gated to long messages), reading-controls panel, settings sub-panel restructure, scoped
+  to the message area only.
 - [tier2-knuth-plass-justification.md](tier2-knuth-plass-justification.md) - DEFERRED reading-surface upgrade:
   Knuth-Plass optimal justification on message-seal, the design, honest caveats (marginal delta, reflow pop,
   measurement risk), and the prototype-and-judge gate. Tier 1 (native justify+hyphens) ships first.
