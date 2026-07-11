@@ -687,8 +687,10 @@ function autoConnectInputHandler() {
 }
 
 async function addExtensionsButtonAndMenu() {
-    const buttonHTML = await renderTemplateAsync('wandButton');
-    const extensionsMenuHTML = await renderTemplateAsync('wandMenu');
+    const [buttonHTML, extensionsMenuHTML] = await Promise.all([
+        renderTemplateAsync('wandButton'),
+        renderTemplateAsync('wandMenu'),
+    ]);
 
     $(document.body).append(extensionsMenuHTML);
     $('#leftSendForm').append(buttonHTML);

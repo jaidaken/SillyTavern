@@ -720,10 +720,12 @@ async function firstLoadInit() {
     addDOMPurifyHooks();
     reloadMarkdownProcessor();
     applyBrowserFixes();
-    await getClientVersion();
-    await initSecrets();
-    await readSecretState();
-    await initLocales();
+    // Independent boot fetches run concurrently; each used to cost a serial server round-trip
+    await Promise.all([
+        getClientVersion(),
+        initSecrets().then(() => readSecretState()),
+        initLocales(),
+    ]);
     initChatUtilities();
     initDefaultSlashCommands();
     initTextGenModels();
@@ -743,9 +745,11 @@ async function firstLoadInit() {
     initDynamicStyles();
     initTags();
     initBookmarks();
-    await getUserAvatars(true, user_avatar);
-    await getCharacters();
-    await getBackgrounds();
+    await Promise.all([
+        getUserAvatars(true, user_avatar),
+        getCharacters(),
+        getBackgrounds(),
+    ]);
     await initTokenizers();
     initBackgrounds();
     initAuthorsNote();

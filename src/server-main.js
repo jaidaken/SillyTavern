@@ -49,6 +49,7 @@ import multerMonkeyPatch from './middleware/multerMonkeyPatch.js';
 import initRequestProxy from './request-proxy.js';
 import initPrivateRequestFilter from './private-request-filter.js';
 import cacheBuster from './middleware/cacheBuster.js';
+import { getIndexHtmlWithModulePreloads } from './middleware/modulePreload.js';
 import corsProxyMiddleware from './middleware/corsProxy.js';
 import hostWhitelistMiddleware from './middleware/hostWhitelist.js';
 import userCssMiddleware from './middleware/userCss.js';
@@ -204,14 +205,15 @@ if (!cliArgs.disableCsrf) {
 
 // Static files
 // Host index page
-app.get('/', cacheBuster.middleware, (request, response) => {
+app.get('/', cacheBuster.middleware, async (request, response) => {
     if (shouldRedirectToLogin(request)) {
         const query = request.url.split('?')[1];
         const redirectUrl = query ? `/login?${query}` : '/login';
         return response.redirect(redirectUrl);
     }
 
-    return response.sendFile('index.html', { root: path.join(serverDirectory, 'public') });
+    const html = await getIndexHtmlWithModulePreloads();
+    return response.type('html').send(html);
 });
 
 // Callback endpoint for OAuth PKCE flows (e.g. OpenRouter)
