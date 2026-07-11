@@ -594,6 +594,9 @@ body {
     --text: oklch(0.315 0.021 60);
     --accent: oklch(0.520 0.110 55);
     --border-soft: oklch(0.86 0.02 84);
+    /* Speech + emphasis must darken too, or dialogue (the most common styled RP text) sits near-invisible. */
+    --st-quote: oklch(0.450 0.115 72);
+    --st-em: oklch(0.400 0.020 66);
     background: var(--bg);
 }
 #chat-root[data-reading-theme="paper"] #chat {
@@ -601,6 +604,8 @@ body {
     --text: oklch(0.255 0.012 60);
     --accent: oklch(0.470 0.130 45);
     --border-soft: oklch(0.90 0.006 90);
+    --st-quote: oklch(0.420 0.125 55);
+    --st-em: oklch(0.360 0.015 60);
     background: var(--bg);
 }
 

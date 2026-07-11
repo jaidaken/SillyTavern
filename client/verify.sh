@@ -85,6 +85,10 @@ echo "== served html (pre-hydration) =="
 # body a placeholder the client replaces.
 check "region hydration markers in index.html" "$(count '<!--\$' dist/index.html)" 3
 check "ssr placeholder, one per message" "$(count 'ST_SSR_PLACEHOLDER' dist/index.html)" 12
+# The justify gate (message.zx): long messages carry mes-justify, short roleplay turns stay plain, so
+# both classes must appear in the SSR. A regression that justified everything (or nothing) fails here.
+atleast "justify gate: long messages carry mes-justify" "$(count 'class=\"mes_text mes-justify\"' dist/index.html)" 1
+atleast "justify gate: short messages stay plain mes_text" "$(count 'class=\"mes_text\"' dist/index.html)" 1
 
 # Start the server for every browser check. --dev exposes /dev/stream and /dev/hold. setsid so the
 # whole tree dies with the group kill in cleanup.

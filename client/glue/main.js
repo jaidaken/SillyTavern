@@ -3,9 +3,9 @@
 (function () {
     'use strict';
 
-    const ZIEX_DOOR = '/vendor/ziex/wasm/index.js';
-    const PURIFY_URL = '/glue/vendor/purify.es.mjs';
-    const HLJS_URL = '/glue/vendor/hljs.mjs';
+    const ZIEX_DOOR = '/client/vendor/ziex/wasm/index.js';
+    const PURIFY_URL = '/client/glue/vendor/purify.es.mjs';
+    const HLJS_URL = '/client/glue/vendor/hljs.mjs';
 
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
@@ -566,7 +566,9 @@
         }
         const shellEl = document.getElementById('shell');
         if (shellEl) {
-            new MutationObserver(syncDrawerInert).observe(shellEl, { childList: true, subtree: true });
+            // syncReadingAria too: the settings body (which holds the reading controls) re-renders inside
+            // the shell, so re-apply aria-pressed to the active buttons whenever it does.
+            new MutationObserver(function () { syncDrawerInert(); syncReadingAria(); }).observe(shellEl, { childList: true, subtree: true });
             syncDrawerInert();
         }
 
@@ -599,11 +601,24 @@
             const root = document.getElementById('chat-root');
             if (root) root.setAttribute('data-reading-' + key, val);
         }
+        // The CSS highlights the active control off #chat-root; mirror that to aria-pressed so a screen
+        // reader hears the current selection (the CSS colour alone is invisible to AT).
+        function syncReadingAria() {
+            const root = document.getElementById('chat-root');
+            if (!root) return;
+            const btns = document.querySelectorAll('[data-reading-set]');
+            for (let i = 0; i < btns.length; i++) {
+                const b = btns[i];
+                const on = root.getAttribute('data-reading-' + b.getAttribute('data-reading-set')) === b.getAttribute('data-reading-val');
+                b.setAttribute('aria-pressed', on ? 'true' : 'false');
+            }
+        }
         Object.keys(READING_DEFAULT).forEach(function (key) {
             let val = READING_DEFAULT[key];
             try { val = localStorage.getItem('st-reading-' + key) || READING_DEFAULT[key]; } catch (_) {}
             applyReading(key, val);
         });
+        syncReadingAria();
         document.addEventListener('click', function (e) {
             const btn = e.target && e.target.closest ? e.target.closest('[data-reading-set]') : null;
             if (!btn) return;
@@ -612,6 +627,7 @@
             if (!key || val === null || !Object.hasOwn(READING_DEFAULT, key)) return;
             try { localStorage.setItem('st-reading-' + key, val); } catch (_) {}
             applyReading(key, val);
+            syncReadingAria();
         });
 
         // Composer auto-grow: the textarea expands to fit its content up to the CSS max-height, then
