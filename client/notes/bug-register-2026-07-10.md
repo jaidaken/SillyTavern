@@ -240,3 +240,22 @@ qsort shellsort, intCast note, digit-led ordered list.
   Zig handler (handler runs after native dispatch ends), so every drawer/dock button toggled nothing.
   Introduced by m-zigcore, caught by the render-harness toggle checks (dockOpened false, shell delta 0),
   reverted to `target` (safe: the button is empty, icon is a ::before pseudo). ui.zig onDrawer.
+- [PROBED 2026-07-11, tree-free viable, build DEFERRED to Phase 7] m-treefree probe of freeing the
+  memo-skipped message nodes' per-render component pointers. VERDICT: viable with a plan amendment
+  (not clean-as-drafted, not a blocking major). The naive fixed-one-render-grace free UAFs at three
+  points; the retained-tree walker-skip covers tear 3 (registerVElement walks the retained tree at
+  `Client.zig:423` dereferencing `.component.element.attributes`) but NOT tears 1 and 2 (two other
+  freed-`.component` reads; see the m-treefree transcript for the exact sites). PLAN DELTA for the
+  Phase 7 build: free arenas by LIVENESS (pin any generation a live or memo-skipped node references),
+  never a fixed grace; keep it O(1)/token via a per-generation refcount, NOT an O(N) tree scan (a scan
+  would re-add the per-token cost the memoization just removed); persist key + owner_component_id off
+  the arena; keep the walker-skip. Probe reverted its worktree; nothing shipped.
+- [OPEN, this-wave regression, blocks clean deploy] verify.sh `rel=noopener forced on links` = 0 on a
+  clean run (no chrome contention), was 2 pre-wave-2 (b1t09h0bn). The `afterSanitizeAttributes` hook in
+  glue/main.js:94-102 is byte-identical to wave-1 and still sets `rel="noopener noreferrer"`, and its
+  sibling hooks (js-href strip, class-namespace) both pass, so installHooks runs. The streamed hostile
+  link renders (real-href=1) but without rel. Hypothesis: the STREAMED message body takes a sanitize
+  path that does not carry the afterSanitize hook the way the sealed/boot path does; needs the call-site
+  traced (which DOMPurify.sanitize the streaming render uses). Severity LOW (modern browsers imply
+  noopener for target=_blank since 2021; all XSS strips pass), but it regressed this wave so fix at root
+  before deploy, not ship the failing check.
