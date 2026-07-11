@@ -40,6 +40,23 @@ propagation, env.sanitize fail-closed, [DONE] glue termination, bridge __st_stre
 NOTE: the backlog still lists items 7 (stream.zig:141) and 8 (markdown.zig:22) as OPEN in its "Real bugs"
 list; aud-zig DRIFT flags both as already fixed. The backlog is stale on those two only.
 
+## Resolved (Wave 2, 2026-07-11, committed; NOT re-counted below)
+
+Landed by a parallel team (m-app/m-css/m-glue/m-treefree/m-chrome + m-edge draft), each lead-verified.
+
+- SECURITY: wave-1 sanitizer hardening (MESSAGE_CONFIG: ALLOW_DATA_ATTR=false, SANITIZE_NAMED_PROPS, URL_ATTRS trim, rel=noopener hook, class allowlist) `a8ef09a18`; G21 forbid model-authored form/input/button/textarea/select/option in message bodies `ee219af81`.
+- CORRECTNESS: quotes.zig paragraphEnd O(n^2)->O(n) ParaCache `5102f5b03`; dead beginSse + extern sse_start removed `5102f5b03`; onDrawer reads target not currentTarget (panel toggle was dead) `a8ef09a18`; lone streamed code-fence never highlighted -> highlightSealedBlocks on seal `ee219af81`; wave-1 stream/core robustness (streamBegin u32 guard, drain saw_done, 1MiB caps, adopt failedBytes sentinel) `a8ef09a18`.
+- CSS: #20 resize-handle clip, #28 press timing, #39 list indent, #40 img aspect `f09bd400a`; #6 WCAG 1.4.11 control-contrast -> --control-border 3.71:1 `a4247e29b`; wave-1 contrast Lc raises + focus-visible + skip-link + dead-token removal `a8ef09a18`.
+- MEMORY LEAKS: patches 07 node-handle, 08 standalone-alloc, 09 client-handle-registry+event `6d91a78f4` (UAF-detector clean); patch 05 concatRawText earlier. COUPLED leaks (Client.zig:331 render tree + componentOwnerId retained owner ids) DEFERRED to Phase 7, detector-confirmed unsafe to free without the liveness-refcount design.
+- A11Y: one <main>, one <h1>, skip-link, role=log, role=separator + aria-value* + keyboard resize, aria-expanded/controls/busy, inert-on-drawer, landmarks `a8ef09a18`; preserved through the restyle (zero .zx edits) `a4247e29b`.
+- DISTINCTIVENESS: Scriptorium chrome restyle (warm reading-desk, Newsreader serif, amber accent, message-arrival signature) clears the WD69 swap-logo gate `a4247e29b`. Font pruning fixed so self-hosted faces actually ship (the prior theme silently ran in Georgia fallback).
+- TEST QUALITY + GATE: markdown fuzz determinism + full-byte-range, quotes no-q-in-fence property, adopt unpack native test `5102f5b03`; the real adversarial verify.sh gate (hostile bytes driven through the live pipeline, regression-proven) `56e178e74`.
+
+Still OPEN after Wave 2 (see the Addendum at the foot for detail):
+- rel=noopener verify check = 0 [ROOT-CAUSED, NOT a wave-2 regression]: bisected out glue + quotes.zig + sanitized.zig, then rebuilt the pre-wave commit 56e178e74 EXACTLY and it also gives 0 now though it gave 2 ~1.5h earlier (same code, same patches). So it is environmental: DOMPurify drops the `target`/`rel` the afterSanitizeAttributes hook sets because they are not in the config allow-add set. Fix = `ADD_ATTR: ['target', 'rel']` in MESSAGE_CONFIG so the hook-added attributes survive the final pass (version-robust). Low severity (browsers imply noopener for target=_blank; all XSS strips pass).
+- DEFERRED features/refactors: per-speaker colour (#7), glue/main.js + app.css structure splits (#6), Phase 7 tree-free + its coupled leaks (#10), edge Caddy security/cache headers (drafted in nixos-config, awaiting operator rebuild).
+- The un-actioned W05 items in the sections below (dead code, further CSS, scripts, perf, supply-chain) remain as listed; this wave took the security/correctness/a11y/leak/distinctiveness slice.
+
 ---
 
 ## SECURITY (fix in W0; one decision for the operator)
