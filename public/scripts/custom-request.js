@@ -318,7 +318,7 @@ export class TextCompletionService {
                 const preset = presetManager.getCompletionPresetByName(presetName);
                 if (preset) {
                     // Convert preset to payload and merge with custom data
-                    requestData = this.presetToGeneratePayload(preset, {}, requestData);
+                    requestData = await this.presetToGeneratePayload(preset, {}, requestData);
                 } else {
                     log.net.warn(`Preset "${presetName}" not found, continuing with default settings`);
                 }
@@ -391,9 +391,9 @@ export class TextCompletionService {
      * @param {Object} preset - The preset configuration
      * @param {Object} overridePreset - Additional parameters to override preset values
      * @param {Object} overridePayload - Additional parameters to override payload values
-     * @returns {Object} - Formatted payload for text completion API
+     * @returns {Promise<Object>} - Formatted payload for text completion API
      */
-    static presetToGeneratePayload(preset, overridePreset = {}, overridePayload = {}) {
+    static async presetToGeneratePayload(preset, overridePreset = {}, overridePayload = {}) {
         if (!preset || typeof preset !== 'object') {
             throw new Error('Invalid preset: must be an object');
         }
@@ -409,7 +409,7 @@ export class TextCompletionService {
         }
 
         // convert to a generation payload
-        const payload = createTextGenGenerationData(settings, overridePayload.model, overridePayload.prompt, preset.genamt);
+        const payload = await createTextGenGenerationData(settings, overridePayload.model, overridePayload.prompt, preset.genamt);
 
         // apply overrides
         return this.createRequestData({ ...payload, ...overridePayload });

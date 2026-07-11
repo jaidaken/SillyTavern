@@ -24,7 +24,7 @@ import { getActiveManualApiSamplers, loadApiSelectedSamplers, isSamplerManualPri
 import { SECRET_KEYS, writeSecret } from './secrets.js';
 import { getEventSourceStream } from './sse-stream.js';
 import { getCurrentDreamGenModelTokenizer, getCurrentOpenRouterModelTokenizer, loadAphroditeModels, loadDreamGenModels, loadFeatherlessModels, loadGenericModels, loadInfermaticAIModels, loadLlamaCppModels, loadMancerModels, loadOllamaModels, loadOpenRouterModels, loadTabbyModels, loadTogetherAIModels, loadVllmModels, updateOpenRouterProvidersWarning } from './textgen-models.js';
-import { ENCODE_TOKENIZERS, TEXTGEN_TOKENIZERS, TOKENIZER_SUPPORTED_KEY, getTextTokens, getTokenizerBestMatch, tokenizers } from './tokenizers.js';
+import { ENCODE_TOKENIZERS, TEXTGEN_TOKENIZERS, TOKENIZER_SUPPORTED_KEY, getTextTokensAsync, getTokenizerBestMatch, tokenizers } from './tokenizers.js';
 import { AbortReason } from './util/AbortReason.js';
 import { getSortableDelay, onlyUnique, arraysEqual, isObject } from './utils.js';
 import { log } from './log.js';
@@ -435,9 +435,9 @@ function getTokenizerForTokenIds() {
  * Gets the custom token bans from settings and macros.
  * @param {TextCompletionSettings} settings Text completion settings to use
  * @typedef {{banned_tokens: string, banned_strings: string[]}} TokenBanResult
- * @returns {TokenBanResult} String with comma-separated banned token IDs
+ * @returns {Promise<TokenBanResult>} String with comma-separated banned token IDs
  */
-function getCustomTokenBans(settings = null) {
+async function getCustomTokenBans(settings = null) {
     settings = settings ?? textgenerationwebui_settings;
     if (!settings.send_banned_tokens || (!settings.banned_tokens && !settings.global_banned_tokens && !textgenerationwebui_banned_in_macros.length)) {
         return {
@@ -485,7 +485,7 @@ function getCustomTokenBans(settings = null) {
             banned_strings.push(line.slice(1, -1));
         } else {
             try {
-                const tokens = getTextTokens(tokenizer, line);
+                const tokens = await getTextTokensAsync(tokenizer, line);
                 banned_tokens.push(...tokens);
             } catch {
                 log.settings.error(`Could not tokenize raw text: ${line}`);
@@ -514,9 +514,9 @@ function toggleBannedStringsKillSwitch(isEnabled, title) {
 /**
  * Calculates logit bias object from the logit bias list.
  * @param {TextCompletionSettings} settings Text completion settings
- * @returns {object} Logit bias object
+ * @returns {Promise<object>} Logit bias object
  */
-function calculateLogitBias(settings = null) {
+async function calculateLogitBias(settings = null) {
     settings = settings ?? textgenerationwebui_settings;
 
     if (!Array.isArray(settings.logit_bias) || settings.logit_bias.length === 0) {
@@ -545,7 +545,7 @@ function calculateLogitBias(settings = null) {
         return result;
     }
 
-    getLogitBiasListResult(settings.logit_bias, tokenizer, addBias);
+    await getLogitBiasListResult(settings.logit_bias, tokenizer, addBias);
 
     return result;
 }
@@ -1596,15 +1596,15 @@ export function replaceMacrosInList(str) {
  * @param {boolean} isContinue Whether this is for a continue
  * @param {object} cfgValues Additional parameters (guidanceScale, negativePrompt)
  * @param {string} type Request type (impersonate, quiet, continue, etc)
- * @returns {object} Final generation parameters object appropriate for the text completion source
+ * @returns {Promise<object>} Final generation parameters object appropriate for the text completion source
  */
-export function createTextGenGenerationData(settings, model, finalPrompt = null, maxTokens = null, isImpersonate = false, isContinue = false, cfgValues = null, type = 'quiet') {
+export async function createTextGenGenerationData(settings, model, finalPrompt = null, maxTokens = null, isImpersonate = false, isContinue = false, cfgValues = null, type = 'quiet') {
     settings = settings ?? textgenerationwebui_settings;
     model = model ?? getTextGenModel(settings);
 
     const canMultiSwipe = !isContinue && !isImpersonate && type !== 'quiet';
     const dynatemp = isDynamicTemperatureSupported(settings);
-    const { banned_tokens, banned_strings } = getCustomTokenBans(settings);
+    const { banned_tokens, banned_strings } = await getCustomTokenBans(settings);
     const jsonSchema = isObject(settings.json_schema)
         ? settings.json_schema_allow_empty
             ? settings.json_schema
@@ -1815,7 +1815,8 @@ export function createTextGenGenerationData(settings, model, finalPrompt = null,
     }
 
     if (Array.isArray(settings.logit_bias) && settings.logit_bias.length) {
-        const logitBias = BIAS_CACHE.get(BIAS_KEY) || calculateLogitBias(settings);
+        // Accepted micro-race: a cache delete during this await gets overwritten by the stale set until the next bias/preset edit.
+        const logitBias = BIAS_CACHE.get(BIAS_KEY) || await calculateLogitBias(settings);
         BIAS_CACHE.set(BIAS_KEY, logitBias);
         params.logit_bias = logitBias;
     }
@@ -1857,7 +1858,7 @@ export function createTextGenGenerationData(settings, model, finalPrompt = null,
 
 export async function getTextGenGenerationData(finalPrompt, maxTokens, isImpersonate, isContinue, cfgValues, type) {
     const model = getTextGenModel(textgenerationwebui_settings);
-    const params = createTextGenGenerationData(textgenerationwebui_settings, model, finalPrompt, maxTokens, isImpersonate, isContinue, cfgValues, type);
+    const params = await createTextGenGenerationData(textgenerationwebui_settings, model, finalPrompt, maxTokens, isImpersonate, isContinue, cfgValues, type);
     await eventSource.emit(event_types.TEXT_COMPLETION_SETTINGS_READY, params);
     return params;
 }

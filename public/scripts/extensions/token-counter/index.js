@@ -2,7 +2,7 @@ import { main_api } from '../../../script.js';
 import { getContext } from '../../extensions.js';
 import { SlashCommand } from '../../slash-commands/SlashCommand.js';
 import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
-import { getFriendlyTokenizerName, getTextTokens, getTokenCountAsync, tokenizers } from '../../tokenizers.js';
+import { getFriendlyTokenizerName, getTextTokensAsync, getTokenCountAsync, tokenizers } from '../../tokenizers.js';
 import { resetScrollHeight, debounce } from '../../utils.js';
 import { debounce_timeout } from '../../constants.js';
 import { POPUP_TYPE, callGenericPopup } from '../../popup.js';
@@ -15,9 +15,16 @@ async function doTokenCounter() {
     const html = await renderExtensionTemplateAsync('token-counter', 'window', { tokenizerName });
 
     const dialog = $(html);
+    let countSequence = 0;
     const countDebounced = debounce(async () => {
+        const sequence = ++countSequence;
         const text = String($('#token_counter_textarea').val());
-        const ids = main_api == 'openai' ? getTextTokens(tokenizers.OPENAI, text) : getTextTokens(tokenizerId, text);
+        const ids = main_api == 'openai' ? await getTextTokensAsync(tokenizers.OPENAI, text) : await getTextTokensAsync(tokenizerId, text);
+
+        // A newer input superseded this request while the tokenizer round-trip was in flight
+        if (sequence !== countSequence) {
+            return;
+        }
 
         if (Array.isArray(ids) && ids.length > 0) {
             $('#token_counter_ids').text(`[${ids.join(', ')}]`);

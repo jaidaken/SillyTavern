@@ -22,7 +22,7 @@ import {
 import { is_group_generating, selected_group } from '../../group-chats.js';
 import { loadMovingUIState } from '../../power-user.js';
 import { dragElement } from '../../RossAscends-mods.js';
-import { getTextTokens, getTokenCountAsync, tokenizers } from '../../tokenizers.js';
+import { getTextTokensAsync, getTokenCountAsync, tokenizers } from '../../tokenizers.js';
 import { debounce_timeout } from '../../constants.js';
 import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
 import { SlashCommand } from '../../slash-commands/SlashCommand.js';
@@ -52,7 +52,7 @@ async function countSourceTokens(text, padding = 0) {
     }
 
     if (extension_settings.memory.source === summary_sources.extras) {
-        const count = getTextTokens(tokenizers.GPT2, text).length;
+        const count = (await getTextTokensAsync(tokenizers.GPT2, text)).length;
         return count + padding;
     }
 

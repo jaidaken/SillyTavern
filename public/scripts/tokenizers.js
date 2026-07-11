@@ -938,6 +938,10 @@ function countTokensFromServer(endpoint, str, resolve) {
 
             isAsync && resolve(tokenCount);
         },
+        error: function () {
+            tokenCount = apiFailureTokenCount(str);
+            isAsync && resolve(tokenCount);
+        },
     });
 
     return tokenCount;
@@ -970,6 +974,10 @@ function countTokensFromKoboldAPI(str, resolve) {
                 tokenCount = apiFailureTokenCount(str);
             }
 
+            isAsync && resolve(tokenCount);
+        },
+        error: function () {
+            tokenCount = apiFailureTokenCount(str);
             isAsync && resolve(tokenCount);
         },
     });
@@ -1010,6 +1018,10 @@ function countTokensFromTextgenAPI(str, resolve) {
                 tokenCount = apiFailureTokenCount(str);
             }
 
+            isAsync && resolve(tokenCount);
+        },
+        error: function () {
+            tokenCount = apiFailureTokenCount(str);
             isAsync && resolve(tokenCount);
         },
     });
@@ -1065,6 +1077,9 @@ function getTextTokensFromServer(endpoint, str, resolve) {
 
             isAsync && resolve(ids);
         },
+        error: function () {
+            isAsync && resolve(ids);
+        },
     });
     return ids;
 }
@@ -1087,6 +1102,9 @@ function getTextTokensFromTextgenAPI(str, resolve) {
         contentType: 'application/json',
         success: function (data) {
             ids = data.ids;
+            isAsync && resolve(ids);
+        },
+        error: function () {
             isAsync && resolve(ids);
         },
     });
@@ -1117,6 +1135,9 @@ function getTextTokensFromKoboldAPI(str, resolve) {
             ids = data.ids;
             isAsync && resolve(ids);
         },
+        error: function () {
+            isAsync && resolve(ids);
+        },
     });
 
     return ids;
@@ -1145,6 +1166,9 @@ function decodeTextTokensFromServer(endpoint, ids, resolve) {
             chunks = data.chunks;
             isAsync && resolve({ text, chunks });
         },
+        error: function () {
+            isAsync && resolve({ text, chunks });
+        },
     });
     return { text, chunks };
 }
@@ -1154,6 +1178,7 @@ function decodeTextTokensFromServer(endpoint, ids, resolve) {
  * @param {number} tokenizerType Tokenizer type.
  * @param {string} str String to tokenize.
  * @returns {number[]} Array of token ids.
+ * @deprecated Use getTextTokensAsync instead. Synchronous XHR blocks the main thread.
  */
 export function getTextTokens(tokenizerType, str) {
     switch (tokenizerType) {
@@ -1185,10 +1210,77 @@ export function getTextTokens(tokenizerType, str) {
 }
 
 /**
+ * Encodes a string to tokens using the server API without blocking the main thread.
+ * @param {number} tokenizerType Tokenizer type.
+ * @param {string} str String to tokenize.
+ * @returns {Promise<number[]>} Array of token ids.
+ */
+export function getTextTokensAsync(tokenizerType, str) {
+    return new Promise(resolve => {
+        switch (tokenizerType) {
+            case tokenizers.API_CURRENT:
+                return getTextTokensAsync(currentRemoteTokenizerAPI(), str).then(resolve);
+            case tokenizers.API_TEXTGENERATIONWEBUI:
+                return getTextTokensFromTextgenAPI(str, resolve);
+            case tokenizers.API_KOBOLD:
+                return getTextTokensFromKoboldAPI(str, resolve);
+            default: {
+                const tokenizerEndpoints = TOKENIZER_URLS[tokenizerType];
+                if (!tokenizerEndpoints) {
+                    apiFailureTokenCount(str);
+                    log.tok.warn('Unknown tokenizer type', tokenizerType);
+                    return resolve([]);
+                }
+                let endpointUrl = tokenizerEndpoints.encode;
+                if (!endpointUrl) {
+                    apiFailureTokenCount(str);
+                    log.tok.warn('This tokenizer type does not support encoding', tokenizerType);
+                    return resolve([]);
+                }
+                if (tokenizerType === tokenizers.OPENAI) {
+                    endpointUrl += `?model=${getTokenizerModel()}`;
+                }
+                return getTextTokensFromServer(endpointUrl, str, resolve);
+            }
+        }
+    });
+}
+
+/**
+ * Decodes token ids to text using the server API without blocking the main thread.
+ * @param {number} tokenizerType Tokenizer type.
+ * @param {number[]} ids Array of token ids
+ * @returns {Promise<{ text: string, chunks?: string[] }>} Decoded token text as a single string and individual chunks (if available).
+ */
+export function decodeTextTokensAsync(tokenizerType, ids) {
+    return new Promise(resolve => {
+        // Currently, neither remote API can decode, but this may change in the future. Put this guard here to be safe
+        if (tokenizerType === tokenizers.API_CURRENT) {
+            return decodeTextTokensAsync(tokenizers.NONE, ids).then(resolve);
+        }
+        const tokenizerEndpoints = TOKENIZER_URLS[tokenizerType];
+        if (!tokenizerEndpoints) {
+            log.tok.warn('Unknown tokenizer type', tokenizerType);
+            return resolve({ text: '', chunks: [] });
+        }
+        let endpointUrl = tokenizerEndpoints.decode;
+        if (!endpointUrl) {
+            log.tok.warn('This tokenizer type does not support decoding', tokenizerType);
+            return resolve({ text: '', chunks: [] });
+        }
+        if (tokenizerType === tokenizers.OPENAI) {
+            endpointUrl += `?model=${getTokenizerModel()}`;
+        }
+        return decodeTextTokensFromServer(endpointUrl, ids, resolve);
+    });
+}
+
+/**
  * Decodes token ids to text using the server API.
  * @param {number} tokenizerType Tokenizer type.
  * @param {number[]} ids Array of token ids
  * @returns {({ text: string, chunks?: string[] })} Decoded token text as a single string and individual chunks (if available).
+ * @deprecated Use decodeTextTokensAsync instead. Synchronous XHR blocks the main thread.
  */
 export function decodeTextTokens(tokenizerType, ids) {
     // Currently, neither remote API can decode, but this may change in the future. Put this guard here to be safe

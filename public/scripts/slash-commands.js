@@ -75,7 +75,7 @@ import { chat_completion_sources, MINIMAX_ENDPOINT, oai_settings, promptManager,
 import { user_avatar } from './personas.js';
 import { addEphemeralStoppingString, chat_styles, context_presets, flushEphemeralStoppingStrings, playMessageSound, power_user } from './power-user.js';
 import { SERVER_INPUTS, textgen_types, textgenerationwebui_settings } from './textgen-settings.js';
-import { decodeTextTokens, getAvailableTokenizers, getFriendlyTokenizerName, getTextTokens, getTokenCountAsync, selectTokenizer } from './tokenizers.js';
+import { decodeTextTokensAsync, getAvailableTokenizers, getFriendlyTokenizerName, getTextTokensAsync, getTokenCountAsync, selectTokenizer } from './tokenizers.js';
 import { debounce, delay, equalsIgnoreCaseAndAccents, findChar, getCharIndex, isFalseBoolean, isTrueBoolean, onlyUnique, regexFromString, showFontAwesomePicker, stringToRange, trimToEndSentence, trimToStartSentence, waitUntilCondition } from './utils.js';
 import { registerVariableCommands, resolveVariable } from './variables.js';
 import { registerActionLoaderSlashCommands } from './action-loader-slashcommands.js';
@@ -3980,7 +3980,7 @@ async function trimTokensCallback(arg, value) {
     log.tok.debug('Requesting tokenization for /trimtokens command', tokenizerName);
 
     try {
-        const textTokens = getTextTokens(tokenizerId, value);
+        const textTokens = await getTextTokensAsync(tokenizerId, value);
 
         if (!Array.isArray(textTokens) || !textTokens.length) {
             log.tok.warn('WARN: No tokens returned for /trimtokens command, falling back to estimation');
@@ -3991,7 +3991,7 @@ async function trimTokensCallback(arg, value) {
         }
 
         const sliceTokens = direction === 'start' ? textTokens.slice(0, limit) : textTokens.slice(-limit);
-        const { text } = decodeTextTokens(tokenizerId, sliceTokens);
+        const { text } = await decodeTextTokensAsync(tokenizerId, sliceTokens);
         return text;
     } catch (error) {
         log.tok.warn('WARN: Tokenization failed for /trimtokens command, returning original', error);

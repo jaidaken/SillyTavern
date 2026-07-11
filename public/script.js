@@ -3742,7 +3742,7 @@ class StreamingProcessor {
         }
 
         syncMesToSwipe(messageId);
-        saveLogprobsForActiveMessage(this.messageLogprobs.filter(Boolean), this.continueMessage);
+        await saveLogprobsForActiveMessage(this.messageLogprobs.filter(Boolean), this.continueMessage);
 
         if (Array.isArray(this.images) && this.images.length > 0) {
             await processImageAttachment(message, { imageUrls: this.images });
@@ -4019,7 +4019,7 @@ export async function generateRawData({ prompt = '', api = null, instructOverrid
                 break;
             case 'novel': {
                 const novelSettings = novelai_settings[novelai_setting_names[nai_settings.preset_settings_novel]];
-                generateData = getNovelGenerationData(prompt, novelSettings, amount_gen, false, false, null, 'quiet');
+                generateData = await getNovelGenerationData(prompt, novelSettings, amount_gen, false, false, null, 'quiet');
                 TempResponseLength.restore(api);
                 break;
             }
@@ -5245,7 +5245,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         case 'novel': {
             const cfgValues = useCfgPrompt ? { guidanceScale: cfgGuidanceScale } : null;
             const presetSettings = novelai_settings[novelai_setting_names[nai_settings.preset_settings_novel]];
-            generate_data = getNovelGenerationData(finalPrompt, presetSettings, maxLength, isImpersonate, isContinue, cfgValues, type);
+            generate_data = await getNovelGenerationData(finalPrompt, presetSettings, maxLength, isImpersonate, isContinue, cfgValues, type);
             break;
         }
         case 'openai': {
@@ -5501,7 +5501,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             }
 
             // This relies on `saveReply` having been called to add the message to the chat, so it must be last.
-            parseAndSaveLogprobs(data, continue_mag);
+            await parseAndSaveLogprobs(data, continue_mag);
         }
 
         if (canPerformToolCalls) {
@@ -6199,7 +6199,7 @@ function extractImagesFromData(data, { mainApi = null, chatCompletionSource = nu
  * @param {object} data - response data containing all tokens/logprobs
  * @param {string} continueFrom - for 'continue' generations, the prompt
  *  */
-function parseAndSaveLogprobs(data, continueFrom) {
+async function parseAndSaveLogprobs(data, continueFrom) {
     /** @type {import('./scripts/logprobs.js').TokenLogprobs[] | null} */
     let logprobs = null;
 
@@ -6231,7 +6231,7 @@ function parseAndSaveLogprobs(data, continueFrom) {
             return;
     }
 
-    saveLogprobsForActiveMessage(logprobs, continueFrom);
+    await saveLogprobsForActiveMessage(logprobs, continueFrom);
 }
 
 /**

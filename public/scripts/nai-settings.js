@@ -11,7 +11,7 @@ import {
     startStatusLoading,
 } from '../script.js';
 import { MAX_CONTEXT_DEFAULT, MAX_RESPONSE_DEFAULT, power_user } from './power-user.js';
-import { getTextTokens, tokenizers } from './tokenizers.js';
+import { getTextTokensAsync, tokenizers } from './tokenizers.js';
 import { getEventSourceStream } from './sse-stream.js';
 import {
     getSortableDelay,
@@ -432,7 +432,7 @@ const sliders = [
     },
 ];
 
-function getBadWordIds(banned_tokens, tokenizerType) {
+async function getBadWordIds(banned_tokens, tokenizerType) {
     if (tokenizerType === tokenizers.NONE) {
         return [];
     }
@@ -457,7 +457,7 @@ function getBadWordIds(banned_tokens, tokenizerType) {
 
         // Verbatim text
         if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-            const tokens = getTextTokens(tokenizerType, trimmed.slice(1, -1));
+            const tokens = await getTextTokensAsync(tokenizerType, trimmed.slice(1, -1));
             result.push(tokens);
         } else if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
             // Raw token ids, JSON serialized
@@ -474,7 +474,7 @@ function getBadWordIds(banned_tokens, tokenizerType) {
             }
         } else {
             // Apply permutations
-            const permutations = getBadWordPermutations(trimmed).map(t => getTextTokens(tokenizerType, t));
+            const permutations = await Promise.all(getBadWordPermutations(trimmed).map(t => getTextTokensAsync(tokenizerType, t)));
             result.push(...permutations);
         }
     }
@@ -513,7 +513,7 @@ function getBadWordPermutations(text) {
     return result.filter(onlyUnique);
 }
 
-export function getNovelGenerationData(finalPrompt, settings, maxLength, isImpersonate, isContinue, _cfgValues, type) {
+export async function getNovelGenerationData(finalPrompt, settings, maxLength, isImpersonate, isContinue, _cfgValues, type) {
     log.net.debug('NovelAI generation data for', type);
     const isKayra = nai_settings.model_novel.includes('kayra');
     const isErato = nai_settings.model_novel.includes('erato');
@@ -545,18 +545,19 @@ export function getNovelGenerationData(finalPrompt, settings, maxLength, isImper
 
     const MAX_STOP_SEQUENCES = 1024;
     const stopSequences = (tokenizerType !== tokenizers.NONE)
-        ? stoppingStrings.slice(0, MAX_STOP_SEQUENCES).map(t => getTextTokens(tokenizerType, t))
+        ? await Promise.all(stoppingStrings.slice(0, MAX_STOP_SEQUENCES).map(t => getTextTokensAsync(tokenizerType, t)))
         : undefined;
 
     const badWordIds = (tokenizerType !== tokenizers.NONE)
-        ? getBadWordIds(nai_settings.banned_tokens, tokenizerType)
+        ? await getBadWordIds(nai_settings.banned_tokens, tokenizerType)
         : undefined;
 
     const prefix = selectPrefix(nai_settings.prefix, finalPrompt);
 
     let logitBias = [];
     if (tokenizerType !== tokenizers.NONE && Array.isArray(nai_settings.logit_bias) && nai_settings.logit_bias.length) {
-        logitBias = BIAS_CACHE.get(BIAS_KEY) || calculateLogitBias();
+        // Accepted micro-race: a cache delete during this await gets overwritten by the stale set until the next bias/preset edit.
+        logitBias = BIAS_CACHE.get(BIAS_KEY) || await calculateLogitBias();
         BIAS_CACHE.set(BIAS_KEY, logitBias);
     }
 
@@ -679,7 +680,7 @@ function saveSamplingOrder() {
  * Calculates logit bias for Novel AI
  * @returns {object[]} Array of logit bias objects
  */
-function calculateLogitBias() {
+async function calculateLogitBias() {
     const biasPreset = nai_settings.logit_bias;
 
     if (!Array.isArray(biasPreset) || biasPreset.length === 0) {
@@ -702,7 +703,7 @@ function calculateLogitBias() {
         };
     }
 
-    const result = getLogitBiasListResult(biasPreset, tokenizerType, getBiasObject);
+    const result = await getLogitBiasListResult(biasPreset, tokenizerType, getBiasObject);
     return result;
 }
 

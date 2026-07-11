@@ -99,7 +99,7 @@ import { SlashCommandEnumValue } from './slash-commands/SlashCommandEnumValue.js
 import { SlashCommandParser } from './slash-commands/SlashCommandParser.js';
 import { tag_map, tags, importTags } from './tags.js';
 import { getTextGenServer, textgenerationwebui_settings } from './textgen-settings.js';
-import { tokenizers, getTextTokens, getTokenCount, getTokenCountAsync, getTokenizerModel } from './tokenizers.js';
+import { tokenizers, getTextTokens, getTextTokensAsync, decodeTextTokensAsync, getTokenCount, getTokenCountAsync, getTokenizerModel } from './tokenizers.js';
 import { ToolManager } from './tool-calling.js';
 import { accountStorage } from './util/AccountStorage.js';
 import { timestampToMoment, uuidv4, importFromExternalUrl } from './utils.js';
@@ -209,7 +209,10 @@ export function getContext() {
         sendGenerationRequest,
         stopGeneration,
         tokenizers,
+        /** @deprecated Use getTextTokensAsync instead */
         getTextTokens,
+        getTextTokensAsync,
+        decodeTextTokensAsync,
         /** @deprecated Use getTokenCountAsync instead */
         getTokenCount,
         getTokenCountAsync,

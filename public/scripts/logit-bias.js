@@ -1,5 +1,5 @@
 import { saveSettingsDebounced } from '../script.js';
-import { getTextTokens } from './tokenizers.js';
+import { getTextTokensAsync } from './tokenizers.js';
 import { getSortableDelay, uuidv4 } from './utils.js';
 import { log } from './log.js';
 
@@ -100,9 +100,9 @@ function createLogitBiasListItem(entry, logitBias, containerSelector) {
  * @param {object[]} biasPreset Bias preset
  * @param {number} tokenizerType Tokenizer type (see tokenizers.js)
  * @param {(bias: number, sequence: number[]) => object} getBiasObject Transformer function to create bias object
- * @returns {object[]} Array of logit bias objects
+ * @returns {Promise<object[]>} Array of logit bias objects
  */
-export function getLogitBiasListResult(biasPreset, tokenizerType, getBiasObject) {
+export async function getLogitBiasListResult(biasPreset, tokenizerType, getBiasObject) {
     const result = [];
 
     for (const entry of biasPreset) {
@@ -116,7 +116,7 @@ export function getLogitBiasListResult(biasPreset, tokenizerType, getBiasObject)
 
             // Verbatim text
             if (text.startsWith('{') && text.endsWith('}')) {
-                const tokens = getTextTokens(tokenizerType, text.slice(1, -1));
+                const tokens = await getTextTokensAsync(tokenizerType, text.slice(1, -1));
                 result.push(getBiasObject(entry.value, tokens));
             } else if (text.startsWith('[') && text.endsWith(']')) {
                 // Raw token ids, JSON serialized
@@ -134,7 +134,7 @@ export function getLogitBiasListResult(biasPreset, tokenizerType, getBiasObject)
             } else {
                 // Text with a leading space
                 const biasText = ` ${text}`;
-                const tokens = getTextTokens(tokenizerType, biasText);
+                const tokens = await getTextTokensAsync(tokenizerType, biasText);
                 result.push(getBiasObject(entry.value, tokens));
             }
         }

@@ -11,7 +11,7 @@ import {
     substituteParamsExtended,
 } from '../script.js';
 import { debounce, delay, getStringHash } from './utils.js';
-import { decodeTextTokens, getTokenizerBestMatch } from './tokenizers.js';
+import { decodeTextTokensAsync, getTokenizerBestMatch } from './tokenizers.js';
 import { power_user } from './power-user.js';
 import { callGenericPopup, POPUP_TYPE } from './popup.js';
 import { t } from './i18n.js';
@@ -507,27 +507,38 @@ function withVirtualWhitespace(text, span) {
  * @param {TokenLogprobs[]} logprobs - array of logprobs data for each token
  * @param {string | null} continueFrom  - for 'continue' generations, the prompt
  */
-export function saveLogprobsForActiveMessage(logprobs, continueFrom) {
+export async function saveLogprobsForActiveMessage(logprobs, continueFrom) {
     if (!logprobs) {
         // non-streaming APIs could return null data
         return;
     }
 
+    // Capture the message index before any await so a chat mutation mid-decode can't retarget the data
+    const msgId = chat.length - 1;
+
     // NovelAI only returns token IDs in logprobs data; convert to text tokens in-place
     if (getGeneratingApi() === 'novel') {
-        convertTokenIdLogprobsToText(logprobs);
+        try {
+            await convertTokenIdLogprobsToText(logprobs);
+        } catch (error) {
+            log.gen.warn('Failed to decode logprobs token IDs', error);
+        }
+    }
+    const message = chat[msgId];
+    if (!message) {
+        // Message was deleted while token IDs were being decoded
+        return;
     }
 
-    const msgId = chat.length - 1;
     /** @type {MessageLogprobData} */
     const data = {
         created: new Date().getTime(),
         api: getGeneratingApi(),
         messageId: msgId,
-        swipeId: chat[msgId].swipe_id,
+        swipeId: message.swipe_id,
         messageLogprobs: logprobs,
         continueFrom,
-        hash: getMessageHash(chat[msgId]),
+        hash: getMessageHash(message),
     };
 
     state.messageLogprobs.set(data.hash, data);
@@ -573,7 +584,7 @@ function getActiveMessageLogprobData() {
  *
  * @param {TokenLogprobs[]} input - logprobs data with numeric token IDs
  */
-function convertTokenIdLogprobsToText(input) {
+async function convertTokenIdLogprobsToText(input) {
     const api = getGeneratingApi();
     if (api !== 'novel') {
         // should have been checked by the caller
@@ -589,7 +600,7 @@ function convertTokenIdLogprobsToText(input) {
 
     // Submit token IDs to tokenizer to get token text, then build ID->text map
     // noinspection JSCheckFunctionSignatures - mutates input in-place
-    const { chunks } = decodeTextTokens(tokenizerId, tokenIds);
+    const { chunks } = await decodeTextTokensAsync(tokenizerId, tokenIds);
     const tokenIdText = new Map(tokenIds.map((id, i) => [id, chunks[i]]));
 
     // Fixup logprobs data with token text
