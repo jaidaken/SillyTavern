@@ -66,9 +66,9 @@ router.post('/synthesize', async (req, res) => {
         const pipe = await getPipeline(TASK, model);
         const speaker_embeddings = speaker
             ? new Float32Array(new Uint8Array(Buffer.from(speaker.startsWith('data:') ? speaker.split(',')[1] : speaker, 'base64')).buffer)
-            : null;
+            : undefined;
         const start = performance.now();
-        const result = await pipe(text, { speaker_embeddings: speaker_embeddings });
+        const result = await pipe(/** @type {string} */ (text), { speaker_embeddings: speaker_embeddings });
         const end = performance.now();
         log.tts.debug(`Execution duration: ${(end - start) / 1000} seconds`);
 

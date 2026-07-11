@@ -11,47 +11,62 @@ import { log } from './log.js';
 configureTransformers();
 
 function configureTransformers() {
+    const wasmEnv = env.backends?.onnx?.wasm;
+    if (!wasmEnv) {
+        log.tok.warn('onnxruntime-web WASM env is unavailable; skipping thread/path configuration.');
+        return;
+    }
     // Limit the number of threads to 1 to avoid issues on Android
-    env.backends.onnx.wasm.numThreads = 1;
+    wasmEnv.numThreads = 1;
     // Local WASM (no CDN). transformers ships .wasm in a nested onnxruntime-web; Nix may hoist it,
     // so use whichever of the nested or top-level dist actually exists.
     const wasmCandidates = [
         path.join(serverDirectory, 'node_modules', '@huggingface', 'transformers', 'node_modules', 'onnxruntime-web', 'dist'),
         path.join(serverDirectory, 'node_modules', 'onnxruntime-web', 'dist'),
     ];
-    env.backends.onnx.wasm.wasmPaths = (wasmCandidates.find(d => fs.existsSync(d)) ?? wasmCandidates[0]) + path.sep;
+    wasmEnv.wasmPaths = (wasmCandidates.find(d => fs.existsSync(d)) ?? wasmCandidates[0]) + path.sep;
 }
 
+/**
+ * @typedef {object} TaskDefinition
+ * @property {string} defaultModel Model to use when config specifies none
+ * @property {any} pipeline Cached pipeline instance for the task
+ * @property {string} configField config.yaml path for the model override
+ * @property {import('@huggingface/transformers').DataType} dtype Model weights variant to load
+ * @property {string} [currentModel] Model the cached pipeline was created with
+ */
+
+/** @type {Record<string, TaskDefinition>} */
 const tasks = {
     'text-classification': {
         defaultModel: 'Cohee/distilbert-base-uncased-go-emotions-onnx',
         pipeline: null,
         configField: 'extensions.models.classification',
-        quantized: true,
+        dtype: 'q8',
     },
     'image-to-text': {
         defaultModel: 'Xenova/vit-gpt2-image-captioning',
         pipeline: null,
         configField: 'extensions.models.captioning',
-        quantized: true,
+        dtype: 'q8',
     },
     'feature-extraction': {
         defaultModel: 'Xenova/all-mpnet-base-v2',
         pipeline: null,
         configField: 'extensions.models.embedding',
-        quantized: true,
+        dtype: 'q8',
     },
     'automatic-speech-recognition': {
         defaultModel: 'Xenova/whisper-small',
         pipeline: null,
         configField: 'extensions.models.speechToText',
-        quantized: true,
+        dtype: 'q8',
     },
     'text-to-speech': {
         defaultModel: 'Xenova/speecht5_tts',
         pipeline: null,
         configField: 'extensions.models.textToSpeech',
-        quantized: false,
+        dtype: 'fp32',
     },
 };
 
@@ -122,9 +137,10 @@ async function migrateCacheToDataDir() {
 
 /**
  * Gets the transformers.js pipeline for a given task.
- * @param {import('@huggingface/transformers').PipelineType} task The task to get the pipeline for
+ * @template {import('@huggingface/transformers').PipelineType} T
+ * @param {T} task The task to get the pipeline for
  * @param {string} forceModel The model to use for the pipeline, if any
- * @returns {Promise<import('@huggingface/transformers').Pipeline>} The transformers.js pipeline
+ * @returns {Promise<import('@huggingface/transformers').AllTasks[T]>} The transformers.js pipeline
  */
 export async function getPipeline(task, forceModel = '') {
     await migrateCacheToDataDir();
@@ -141,10 +157,9 @@ export async function getPipeline(task, forceModel = '') {
     const model = forceModel || getModelForTask(task);
     const localOnly = !getConfigValue('extensions.models.autoDownload', true, 'boolean');
     log.tok.info('Initializing transformers.js pipeline for task', task, 'with model', model);
-    const instance = await pipeline(task, model, { cache_dir: cacheDir, quantized: tasks[task].quantized ?? true, local_files_only: localOnly });
+    const instance = await pipeline(task, model, { cache_dir: cacheDir, dtype: tasks[task].dtype ?? 'q8', local_files_only: localOnly });
     tasks[task].pipeline = instance;
     tasks[task].currentModel = model;
-    // @ts-ignore
     return instance;
 }
 

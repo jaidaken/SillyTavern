@@ -1,6 +1,6 @@
 {
     "typescriptVersion": "7.0.2",
-    "total": 502,
+    "total": 497,
     "errors": [
         {
             "file": "plugins.js",
@@ -120,36 +120,6 @@
             "file": "src/endpoints/backends/kobold.js",
             "code": "TS2339",
             "message": "Property 'status' does not exist on type '{}'.",
-            "count": 1
-        },
-        {
-            "file": "src/endpoints/backends/text-completions.js",
-            "code": "TS2339",
-            "message": "Property 'code' does not exist on type '{}'.",
-            "count": 1
-        },
-        {
-            "file": "src/endpoints/backends/text-completions.js",
-            "code": "TS2339",
-            "message": "Property 'error' does not exist on type '{}'.",
-            "count": 1
-        },
-        {
-            "file": "src/endpoints/backends/text-completions.js",
-            "code": "TS2339",
-            "message": "Property 'message' does not exist on type '{}'.",
-            "count": 1
-        },
-        {
-            "file": "src/endpoints/backends/text-completions.js",
-            "code": "TS2339",
-            "message": "Property 'status' does not exist on type '{}'.",
-            "count": 1
-        },
-        {
-            "file": "src/endpoints/backends/text-completions.js",
-            "code": "TS2339",
-            "message": "Property 'statusText' does not exist on type '{}'.",
             "count": 1
         },
         {

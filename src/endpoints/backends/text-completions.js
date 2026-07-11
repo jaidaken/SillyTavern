@@ -226,7 +226,7 @@ router.post('/status', async function (request, response) {
         }
 
         return response.send({ result, data: data.data });
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
         // An unreachable backend is not a server error; report it as a clean 200 status so the
         // client shows "not connected" without a red 500 filling the console on every poll.
         const code = error?.cause?.code ?? error?.code;
@@ -436,7 +436,7 @@ router.post('/generate', async function (request, response) {
                     : response.end();
             }
         }
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
         const status = error?.status ?? error?.code ?? 'UNKNOWN';
         const text = error?.error ?? error?.statusText ?? error?.message ?? 'Unknown error on /generate endpoint';
         let value = { error: true, status: status, response: text };
