@@ -4,7 +4,7 @@ import path from 'node:path';
 import express from 'express';
 import fetch from 'node-fetch';
 import sanitize from 'sanitize-filename';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import writeFileAtomic from 'write-file-atomic';
 import urlJoin from 'url-join';
 import _ from 'lodash';
 import mime from 'mime-types';
@@ -18,11 +18,10 @@ import { log } from '../log.js';
 /**
  * Gets the comfy workflows.
  * @param {import('../users.js').UserDirectoryList} directories
- * @returns {string[]} List of comfy workflows
+ * @returns {Promise<string[]>} List of comfy workflows
  */
-function getComfyWorkflows(directories) {
-    return fs
-        .readdirSync(directories.comfyWorkflows)
+async function getComfyWorkflows(directories) {
+    return (await fs.promises.readdir(directories.comfyWorkflows))
         .filter(file => file[0] !== '.' && file.toLowerCase().endsWith('.json'))
         .sort(Intl.Collator().compare);
 }
@@ -485,7 +484,7 @@ comfy.post('/vaes', async (request, response) => {
 
 comfy.post('/workflows', async (request, response) => {
     try {
-        const data = getComfyWorkflows(request.user.directories);
+        const data = await getComfyWorkflows(request.user.directories);
         return response.send(data);
     } catch (error) {
         log.media.error(error);
@@ -496,10 +495,11 @@ comfy.post('/workflows', async (request, response) => {
 comfy.post('/workflow', async (request, response) => {
     try {
         let filePath = path.join(request.user.directories.comfyWorkflows, sanitize(String(request.body.file_name)));
-        if (!fs.existsSync(filePath)) {
+        const fileStat = await fs.promises.stat(filePath).catch(() => null);
+        if (!fileStat) {
             filePath = path.join(request.user.directories.comfyWorkflows, 'Default_Comfy_Workflow.json');
         }
-        const data = fs.readFileSync(filePath, { encoding: 'utf-8' });
+        const data = await fs.promises.readFile(filePath, { encoding: 'utf-8' });
         return response.send(JSON.stringify(data));
     } catch (error) {
         log.media.error(error);
@@ -510,8 +510,8 @@ comfy.post('/workflow', async (request, response) => {
 comfy.post('/save-workflow', async (request, response) => {
     try {
         const filePath = path.join(request.user.directories.comfyWorkflows, sanitize(String(request.body.file_name)));
-        writeFileAtomicSync(filePath, request.body.workflow, 'utf8');
-        const data = getComfyWorkflows(request.user.directories);
+        await writeFileAtomic(filePath, request.body.workflow, 'utf8');
+        const data = await getComfyWorkflows(request.user.directories);
         return response.send(data);
     } catch (error) {
         log.media.error(error);
@@ -522,9 +522,7 @@ comfy.post('/save-workflow', async (request, response) => {
 comfy.post('/delete-workflow', async (request, response) => {
     try {
         const filePath = path.join(request.user.directories.comfyWorkflows, sanitize(String(request.body.file_name)));
-        if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-        }
+        await fs.promises.rm(filePath, { force: true });
         return response.sendStatus(200);
     } catch (error) {
         log.media.error(error);
@@ -544,15 +542,17 @@ comfy.post('/rename-workflow', getFileNameValidationFunction('old_name'), getFil
         const oldPath = path.join(request.user.directories.comfyWorkflows, oldName);
         const newPath = path.join(request.user.directories.comfyWorkflows, newName);
 
-        if (!fs.existsSync(oldPath)) {
+        const oldStat = await fs.promises.stat(oldPath).catch(() => null);
+        if (!oldStat) {
             return response.status(404).send('Workflow not found');
         }
 
-        if (fs.existsSync(newPath)) {
+        const newStat = await fs.promises.stat(newPath).catch(() => null);
+        if (newStat) {
             return response.status(409).send('A workflow with that name already exists');
         }
 
-        fs.renameSync(oldPath, newPath);
+        await fs.promises.rename(oldPath, newPath);
         return response.sendStatus(204);
     } catch (error) {
         log.media.error('ComfyUI workflow rename failed', error);

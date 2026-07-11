@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import express from 'express';
 import _ from 'lodash';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import writeFileAtomic from 'write-file-atomic';
 import bytes from 'bytes';
 
 import { SETTINGS_FILE } from '../constants.js';
@@ -36,7 +36,7 @@ const AUTOSAVE_FUNCTIONS = new Map();
  */
 function triggerAutoSave(handle) {
     if (!AUTOSAVE_FUNCTIONS.has(handle)) {
-        const throttledAutoSave = _.throttle(() => backupUserSettings(handle, true), AUTOSAVE_INTERVAL);
+        const throttledAutoSave = _.throttle(() => backupUserSettings(handle, true).catch(err => log.settings.error('Could not backup settings file', err)), AUTOSAVE_INTERVAL);
         AUTOSAVE_FUNCTIONS.set(handle, throttledAutoSave);
     }
 
@@ -50,24 +50,23 @@ function triggerAutoSave(handle) {
  * Reads and parses files from a directory.
  * @param {string} directoryPath Path to the directory
  * @param {string} fileExtension File extension
- * @returns {Array} Parsed files
+ * @returns {Promise<Array>} Parsed files
  */
-function readAndParseFromDirectory(directoryPath, fileExtension = '.json') {
-    const files = fs
-        .readdirSync(directoryPath)
+async function readAndParseFromDirectory(directoryPath, fileExtension = '.json') {
+    const files = (await fs.promises.readdir(directoryPath))
         .filter(x => path.parse(x).ext == fileExtension)
         .sort();
 
     const parsedFiles = [];
 
-    files.forEach(item => {
+    for (const item of files) {
         try {
-            const file = fs.readFileSync(path.join(directoryPath, item), 'utf-8');
+            const file = await fs.promises.readFile(path.join(directoryPath, item), 'utf-8');
             parsedFiles.push(fileExtension == '.json' ? JSON.parse(file) : file);
         } catch {
             // skip
         }
-    });
+    }
 
     return parsedFiles;
 }
@@ -90,20 +89,20 @@ export function getSettingsBackupFilePrefix(handle) {
     return `settings_${handle}_`;
 }
 
-function readPresetsFromDirectory(directoryPath, options = {}) {
+async function readPresetsFromDirectory(directoryPath, options = {}) {
     const {
         sortFunction,
         removeFileExtension = false,
         fileExtension = '.json',
     } = options;
 
-    const files = fs.readdirSync(directoryPath).sort(sortFunction).filter(x => path.parse(x).ext == fileExtension);
+    const files = (await fs.promises.readdir(directoryPath)).sort(sortFunction).filter(x => path.parse(x).ext == fileExtension);
     const fileContents = [];
     const fileNames = [];
 
-    files.forEach(item => {
+    for (const item of files) {
         try {
-            const file = fs.readFileSync(path.join(directoryPath, item), 'utf8');
+            const file = await fs.promises.readFile(path.join(directoryPath, item), 'utf8');
             JSON.parse(file);
             fileContents.push(file);
             fileNames.push(removeFileExtension ? item.replace(/\.[^/.]+$/, '') : item);
@@ -111,7 +110,7 @@ function readPresetsFromDirectory(directoryPath, options = {}) {
             // skip
             log.settings.warn(`${item} is not a valid JSON`);
         }
-    });
+    }
 
     return { fileContents, fileNames };
 }
@@ -121,7 +120,7 @@ async function backupSettings() {
         const userHandles = await getAllUserHandles();
 
         for (const handle of userHandles) {
-            backupUserSettings(handle, true);
+            await backupUserSettings(handle, true);
         }
     } catch (err) {
         log.settings.error('Could not backup settings file', err);
@@ -132,27 +131,29 @@ async function backupSettings() {
  * Makes a backup of the user's settings file.
  * @param {string} handle User handle
  * @param {boolean} preventDuplicates Prevent duplicate backups
- * @returns {void}
+ * @returns {Promise<void>}
  */
-function backupUserSettings(handle, preventDuplicates) {
+async function backupUserSettings(handle, preventDuplicates) {
     const userDirectories = getUserDirectories(handle);
 
-    if (!fs.existsSync(userDirectories.root)) {
+    const rootStat = await fs.promises.stat(userDirectories.root).catch(() => null);
+    if (!rootStat) {
         return;
     }
 
     const backupFile = path.join(userDirectories.backups, `${getSettingsBackupFilePrefix(handle)}${generateTimestamp()}.json`);
     const sourceFile = path.join(userDirectories.root, SETTINGS_FILE);
 
-    if (preventDuplicates && isDuplicateBackup(handle, sourceFile)) {
+    if (preventDuplicates && await isDuplicateBackup(handle, sourceFile)) {
         return;
     }
 
-    if (!fs.existsSync(sourceFile)) {
+    const sourceStat = await fs.promises.stat(sourceFile).catch(() => null);
+    if (!sourceStat) {
         return;
     }
 
-    fs.copyFileSync(sourceFile, backupFile);
+    await fs.promises.copyFile(sourceFile, backupFile);
     removeOldBackups(userDirectories.backups, `settings_${handle}`);
 }
 
@@ -160,10 +161,10 @@ function backupUserSettings(handle, preventDuplicates) {
  * Checks if the backup would be a duplicate.
  * @param {string} handle User handle
  * @param {string} sourceFile Source file path
- * @returns {boolean} True if the backup is a duplicate
+ * @returns {Promise<boolean>} True if the backup is a duplicate
  */
-function isDuplicateBackup(handle, sourceFile) {
-    const latestBackup = getLatestBackup(handle);
+async function isDuplicateBackup(handle, sourceFile) {
+    const latestBackup = await getLatestBackup(handle);
     if (!latestBackup) {
         return false;
     }
@@ -174,27 +175,34 @@ function isDuplicateBackup(handle, sourceFile) {
  * Returns true if the two files are equal.
  * @param {string} file1 File path
  * @param {string} file2 File path
+ * @returns {Promise<boolean>}
  */
-function areFilesEqual(file1, file2) {
-    if (!fs.existsSync(file1) || !fs.existsSync(file2)) {
+async function areFilesEqual(file1, file2) {
+    const stat1 = await fs.promises.stat(file1).catch(() => null);
+    const stat2 = await fs.promises.stat(file2).catch(() => null);
+    if (!stat1 || !stat2) {
         return false;
     }
 
-    const content1 = fs.readFileSync(file1);
-    const content2 = fs.readFileSync(file2);
+    const content1 = await fs.promises.readFile(file1);
+    const content2 = await fs.promises.readFile(file2);
     return content1.toString() === content2.toString();
 }
 
 /**
  * Gets the latest backup file for a user.
  * @param {string} handle User handle
- * @returns {string|null} Latest backup file. Null if no backup exists.
+ * @returns {Promise<string|null>} Latest backup file. Null if no backup exists.
  */
-function getLatestBackup(handle) {
+async function getLatestBackup(handle) {
     const userDirectories = getUserDirectories(handle);
-    const backupFiles = fs.readdirSync(userDirectories.backups)
-        .filter(x => x.startsWith(getSettingsBackupFilePrefix(handle)))
-        .map(x => ({ name: x, ctime: fs.statSync(path.join(userDirectories.backups, x)).ctimeMs }));
+    const backupFileNames = (await fs.promises.readdir(userDirectories.backups))
+        .filter(x => x.startsWith(getSettingsBackupFilePrefix(handle)));
+    const backupFiles = [];
+    for (const name of backupFileNames) {
+        const stat = await fs.promises.stat(path.join(userDirectories.backups, name));
+        backupFiles.push({ name, ctime: stat.ctimeMs });
+    }
     const latestBackup = backupFiles.sort((a, b) => b.ctime - a.ctime)[0]?.name;
     if (!latestBackup) {
         return null;
@@ -204,10 +212,10 @@ function getLatestBackup(handle) {
 
 export const router = express.Router();
 
-router.post('/save', function (request, response) {
+router.post('/save', async function (request, response) {
     try {
         const pathToSettings = path.join(request.user.directories.root, SETTINGS_FILE);
-        writeFileAtomicSync(pathToSettings, JSON.stringify(request.body, null, 4), 'utf8');
+        await writeFileAtomic(pathToSettings, JSON.stringify(request.body, null, 4), 'utf8');
         triggerAutoSave(request.user.profile.handle);
         response.send({ result: 'ok' });
     } catch (err) {
@@ -217,54 +225,53 @@ router.post('/save', function (request, response) {
 });
 
 // Wintermute's code
-router.post('/get', (request, response) => {
+router.post('/get', async (request, response) => {
     let settings;
     try {
         const pathToSettings = path.join(request.user.directories.root, SETTINGS_FILE);
-        settings = fs.readFileSync(pathToSettings, 'utf8');
+        settings = await fs.promises.readFile(pathToSettings, 'utf8');
     } catch (e) {
         return response.sendStatus(500);
     }
 
     // NovelAI Settings
     const { fileContents: novelai_settings, fileNames: novelai_setting_names }
-        = readPresetsFromDirectory(request.user.directories.novelAI_Settings, {
+        = await readPresetsFromDirectory(request.user.directories.novelAI_Settings, {
             sortFunction: sortByName(request.user.directories.novelAI_Settings),
             removeFileExtension: true,
         });
 
     // OpenAI Settings
     const { fileContents: openai_settings, fileNames: openai_setting_names }
-        = readPresetsFromDirectory(request.user.directories.openAI_Settings, {
+        = await readPresetsFromDirectory(request.user.directories.openAI_Settings, {
             sortFunction: sortByName(request.user.directories.openAI_Settings), removeFileExtension: true,
         });
 
     // TextGenerationWebUI Settings
     const { fileContents: textgenerationwebui_presets, fileNames: textgenerationwebui_preset_names }
-        = readPresetsFromDirectory(request.user.directories.textGen_Settings, {
+        = await readPresetsFromDirectory(request.user.directories.textGen_Settings, {
             sortFunction: sortByName(request.user.directories.textGen_Settings), removeFileExtension: true,
         });
 
     //Kobold
     const { fileContents: koboldai_settings, fileNames: koboldai_setting_names }
-        = readPresetsFromDirectory(request.user.directories.koboldAI_Settings, {
+        = await readPresetsFromDirectory(request.user.directories.koboldAI_Settings, {
             sortFunction: sortByName(request.user.directories.koboldAI_Settings), removeFileExtension: true,
         });
 
-    const worldFiles = fs
-        .readdirSync(request.user.directories.worlds)
+    const worldFiles = (await fs.promises.readdir(request.user.directories.worlds))
         .filter(file => path.extname(file).toLowerCase() === '.json')
         .sort((a, b) => a.localeCompare(b));
     const world_names = worldFiles.map(item => path.parse(item).name);
 
-    const themes = readAndParseFromDirectory(request.user.directories.themes);
-    const movingUIPresets = readAndParseFromDirectory(request.user.directories.movingUI);
-    const quickReplyPresets = readAndParseFromDirectory(request.user.directories.quickreplies);
+    const themes = await readAndParseFromDirectory(request.user.directories.themes);
+    const movingUIPresets = await readAndParseFromDirectory(request.user.directories.movingUI);
+    const quickReplyPresets = await readAndParseFromDirectory(request.user.directories.quickreplies);
 
-    const instruct = readAndParseFromDirectory(request.user.directories.instruct);
-    const context = readAndParseFromDirectory(request.user.directories.context);
-    const sysprompt = readAndParseFromDirectory(request.user.directories.sysprompt);
-    const reasoning = readAndParseFromDirectory(request.user.directories.reasoning);
+    const instruct = await readAndParseFromDirectory(request.user.directories.instruct);
+    const context = await readAndParseFromDirectory(request.user.directories.context);
+    const sysprompt = await readAndParseFromDirectory(request.user.directories.sysprompt);
+    const reasoning = await readAndParseFromDirectory(request.user.directories.reasoning);
 
     response.send({
         settings,
@@ -298,14 +305,15 @@ router.post('/get', (request, response) => {
 
 router.post('/get-snapshots', async (request, response) => {
     try {
-        const snapshots = fs.readdirSync(request.user.directories.backups);
+        const snapshots = await fs.promises.readdir(request.user.directories.backups);
         const userFilesPattern = getSettingsBackupFilePrefix(request.user.profile.handle);
         const userSnapshots = snapshots.filter(x => x.startsWith(userFilesPattern));
 
-        const result = userSnapshots.map(x => {
-            const stat = fs.statSync(path.join(request.user.directories.backups, x));
-            return { date: stat.ctimeMs, name: x, size: stat.size };
-        });
+        const result = [];
+        for (const x of userSnapshots) {
+            const stat = await fs.promises.stat(path.join(request.user.directories.backups, x));
+            result.push({ date: stat.ctimeMs, name: x, size: stat.size });
+        }
 
         response.json(result);
     } catch (error) {
@@ -325,11 +333,12 @@ router.post('/load-snapshot', getFileNameValidationFunction('name'), async (requ
         const snapshotName = request.body.name;
         const snapshotPath = path.join(request.user.directories.backups, snapshotName);
 
-        if (!fs.existsSync(snapshotPath)) {
+        const snapshotStat = await fs.promises.stat(snapshotPath).catch(() => null);
+        if (!snapshotStat) {
             return response.sendStatus(404);
         }
 
-        const content = fs.readFileSync(snapshotPath, 'utf8');
+        const content = await fs.promises.readFile(snapshotPath, 'utf8');
 
         response.send(content);
     } catch (error) {
@@ -340,7 +349,7 @@ router.post('/load-snapshot', getFileNameValidationFunction('name'), async (requ
 
 router.post('/make-snapshot', async (request, response) => {
     try {
-        backupUserSettings(request.user.profile.handle, false);
+        await backupUserSettings(request.user.profile.handle, false);
         response.sendStatus(204);
     } catch (error) {
         log.settings.error(error);
@@ -359,13 +368,14 @@ router.post('/restore-snapshot', getFileNameValidationFunction('name'), async (r
         const snapshotName = request.body.name;
         const snapshotPath = path.join(request.user.directories.backups, snapshotName);
 
-        if (!fs.existsSync(snapshotPath)) {
+        const snapshotStat = await fs.promises.stat(snapshotPath).catch(() => null);
+        if (!snapshotStat) {
             return response.sendStatus(404);
         }
 
         const pathToSettings = path.join(request.user.directories.root, SETTINGS_FILE);
-        fs.rmSync(pathToSettings, { force: true });
-        fs.copyFileSync(snapshotPath, pathToSettings);
+        await fs.promises.rm(pathToSettings, { force: true });
+        await fs.promises.copyFile(snapshotPath, pathToSettings);
 
         response.sendStatus(204);
     } catch (error) {

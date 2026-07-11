@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 
 import express from 'express';
 import fetch from 'node-fetch';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import writeFileAtomic from 'write-file-atomic';
 
 import { Tokenizer } from '@agnai/web-tokenizers';
 import { SentencePieceProcessor } from '@agnai/sentencepiece-js';
@@ -97,25 +97,25 @@ async function getPathToTokenizer(model, fallbackModel) {
         }
 
         const CACHE_PATH = path.join(globalThis.DATA_ROOT, '_cache');
-        if (!fs.existsSync(CACHE_PATH)) {
-            fs.mkdirSync(CACHE_PATH, { recursive: true });
-        }
+        await fs.promises.mkdir(CACHE_PATH, { recursive: true });
 
         // If an uncompressed version exists, return it
         const isCompressed = path.extname(fileName) === '.gz';
         const uncompressedName = path.basename(fileName, '.gz');
         const uncompressedPath = path.join(CACHE_PATH, uncompressedName);
-        if (isCompressed && fs.existsSync(uncompressedPath)) {
+        const uncompressedStat = isCompressed ? await fs.promises.stat(uncompressedPath).catch(() => null) : null;
+        if (isCompressed && uncompressedStat) {
             return uncompressedPath;
         }
 
         const cachedFile = path.join(CACHE_PATH, fileName);
-        if (fs.existsSync(cachedFile)) {
+        const cachedStat = await fs.promises.stat(cachedFile).catch(() => null);
+        if (cachedStat) {
             // If the file was downloaded manually
             if (isCompressed) {
                 const compressedBuffer = await fs.promises.readFile(cachedFile);
                 const decompressedBuffer = await gunzip(compressedBuffer);
-                writeFileAtomicSync(uncompressedPath, decompressedBuffer);
+                await writeFileAtomic(uncompressedPath, decompressedBuffer);
                 await fs.promises.unlink(cachedFile);
                 return uncompressedPath;
             }
@@ -135,11 +135,11 @@ async function getPathToTokenizer(model, fallbackModel) {
         const arrayBuffer = await response.arrayBuffer();
         if (isCompressed) {
             const decompressedBuffer = await gunzip(arrayBuffer);
-            writeFileAtomicSync(uncompressedPath, decompressedBuffer);
+            await writeFileAtomic(uncompressedPath, decompressedBuffer);
             return uncompressedPath;
         }
 
-        writeFileAtomicSync(cachedFile, Buffer.from(arrayBuffer));
+        await writeFileAtomic(cachedFile, Buffer.from(arrayBuffer));
         return cachedFile;
     } catch (error) {
         const getLastSegment = str => str?.split('/')?.pop() || '';

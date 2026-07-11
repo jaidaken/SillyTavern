@@ -855,7 +855,7 @@ function createTranscribeHandler({ secretKey, apiUrl, providerName }) {
                 return response.status(500).send(text);
             }
 
-            fs.unlinkSync(request.file.path);
+            await fs.promises.unlink(request.file.path);
             const data = await result.json();
             log.net.debug(`${providerName} transcription response`, data);
             return response.json(data);
@@ -905,7 +905,7 @@ router.post('/chutes/transcribe-audio', async (request, response) => {
         }
 
         log.net.info('Processing audio file with Chutes', request.file.path);
-        const audioBase64 = fs.readFileSync(request.file.path).toString('base64');
+        const audioBase64 = (await fs.promises.readFile(request.file.path)).toString('base64');
 
         const result = await fetch(`https://${request.body.model}.chutes.ai/transcribe`, {
             method: 'POST',
@@ -924,7 +924,7 @@ router.post('/chutes/transcribe-audio', async (request, response) => {
             return response.status(500).send(text);
         }
 
-        fs.unlinkSync(request.file.path);
+        await fs.promises.unlink(request.file.path);
         const data = await result.json();
         log.net.debug('Chutes transcription response', data);
 

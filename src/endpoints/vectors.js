@@ -590,7 +590,8 @@ router.post('/purge-all', async (req, res) => {
     try {
         for (const source of SOURCES) {
             const sourcePath = path.join(req.user.directories.vectors, sanitize(source));
-            if (!fs.existsSync(sourcePath)) {
+            const sourceStat = await fs.promises.stat(sourcePath).catch(() => null);
+            if (!sourceStat) {
                 continue;
             }
             await fs.promises.rm(sourcePath, { recursive: true });
@@ -614,7 +615,8 @@ router.post('/purge', async (req, res) => {
 
         for (const source of SOURCES) {
             const sourcePath = path.join(req.user.directories.vectors, sanitize(source), sanitize(collectionId));
-            if (!fs.existsSync(sourcePath)) {
+            const sourceStat = await fs.promises.stat(sourcePath).catch(() => null);
+            if (!sourceStat) {
                 continue;
             }
             await fs.promises.rm(sourcePath, { recursive: true });

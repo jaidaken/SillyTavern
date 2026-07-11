@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import writeFileAtomic from 'write-file-atomic';
 
 import { getDefaultPresetFile, getDefaultPresets } from './content-manager.js';
 import { log } from '../log.js';
@@ -40,7 +40,7 @@ function getPresetSettingsByAPI(apiId, directories) {
 
 export const router = express.Router();
 
-router.post('/save', function (request, response) {
+router.post('/save', async function (request, response) {
     const name = sanitize(request.body.name);
     if (!request.body.preset || !name) {
         return response.sendStatus(400);
@@ -54,11 +54,11 @@ router.post('/save', function (request, response) {
     }
 
     const fullpath = path.join(settings.folder, filename);
-    writeFileAtomicSync(fullpath, JSON.stringify(request.body.preset, null, 4), 'utf-8');
+    await writeFileAtomic(fullpath, JSON.stringify(request.body.preset, null, 4), 'utf-8');
     return response.send({ name });
 });
 
-router.post('/delete', function (request, response) {
+router.post('/delete', async function (request, response) {
     if (!request.body.name) {
         return response.sendStatus(400);
     }
@@ -77,11 +77,14 @@ router.post('/delete', function (request, response) {
 
     const fullpath = path.join(settings.folder, filename);
 
-    if (fs.existsSync(fullpath)) {
-        fs.unlinkSync(fullpath);
+    try {
+        await fs.promises.unlink(fullpath);
         return response.sendStatus(200);
-    } else {
-        return response.sendStatus(404);
+    } catch (error) {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+            return response.sendStatus(404);
+        }
+        throw error;
     }
 });
 

@@ -420,7 +420,7 @@ elevenlabs.post('/recognize', async (req, res) => {
             return res.sendStatus(500);
         }
 
-        fs.unlinkSync(req.file.path);
+        await fs.promises.unlink(req.file.path);
         const responseJson = await response.json();
         log.tts.debug('ElevenLabs speech recognition response:', responseJson);
         return res.json(responseJson);

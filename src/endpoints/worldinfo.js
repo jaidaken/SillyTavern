@@ -4,7 +4,7 @@ import path from 'node:path';
 import express from 'express';
 import sanitize from 'sanitize-filename';
 import _ from 'lodash';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import writeFileAtomic from 'write-file-atomic';
 import { tryParse } from '../util.js';
 import { log } from '../log.js';
 
@@ -79,7 +79,7 @@ router.post('/get', (request, response) => {
     return response.send(file);
 });
 
-router.post('/delete', (request, response) => {
+router.post('/delete', async (request, response) => {
     if (!request.body?.name) {
         return response.sendStatus(400);
     }
@@ -88,16 +88,17 @@ router.post('/delete', (request, response) => {
     const filename = sanitize(`${worldInfoName}.json`);
     const pathToWorldInfo = path.join(request.user.directories.worlds, filename);
 
-    if (!fs.existsSync(pathToWorldInfo)) {
+    const worldInfoStat = await fs.promises.stat(pathToWorldInfo).catch(() => null);
+    if (!worldInfoStat) {
         throw new Error(`World info file ${filename} doesn't exist.`);
     }
 
-    fs.unlinkSync(pathToWorldInfo);
+    await fs.promises.unlink(pathToWorldInfo);
 
     return response.sendStatus(200);
 });
 
-router.post('/import', (request, response) => {
+router.post('/import', async (request, response) => {
     if (!request.file) return response.sendStatus(400);
 
     const filename = `${path.parse(sanitize(request.file.originalname)).name}.json`;
@@ -108,8 +109,8 @@ router.post('/import', (request, response) => {
         fileContents = request.body.convertedData;
     } else {
         const pathToUpload = path.join(request.file.destination, request.file.filename);
-        fileContents = fs.readFileSync(pathToUpload, 'utf8');
-        fs.unlinkSync(pathToUpload);
+        fileContents = await fs.promises.readFile(pathToUpload, 'utf8');
+        await fs.promises.unlink(pathToUpload);
     }
 
     try {
@@ -128,11 +129,11 @@ router.post('/import', (request, response) => {
         return response.status(400).send('World file must have a name');
     }
 
-    writeFileAtomicSync(pathToNewFile, fileContents);
+    await writeFileAtomic(pathToNewFile, fileContents);
     return response.send({ name: worldName });
 });
 
-router.post('/edit', (request, response) => {
+router.post('/edit', async (request, response) => {
     if (!request.body) {
         return response.sendStatus(400);
     }
@@ -152,7 +153,7 @@ router.post('/edit', (request, response) => {
     const filename = sanitize(`${request.body.name}.json`);
     const pathToFile = path.join(request.user.directories.worlds, filename);
 
-    writeFileAtomicSync(pathToFile, JSON.stringify(request.body.data, null, 4));
+    await writeFileAtomic(pathToFile, JSON.stringify(request.body.data, null, 4));
 
     return response.send({ ok: true });
 });
