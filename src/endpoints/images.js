@@ -15,13 +15,13 @@ import { log } from '../log.js';
  *
  * @param {string} filePath - The full path of the file for which the directory should be ensured.
  */
-function ensureDirectoryExistence(filePath) {
+async function ensureDirectoryExistence(filePath) {
     const dirname = path.dirname(filePath);
-    if (fs.existsSync(dirname)) {
+    if (await fs.promises.stat(dirname).catch(() => null)) {
         return true;
     }
-    ensureDirectoryExistence(dirname);
-    fs.mkdirSync(dirname);
+    await ensureDirectoryExistence(dirname);
+    await fs.promises.mkdir(dirname);
 }
 
 export const router = express.Router();
@@ -68,7 +68,7 @@ router.post('/upload', async (request, response) => {
             pathToNewFile = path.join(request.user.directories.userImages, sanitize(request.body.ch_name), sanitize(filename));
         }
 
-        ensureDirectoryExistence(pathToNewFile);
+        await ensureDirectoryExistence(pathToNewFile);
         const imageBuffer = Buffer.from(image, 'base64');
         await fs.promises.writeFile(pathToNewFile, new Uint8Array(imageBuffer));
         response.send({ path: clientRelativePath(request.user.directories.root, pathToNewFile) });
@@ -78,7 +78,7 @@ router.post('/upload', async (request, response) => {
     }
 });
 
-router.post('/list{/:folder}', (request, response) => {
+router.post('/list{/:folder}', async (request, response) => {
     try {
         if (request.params.folder) {
             if (request.body.folder) {
@@ -98,8 +98,8 @@ router.post('/list{/:folder}', (request, response) => {
         const sort = request.body.sortField || 'date';
         const order = request.body.sortOrder || 'asc';
 
-        if (!fs.existsSync(directoryPath)) {
-            fs.mkdirSync(directoryPath, { recursive: true });
+        if (!(await fs.promises.stat(directoryPath).catch(() => null))) {
+            await fs.promises.mkdir(directoryPath, { recursive: true });
         }
 
         const images = getImages(directoryPath, sort, type);
@@ -113,14 +113,14 @@ router.post('/list{/:folder}', (request, response) => {
     }
 });
 
-router.post('/folders', (request, response) => {
+router.post('/folders', async (request, response) => {
     try {
         const directoryPath = request.user.directories.userImages;
-        if (!fs.existsSync(directoryPath)) {
-            fs.mkdirSync(directoryPath, { recursive: true });
+        if (!(await fs.promises.stat(directoryPath).catch(() => null))) {
+            await fs.promises.mkdir(directoryPath, { recursive: true });
         }
 
-        const folders = fs.readdirSync(directoryPath, { withFileTypes: true })
+        const folders = (await fs.promises.readdir(directoryPath, { withFileTypes: true }))
             .filter(dirent => dirent.isDirectory())
             .map(dirent => dirent.name);
 
@@ -142,11 +142,14 @@ router.post('/delete', async (request, response) => {
             return response.status(400).send('Invalid path');
         }
 
-        if (!fs.existsSync(pathToDelete)) {
-            return response.status(404).send('File not found');
+        try {
+            await fs.promises.unlink(pathToDelete);
+        } catch (error) {
+            if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+                return response.status(404).send('File not found');
+            }
+            throw error;
         }
-
-        fs.unlinkSync(pathToDelete);
         log.media.info(`Deleted image: ${request.body.path} from ${request.user.profile.handle}`);
         return response.sendStatus(200);
     } catch (error) {

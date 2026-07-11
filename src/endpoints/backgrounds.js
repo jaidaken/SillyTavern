@@ -77,12 +77,15 @@ router.post('/delete', getFileNameValidationFunction('bg'), async function (requ
 
         const fileName = path.join(request.user.directories.backgrounds, sanitize(request.body.bg));
 
-        if (!fs.existsSync(fileName)) {
-            log.media.error('BG file not found');
-            return response.sendStatus(400);
+        try {
+            await fs.promises.unlink(fileName);
+        } catch (error) {
+            if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+                log.media.error('BG file not found');
+                return response.sendStatus(400);
+            }
+            throw error;
         }
-
-        fs.unlinkSync(fileName);
         invalidateThumbnail(request.user.directories, 'bg', request.body.bg);
 
         // Remove metadata for deleted image
@@ -105,18 +108,18 @@ router.post('/rename', async function (request, response) {
         const oldFileName = path.join(request.user.directories.backgrounds, sanitize(request.body.old_bg));
         const newFileName = path.join(request.user.directories.backgrounds, sanitize(request.body.new_bg));
 
-        if (!fs.existsSync(oldFileName)) {
+        if (!(await fs.promises.stat(oldFileName).catch(() => null))) {
             log.media.error('BG file not found');
             return response.sendStatus(400);
         }
 
-        if (fs.existsSync(newFileName)) {
+        if (await fs.promises.stat(newFileName).catch(() => null)) {
             log.media.error('New BG file already exists');
             return response.sendStatus(400);
         }
 
-        fs.copyFileSync(oldFileName, newFileName);
-        fs.unlinkSync(oldFileName);
+        await fs.promises.copyFile(oldFileName, newFileName);
+        await fs.promises.unlink(oldFileName);
         invalidateThumbnail(request.user.directories, 'bg', request.body.old_bg);
 
         // Update metadata for renamed image
@@ -139,8 +142,8 @@ router.post('/upload', async function (request, response) {
 
         const img_path = path.join(request.file.destination, request.file.filename);
         const filename = sanitize(request.file.originalname);
-        fs.copyFileSync(img_path, path.join(request.user.directories.backgrounds, filename));
-        fs.unlinkSync(img_path);
+        await fs.promises.copyFile(img_path, path.join(request.user.directories.backgrounds, filename));
+        await fs.promises.unlink(img_path);
         invalidateThumbnail(request.user.directories, 'bg', filename);
 
         // Generate metadata for the new image

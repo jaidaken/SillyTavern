@@ -3,7 +3,7 @@ import fs from 'node:fs';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
-import { sync as writeFileSyncAtomic } from 'write-file-atomic';
+import writeFileAtomic from 'write-file-atomic';
 
 import { validateAssetFileName } from './assets.js';
 import { clientRelativePath } from '../util.js';
@@ -46,7 +46,7 @@ router.post('/upload', async (request, response) => {
             return response.status(400).send(validation.message);
 
         const pathToUpload = path.join(request.user.directories.files, request.body.name);
-        writeFileSyncAtomic(pathToUpload, request.body.data, 'base64');
+        await writeFileAtomic(pathToUpload, request.body.data, 'base64');
         const url = clientRelativePath(request.user.directories.root, pathToUpload);
         log.content.info(`Uploaded file: ${url} from ${request.user.profile.handle}`);
         return response.send({ path: url });
@@ -67,11 +67,14 @@ router.post('/delete', async (request, response) => {
             return response.status(400).send('Invalid path');
         }
 
-        if (!fs.existsSync(pathToDelete)) {
-            return response.status(404).send('File not found');
+        try {
+            await fs.promises.unlink(pathToDelete);
+        } catch (error) {
+            if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+                return response.status(404).send('File not found');
+            }
+            throw error;
         }
-
-        fs.unlinkSync(pathToDelete);
         log.content.info(`Deleted file: ${request.body.path} from ${request.user.profile.handle}`);
         return response.sendStatus(200);
     } catch (error) {
@@ -94,7 +97,7 @@ router.post('/verify', async (request, response) => {
                 log.content.warn(`File verification: Invalid path: ${pathToVerify}`);
                 continue;
             }
-            const fileExists = fs.existsSync(pathToVerify);
+            const fileExists = !!(await fs.promises.stat(pathToVerify).catch(() => null));
             verified[url] = fileExists;
         }
 

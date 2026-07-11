@@ -4,7 +4,7 @@ import path from 'node:path';
 import express from 'express';
 import sanitize from 'sanitize-filename';
 import { Jimp, JimpMime } from '../jimp.js';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import writeFileAtomic from 'write-file-atomic';
 import { imageSize as sizeOf } from 'image-size';
 
 import { getConfigValue, invalidateFirefoxCache } from '../util.js';
@@ -116,13 +116,12 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
         const pathToOriginalFile = path.join(originalFolder, file);
 
         // Check if thumbnail already exists and return it if not forcing regeneration
-        if (!forceGenerate && fs.existsSync(pathToCachedFile)) {
+        if (!forceGenerate && await fs.promises.stat(pathToCachedFile).catch(() => null)) {
             try {
                 // Check if original image was updated after thumbnail creation
-                const originalFileExists = fs.existsSync(pathToOriginalFile);
-                if (originalFileExists) {
-                    const originalStat = fs.statSync(pathToOriginalFile);
-                    const cachedStat = fs.statSync(pathToCachedFile);
+                const originalStat = await fs.promises.stat(pathToOriginalFile).catch(() => null);
+                if (originalStat) {
+                    const cachedStat = await fs.promises.stat(pathToCachedFile);
 
                     if (originalStat.mtimeMs > cachedStat.ctimeMs) {
                         // Original file changed, regenerate thumbnail
@@ -131,7 +130,7 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
                 }
 
                 if (!forceGenerate) {
-                    const buffer = fs.readFileSync(pathToCachedFile);
+                    const buffer = await fs.promises.readFile(pathToCachedFile);
                     const fileDimensions = sizeOf(buffer);
                     const ratio = (fileDimensions.height > 0) ? (fileDimensions.width / fileDimensions.height) : 1.0;
                     // When a thumbnail exists, return the current resolution from config so the JSON can be updated.
@@ -142,7 +141,7 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
                 forceGenerate = true;
             }
         }
-        if (!fs.existsSync(pathToOriginalFile)) {
+        if (!(await fs.promises.stat(pathToOriginalFile).catch(() => null))) {
             log.media.error(`[generateThumbnail] Cannot generate thumbnail, original file not found: ${pathToOriginalFile}`);
             return { path: null, aspectRatio: null, resolution: null };
         }
@@ -152,7 +151,7 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
         // For WebP files, we must check if they are animated, as Jimp cannot process them.
         // If isKnownAnimated is false, we assume the caller knows it is static and skip this check.
         if (fileExtension === '.webp' && isKnownAnimated !== false) {
-            const buffer = fs.readFileSync(pathToOriginalFile);
+            const buffer = await fs.promises.readFile(pathToOriginalFile);
             const isAnimated = isAnimatedWebP(buffer);
             if (isAnimated) {
                 // The client is expected to handle it.
@@ -162,7 +161,7 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
 
         // For PNG files, check if they are actually APNGs.
         if (fileExtension === '.png' && isKnownAnimated !== false) {
-            const buffer = fs.readFileSync(pathToOriginalFile);
+            const buffer = await fs.promises.readFile(pathToOriginalFile);
             const isAnimated = isAnimatedApng(buffer);
             if (isAnimated) {
                 // The client is expected to handle it.
@@ -201,7 +200,7 @@ async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
     const pathToCachedFile = path.join(thumbnailFolder, file);
 
     try {
-        const fileBuffer = fs.readFileSync(pathToOriginalFile);
+        const fileBuffer = await fs.promises.readFile(pathToOriginalFile);
         const image = await Jimp.read(fileBuffer);
 
         // Calculate aspect ratio from original image dimensions
@@ -233,7 +232,7 @@ async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
             ? await thumbImage.getBuffer(JimpMime.png)
             : await thumbImage.getBuffer(JimpMime.jpeg, { quality: quality, jpegColorSpace: 'ycbcr' });
 
-        writeFileAtomicSync(pathToCachedFile, buffer);
+        await writeFileAtomic(pathToCachedFile, buffer);
 
         return { success: true, aspectRatio, resolution: thumbnailResolution };
     } catch (error) {
@@ -258,16 +257,16 @@ publicRouter.get('/', async function (request, response) {
         const file = sanitize(rawFile);
         if (file !== rawFile) return response.sendStatus(403);
 
-        const serveOriginal = () => {
+        const serveOriginal = async () => {
             const folder = getOriginalFolder(request.user.directories, type);
             const pathToOriginalFile = path.resolve(path.join(folder, file));
-            if (!fs.existsSync(pathToOriginalFile)) return response.sendStatus(404);
+            if (!(await fs.promises.stat(pathToOriginalFile).catch(() => null))) return response.sendStatus(404);
             invalidateFirefoxCache(pathToOriginalFile, request, response);
             return response.sendFile(pathToOriginalFile);
         };
 
         if (!thumbnailsEnabled) {
-            return serveOriginal();
+            return await serveOriginal();
         }
 
         const animatedEnabled = animated === 'true';
@@ -276,26 +275,26 @@ publicRouter.get('/', async function (request, response) {
 
         // Serve original for animated formats or GIFs
         if (animatedEnabled && isAnimatedFormat) {
-            return serveOriginal();
+            return await serveOriginal();
         }
 
         if (fileExtension === '.gif') {
-            return serveOriginal();
+            return await serveOriginal();
         }
 
         const thumbnailFolder = getThumbnailFolder(request.user.directories, type);
         const pathToCachedFile = path.join(thumbnailFolder, file);
 
         // Try to generate thumbnail if it doesn't exist
-        if (!fs.existsSync(pathToCachedFile)) {
+        if (!(await fs.promises.stat(pathToCachedFile).catch(() => null))) {
             const thumbResult = await generateThumbnail(request.user.directories, type, file, false);
             // If generation failed (path is null), serve the original file
             if (!thumbResult.path) {
-                return serveOriginal();
+                return await serveOriginal();
             }
         }
 
-        if (fs.existsSync(pathToCachedFile)) {
+        if (await fs.promises.stat(pathToCachedFile).catch(() => null)) {
             invalidateFirefoxCache(pathToCachedFile, request, response);
             return response.sendFile(file, { root: thumbnailFolder, dotfiles: 'allow' });
         }
