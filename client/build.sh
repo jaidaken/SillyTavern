@@ -21,9 +21,10 @@ zig build export "-Doptimize=$OPT"
 # unpruned ziex npm tree export copied in. verify.sh then runs against the pruned artifact.
 ./patch-door.sh
 
-# Minify the browser-fetched dist assets (sources stay readable). Vendor mjs keep --format=esm so
-# the dynamic-import() default-export shape survives; --allow-overwrite writes each file over itself.
-for f in dist/glue/vendor/purify.es.mjs dist/glue/vendor/hljs.mjs; do
+# Minify the browser-fetched dist assets (sources stay readable). ESM keeps --format=esm so the
+# dynamic-import() shape survives; --allow-overwrite writes each file over itself. The ziex door is
+# minified here, AFTER patch-door: verify.sh asserts the patch by minify-stable signals, not source.
+for f in dist/glue/vendor/purify.es.mjs dist/glue/vendor/hljs.mjs dist/vendor/ziex/wasm/index.js; do
     b=$(wc -c < "$f")
     npx --yes esbuild "$f" --minify --format=esm --allow-overwrite --outfile="$f"
     echo "minify $f: $b -> $(wc -c < "$f") bytes"

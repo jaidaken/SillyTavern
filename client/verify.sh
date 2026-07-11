@@ -73,10 +73,10 @@ if zig build test;  then echo "  ok    zig build test";  else echo "  FAIL  zig 
 
 echo
 echo "== build artifacts =="
-# Patched state is the PRESENCE of the uncached readString body, never the absence of a cache
-# marker: a reformatted door has both cache markers absent while still carrying the D1 stale read.
-door_uncached=$(grep -Fc 'return textDecoder.decode(getMemoryView().subarray(ptr, ptr + len));' "$DOOR")
-atleast "door patched: uncached readString body" "$door_uncached" 1
+# The door is minified, so grep minify-stable signals not the source line: the decode path survives
+# (property names are not mangled) and the D1 patch removed stringCacheKey (the door's only 65536).
+atleast "door readString decode path present" "$(count 'subarray(' "$DOOR")" 1
+check   "door patched: string cache removed (D1)" "$(count '65536' "$DOOR")" 0
 check   "main.wasm present" "$([ -f "$WASM" ] && echo yes || echo no)" "yes"
 
 echo
