@@ -28,9 +28,9 @@ for f in dist/glue/vendor/purify.es.mjs dist/glue/vendor/hljs.mjs; do
     npx --yes esbuild "$f" --minify --format=esm --allow-overwrite --outfile="$f"
     echo "minify $f: $b -> $(wc -c < "$f") bytes"
 done
-# main.js is NOT minified: esbuild mangles the ?stream dev-probe harness verify.sh drives, and a
-# minified glue is unverifiable. It is only ~30KB (~10KB gzip); the win is in the vendored libs above.
-for f in dist/glue/app.css; do
+# main.js (classic-script IIFE, deps via dynamic import()) + app.css take plain --minify: no
+# --format=esm, so the non-module script contract survives. esbuild picks the loader by extension.
+for f in dist/glue/main.js dist/glue/app.css; do
     b=$(wc -c < "$f")
     npx --yes esbuild "$f" --minify --allow-overwrite --outfile="$f"
     echo "minify $f: $b -> $(wc -c < "$f") bytes"
