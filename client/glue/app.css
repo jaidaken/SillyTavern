@@ -534,6 +534,11 @@ body {
     line-height: var(--lh-prose);
     color: var(--text);
     overflow-wrap: break-word;
+    /* Reading-surface typography: pretty wrapping avoids a stranded last word; Newsreader's oldstyle
+       proportional figures sit like lowercase for a book feel. Code is in <pre> (no wrap) and mono
+       (fixed width) so neither tweak affects it. */
+    text-wrap: pretty;
+    font-variant-numeric: oldstyle-figures proportional-nums;
 }
 
 .mes_text > *:first-child { margin-top: 0; }
