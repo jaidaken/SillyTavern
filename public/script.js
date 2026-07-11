@@ -229,7 +229,7 @@ import {
     getInstructStoppingSequences,
 } from './scripts/instruct-mode.js';
 import { initLocales, t } from './scripts/i18n.js';
-import { getFriendlyTokenizerName, getTokenCount, getTokenCountAsync, initTokenizers, saveTokenCache } from './scripts/tokenizers.js';
+import { getFriendlyTokenizerName, getTokenCountAsync, initTokenizers, saveTokenCache } from './scripts/tokenizers.js';
 import {
     user_avatar,
     getUserAvatars,
@@ -5405,7 +5405,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
             if (isStreamFinished) {
                 await streamingProcessor.onFinishStreaming(streamingProcessor.messageId, getMessage);
                 streamingProcessor = null;
-                triggerAutoContinue(messageChunk, isImpersonate);
+                await triggerAutoContinue(messageChunk, isImpersonate);
                 return Object.defineProperties(new String(getMessage), {
                     'messageChunk': { value: messageChunk },
                     'fromStream': { value: true },
@@ -5542,7 +5542,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         log.gen.info(`Generation ended: ${getGeneratingModel()}`);
 
         if (type !== 'quiet') {
-            triggerAutoContinue(messageChunk, isImpersonate);
+            await triggerAutoContinue(messageChunk, isImpersonate);
         }
 
         // Don't break the API chain that expects a single string in return
@@ -5680,7 +5680,7 @@ export function getNextMessageId(type) {
  * @param {boolean} isImpersonate Is the user impersonation
  * @returns {boolean} Whether the message should be auto-continued
  */
-export function shouldAutoContinue(messageChunk, isImpersonate) {
+export async function shouldAutoContinue(messageChunk, isImpersonate) {
     if (!power_user.auto_continue.enabled) {
         log.gen.debug('Auto-continue is disabled by user.');
         return false;
@@ -5726,7 +5726,7 @@ export function shouldAutoContinue(messageChunk, isImpersonate) {
 
     if (messageChunk.trim().length > USABLE_LENGTH && chat.length) {
         const lastMessage = chat[chat.length - 1];
-        const messageLength = getTokenCount(lastMessage.mes);
+        const messageLength = await getTokenCountAsync(lastMessage.mes);
         const shouldAutoContinue = messageLength < power_user.auto_continue.target_length;
 
         if (shouldAutoContinue) {
@@ -5747,13 +5747,13 @@ export function shouldAutoContinue(messageChunk, isImpersonate) {
  * @param {string} messageChunk Current message chunk
  * @param {boolean} isImpersonate Is the user impersonation
  */
-export function triggerAutoContinue(messageChunk, isImpersonate) {
+export async function triggerAutoContinue(messageChunk, isImpersonate) {
     if (selected_group) {
         log.gen.debug('Auto-continue is disabled for group chat');
         return;
     }
 
-    if (shouldAutoContinue(messageChunk, isImpersonate)) {
+    if (await shouldAutoContinue(messageChunk, isImpersonate)) {
         $('#option_continue').trigger('click');
     }
 }
@@ -6637,7 +6637,15 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
     const generationFinished = new Date();
     if (type === 'swipe') {
         oldMessage = lastMessage.mes;
-        lastMessage.swipes.length++;
+        lastMessage.swipes.push('');
+        if (Array.isArray(lastMessage.swipe_info)) {
+            lastMessage.swipe_info.push({
+                send_date: lastMessage.send_date,
+                gen_started: lastMessage.gen_started,
+                gen_finished: lastMessage.gen_finished,
+                extra: {},
+            });
+        }
         if (lastMessage.swipe_id === lastMessage.swipes.length - 1) {
             lastMessage.title = title;
             lastMessage.mes = getMessage;

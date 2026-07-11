@@ -107,8 +107,8 @@ const substr_derivations = [
     ['Moonshot AI', ['<|im_user|>user<|im_middle|>', '<|im_assistant|>assistant<|im_middle|>', '<|im_end|>']],
     ['OpenAI Harmony', ['<|start|>user<|message|>', '<|start|>assistant<|channel|>final<|message|>', '<|end|>']],
 
-    // Generic cases
-    ['ChatML', ['<|im_start|>user', '<|im_start|>assistant', '<|im_end|>']],
+    // Generic cases. No '<|im_start|>user' literal: generic templates build the tag as '<|im_start|>' + message['role'].
+    ['ChatML', ['<|im_start|>assistant', '<|im_end|>']],
 ];
 
 const parse_derivation = derivation => (typeof derivation === 'string') ? {

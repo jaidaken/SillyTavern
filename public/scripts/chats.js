@@ -2382,7 +2382,7 @@ export function initChatUtilities() {
     });
 
     document.getElementById('send_textarea').addEventListener('paste', async function (event) {
-        if (event.clipboardData.files.length === 0) {
+        if (!event.clipboardData?.files?.length) {
             return;
         }
 

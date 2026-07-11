@@ -1064,7 +1064,7 @@ async function generateGroupWrapper(byAutoMode, type = null, params = {}) {
             let messageChunk = textResult?.messageChunk;
 
             if (messageChunk) {
-                while (shouldAutoContinue(messageChunk, type === 'impersonate')) {
+                while (await shouldAutoContinue(messageChunk, type === 'impersonate')) {
                     textResult = await Generate('continue', { automatic_trigger: byAutoMode, ...(params || {}) });
                     messageChunk = textResult?.messageChunk;
                 }

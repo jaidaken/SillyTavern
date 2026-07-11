@@ -244,7 +244,8 @@ app.post('/api/ping', (request, response) => {
         request.session.touch = Date.now();
     }
 
-    response.sendStatus(204);
+    // 200 with a body, not 204: Chrome logs bodyless-204 fetches as "Fetch failed loading" (cosmetic, but noisy).
+    response.sendStatus(200);
 });
 
 if (cliArgs.enableCorsProxy) {
