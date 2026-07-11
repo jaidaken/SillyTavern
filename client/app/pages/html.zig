@@ -18,8 +18,9 @@ const builtin = @import("builtin");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
-/// Rendered server-side in place of message bodies; the client render replaces it.
-pub const ssr_placeholder = "ST_SSR_PLACEHOLDER";
+/// Rendered server-side in place of message bodies; the client render replaces it. Wrapped in a
+/// `hidden` span so the raw placeholder never paints in the split second before the wasm hydrates.
+pub const ssr_placeholder = "<span hidden>ST_SSR_PLACEHOLDER</span>";
 
 extern "env" fn sanitize(ptr: [*]const u8, len: usize) u64;
 
