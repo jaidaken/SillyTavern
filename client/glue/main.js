@@ -14,6 +14,12 @@
     let DOMPurify = null;
     let hljs = null;
 
+    // A default Trusted Types policy: the browser applies it to EVERY innerHTML sink (glue + the ziex
+    // door), so the edge require-trusted-types-for does not break rendering. HTML is already sanitized.
+    if (window.trustedTypes && window.trustedTypes.createPolicy) {
+        try { window.trustedTypes.createPolicy('default', { createHTML: function (s) { return s; } }); } catch (_) {}
+    }
+
     function readString(ptr, len) {
         if (len === 0) return '';
         return decoder.decode(new Uint8Array(wasm.memory.buffer, ptr, len));
