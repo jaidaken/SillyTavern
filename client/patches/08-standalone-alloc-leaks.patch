@@ -1,0 +1,32 @@
+diff --git c/src/runtime/core/vdom.zig w/src/runtime/core/vdom.zig
+index 119f44a4..f24a0b8f 100644
+--- c/src/runtime/core/vdom.zig
++++ w/src/runtime/core/vdom.zig
+@@ -80,6 +80,9 @@ pub const VNode = struct {
+                     // Flatten fragments: lift fragment children into this node's
+                     // children list (React-style - fragments produce no DOM node).
+                     const flat = try flattenComponents(allocator, children);
++                    // flattenComponents allocates only when it flattens a fragment; free that slice
++                    // (the child vnodes copy each Component by value, so nothing points into it).
++                    defer if (flat.ptr != children.ptr) allocator.free(flat);
+                     try self.children.ensureTotalCapacity(allocator, flat.len);
+                     for (flat, 0..) |child, child_index| {
+                         const child_vnode = try createFromComponent(allocator, child, owner_component_id, child_index);
+@@ -381,6 +384,7 @@ pub fn resolveComponent(allocator: zx.Allocator, component: zx.Component, owner_
+                 const component_id = componentOwnerId(allocator, curr, owner_component_id, sibling_index);
+                 comp_fn.setIdentity(component_id, @truncate(next_velement_id));
+                 curr = try comp_fn.call();
++                if (component_id.ptr != owner_component_id.ptr) allocator.free(component_id);
+             },
+             else => return curr,
+         }
+@@ -506,6 +510,9 @@ fn reconcileChildren(
+         if (element.children) |children| break :blk children else break :blk &[_]zx.Component{};
+     } else &[_]zx.Component{};
+     const new_children_slice = try flattenComponents(allocator, new_children_raw);
++    // Free the flattened slice at scope exit when it was allocated (only on a fragment flatten); the
++    // reconcile reads Components out of it but never retains the backing array.
++    defer if (new_children_slice.ptr != new_children_raw.ptr) allocator.free(new_children_slice);
+ 
+     var old_idx: usize = 0;
+     var new_idx: usize = 0;

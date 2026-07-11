@@ -1,0 +1,65 @@
+diff --git c/src/runtime/client/Client.zig w/src/runtime/client/Client.zig
+index 708a34f3..27953828 100644
+--- c/src/runtime/client/Client.zig
++++ w/src/runtime/client/Client.zig
+@@ -251,6 +251,11 @@ pub fn getHandler(self: *Client, velement_id: u64, event_type: EventType) ?zx.Ev
+ /// Unregister a VElement and all its children from the registry
+ pub fn unregisterVElement(self: *Client, velement: *vtree_mod.VElement) void {
+     _ = self.id_to_velement.remove(velement.id);
++    // The handler_registry is keyed by (velement_id, event_type); id_to_velement removal alone left
++    // its entries behind, so it grew every DELETION/REPLACE (panel close, left-dock rebuild).
++    inline for (std.meta.fields(EventType)) |field| {
++        _ = self.handler_registry.remove(.{ .velement_id = velement.id, .event_type = @enumFromInt(field.value) });
++    }
+     if (zx.platform.role == .client) {
+         window.ext._clearEventHandlerModes(velement.id);
+     }
+@@ -270,12 +275,17 @@ pub fn getVElementById(self: *Client, id: u64) ?*vtree_mod.VElement {
+ /// event_ref is a u64 NaN-boxed reference to the JS event object
+ /// Returns true if a handler was found and called
+ pub fn dispatchEvent(self: *Client, velement_id: u64, event_type: EventType, event_ref: u64) bool {
+-    if (self.getHandler(velement_id, event_type)) |handler| {
+-        const event_context = zx.client.Event.init(event_ref);
+-        handler.callback(handler.context, event_context);
+-        return true;
+-    }
+-    return false;
++    // The door mints a fresh jsz ref for the event per dispatch and never frees it, so wasm owns it.
++    const handler = self.getHandler(velement_id, event_type) orelse {
++        if (zx.platform.role == .client) zx.client.Event.init(event_ref).getEvent().deinit();
++        return false;
++    };
++    const event_context = zx.client.Event.init(event_ref);
++    handler.callback(handler.context, event_context);
++    // A suspending handler may read the event after this returns, so it owns release; the app uses
++    // only synchronous handlers, which are done with the event here.
++    if (zx.platform.role == .client and !handler.may_suspend) event_context.getEvent().deinit();
++    return true;
+ }
+ 
+ pub fn dispatchEventByName(self: *Client, velement_id: u64, event_type_name: []const u8) bool {
+@@ -314,6 +324,8 @@ pub fn render(self: *Client, cmp: ComponentMeta) !void {
+     const allocator = self.allocator;
+ 
+     const document = Document.init(allocator);
++    // Document.init retains a jsz handle on `document`; without this each render leaks one.
++    defer document.deinit();
+     // const console = Console.init();
+ 
+     // Find component boundary using comment markers <!--$id--> or <!--$id|props-->
+@@ -340,6 +352,7 @@ pub fn render(self: *Client, cmp: ComponentMeta) !void {
+ 
+         // Map the VDOM to platform-specific nodes (DOM)
+         const dom_node = try vtree_mod.createPlatformNodes(allocator, vtree_ptr.vtree, self, .{});
++        defer dom_node.deinit();
+         try marker.replaceContent(dom_node);
+ 
+         // registerVElement is already called recursively inside createPlatformNodes
+@@ -358,6 +371,7 @@ pub fn render(self: *Client, cmp: ComponentMeta) !void {
+             const vtree_ptr = self.vtrees.getPtr(cmp.id).?;
+ 
+             const dom_node = try vtree_mod.createPlatformNodes(allocator, vtree_ptr.vtree, self, .{});
++            defer dom_node.deinit();
+             try marker.replaceContent(dom_node);
+             return;
+         }

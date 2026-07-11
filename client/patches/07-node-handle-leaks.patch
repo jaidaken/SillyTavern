@@ -1,0 +1,60 @@
+diff --git c/src/runtime/client/render.zig w/src/runtime/client/render.zig
+index 4419ef72..eaad260a 100644
+--- c/src/runtime/client/render.zig
++++ w/src/runtime/client/render.zig
+@@ -52,7 +52,8 @@ pub fn applyPatches(
+             .PLACEMENT => {
+                 const data = &patch.data.PLACEMENT;
+ 
+-                _ = try createPlatformNodes(allocator, data.vnode, client, options);
++                const placed = try createPlatformNodes(allocator, data.vnode, client, options);
++                placed.deinit();
+ 
+                 if (data.reference_id) |ref_id| {
+                     ext._ib(data.parent_id, data.vnode.id, ref_id);
+@@ -87,7 +88,8 @@ pub fn applyPatches(
+             .REPLACE => {
+                 const data = &patch.data.REPLACE;
+ 
+-                _ = try createPlatformNodes(allocator, data.new_vnode, client, options);
++                const replaced = try createPlatformNodes(allocator, data.new_vnode, client, options);
++                replaced.deinit();
+ 
+                 ext._rpc(data.parent_id, data.new_vnode.id, data.old_vnode_id);
+ 
+@@ -301,7 +303,10 @@ pub fn createPlatformNodes(allocator: zx.Allocator, vnode: *VNode, client: anyty
+             }
+ 
+             for (vnode.children.items) |child| {
+-                _ = try createPlatformNodes(allocator, child, client, options);
++                const child_node = try createPlatformNodes(allocator, child, client, options);
++                // The DOM node lives in the JS domNodes registry keyed by vnode id; the jsz ref
++                // returned here is a separate handle, no longer needed once appended by id.
++                defer child_node.deinit();
+                 ext._ac(vnode.id, child.id);
+             }
+ 
+diff --git c/src/runtime/client/window/document.zig w/src/runtime/client/window/document.zig
+index a3846cbf..b1def07e 100644
+--- c/src/runtime/client/window/document.zig
++++ w/src/runtime/client/window/document.zig
+@@ -290,6 +290,9 @@ pub const CommentMarker = struct {
+         // Remove nodes between start and end comments
+         while (true) {
+             const next_sibling: real_js.Object = self.start_comment.get(real_js.Object, "nextSibling") catch break;
++            // Each get/call returns a fresh jsz handle; release it every iteration or hydration leaks
++            // one handle per removed node plus one per removeChild result.
++            defer next_sibling.deinit();
+             // Check node type - comment nodes have nodeType === 8
+             const node_type = next_sibling.get(i32, "nodeType") catch break;
+             if (node_type == 8) {
+@@ -299,7 +302,8 @@ pub const CommentMarker = struct {
+                 // End marker starts with '/'
+                 if (text.len > 0 and text[0] == '/') break;
+             }
+-            _ = self.parent.call(real_js.Object, "removeChild", .{next_sibling}) catch break;
++            const removed = self.parent.call(real_js.Object, "removeChild", .{next_sibling}) catch break;
++            removed.deinit();
+         }
+     }
+ 
