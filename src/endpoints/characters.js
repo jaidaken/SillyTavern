@@ -786,7 +786,7 @@ async function importFromCharX(uploadPath, { request }, preservedFileName) {
 
     if (auxiliaryAssets.length > 0) {
         try {
-            const summary = persistCharXAssets(auxiliaryAssets, extractedBuffers, request.user.directories, characterFolder);
+            const summary = await persistCharXAssets(auxiliaryAssets, extractedBuffers, request.user.directories, characterFolder);
             if (summary.sprites || summary.backgrounds || summary.misc) {
                 log.chars.info(`CharX: Imported ${summary.sprites} sprite(s), ${summary.backgrounds} background(s), ${summary.misc} misc asset(s) for ${characterFolder}`);
             }

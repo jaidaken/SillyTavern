@@ -56,22 +56,21 @@ export function validateAssetFileName(inputFilename) {
  * Recursive function to get files
  * @param {string} dir - The directory to search for files
  * @param {string[]} files - The array of files to return
- * @returns {string[]} - The array of files
+ * @returns {Promise<string[]>} - The array of files
  */
-function getFiles(dir, files = []) {
-    if (!fs.existsSync(dir)) return files;
-
-    // Get an array of all files and directories in the passed directory using fs.readdirSync
-    const fileList = fs.readdirSync(dir, { withFileTypes: true });
-    // Create the full path of the file/directory by concatenating the passed directory and file/directory name
+async function getFiles(dir, files = []) {
+    /** @type {import('node:fs').Dirent[]} */
+    let fileList;
+    try {
+        fileList = await fs.promises.readdir(dir, { withFileTypes: true });
+    } catch {
+        return files;
+    }
     for (const file of fileList) {
         const name = path.join(dir, file.name);
-        // Check if the current file/directory is a directory using fs.statSync
         if (file.isDirectory()) {
-            // If it is a directory, recursively call the getFiles function with the directory path and the files array
-            getFiles(name, files);
+            await getFiles(name, files);
         } else {
-            // If it is a file, push the full path to the files array
             files.push(name);
         }
     }
@@ -82,16 +81,17 @@ function getFiles(dir, files = []) {
  * Ensure that the asset folders exist.
  * @param {import('../users.js').UserDirectoryList} directories - The user's directories
  */
-function ensureFoldersExist(directories) {
+async function ensureFoldersExist(directories) {
     const folderPath = path.join(directories.assets);
 
     for (const category of VALID_CATEGORIES) {
         const assetCategoryPath = path.join(folderPath, category);
-        if (fs.existsSync(assetCategoryPath) && !fs.statSync(assetCategoryPath).isDirectory()) {
-            fs.unlinkSync(assetCategoryPath);
+        const stat = await fs.promises.stat(assetCategoryPath).catch(() => null);
+        if (stat && !stat.isDirectory()) {
+            await fs.promises.unlink(assetCategoryPath);
         }
-        if (!fs.existsSync(assetCategoryPath)) {
-            fs.mkdirSync(assetCategoryPath, { recursive: true });
+        if (!stat || !stat.isDirectory()) {
+            await fs.promises.mkdir(assetCategoryPath, { recursive: true });
         }
     }
 }
@@ -111,10 +111,11 @@ router.post('/get', async (request, response) => {
     let output = {};
 
     try {
-        if (fs.existsSync(folderPath) && fs.statSync(folderPath).isDirectory()) {
-            ensureFoldersExist(request.user.directories);
+        const rootStat = await fs.promises.stat(folderPath).catch(() => null);
+        if (rootStat && rootStat.isDirectory()) {
+            await ensureFoldersExist(request.user.directories);
 
-            const folders = fs.readdirSync(folderPath, { withFileTypes: true })
+            const folders = (await fs.promises.readdir(folderPath, { withFileTypes: true }))
                 .filter(file => file.isDirectory());
 
             for (const { name: folder } of folders) {
@@ -125,7 +126,7 @@ router.post('/get', async (request, response) => {
                 if (folder == 'live2d') {
                     output[folder] = [];
                     const live2d_folder = path.normalize(path.join(folderPath, folder));
-                    const files = getFiles(live2d_folder);
+                    const files = await getFiles(live2d_folder);
                     for (let file of files) {
                         if (file.includes('model') && file.endsWith('.json')) {
                             output[folder].push(clientRelativePath(request.user.directories.root, file));
@@ -139,7 +140,7 @@ router.post('/get', async (request, response) => {
                     output[folder] = { 'model': [], 'animation': [] };
                     // Extract models
                     const vrm_model_folder = path.normalize(path.join(folderPath, 'vrm', 'model'));
-                    let files = getFiles(vrm_model_folder);
+                    let files = await getFiles(vrm_model_folder);
                     for (let file of files) {
                         if (!file.endsWith('.placeholder')) {
                             output.vrm.model.push(clientRelativePath(request.user.directories.root, file));
@@ -148,7 +149,7 @@ router.post('/get', async (request, response) => {
 
                     // Extract models
                     const vrm_animation_folder = path.normalize(path.join(folderPath, 'vrm', 'animation'));
-                    files = getFiles(vrm_animation_folder);
+                    files = await getFiles(vrm_animation_folder);
                     for (let file of files) {
                         if (!file.endsWith('.placeholder')) {
                             output.vrm.animation.push(clientRelativePath(request.user.directories.root, file));
@@ -158,7 +159,7 @@ router.post('/get', async (request, response) => {
                 }
 
                 // Other assets (bgm/ambient/blip)
-                const files = fs.readdirSync(path.join(folderPath, folder))
+                const files = (await fs.promises.readdir(path.join(folderPath, folder)))
                     .filter(filename => {
                         return filename != '.placeholder';
                     });
@@ -210,7 +211,7 @@ router.post('/download', async (request, response) => {
         }
 
         // Validate filename
-        ensureFoldersExist(request.user.directories);
+        await ensureFoldersExist(request.user.directories);
         const validation = validateAssetFileName(request.body.filename);
         if (validation.error)
             return response.status(400).send(validation.message);
@@ -226,26 +227,24 @@ router.post('/download', async (request, response) => {
         }
         const destination = path.resolve(temp_path);
         // Delete if previous download failed
-        if (fs.existsSync(temp_path)) {
-            await fs.promises.unlink(temp_path);
-        }
+        await fs.promises.rm(temp_path, { force: true });
         const fileStream = fs.createWriteStream(destination, { flags: 'wx' });
         // @ts-ignore
         await finished(res.body.pipe(fileStream));
 
         if (category === 'character') {
-            const fileContent = fs.readFileSync(temp_path);
+            const fileContent = await fs.promises.readFile(temp_path);
             const contentType = mime.lookup(temp_path) || 'application/octet-stream';
             response.setHeader('Content-Type', contentType);
             response.send(fileContent);
-            fs.unlinkSync(temp_path);
+            await fs.promises.unlink(temp_path);
             return;
         }
 
         // Move into asset place
         log.content.info('Download finished, moving file from', temp_path, 'to', file_path);
-        fs.copyFileSync(temp_path, file_path);
-        fs.unlinkSync(temp_path);
+        await fs.promises.copyFile(temp_path, file_path);
+        await fs.promises.unlink(temp_path);
         response.sendStatus(200);
     } catch (error) {
         log.content.error(error);
@@ -284,15 +283,14 @@ router.post('/delete', async (request, response) => {
     log.content.info('Request received to delete', category, file_path);
 
     try {
-        if (!fs.existsSync(file_path)) {
-            log.content.error('Asset not found.');
-            return response.sendStatus(404);
-        }
-
         await fs.promises.unlink(file_path);
         log.content.info('Asset deleted.');
         return response.sendStatus(200);
     } catch (error) {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+            log.content.error('Asset not found.');
+            return response.sendStatus(404);
+        }
         log.content.error(error);
         return response.sendStatus(500);
     }
@@ -329,16 +327,17 @@ router.post('/character', async (request, response) => {
 
     let output = [];
     try {
-        if (fs.existsSync(folderPath) && fs.statSync(folderPath).isDirectory()) {
+        const folderStat = await fs.promises.stat(folderPath).catch(() => null);
+        if (folderStat && folderStat.isDirectory()) {
             // Live2d assets
             if (category == 'live2d') {
-                const folders = fs.readdirSync(folderPath, { withFileTypes: true });
+                const folders = await fs.promises.readdir(folderPath, { withFileTypes: true });
                 for (const folderInfo of folders) {
                     if (!folderInfo.isDirectory()) continue;
 
                     const modelFolder = folderInfo.name;
                     const live2dModelPath = path.join(folderPath, modelFolder);
-                    for (let file of fs.readdirSync(live2dModelPath)) {
+                    for (let file of await fs.promises.readdir(live2dModelPath)) {
                         if (file.includes('model') && file.endsWith('.json'))
                             output.push(path.join('characters', name, category, modelFolder, file));
                     }
@@ -347,7 +346,7 @@ router.post('/character', async (request, response) => {
             }
 
             // Other assets
-            const files = fs.readdirSync(folderPath)
+            const files = (await fs.promises.readdir(folderPath))
                 .filter(filename => {
                     return filename != '.placeholder';
                 });

@@ -390,18 +390,18 @@ export async function extractFilesFromZipBuffer(archiveBuffer, fileNames) {
 /**
  * Ensures a directory exists, creating it if necessary.
  * @param {string} dirPath Path to the directory
- * @returns {boolean} True if the directory exists or was created, false on error
+ * @returns {Promise<boolean>} True if the directory exists or was created, false on error
  */
-export function ensureDirectory(dirPath) {
+export async function ensureDirectory(dirPath) {
     try {
-        if (!fs.existsSync(dirPath)) {
-            fs.mkdirSync(dirPath, { recursive: true });
-        } else if (!fs.statSync(dirPath).isDirectory()) {
+        // Recursive mkdir is a no-op on an existing dir; EEXIST means the path is a non-directory.
+        await fs.promises.mkdir(dirPath, { recursive: true });
+        return true;
+    } catch (error) {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'EEXIST') {
             log.sys.warn(`ensureDirectory: Path ${dirPath} exists and is not a directory.`);
             return false;
         }
-        return true;
-    } catch (error) {
         log.sys.error(`ensureDirectory: Failed to prepare directory ${dirPath}`, error);
         return false;
     }
