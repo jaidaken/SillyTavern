@@ -22,15 +22,18 @@ KEEP=(
     "glue/main.js"
     "glue/app.css"
     "glue/favicon.png"
-    "glue/fonts/Newsreader-latin.woff2"
-    "glue/fonts/Newsreader-latin-italic.woff2"
-    "glue/fonts/IBMPlexMono-400.woff2"
-    "glue/fonts/IBMPlexMono-500.woff2"
     "glue/vendor/hljs.mjs"
     "glue/vendor/purify.es.mjs"
     "glue/vendor/hljs-theme.css"
     "vendor/ziex/wasm/index.js"
 )
+
+# Fonts globbed, not listed (adding a face touches only app.css + preloads). Ship each woff2 + its
+# OFL text; exclude ziex's bundled IBM Plex demo fonts (the export drops them here, app never uses them).
+if [ -d "$DIST/glue/fonts" ]; then
+    while IFS= read -r ff; do KEEP+=("${ff#"$DIST"/}"); done \
+        < <(find "$DIST/glue/fonts" -type f \( -name '*.woff2' -o -name 'OFL-*.txt' \) ! -name 'IBMPlex*')
+fi
 
 before_files=$(find "$DIST" -type f | wc -l)
 before_gz=0

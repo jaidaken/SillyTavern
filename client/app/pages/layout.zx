@@ -9,6 +9,9 @@ pub fn Layout(ctx: zx.LayoutContext, children: zx.Component) zx.Component {
                 <title>SillyTavern</title>
                 <link rel="icon" type="image/png" href="/glue/favicon.png" />
                 <link rel="preload" as="font" type="font/woff2" href="/glue/fonts/Newsreader-latin.woff2" crossorigin />
+                <link rel="preload" as="font" type="font/woff2" href="/glue/fonts/Newsreader-latin-italic.woff2" crossorigin />
+                <link rel="preload" as="font" type="font/woff2" href="/glue/fonts/JetBrainsMono-latin.woff2" crossorigin />
+                <link rel="preload" as="font" type="font/woff2" href="/glue/fonts/JetBrainsMono-latin-italic.woff2" crossorigin />
                 <link rel="stylesheet" href="/glue/vendor/hljs-theme.css" />
                 <link rel="stylesheet" href="/glue/app.css" />
             </head>
