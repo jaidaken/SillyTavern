@@ -6,7 +6,7 @@ import { Buffer } from 'node:buffer';
 import express from 'express';
 import fetch from 'node-fetch';
 import sanitize from 'sanitize-filename';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import writeFileAtomic from 'write-file-atomic';
 
 import { getConfigValue, color, setPermissionsSync, isValidUrl } from '../util.js';
 import { write } from '../character-card-parser.js';
@@ -131,11 +131,11 @@ export function getDefaultPresetFile(filename) {
  * @param {string} contentLogPath Path to the content log file
  * @param {(type: string) => string | null} resolveTarget Function to resolve the target directory for a content type
  * @param {string[]} [forceCategories] List of categories to force check (even if content check is skipped)
- * @returns {boolean} Whether any content was added
+ * @returns {Promise<boolean>} Whether any content was added
  */
-function seedContent(contentIndex, contentLogPath, resolveTarget, forceCategories) {
+async function seedContent(contentIndex, contentLogPath, resolveTarget, forceCategories) {
     let anyContentAdded = false;
-    const contentLog = getContentLog(contentLogPath);
+    const contentLog = await getContentLog(contentLogPath);
 
     for (const contentItem of contentIndex) {
         if (contentLog.includes(contentItem.filename) && !forceCategories?.includes(contentItem.type)) {
@@ -149,7 +149,7 @@ function seedContent(contentIndex, contentLogPath, resolveTarget, forceCategorie
 
         const contentPath = path.join(contentItem.folder, contentItem.filename);
 
-        if (!fs.existsSync(contentPath)) {
+        if (!(await fs.promises.stat(contentPath).catch(() => null))) {
             log.content.warn(`Content file ${contentItem.filename} is missing`);
             continue;
         }
@@ -165,19 +165,19 @@ function seedContent(contentIndex, contentLogPath, resolveTarget, forceCategorie
         const targetPath = path.join(contentTarget, basePath);
         contentLog.push(contentItem.filename);
 
-        if (fs.existsSync(targetPath)) {
+        if (await fs.promises.stat(targetPath).catch(() => null)) {
             log.content.warn(`Content file ${contentItem.filename} already exists in ${contentTarget}`);
             continue;
         }
 
-        fs.mkdirSync(contentTarget, { recursive: true });
-        fs.cpSync(contentPath, targetPath, { recursive: true, force: false });
+        await fs.promises.mkdir(contentTarget, { recursive: true });
+        await fs.promises.cp(contentPath, targetPath, { recursive: true, force: false });
         setPermissionsSync(targetPath);
         log.content.info(`Content file ${contentItem.filename} copied to ${contentTarget}`);
         anyContentAdded = true;
     }
 
-    writeFileAtomicSync(contentLogPath, contentLog.join('\n'));
+    await writeFileAtomic(contentLogPath, contentLog.join('\n'));
     return anyContentAdded;
 }
 
@@ -189,8 +189,8 @@ function seedContent(contentIndex, contentLogPath, resolveTarget, forceCategorie
  * @returns {Promise<boolean>} Whether any content was added
  */
 async function seedContentForUser(contentIndex, directories, forceCategories) {
-    if (!fs.existsSync(directories.root)) {
-        fs.mkdirSync(directories.root, { recursive: true });
+    if (!(await fs.promises.stat(directories.root).catch(() => null))) {
+        await fs.promises.mkdir(directories.root, { recursive: true });
     }
 
     const contentLogPath = path.join(directories.root, 'content.log');
@@ -384,14 +384,14 @@ export function getGlobalTargetByType(type) {
 /**
  * Gets the content log from the content log file.
  * @param {string} contentLogPath Path to the content log file
- * @returns {string[]} Array of content log lines
+ * @returns {Promise<string[]>} Array of content log lines
  */
-function getContentLog(contentLogPath) {
-    if (!fs.existsSync(contentLogPath)) {
+async function getContentLog(contentLogPath) {
+    if (!(await fs.promises.stat(contentLogPath).catch(() => null))) {
         return [];
     }
 
-    const contentLogText = fs.readFileSync(contentLogPath, 'utf8');
+    const contentLogText = await fs.promises.readFile(contentLogPath, 'utf8');
     return contentLogText.split('\n');
 }
 
@@ -477,7 +477,7 @@ async function downloadChubCharacter(id) {
     };
 
     const defaultAvatarPath = path.join(serverDirectory, DEFAULT_AVATAR_PATH);
-    const defaultAvatarBuffer = fs.readFileSync(defaultAvatarPath);
+    const defaultAvatarBuffer = await fs.promises.readFile(defaultAvatarPath);
 
     let imageBuffer = defaultAvatarBuffer;
 
@@ -883,7 +883,7 @@ async function extractPerchanceCharacterFromGz(result) {
  */
 async function fetchPerchanceAvatar(avatarUrl, isAvatarBase64) {
     const defaultAvatarPath = path.join(serverDirectory, DEFAULT_AVATAR_PATH);
-    const defaultAvatarBuffer = fs.readFileSync(defaultAvatarPath);
+    const defaultAvatarBuffer = await fs.promises.readFile(defaultAvatarPath);
 
     if (!avatarUrl || (!isAvatarBase64 && !isValidUrl(avatarUrl))) {
         log.content.warn('Perchance character does not have an avatar, it is not base64, or it is an invalid url, using default avatar');
