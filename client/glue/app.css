@@ -38,9 +38,13 @@
     --st-quote:    oklch(0.850 0.088 78);
     --st-em:       oklch(0.800 0.014 74);
 
-    /* Type: 2 primary families, the book serif for reading + UI, mono for chrome + code. */
-    --font-serif: "Newsreader", Georgia, "Times New Roman", serif;
-    --font-mono:  "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+    /* Type: 2 self-hosted Latin families (book serif for reading + UI, mono for chrome + code). Any
+       script they don't cover (CJK, Thai, Arabic, Indic, Cyrillic, Greek...) falls through to the
+       OS font: ui-serif/ui-monospace pick the platform UI face, and the trailing generic keyword is
+       the script-aware catch-all the browser resolves per character. Non-Latin renders in the
+       viewer's own system font, never tofu. */
+    --font-serif: "Newsreader", ui-serif, Georgia, Cambria, "Times New Roman", serif;
+    --font-mono:  "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
     --font-ui:    var(--font-serif);
     --text-xs:   0.75rem;
     --text-sm:   0.85rem;
