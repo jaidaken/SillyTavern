@@ -572,6 +572,15 @@
             syncDrawerInert();
         }
 
+        // Warm the self-hosted faces at boot: this consumes each <link rel=preload> (so Chrome stops
+        // warning "preloaded but not used" when the first paint has no italic or code) and keeps the
+        // italic + mono faces in memory, ready the instant a message uses emphasis or a code block.
+        if (document.fonts && document.fonts.load) {
+            ['1em Newsreader', 'italic 1em Newsreader', '1em "JetBrains Mono"', 'italic 1em "JetBrains Mono"'].forEach(function (spec) {
+                try { document.fonts.load(spec); } catch (_) {}
+            });
+        }
+
         // Motion preference. Zig owns the reactive class the CSS reads; the glue owns persistence.
         // Default "system" honours the OS prefers-reduced-motion; the settings drawer overrides it.
         const MOTION = { system: 0, on: 1, off: 2 };
