@@ -1,18 +1,77 @@
-// The User Settings drawer body. First real control: the motion preference, which honours the OS
-// reduced-motion by default and can be overridden. Split out of TopDrawer so the generic drawer
-// holds only chrome and a body slot, not a growing per-panel if/else chain.
+// The User Settings drawer body, split into sub-panels (Reading, Appearance) so it stays legible as
+// controls grow. Reading controls are presentational: each button sets a data-reading-* attribute on
+// #chat-root (glue owns persistence + application), and the active highlight + panel visibility are
+// CSS keyed off those attrs, so they survive a Shell re-render without Zig reactive state. Motion is
+// the exception: Zig owns its reactive class (it re-renders the seg), so it keeps its existing wiring.
 pub fn SettingsBody(allocator: zx.Allocator) zx.Component {
     return (
         <div @allocator={allocator} class="settings-body">
-            <div class="setting-row">
-                <span class="setting-label" id="motion-label">Motion</span>
-                <div class="seg" role="radiogroup" aria-labelledby="motion-label" aria-describedby="motion-note">
-                    <button class={ui.motionSegClass(.system)} data-motion-set="system" type="button" role="radio" aria-checked={motionChecked(.system)}>System</button>
-                    <button class={ui.motionSegClass(.on)} data-motion-set="on" type="button" role="radio" aria-checked={motionChecked(.on)}>On</button>
-                    <button class={ui.motionSegClass(.off)} data-motion-set="off" type="button" role="radio" aria-checked={motionChecked(.off)}>Off</button>
-                </div>
+            <div class="settings-tabs" role="group" aria-label="Settings sections">
+                <button class="settings-tab" data-reading-set="tab" data-reading-val="reading" type="button">Reading</button>
+                <button class="settings-tab" data-reading-set="tab" data-reading-val="appearance" type="button">Appearance</button>
             </div>
-            <p class="setting-note" id="motion-note">System follows your OS reduced-motion preference.</p>
+
+            <div class="settings-panel" data-tab="reading" aria-label="Reading">
+                <div class="setting-row">
+                    <span class="setting-label">Text size</span>
+                    <div class="seg" role="group" aria-label="Text size">
+                        <button class="seg-btn" data-reading-set="size" data-reading-val="s" type="button">Small</button>
+                        <button class="seg-btn" data-reading-set="size" data-reading-val="m" type="button">Medium</button>
+                        <button class="seg-btn" data-reading-set="size" data-reading-val="l" type="button">Large</button>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">Line width</span>
+                    <div class="seg" role="group" aria-label="Line width">
+                        <button class="seg-btn" data-reading-set="measure" data-reading-val="narrow" type="button">Narrow</button>
+                        <button class="seg-btn" data-reading-set="measure" data-reading-val="normal" type="button">Normal</button>
+                        <button class="seg-btn" data-reading-set="measure" data-reading-val="wide" type="button">Wide</button>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">Line height</span>
+                    <div class="seg" role="group" aria-label="Line height">
+                        <button class="seg-btn" data-reading-set="lh" data-reading-val="tight" type="button">Tight</button>
+                        <button class="seg-btn" data-reading-set="lh" data-reading-val="normal" type="button">Normal</button>
+                        <button class="seg-btn" data-reading-set="lh" data-reading-val="loose" type="button">Loose</button>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">Justify</span>
+                    <div class="seg" role="group" aria-label="Justify long messages">
+                        <button class="seg-btn" data-reading-set="justify" data-reading-val="on" type="button">On</button>
+                        <button class="seg-btn" data-reading-set="justify" data-reading-val="off" type="button">Off</button>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">Paragraphs</span>
+                    <div class="seg" role="group" aria-label="Paragraph style">
+                        <button class="seg-btn" data-reading-set="indent" data-reading-val="novel" type="button">Novel</button>
+                        <button class="seg-btn" data-reading-set="indent" data-reading-val="chat" type="button">Chat</button>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <span class="setting-label">Theme</span>
+                    <div class="seg" role="group" aria-label="Reading theme">
+                        <button class="seg-btn" data-reading-set="theme" data-reading-val="dark" type="button">Dark</button>
+                        <button class="seg-btn" data-reading-set="theme" data-reading-val="sepia" type="button">Sepia</button>
+                        <button class="seg-btn" data-reading-set="theme" data-reading-val="paper" type="button">Paper</button>
+                    </div>
+                </div>
+                <p class="setting-note">Reading styles apply to the chat area only.</p>
+            </div>
+
+            <div class="settings-panel" data-tab="appearance" aria-label="Appearance">
+                <div class="setting-row">
+                    <span class="setting-label" id="motion-label">Motion</span>
+                    <div class="seg" role="radiogroup" aria-labelledby="motion-label" aria-describedby="motion-note">
+                        <button class={ui.motionSegClass(.system)} data-motion-set="system" type="button" role="radio" aria-checked={motionChecked(.system)}>System</button>
+                        <button class={ui.motionSegClass(.on)} data-motion-set="on" type="button" role="radio" aria-checked={motionChecked(.on)}>On</button>
+                        <button class={ui.motionSegClass(.off)} data-motion-set="off" type="button" role="radio" aria-checked={motionChecked(.off)}>Off</button>
+                    </div>
+                </div>
+                <p class="setting-note" id="motion-note">System follows your OS reduced-motion preference.</p>
+            </div>
         </div>
     );
 }

@@ -67,6 +67,10 @@ function launchChrome(profile) {
     // process group (detached) so cleanup can group-kill the browser and its renderers together.
     const child = spawn('google-chrome-stable', [
         '--headless', '--disable-gpu', '--no-sandbox',
+        // Tall window so every fixture message is inside the viewport: the app uses content-visibility
+        // to skip rendering off-screen messages, and a short window would leave the last (streamed) one
+        // off-screen and unrendered, so its content would be absent from the dump.
+        '--window-size=1400,9000',
         `--user-data-dir=${profile}`, '--remote-debugging-port=0', 'about:blank',
     ], { detached: true, stdio: 'ignore' });
     return child;

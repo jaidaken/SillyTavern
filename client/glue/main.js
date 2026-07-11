@@ -591,6 +591,29 @@
             applyMotion(name);
         });
 
+        // Reading preferences: presentational data-reading-* attributes on #chat-root, which does not
+        // re-render with the Shell region, so the values (and the CSS active highlights keyed off them)
+        // survive a settings re-render without Zig state. The glue owns persistence; the CSS owns effect.
+        const READING_DEFAULT = { size: 'm', measure: 'normal', lh: 'normal', justify: 'on', indent: 'novel', theme: 'dark', tab: 'reading' };
+        function applyReading(key, val) {
+            const root = document.getElementById('chat-root');
+            if (root) root.setAttribute('data-reading-' + key, val);
+        }
+        Object.keys(READING_DEFAULT).forEach(function (key) {
+            let val = READING_DEFAULT[key];
+            try { val = localStorage.getItem('st-reading-' + key) || READING_DEFAULT[key]; } catch (_) {}
+            applyReading(key, val);
+        });
+        document.addEventListener('click', function (e) {
+            const btn = e.target && e.target.closest ? e.target.closest('[data-reading-set]') : null;
+            if (!btn) return;
+            const key = btn.getAttribute('data-reading-set');
+            const val = btn.getAttribute('data-reading-val');
+            if (!key || val === null || !Object.hasOwn(READING_DEFAULT, key)) return;
+            try { localStorage.setItem('st-reading-' + key, val); } catch (_) {}
+            applyReading(key, val);
+        });
+
         // Composer auto-grow: the textarea expands to fit its content up to the CSS max-height, then
         // scrolls. Delegated on input so it survives ziex re-renders replacing the element.
         document.addEventListener('input', function (e) {

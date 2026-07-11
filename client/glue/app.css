@@ -239,7 +239,7 @@ body {
 }
 
 .chat-inner {
-    max-width: var(--measure);
+    max-width: var(--reading-measure, var(--measure));
     margin: 0 auto;
     padding: var(--s-5) var(--s-4) var(--s-6);
 }
@@ -498,6 +498,10 @@ body {
     padding-block: var(--s-4);
     padding-inline-start: var(--s-4);
     border-bottom: 1px solid var(--border-soft);
+    /* Skip layout + paint for off-screen messages so a long roleplay log stays cheap; the intrinsic
+       size reserves scroll height for what is not yet rendered. */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 5rem;
 }
 
 .mes:last-child {
@@ -530,8 +534,9 @@ body {
 
 .mes_text {
     font-family: var(--font-serif);
-    font-size: var(--text-md);
-    line-height: var(--lh-prose);
+    /* Size + line-height are reading-control vars (glue sets them per user); default to the base tokens. */
+    font-size: var(--reading-size, var(--text-md));
+    line-height: var(--reading-lh, var(--lh-prose));
     color: var(--text);
     overflow-wrap: break-word;
     /* Reading-surface typography: pretty wrapping avoids a stranded last word; Newsreader's oldstyle
@@ -539,6 +544,8 @@ body {
        (fixed width) so neither tweak affects it. */
     text-wrap: pretty;
     font-variant-numeric: oldstyle-figures proportional-nums;
+    /* Trim the font leading so text sits optically centred in the bubble; progressive, ignored where unsupported. */
+    text-box: trim-both cap alphabetic;
 }
 
 .mes_text > *:first-child { margin-top: 0; }
@@ -547,6 +554,104 @@ body {
 .mes_text p {
     margin: 0 0 0.7em;
 }
+
+/* ---- Reading controls ----
+   Glue sets data-reading-* on #chat-root, which does NOT re-render with the Shell region, so the
+   values (and the button highlights keyed off them) persist across a settings re-render. Every rule
+   is scoped to the message reading area only, never the app chrome. */
+#chat-root[data-reading-size="s"] { --reading-size: 0.95rem; }
+#chat-root[data-reading-size="m"] { --reading-size: var(--text-md); }
+#chat-root[data-reading-size="l"] { --reading-size: 1.2rem; }
+#chat-root[data-reading-measure="narrow"] { --reading-measure: 34rem; }
+#chat-root[data-reading-measure="normal"] { --reading-measure: var(--measure); }
+#chat-root[data-reading-measure="wide"] { --reading-measure: 48rem; }
+#chat-root[data-reading-lh="tight"] { --reading-lh: 1.45; }
+#chat-root[data-reading-lh="normal"] { --reading-lh: var(--lh-prose); }
+#chat-root[data-reading-lh="loose"] { --reading-lh: 1.85; }
+
+/* Justify defaults on; only long messages carry mes-justify (message.zx). Hyphenation is what stops
+   native justification opening whitespace rivers. The pref turns it off. */
+.mes_text.mes-justify {
+    text-align: justify;
+    hyphens: auto;
+    -webkit-hyphens: auto;
+    hyphenate-limit-chars: 6 3 2;
+}
+#chat-root[data-reading-justify="off"] .mes_text.mes-justify {
+    text-align: left;
+    hyphens: none;
+    -webkit-hyphens: none;
+}
+
+/* Novel paragraphs: first-line indent, no inter-paragraph gap. Default (or "chat") keeps the spacing. */
+#chat-root[data-reading-indent="novel"] .mes_text p { margin-block-end: 0; }
+#chat-root[data-reading-indent="novel"] .mes_text p + p { text-indent: 1.4em; }
+
+/* Reading themes recolor the message area only (scoped to #chat); accent darkens so links/names stay
+   legible on the light grounds. Default (dark) needs no override. */
+#chat-root[data-reading-theme="sepia"] #chat {
+    --bg: oklch(0.923 0.028 84);
+    --text: oklch(0.315 0.021 60);
+    --accent: oklch(0.520 0.110 55);
+    --border-soft: oklch(0.86 0.02 84);
+    background: var(--bg);
+}
+#chat-root[data-reading-theme="paper"] #chat {
+    --bg: oklch(0.968 0.006 90);
+    --text: oklch(0.255 0.012 60);
+    --accent: oklch(0.470 0.130 45);
+    --border-soft: oklch(0.90 0.006 90);
+    background: var(--bg);
+}
+
+/* A control button highlights off the #chat-root state (survives a Shell re-render). */
+#chat-root[data-reading-size="s"] .seg-btn[data-reading-set="size"][data-reading-val="s"],
+#chat-root[data-reading-size="m"] .seg-btn[data-reading-set="size"][data-reading-val="m"],
+#chat-root[data-reading-size="l"] .seg-btn[data-reading-set="size"][data-reading-val="l"],
+#chat-root[data-reading-measure="narrow"] .seg-btn[data-reading-set="measure"][data-reading-val="narrow"],
+#chat-root[data-reading-measure="normal"] .seg-btn[data-reading-set="measure"][data-reading-val="normal"],
+#chat-root[data-reading-measure="wide"] .seg-btn[data-reading-set="measure"][data-reading-val="wide"],
+#chat-root[data-reading-lh="tight"] .seg-btn[data-reading-set="lh"][data-reading-val="tight"],
+#chat-root[data-reading-lh="normal"] .seg-btn[data-reading-set="lh"][data-reading-val="normal"],
+#chat-root[data-reading-lh="loose"] .seg-btn[data-reading-set="lh"][data-reading-val="loose"],
+#chat-root[data-reading-justify="on"] .seg-btn[data-reading-set="justify"][data-reading-val="on"],
+#chat-root[data-reading-justify="off"] .seg-btn[data-reading-set="justify"][data-reading-val="off"],
+#chat-root[data-reading-indent="novel"] .seg-btn[data-reading-set="indent"][data-reading-val="novel"],
+#chat-root[data-reading-indent="chat"] .seg-btn[data-reading-set="indent"][data-reading-val="chat"],
+#chat-root[data-reading-theme="dark"] .seg-btn[data-reading-set="theme"][data-reading-val="dark"],
+#chat-root[data-reading-theme="sepia"] .seg-btn[data-reading-set="theme"][data-reading-val="sepia"],
+#chat-root[data-reading-theme="paper"] .seg-btn[data-reading-set="theme"][data-reading-val="paper"] {
+    background: var(--surface-2);
+    color: var(--accent);
+}
+
+/* Settings sub-panel tabs. */
+.settings-tabs {
+    display: flex;
+    gap: 2px;
+    margin-block-end: var(--s-3);
+    border-bottom: 1px solid var(--border);
+}
+.settings-tab {
+    padding: 0.4rem 0.8rem;
+    background: transparent;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    cursor: pointer;
+}
+.settings-tab:hover { color: var(--text); }
+#chat-root[data-reading-tab="reading"] .settings-tab[data-reading-val="reading"],
+#chat-root[data-reading-tab="appearance"] .settings-tab[data-reading-val="appearance"] {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+.settings-panel { display: none; }
+.settings-panel[data-tab="reading"] { display: block; }
+#chat-root[data-reading-tab="appearance"] .settings-panel[data-tab="reading"] { display: none; }
+#chat-root[data-reading-tab="appearance"] .settings-panel[data-tab="appearance"] { display: block; }
 
 /* Speech in warm amber, action/scene text in muted italic: the RP reading convention. */
 .mes_text q {

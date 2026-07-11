@@ -16,11 +16,14 @@ pub const MessageProps = struct {
 pub fn MessageView(allocator: zx.Allocator, props: MessageProps) zx.Component {
     instrument.bump();
     const body: html.SanitizedHtml = sanitized.renderMessage(allocator, props.msg.body, props.cacheable);
+    // Only long messages carry mes-justify: a justified one or two line body opens ugly word gaps, so
+    // short roleplay turns stay ragged. ~180 source bytes is a rough three-line floor at the reading measure.
+    const text_class: []const u8 = if (props.msg.body.len > 180) "mes_text mes-justify" else "mes_text";
 
     return (
         <div @allocator={allocator} class="mes" aria-busy={if (props.streaming) "true" else "false"}>
             <div class="mes_name">{props.msg.name}</div>
-            <div class="mes_text" @escaping={.none}>{html.sink(body)}</div>
+            <div class={text_class} @escaping={.none}>{html.sink(body)}</div>
         </div>
     );
 }
