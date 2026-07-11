@@ -39,6 +39,62 @@ const roleplay = [_]Message{
         ,
     },
     .{
+        .name = "You",
+        .body =
+        \\"Not ours," I echo. My hand closes over hers before the map can vanish. "Then say whose."
+        ,
+    },
+    .{
+        .name = "Seraphina",
+        .body =
+        \\*She lets the map go, but not the look.* "Vael colours. Black sails, a grey hull."
+        \\
+        \\A pause. "Salvagers don't fly a house."
+        ,
+    },
+    .{
+        .name = "You",
+        .body =
+        \\> Somewhere above, a floorboard settles.
+        \\
+        \\I lower my voice. "So it wasn't salvage."
+        ,
+    },
+    .{
+        .name = "Seraphina",
+        .body =
+        \\"It was a message." *She draws a second line, crossing the first.* "Left where the tide would carry it to *our* door, not theirs."
+        ,
+    },
+    .{
+        .name = "You",
+        .body =
+        \\"A warning, then. Or bait."
+        \\
+        \\I weigh the two and like neither.
+        ,
+    },
+    .{
+        .name = "Seraphina",
+        .body =
+        \\"Both, if they're clever." *She almost smiles.* "And they are clever."
+        ,
+    },
+    .{
+        .name = "You",
+        .body =
+        \\"Then we don't take the bait." *I straighten.* "We follow it back."
+        ,
+    },
+    .{
+        .name = "Seraphina",
+        .body =
+        \\*For the first time she looks up.* "You'd sail into Vael water on a hunch."
+        \\
+        \\"No." She rolls the map open again. "On **two**."
+        ,
+    },
+    .{
         .name = "Quote styles",
         .body =
         \\All six of SillyTavern's quote forms colour the same way:

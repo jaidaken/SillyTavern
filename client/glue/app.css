@@ -739,19 +739,40 @@ body {
    margin rule draws down like ink. ziex keeps stable element identity, so this fires once per message,
    not per rerender. --move zeroes only the movement under reduced motion; the opacity + amber still
    play, so the character carries via serif names + amber + warm ground (WD25/WD63). */
-.mes {
+/* Held invisible until the client adds .hydrated to #chat-root after the first render, so a message
+   settles in complete (name never precedes its body) and the load reveals top-to-bottom (WD63). */
+#chat-root:not(.hydrated) .mes { opacity: 0; }
+
+#chat-root.hydrated .mes {
     animation: mes-rise 300ms var(--ease-out) both;
+    animation-delay: var(--md, 0ms);
 }
 
-.mes_name {
+#chat-root.hydrated .mes_name {
     animation: mes-name 300ms var(--ease-out) both;
-    animation-delay: 45ms;
+    animation-delay: calc(var(--md, 0ms) + 45ms);
 }
 
-.mes::before {
+#chat-root.hydrated .mes::before {
     animation: mes-ink 420ms var(--ease-out) both;
-    animation-delay: 80ms;
+    animation-delay: calc(var(--md, 0ms) + 80ms);
 }
+
+/* Stagger the initial reveal top-to-bottom; a live message past this list settles with no delay. */
+.chat-inner .mes:nth-child(1) { --md: 0ms; }
+.chat-inner .mes:nth-child(2) { --md: 100ms; }
+.chat-inner .mes:nth-child(3) { --md: 200ms; }
+.chat-inner .mes:nth-child(4) { --md: 300ms; }
+.chat-inner .mes:nth-child(5) { --md: 400ms; }
+.chat-inner .mes:nth-child(6) { --md: 500ms; }
+.chat-inner .mes:nth-child(7) { --md: 600ms; }
+.chat-inner .mes:nth-child(8) { --md: 700ms; }
+.chat-inner .mes:nth-child(9) { --md: 800ms; }
+.chat-inner .mes:nth-child(10) { --md: 900ms; }
+.chat-inner .mes:nth-child(11) { --md: 1000ms; }
+.chat-inner .mes:nth-child(12) { --md: 1100ms; }
+.chat-inner .mes:nth-child(13) { --md: 1200ms; }
+.chat-inner .mes:nth-child(14) { --md: 1300ms; }
 
 @keyframes mes-rise {
     from { opacity: 0; transform: translateY(calc(var(--move) * 8px)); }

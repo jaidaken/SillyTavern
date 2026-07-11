@@ -78,7 +78,7 @@ echo "== served html (pre-hydration) =="
 # Three client regions (Shell, MessageLog, Composer), each with one SSR marker; three fixtures, each
 # body a placeholder the client replaces.
 check "region hydration markers in index.html" "$(count '<!--\$' dist/index.html)" 3
-check "ssr placeholder, one per message" "$(count 'ST_SSR_PLACEHOLDER' dist/index.html)" 3
+check "ssr placeholder, one per message" "$(count 'ST_SSR_PLACEHOLDER' dist/index.html)" 12
 
 # Start the server for every browser check. --dev exposes /dev/stream and /dev/hold. setsid so the
 # whole tree dies with the group kill in cleanup.
@@ -134,13 +134,13 @@ echo
 echo "== rendered dom (default) =="
 chrome "http://127.0.0.1:$PORT/" 9000 > "$DOM"
 check "ssr placeholder replaced" "$(count 'ST_SSR_PLACEHOLDER' "$DOM")" 0
-check "messages rendered" "$(count 'class="mes"' "$DOM")" 3
+check "messages rendered" "$(count 'class="mes"' "$DOM")" 12
 check "shell region present" "$(count 'id="shell"' "$DOM")" 1
 check "messagelog region present" "$(count 'id="chat"' "$DOM")" 1
 check "composer region present" "$(count 'id="composer"' "$DOM")" 1
 # The three roleplay fixtures carry real quotes, a blockquote, emphasis, and a hard break.
 check   "quotes open and close balance" "$(count '<q>' "$DOM")" "$(count '</q>' "$DOM")"
-check   "quotes wrapped" "$(count '<q>' "$DOM")" 4
+check   "quotes wrapped" "$(count '<q>' "$DOM")" 26
 atleast "blockquotes" "$(count '<blockquote>' "$DOM")" 1
 atleast "hard line breaks" "$(count '<br' "$DOM")" 1
 atleast "emphasis" "$(count '<em>' "$DOM")" 1
@@ -150,7 +150,7 @@ echo "== sanitize boundary (hostile body driven through the render) =="
 chrome "$SAN_URL" 30000 > "$SAN_DOM"
 # The hostile message must have rendered at all: three fixtures plus the streamed one. If the body
 # were dropped, the strip checks below would pass vacuously, so this is the anti-vacuous guard.
-check   "hostile message rendered" "$(count 'class="mes"' "$SAN_DOM")" 4
+check   "hostile message rendered" "$(count 'class="mes"' "$SAN_DOM")" 13
 check   "onerror attribute stripped" "$(count 'onerror=' "$SAN_DOM")" 0
 check   "javascript: href stripped" "$(count 'href="javascript:' "$SAN_DOM")" 0
 check   "svg data uri stripped" "$(count 'src="data:image/svg' "$SAN_DOM")" 0
@@ -216,11 +216,11 @@ def check(label, ok, detail):
 
 check("all tokens delivered", s["tokens"] == 200, s["tokens"])
 check("writes coalesced per frame", s["flushes"] < 60, f"{s['flushes']} flushes for 200 tokens")
-# Three fixtures sanitize at boot, then one sanitize per flush for the uncached streaming tail.
-budget = 3 + s["flushes"] + 2
+# The twelve example fixtures sanitize at boot, then one per flush for the uncached streaming tail.
+budget = 12 + s["flushes"] + 2
 check("render cache holds", s["sanitizes"] <= budget, f"{s['sanitizes']} sanitizes, budget {budget}")
 check("tail text present", "tok199" in h, "tok199")
-check("streamed message appended", len(re.findall(r'class="mes"', h)) == 4, len(re.findall(r'class="mes"', h)))
+check("streamed message appended", len(re.findall(r'class="mes"', h)) == 13, len(re.findall(r'class="mes"', h)))
 sys.exit(1 if fail else 0)
 PY
 [ $? -eq 0 ] || FAILURES=$((FAILURES + 1))

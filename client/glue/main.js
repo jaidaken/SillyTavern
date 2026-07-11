@@ -488,6 +488,15 @@
             throw new Error('[st-client] door.init exposed no wasm exports: __zx_alloc unreachable');
         }
 
+        // door.init filled real bodies into the invisible SSR frames; add .hydrated past the next
+        // paint so the CSS staggers the settle on complete messages, not the empty pre-hydrate frames.
+        requestAnimationFrame(function () {
+            requestAnimationFrame(function () {
+                const root = document.getElementById('chat-root');
+                if (root) root.classList.add('hydrated');
+            });
+        });
+
         // Panel resize: drag a .panel-resize handle. Width is set live during the drag to avoid a
         // rerender per pointermove; the final width is persisted to Zig state on release.
         document.addEventListener('pointerdown', function (e) {
