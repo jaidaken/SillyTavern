@@ -22,6 +22,10 @@ const thumbnailsEnabled = !!getConfigValue('thumbnails.enabled', true, 'boolean'
 const quality = Math.min(100, Math.max(1, parseInt(getConfigValue('thumbnails.quality', 95, 'number'))));
 const pngFormat = String(getConfigValue('thumbnails.format', 'jpg')).toLowerCase().trim() === 'png';
 
+// Skips the per-request readFile+sizeOf on thumbnail cache hits; mtime mismatch falls back to a fresh read.
+/** @type {Map<string, {mtimeMs: number, aspectRatio: number}>} */
+const aspectRatioCache = new Map();
+
 /**
  * @typedef {'bg' | 'avatar' | 'persona'} ThumbnailType
  */
@@ -89,6 +93,7 @@ export async function invalidateThumbnail(directories, type, file) {
     const pathToThumbnail = path.join(folder, sanitize(file));
 
     await fs.promises.rm(pathToThumbnail, { force: true });
+    aspectRatioCache.delete(pathToThumbnail);
 }
 
 /**
@@ -115,25 +120,29 @@ export async function generateThumbnail(directories, type, file, forceGenerate =
         const pathToOriginalFile = path.join(originalFolder, file);
 
         // Check if thumbnail already exists and return it if not forcing regeneration
-        if (!forceGenerate && await fs.promises.stat(pathToCachedFile).catch(() => null)) {
+        const cachedStat = forceGenerate ? null : await fs.promises.stat(pathToCachedFile).catch(() => null);
+        if (cachedStat) {
             try {
                 // Check if original image was updated after thumbnail creation
                 const originalStat = await fs.promises.stat(pathToOriginalFile).catch(() => null);
-                if (originalStat) {
-                    const cachedStat = await fs.promises.stat(pathToCachedFile);
-
-                    if (originalStat.mtimeMs > cachedStat.ctimeMs) {
-                        // Original file changed, regenerate thumbnail
-                        forceGenerate = true;
-                    }
+                if (originalStat && originalStat.mtimeMs > cachedStat.ctimeMs) {
+                    // Original file changed, regenerate thumbnail
+                    forceGenerate = true;
                 }
 
                 if (!forceGenerate) {
+                    // When a thumbnail exists, return the current resolution from config so the JSON can be updated.
+                    const resolution = getThumbnailResolution(type);
+
+                    const knownRatio = aspectRatioCache.get(pathToCachedFile);
+                    if (knownRatio && knownRatio.mtimeMs === cachedStat.mtimeMs) {
+                        return { path: pathToCachedFile, aspectRatio: knownRatio.aspectRatio, resolution };
+                    }
+
                     const buffer = await fs.promises.readFile(pathToCachedFile);
                     const fileDimensions = sizeOf(buffer);
                     const ratio = (fileDimensions.height > 0) ? (fileDimensions.width / fileDimensions.height) : 1.0;
-                    // When a thumbnail exists, return the current resolution from config so the JSON can be updated.
-                    const resolution = getThumbnailResolution(type);
+                    aspectRatioCache.set(pathToCachedFile, { mtimeMs: cachedStat.mtimeMs, aspectRatio: ratio });
                     return { path: pathToCachedFile, aspectRatio: ratio, resolution };
                 }
             } catch (e) {
@@ -232,6 +241,11 @@ async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
             : await thumbImage.getBuffer(JimpMime.jpeg, { quality: quality, jpegColorSpace: 'ycbcr' });
 
         await writeFileAtomic(pathToCachedFile, buffer);
+
+        // Cache the thumb-derived ratio (what the hit path computes), not the original-derived return value.
+        const thumbStat = await fs.promises.stat(pathToCachedFile);
+        const thumbRatio = (thumbImage.bitmap.height > 0) ? (thumbImage.bitmap.width / thumbImage.bitmap.height) : 1.0;
+        aspectRatioCache.set(pathToCachedFile, { mtimeMs: thumbStat.mtimeMs, aspectRatio: thumbRatio });
 
         return { success: true, aspectRatio, resolution: thumbnailResolution };
     } catch (error) {

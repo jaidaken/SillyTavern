@@ -290,6 +290,30 @@ function getModelScope(sourceSettings) {
     return (sourceSettings?.model || '');
 }
 
+const INDEX_CACHE_CAP = 32;
+/** @type {Map<string, vectra.LocalIndex>} */
+const indexCache = new Map();
+/** @type {Set<string>} */
+const migratedIndexPaths = new Set();
+
+/**
+ * Evicts cached indexes at or under the given path; every disk-delete path must call this.
+ * @param {string} targetPath - Index folder path or a parent directory of index folders
+ */
+export function evictVectorIndexes(targetPath) {
+    const prefix = targetPath + path.sep;
+    for (const key of [...indexCache.keys()]) {
+        if (key === targetPath || key.startsWith(prefix)) {
+            indexCache.delete(key);
+        }
+    }
+    for (const key of [...migratedIndexPaths]) {
+        if (key === targetPath || key.startsWith(prefix)) {
+            migratedIndexPaths.delete(key);
+        }
+    }
+}
+
 /**
  * Gets the index for the vector collection
  * @param {import('../users.js').UserDirectoryList} directories - User directories
@@ -298,15 +322,34 @@ function getModelScope(sourceSettings) {
  * @param {object} sourceSettings - The model for the source
  * @returns {Promise<vectra.LocalIndex>} - The index for the collection
  */
-async function getIndex(directories, collectionId, source, sourceSettings) {
+export async function getIndex(directories, collectionId, source, sourceSettings) {
     const model = getModelScope(sourceSettings);
     const pathToFile = path.join(directories.vectors, sanitize(source), sanitize(collectionId), sanitize(model));
+
+    const cached = indexCache.get(pathToFile);
+    if (cached) {
+        // Map iterates in insertion order: delete+set makes this entry the most recently used.
+        indexCache.delete(pathToFile);
+        indexCache.set(pathToFile, cached);
+        return cached;
+    }
+
     const store = new vectra.LocalIndex(pathToFile);
 
     if (!await store.isIndexCreated()) {
         await store.createIndex();
-    } else {
+        migratedIndexPaths.add(pathToFile);
+    } else if (!migratedIndexPaths.has(pathToFile)) {
         await migrateNumericHashes(store);
+        migratedIndexPaths.add(pathToFile);
+    }
+
+    indexCache.set(pathToFile, store);
+    if (indexCache.size > INDEX_CACHE_CAP) {
+        const oldestKey = indexCache.keys().next().value;
+        if (oldestKey !== undefined) {
+            indexCache.delete(oldestKey);
+        }
     }
 
     return store;
@@ -430,13 +473,14 @@ async function queryCollection(directories, collectionId, source, sourceSettings
  */
 async function multiQueryCollection(directories, collectionIds, source, sourceSettings, searchText, topK, threshold) {
     const vector = await getVector(source, sourceSettings, searchText, true, directories);
-    const results = [];
 
-    for (const collectionId of collectionIds) {
+    // Read-only per collection; flat() keeps the pre-sort ordering of the old sequential loop.
+    const perCollection = await Promise.all(collectionIds.map(async collectionId => {
         const store = await getIndex(directories, collectionId, source, sourceSettings);
         const result = await store.queryItems(vector, '', topK);
-        results.push(...result.map(result => ({ collectionId, result })));
-    }
+        return result.map(result => ({ collectionId, result }));
+    }));
+    const results = perCollection.flat();
 
     // Sort results by descending similarity, apply threshold, and take top K
     const sortedResults = results
@@ -482,6 +526,7 @@ async function regenerateCorruptedIndexErrorHandler(req, res, error) {
                 const path = index.folderPath;
                 log.vectors.warn(`Corrupted index detected at ${path}, regenerating...`);
                 await index.deleteIndex();
+                evictVectorIndexes(path);
                 return res.redirect(307, req.originalUrl + '?regenerated=true');
             }
         }
@@ -591,11 +636,11 @@ router.post('/purge-all', async (req, res) => {
         for (const source of SOURCES) {
             const sourcePath = path.join(req.user.directories.vectors, sanitize(source));
             const sourceStat = await fs.promises.stat(sourcePath).catch(() => null);
-            if (!sourceStat) {
-                continue;
+            if (sourceStat) {
+                await fs.promises.rm(sourcePath, { recursive: true });
+                log.vectors.info(`Deleted vector source store at ${sourcePath}`);
             }
-            await fs.promises.rm(sourcePath, { recursive: true });
-            log.vectors.info(`Deleted vector source store at ${sourcePath}`);
+            evictVectorIndexes(sourcePath);
         }
 
         return res.sendStatus(200);
@@ -616,11 +661,11 @@ router.post('/purge', async (req, res) => {
         for (const source of SOURCES) {
             const sourcePath = path.join(req.user.directories.vectors, sanitize(source), sanitize(collectionId));
             const sourceStat = await fs.promises.stat(sourcePath).catch(() => null);
-            if (!sourceStat) {
-                continue;
+            if (sourceStat) {
+                await fs.promises.rm(sourcePath, { recursive: true });
+                log.vectors.info(`Deleted vector index at ${sourcePath}`);
             }
-            await fs.promises.rm(sourcePath, { recursive: true });
-            log.vectors.info(`Deleted vector index at ${sourcePath}`);
+            evictVectorIndexes(sourcePath);
         }
 
         return res.sendStatus(200);
