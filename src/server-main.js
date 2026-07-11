@@ -73,6 +73,7 @@ import { checkForNewContent } from './endpoints/content-manager.js';
 import { init as settingsInit } from './endpoints/settings.js';
 import { redirectDeprecatedEndpoints, ServerStartup, setupPrivateEndpoints } from './server-startup.js';
 import { diskCache } from './endpoints/characters.js';
+import { flushChatBackups } from './endpoints/chats.js';
 import { migrateFlatSecrets } from './endpoints/secrets.js';
 import { runConfigValidation } from './config-validate.js';
 import { migrateGroupChatsMetadataFormat } from './endpoints/groups.js';
@@ -235,7 +236,19 @@ app.get('/login', loginPageMiddleware);
 const webpackMiddleware = getWebpackServeMiddleware();
 app.use(webpackMiddleware);
 app.use(userCssMiddleware);
-app.use(express.static(path.join(serverDirectory, 'public'), {}));
+const publicDirectory = path.join(serverDirectory, 'public');
+app.use(express.static(publicDirectory, {
+    maxAge: '1h',
+    setHeaders: (res, filePath) => {
+        const relativePath = path.relative(publicDirectory, filePath);
+        if (relativePath.endsWith('.html')) {
+            // html always revalidates; lib/img/fonts only change on deploy so they cache for a day
+            res.setHeader('Cache-Control', 'no-cache');
+        } else if (/^(lib|img|webfonts)[/\\]/.test(relativePath) || relativePath.endsWith('.woff2')) {
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+        }
+    },
+}));
 
 // Public API
 app.use('/api/users', usersPublicRouter);
@@ -315,6 +328,7 @@ async function preSetupTasks() {
     const exitProcess = async () => {
         if (isExiting) return;
         isExiting = true;
+        await flushChatBackups();
         await statsOnExit();
         if (typeof cleanupPlugins === 'function') {
             await cleanupPlugins();

@@ -20,7 +20,7 @@ import chalk from 'chalk';
 import bytes from 'bytes';
 import { LOG_LEVELS, CHAT_COMPLETION_SOURCES, MEDIA_REQUEST_TYPE } from './constants.js';
 import { serverDirectory } from './server-directory.js';
-import writeFileAtomic, { sync as writeFileAtomicSync } from 'write-file-atomic';
+import writeFileAtomic from 'write-file-atomic';
 import { isFirefox } from './express-common.js';
 import { log } from './log.js';
 
@@ -682,32 +682,6 @@ export async function removeOldBackups(directory, prefix, limit = null) {
             }
 
             await fs.promises.unlink(oldest);
-        }
-    }
-}
-
-/**
- * Sync twin of removeOldBackups. Only for chat backupChat, whose process-exit flush cannot await.
- * @param {string} directory The root directory to remove backups from.
- * @param {string} prefix File prefix to filter backups by.
- * @param {number?} limit Maximum number of backups to keep. If null, the limit is determined by the `backups.common.numberOfBackups` config value.
- */
-export function removeOldBackupsSync(directory, prefix, limit = null) {
-    const MAX_BACKUPS = limit ?? Number(getConfigValue('backups.common.numberOfBackups', 50, 'number'));
-
-    let files = fs.readdirSync(directory).filter(f => f.startsWith(prefix));
-    if (files.length > MAX_BACKUPS) {
-        files = files.map(f => path.join(directory, f));
-        const mtimes = new Map(files.map(f => [f, fs.statSync(f).mtimeMs]));
-        files.sort((a, b) => (mtimes.get(a) ?? 0) - (mtimes.get(b) ?? 0));
-
-        while (files.length > MAX_BACKUPS) {
-            const oldest = files.shift();
-            if (!oldest) {
-                break;
-            }
-
-            fs.unlinkSync(oldest);
         }
     }
 }
@@ -1565,21 +1539,6 @@ export function flattenSchema(schema, api) {
     const flattenedSchema = resolve(schemaCopy);
     delete flattenedSchema.$schema;
     return flattenedSchema;
-}
-
-/**
- * Writes to a file, creating it's parent directories if needed.
- * Sync path kept only for chat backupChat's process-exit flush; request paths use tryWriteFile.
- * @param {string} filePath
- * @param {string} data
- */
-export function tryWriteFileSync(filePath, data) {
-    const directory = path.dirname(filePath);
-    //Ensure the directory exists.
-    if (!fs.existsSync(directory)) {
-        fs.mkdirSync(directory, { recursive: true });
-    }
-    writeFileAtomicSync(filePath, data, 'utf8');
 }
 
 /**

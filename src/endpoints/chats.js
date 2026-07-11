@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
-import process from 'node:process';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
@@ -14,9 +13,8 @@ import {
     humanizedDateTime,
     tryParse,
     generateTimestamp,
-    removeOldBackupsSync,
+    removeOldBackups,
     formatBytes,
-    tryWriteFileSync,
     tryWriteFile,
     tryReadFile,
     tryDeleteFile,
@@ -38,13 +36,13 @@ export const CHAT_BACKUPS_PREFIX = 'chat_';
  * @param {string} name The name of the chat.
  * @param {string} data The serialized chat to save.
  * @param {string} backupPrefix The file prefix. Typically CHAT_BACKUPS_PREFIX.
- * @returns
+ * @returns {Promise<void>}
  */
-function backupChat(directory, name, data, backupPrefix = CHAT_BACKUPS_PREFIX) {
+async function backupChat(directory, name, data, backupPrefix = CHAT_BACKUPS_PREFIX) {
     try {
         if (!isBackupEnabled) { return; }
-        // stays sync: process.on('exit') flushes the throttled call; an await would defer the write past exit
-        if (!fs.existsSync(directory)) {
+        const directoryExists = await fs.promises.access(directory).then(() => true, () => false);
+        if (!directoryExists) {
             log.chat.error(`The chat couldn't be backed up because no directory exists at ${directory}!`);
         }
         // replace non-alphanumeric characters with underscores
@@ -52,12 +50,12 @@ function backupChat(directory, name, data, backupPrefix = CHAT_BACKUPS_PREFIX) {
 
         const backupFile = path.join(directory, `${backupPrefix}${name}_${generateTimestamp()}.jsonl`);
 
-        tryWriteFileSync(backupFile, data);
-        removeOldBackupsSync(directory, `${backupPrefix}${name}_`);
+        await tryWriteFile(backupFile, data);
+        await removeOldBackups(directory, `${backupPrefix}${name}_`);
         if (isNaN(maxTotalChatBackups) || maxTotalChatBackups < 0) {
             return;
         }
-        removeOldBackupsSync(directory, backupPrefix, maxTotalChatBackups);
+        await removeOldBackups(directory, backupPrefix, maxTotalChatBackups);
     } catch (err) {
         log.chat.error(`Could not backup chat for ${name}`, err);
     }
@@ -71,13 +69,15 @@ const backupFunctions = new Map();
 /**
  * Gets a backup function for a user.
  * @param {string} handle User handle
- * @returns {typeof backupChat} Backup function
+ * @returns {import('lodash').DebouncedFunc<typeof backupChat>} Backup function
  */
 function getBackupFunction(handle) {
-    if (!backupFunctions.has(handle)) {
-        backupFunctions.set(handle, _.throttle(backupChat, throttleInterval, { leading: true, trailing: true }));
+    let func = backupFunctions.get(handle);
+    if (!func) {
+        func = _.throttle(backupChat, throttleInterval, { leading: true, trailing: true });
+        backupFunctions.set(handle, func);
     }
-    return backupFunctions.get(handle) || (() => { });
+    return func;
 }
 
 /**
@@ -97,11 +97,18 @@ function getPreviewMessage(lastMessage) {
         : lastMessage;
 }
 
-process.on('exit', () => {
-    for (const func of backupFunctions.values()) {
-        func.flush();
+/**
+ * Flushes pending throttled chat backups. Awaited by the graceful-shutdown path in server-main.js.
+ * @returns {Promise<void>}
+ */
+export async function flushChatBackups() {
+    const results = await Promise.allSettled([...backupFunctions.values()].map(func => func.flush()));
+    for (const result of results) {
+        if (result.status === 'rejected') {
+            log.chat.error('Could not flush a pending chat backup', result.reason);
+        }
     }
-});
+}
 
 /**
  * Imports a chat from Ooba's format.
