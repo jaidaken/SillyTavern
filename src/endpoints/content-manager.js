@@ -8,7 +8,7 @@ import fetch from 'node-fetch';
 import sanitize from 'sanitize-filename';
 import writeFileAtomic from 'write-file-atomic';
 
-import { getConfigValue, color, setPermissionsSync, isValidUrl } from '../util.js';
+import { getConfigValue, color, setPermissions, isValidUrl } from '../util.js';
 import { write } from '../character-card-parser.js';
 import { serverDirectory } from '../server-directory.js';
 import { Jimp, JimpMime } from '../jimp.js';
@@ -82,11 +82,11 @@ function getScopeByType(type) {
 /**
  * Gets the default presets from the content directory.
  * @param {import('../users.js').UserDirectoryList} directories User directories
- * @returns {object[]} Array of default presets
+ * @returns {Promise<object[]>} Array of default presets
  */
-export function getDefaultPresets(directories) {
+export async function getDefaultPresets(directories) {
     try {
-        const contentIndex = getContentIndex(CONTENT_SCOPE.USER);
+        const contentIndex = await getContentIndex(CONTENT_SCOPE.USER);
         const presets = [];
 
         for (const contentItem of contentIndex) {
@@ -107,17 +107,17 @@ export function getDefaultPresets(directories) {
 /**
  * Gets a default JSON file from the content directory.
  * @param {string} filename Name of the file to get
- * @returns {object | null} JSON object or null if the file doesn't exist
+ * @returns {Promise<object | null>} JSON object or null if the file doesn't exist
  */
-export function getDefaultPresetFile(filename) {
+export async function getDefaultPresetFile(filename) {
     try {
         const contentPath = path.join(contentDirectory, filename);
 
-        if (!fs.existsSync(contentPath)) {
+        const fileContent = await fs.promises.readFile(contentPath, 'utf8').catch(() => null);
+        if (fileContent === null) {
             return null;
         }
 
-        const fileContent = fs.readFileSync(contentPath, 'utf8');
         return JSON.parse(fileContent);
     } catch (err) {
         log.content.warn(`Failed to get default file ${filename}`, err);
@@ -172,7 +172,7 @@ async function seedContent(contentIndex, contentLogPath, resolveTarget, forceCat
 
         await fs.promises.mkdir(contentTarget, { recursive: true });
         await fs.promises.cp(contentPath, targetPath, { recursive: true, force: false });
-        setPermissionsSync(targetPath);
+        await setPermissions(targetPath);
         log.content.info(`Content file ${contentItem.filename} copied to ${contentTarget}`);
         anyContentAdded = true;
     }
@@ -220,8 +220,8 @@ export async function checkForNewContent(directoriesList, forceCategories = []) 
             return;
         }
 
-        const userContentIndex = getContentIndex(CONTENT_SCOPE.USER);
-        const globalContentIndex = getContentIndex(CONTENT_SCOPE.GLOBAL);
+        const userContentIndex = await getContentIndex(CONTENT_SCOPE.USER);
+        const globalContentIndex = await getContentIndex(CONTENT_SCOPE.GLOBAL);
         let anyContentAdded = false;
 
         const globalSeedResult = await seedGlobalContent(globalContentIndex);
@@ -248,13 +248,13 @@ export async function checkForNewContent(directoriesList, forceCategories = []) 
 /**
  * Gets combined content index from the content and scaffold directories.
  * @param {CONTENT_SCOPE} scope Scope of content to get
- * @returns {ContentItem[]} Array of content index
+ * @returns {Promise<ContentItem[]>} Array of content index
  */
-function getContentIndex(scope = CONTENT_SCOPE.USER) {
+async function getContentIndex(scope = CONTENT_SCOPE.USER) {
     const result = [];
 
-    if (fs.existsSync(scaffoldIndexPath)) {
-        const scaffoldIndexText = fs.readFileSync(scaffoldIndexPath, 'utf8');
+    const scaffoldIndexText = await fs.promises.readFile(scaffoldIndexPath, 'utf8').catch(() => null);
+    if (scaffoldIndexText !== null) {
         const scaffoldIndex = JSON.parse(scaffoldIndexText);
         if (Array.isArray(scaffoldIndex)) {
             scaffoldIndex.forEach((item) => {
@@ -265,8 +265,8 @@ function getContentIndex(scope = CONTENT_SCOPE.USER) {
         }
     }
 
-    if (fs.existsSync(contentIndexPath)) {
-        const contentIndexText = fs.readFileSync(contentIndexPath, 'utf8');
+    const contentIndexText = await fs.promises.readFile(contentIndexPath, 'utf8').catch(() => null);
+    if (contentIndexText !== null) {
         const contentIndex = JSON.parse(contentIndexText);
         if (Array.isArray(contentIndex)) {
             contentIndex.forEach((item) => {
@@ -285,10 +285,10 @@ function getContentIndex(scope = CONTENT_SCOPE.USER) {
  * @param {string} type Type of content
  * @param {'json'|'string'|'raw'} format Format of content
  * @param {CONTENT_SCOPE} scope Scope of content to get
- * @returns {string[]|Buffer[]} Array of content
+ * @returns {Promise<string[]|Buffer[]>} Array of content
  */
-export function getContentOfType(type, format, scope = CONTENT_SCOPE.USER) {
-    const contentIndex = getContentIndex(scope);
+export async function getContentOfType(type, format, scope = CONTENT_SCOPE.USER) {
+    const contentIndex = await getContentIndex(scope);
     const indexItems = contentIndex.filter((item) => item.type === type && item.folder);
     const files = [];
     for (const item of indexItems) {
@@ -297,7 +297,7 @@ export function getContentOfType(type, format, scope = CONTENT_SCOPE.USER) {
         }
         try {
             const filePath = path.join(item.folder, item.filename);
-            const fileContent = fs.readFileSync(filePath);
+            const fileContent = await fs.promises.readFile(filePath);
             switch (format) {
                 case 'json':
                     files.push(JSON.parse(fileContent.toString()));

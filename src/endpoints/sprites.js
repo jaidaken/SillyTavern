@@ -4,7 +4,7 @@ import path from 'node:path';
 import express from 'express';
 import mime from 'mime-types';
 import sanitize from 'sanitize-filename';
-import writeFileAtomic, { sync as writeFileAtomicSync } from 'write-file-atomic';
+import writeFileAtomic from 'write-file-atomic';
 
 import { getImageBuffers } from '../util.js';
 import { log } from '../log.js';
@@ -44,9 +44,9 @@ function getSpritesPath(directories, name, isSubfolder) {
  * The additionalAssets and emotions are removed from the data.
  * @param {import('../users.js').UserDirectoryList} directories User directories
  * @param {object} data RisuAI character data
- * @returns {void}
+ * @returns {Promise<void>}
  */
-export function importRisuSprites(directories, data) {
+export async function importRisuSprites(directories, data) {
     try {
         const name = data?.data?.name;
         const risuData = data?.data?.extensions?.risuai;
@@ -79,18 +79,15 @@ export function importRisuSprites(directories, data) {
             return;
         }
 
-        // Create sprites folder if it doesn't exist
-        if (!fs.existsSync(spritesPath)) {
-            fs.mkdirSync(spritesPath, { recursive: true });
-        }
-
-        // Path to sprites is not a directory. This should never happen.
-        if (!fs.statSync(spritesPath).isDirectory()) {
+        const stats = await fs.promises.stat(spritesPath).catch(() => null);
+        if (!stats) {
+            await fs.promises.mkdir(spritesPath, { recursive: true });
+        } else if (!stats.isDirectory()) {
             return;
         }
 
         log.media.info(`RisuAI: Found ${images.length} sprites for ${name}. Writing to disk.`);
-        const files = fs.readdirSync(spritesPath);
+        const files = await fs.promises.readdir(spritesPath);
 
         outer: for (const [label, fileBase64] of images) {
             // Remove existing sprite with the same label
@@ -103,7 +100,7 @@ export function importRisuSprites(directories, data) {
 
             const filename = label + '.png';
             const pathToFile = path.join(spritesPath, sanitize(filename));
-            writeFileAtomicSync(pathToFile, fileBase64, { encoding: 'base64' });
+            await writeFileAtomic(pathToFile, fileBase64, { encoding: 'base64' });
         }
 
         // Remove additionalAssets and emotions from data (they are now in the sprites folder)

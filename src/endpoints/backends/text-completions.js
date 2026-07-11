@@ -86,7 +86,7 @@ async function abortKoboldCppRequest(request, url) {
             headers: {},
         };
 
-        setAdditionalHeaders(request, args, url);
+        await setAdditionalHeaders(request, args, url);
         const abortResponse = await fetch(`${url}/api/extra/abort`, args);
 
         if (!abortResponse.ok) {
@@ -113,7 +113,7 @@ router.post('/status', async function (request, response) {
             headers: { 'Content-Type': 'application/json' },
         };
 
-        setAdditionalHeaders(request, args, baseUrl);
+        await setAdditionalHeaders(request, args, baseUrl);
 
         const apiType = request.body.api_type;
         let url = baseUrl;
@@ -248,7 +248,7 @@ router.post('/props', async function (request, response) {
             headers: {},
         };
 
-        setAdditionalHeaders(request, args, baseUrl);
+        await setAdditionalHeaders(request, args, baseUrl);
 
         const apiType = request.body.api_type;
         let propsUrl = baseUrl + '/props';
@@ -339,7 +339,7 @@ router.post('/generate', async function (request, response) {
             timeout: 0,
         };
 
-        setAdditionalHeaders(request, args, baseUrl);
+        await setAdditionalHeaders(request, args, baseUrl);
 
         if (request.body.api_type === TEXTGEN_TYPES.TOGETHERAI) {
             request.body = _.pickBy(request.body, (_, key) => TOGETHERAI_KEYS.includes(key));
@@ -616,7 +616,7 @@ tabby.post('/download', async function (request, response) {
             timeout: 0,
         };
 
-        setAdditionalHeaders(request, args, baseUrl);
+        await setAdditionalHeaders(request, args, baseUrl);
 
         // Check key permissions
         const permissionResponse = await fetch(`${baseUrl}/v1/auth/permission`, {

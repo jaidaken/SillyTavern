@@ -7,7 +7,7 @@ import path from 'node:path';
 import storage from 'node-persist';
 import { RateLimiterMemory, RateLimiterRes } from 'rate-limiter-flexible';
 import { getAllUserHandles, toKey, getPasswordHash } from '../users.js';
-import { getConfigValue, safeReadFileSync } from '../util.js';
+import { getConfigValue, safeReadFile } from '../util.js';
 import { getIpAddress, retryAfter } from '../express-common.js';
 import { log } from '../log.js';
 
@@ -22,8 +22,8 @@ const basicAuthLimiter = new RateLimiterMemory({
 });
 
 const basicAuthMiddleware = async function (request, response, callback) {
-    const unauthorizedResponse = (res) => {
-        const unauthorizedWebpage = safeReadFileSync(path.join(globalThis.DATA_ROOT, '_errors', 'unauthorized.html')) ?? '';
+    const unauthorizedResponse = async (res) => {
+        const unauthorizedWebpage = await safeReadFile(path.join(globalThis.DATA_ROOT, '_errors', 'unauthorized.html')) ?? '';
         res.set('WWW-Authenticate', 'Basic realm="SillyTavern", charset="UTF-8"');
         return res.status(401).send(unauthorizedWebpage);
     };
@@ -36,13 +36,13 @@ const basicAuthMiddleware = async function (request, response, callback) {
         const authHeader = request.headers.authorization;
 
         if (!authHeader) {
-            return unauthorizedResponse(response);
+            return await unauthorizedResponse(response);
         }
 
         const [scheme, credentials] = authHeader.split(' ');
 
         if (scheme !== 'Basic' || !credentials) {
-            return unauthorizedResponse(response);
+            return await unauthorizedResponse(response);
         }
 
         const rateLimit = await basicAuthLimiter.get(ip);
@@ -74,7 +74,7 @@ const basicAuthMiddleware = async function (request, response, callback) {
         }
 
         await basicAuthLimiter.consume(ip);
-        return unauthorizedResponse(response);
+        return await unauthorizedResponse(response);
     } catch (error) {
         if (error instanceof RateLimiterRes) {
             log.users.error('Basic auth failed: Rate limited from', getIpAddress(request, PREFER_REAL_IP_HEADER), request.method, request.originalUrl);

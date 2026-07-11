@@ -133,7 +133,7 @@ export const router = express.Router();
 
 router.post('/status', async function (req, res) {
     if (!req.body) return res.sendStatus(400);
-    const api_key_novel = readSecret(req.user.directories, SECRET_KEYS.NOVEL);
+    const api_key_novel = await readSecret(req.user.directories, SECRET_KEYS.NOVEL);
 
     if (!api_key_novel) {
         log.net.warn('NovelAI Access Token is missing.');
@@ -168,7 +168,7 @@ router.post('/status', async function (req, res) {
 router.post('/generate', async function (req, res) {
     if (!req.body) return res.sendStatus(400);
 
-    const api_key_novel = readSecret(req.user.directories, SECRET_KEYS.NOVEL);
+    const api_key_novel = await readSecret(req.user.directories, SECRET_KEYS.NOVEL);
 
     if (!api_key_novel) {
         log.net.warn('NovelAI Access Token is missing.');
@@ -303,7 +303,7 @@ router.post('/generate-image', async (request, response) => {
         return response.sendStatus(400);
     }
 
-    const key = readSecret(request.user.directories, SECRET_KEYS.NOVEL);
+    const key = await readSecret(request.user.directories, SECRET_KEYS.NOVEL);
 
     if (!key) {
         log.net.warn('NovelAI Access Token is missing.');
@@ -441,7 +441,7 @@ router.post('/generate-image', async (request, response) => {
 });
 
 router.post('/generate-voice', async (request, response) => {
-    const token = readSecret(request.user.directories, SECRET_KEYS.NOVEL);
+    const token = await readSecret(request.user.directories, SECRET_KEYS.NOVEL);
 
     if (!token) {
         log.net.error('NovelAI Access Token is missing.');

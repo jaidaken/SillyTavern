@@ -94,7 +94,7 @@ async function extractTranscript(videoPageBody, lang) {
 
 router.post('/serpapi', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.SERPAPI);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.SERPAPI);
 
         if (!key) {
             log.search.error('No SerpApi key found');
@@ -218,7 +218,7 @@ router.post('/searxng', async (request, response) => {
 
 router.post('/tavily', async (request, response) => {
     try {
-        const apiKey = readSecret(request.user.directories, SECRET_KEYS.TAVILY);
+        const apiKey = await readSecret(request.user.directories, SECRET_KEYS.TAVILY);
 
         if (!apiKey) {
             log.search.error('No Tavily key found');
@@ -283,7 +283,7 @@ router.post('/koboldcpp', async (request, response) => {
             body: JSON.stringify({ q: query }),
         };
 
-        setAdditionalHeaders(request, args, baseUrl);
+        await setAdditionalHeaders(request, args, baseUrl);
         const result = await fetch(`${baseUrl}/api/extra/websearch`, args);
 
         if (!result.ok) {
@@ -303,7 +303,7 @@ router.post('/koboldcpp', async (request, response) => {
 
 router.post('/serper', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.SERPER);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.SERPER);
 
         if (!key) {
             log.search.error('No Serper key found');
@@ -345,7 +345,7 @@ router.post('/serper', async (request, response) => {
 
 router.post('/zai', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.ZAI);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.ZAI);
 
         if (!key) {
             log.search.error('No Z.AI key found');

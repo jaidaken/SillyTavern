@@ -50,7 +50,7 @@ export async function getVertexAIAuth(request) {
     }
 
     if (authMode === 'express') {
-        const apiKey = readSecret(request.user.directories, SECRET_KEYS.VERTEXAI);
+        const apiKey = await readSecret(request.user.directories, SECRET_KEYS.VERTEXAI);
         if (apiKey) {
             return {
                 authHeader: `Bearer ${apiKey}`,
@@ -60,7 +60,7 @@ export async function getVertexAIAuth(request) {
         throw new Error('API key is required for Vertex AI Express mode');
     } else if (authMode === 'full') {
         // Get service account JSON from backend storage
-        const serviceAccountJson = readSecret(request.user.directories, SECRET_KEYS.VERTEXAI_SERVICE_ACCOUNT);
+        const serviceAccountJson = await readSecret(request.user.directories, SECRET_KEYS.VERTEXAI_SERVICE_ACCOUNT);
 
         if (serviceAccountJson) {
             try {
@@ -192,7 +192,7 @@ export async function getGoogleApiConfig(request, model, endpoint = 'generateCon
         } else if (authType === 'full') {
             // Full mode: use project-specific URL with Authorization header
             // Get project ID from Service Account JSON
-            const serviceAccountJson = readSecret(request.user.directories, SECRET_KEYS.VERTEXAI_SERVICE_ACCOUNT);
+            const serviceAccountJson = await readSecret(request.user.directories, SECRET_KEYS.VERTEXAI_SERVICE_ACCOUNT);
             if (!serviceAccountJson) {
                 throw new Error('Vertex AI Service Account JSON is missing.');
             }
@@ -219,7 +219,7 @@ export async function getGoogleApiConfig(request, model, endpoint = 'generateCon
         }
     } else {
         // Google AI Studio
-        const apiKey = request.body.reverse_proxy ? request.body.proxy_password : readSecret(request.user.directories, SECRET_KEYS.MAKERSUITE);
+        const apiKey = request.body.reverse_proxy ? request.body.proxy_password : await readSecret(request.user.directories, SECRET_KEYS.MAKERSUITE);
         const apiUrl = trimTrailingSlash(request.body.reverse_proxy || API_MAKERSUITE);
         const apiVersion = getConfigValue('gemini.apiVersion', 'v1beta');
         baseUrl = `${apiUrl}/${apiVersion}`;

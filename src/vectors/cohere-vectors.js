@@ -11,7 +11,7 @@ import { log } from '../log.js';
  * @returns {Promise<number[][]>} - The array of vectors for the texts
  */
 export async function getCohereBatchVector(texts, isQuery, directories, model) {
-    const key = readSecret(directories, SECRET_KEYS.COHERE);
+    const key = await readSecret(directories, SECRET_KEYS.COHERE);
 
     if (!key) {
         log.vectors.warn('No API key found');

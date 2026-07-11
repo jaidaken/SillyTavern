@@ -38,6 +38,7 @@ const isESModule = (file) => path.extname(file) === '.mjs';
  * @returns {Promise<Function>} Promise that resolves when all plugins are loaded. Resolves to a "cleanup" function to
  * be called before the server shuts down.
  */
+// Sync fs stays in this module: loadPlugins runs once pre-listen from server-main preSetupTasks.
 export async function loadPlugins(app, pluginsPath) {
     try {
         const exitHooks = [];

@@ -12,6 +12,7 @@ const hostWhitelistScan = !!getConfigValue('hostWhitelist.scan', false, 'boolean
 
 const validationMiddleware = hostValidationMiddleware({
     allowedHosts: hostWhitelist,
+    // Stays sync: host-validation-middleware requires a synchronous string return.
     generateErrorMessage: () => safeReadFileSync(path.join(globalThis.DATA_ROOT, '_errors', 'host-not-allowed.html'))?.toString() ?? '',
     errorResponseContentType: 'text/html',
 });

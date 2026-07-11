@@ -20,7 +20,7 @@ import chalk from 'chalk';
 import bytes from 'bytes';
 import { LOG_LEVELS, CHAT_COMPLETION_SOURCES, MEDIA_REQUEST_TYPE } from './constants.js';
 import { serverDirectory } from './server-directory.js';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import writeFileAtomic, { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { isFirefox } from './express-common.js';
 import { log } from './log.js';
 
@@ -413,13 +413,11 @@ export async function ensureDirectory(dirPath) {
  * @returns {Promise<[string, Buffer][]>} Array of image buffers
  */
 export async function getImageBuffers(zipFilePath) {
-    return new Promise((resolve, reject) => {
-        // Check if the zip file exists
-        if (!fs.existsSync(zipFilePath)) {
-            reject(new Error('File not found'));
-            return;
-        }
+    if (!(await fs.promises.stat(zipFilePath).catch(() => null))) {
+        throw new Error('File not found');
+    }
 
+    return new Promise((resolve, reject) => {
         const imageBuffers = [];
 
         yauzl.open(zipFilePath, { lazyEntries: true }, (err, zipfile) => {
@@ -605,6 +603,30 @@ export function getUniqueName(baseName, exists, { nameBuilder = null, maxTries =
 }
 
 /**
+ * Async twin of getUniqueName for existence predicates that return promises.
+ * @param {string} baseName The name to check.
+ * @param {(name: string) => Promise<boolean>} exists Function to check if name exists.
+ * @param {Object} [options] Same options as getUniqueName.
+ * @param {((baseName: string, i: number) => string)|null} [options.nameBuilder=null] Function to build the name.
+ * @param {number} [options.maxTries=1000] The maximum number of tries to find a unique name.
+ * @param {number} [options.startIndex=1] The index to start with when building the name.
+ * @returns {Promise<string|null>} A unique name. Null if no unique name could be found in `maxTries`.
+ */
+export async function getUniqueNameAsync(baseName, exists, { nameBuilder = null, maxTries = 1000, startIndex = 1 } = {}) {
+    nameBuilder ??= (baseName, i) => i === 0 ? baseName : `${baseName} (${i})`;
+    let i = startIndex;
+    let name;
+    while (i < maxTries + startIndex) {
+        name = nameBuilder(baseName, i);
+        if (!(await exists(name))) {
+            return name;
+        }
+        i++;
+    }
+    return null;
+}
+
+/**
  * Provides safe replacements for characters in filenames. Intended for use with sanitize() from the sanitize-filename package.
  * @param {string} char Character to sanitize
  * @returns {string} Safe replacement character
@@ -639,14 +661,45 @@ export function generateTimestamp() {
  * @param {string} directory The root directory to remove backups from.
  * @param {string} prefix File prefix to filter backups by.
  * @param {number?} limit Maximum number of backups to keep. If null, the limit is determined by the `backups.common.numberOfBackups` config value.
+ * @returns {Promise<void>}
  */
-export function removeOldBackups(directory, prefix, limit = null) {
+export async function removeOldBackups(directory, prefix, limit = null) {
+    const MAX_BACKUPS = limit ?? Number(getConfigValue('backups.common.numberOfBackups', 50, 'number'));
+
+    let files = (await fs.promises.readdir(directory)).filter(f => f.startsWith(prefix));
+    if (files.length > MAX_BACKUPS) {
+        files = files.map(f => path.join(directory, f));
+        const mtimes = new Map();
+        for (const file of files) {
+            mtimes.set(file, (await fs.promises.stat(file)).mtimeMs);
+        }
+        files.sort((a, b) => (mtimes.get(a) ?? 0) - (mtimes.get(b) ?? 0));
+
+        while (files.length > MAX_BACKUPS) {
+            const oldest = files.shift();
+            if (!oldest) {
+                break;
+            }
+
+            await fs.promises.unlink(oldest);
+        }
+    }
+}
+
+/**
+ * Sync twin of removeOldBackups. Only for chat backupChat, whose process-exit flush cannot await.
+ * @param {string} directory The root directory to remove backups from.
+ * @param {string} prefix File prefix to filter backups by.
+ * @param {number?} limit Maximum number of backups to keep. If null, the limit is determined by the `backups.common.numberOfBackups` config value.
+ */
+export function removeOldBackupsSync(directory, prefix, limit = null) {
     const MAX_BACKUPS = limit ?? Number(getConfigValue('backups.common.numberOfBackups', 50, 'number'));
 
     let files = fs.readdirSync(directory).filter(f => f.startsWith(prefix));
     if (files.length > MAX_BACKUPS) {
         files = files.map(f => path.join(directory, f));
-        files.sort((a, b) => fs.statSync(a).mtimeMs - fs.statSync(b).mtimeMs);
+        const mtimes = new Map(files.map(f => [f, fs.statSync(f).mtimeMs]));
+        files.sort((a, b) => (mtimes.get(a) ?? 0) - (mtimes.get(b) ?? 0));
 
         while (files.length > MAX_BACKUPS) {
             const oldest = files.shift();
@@ -664,22 +717,10 @@ export function removeOldBackups(directory, prefix, limit = null) {
  * @param {string} directoryPath Path to the directory containing the images
  * @param {'name' | 'date'} sortBy Sort images by name or date
  * @param {number} type Bitwise flag representing media types to include
- * @returns {string[]} List of image file names
+ * @returns {Promise<string[]>} List of image file names
  */
-export function getImages(directoryPath, sortBy = 'name', type = MEDIA_REQUEST_TYPE.IMAGE) {
-    function getSortFunction() {
-        switch (sortBy) {
-            case 'name':
-                return Intl.Collator().compare;
-            case 'date':
-                return (a, b) => fs.statSync(path.join(directoryPath, a)).mtimeMs - fs.statSync(path.join(directoryPath, b)).mtimeMs;
-            default:
-                return (_a, _b) => 0;
-        }
-    }
-
-    return fs
-        .readdirSync(directoryPath, { withFileTypes: true })
+export async function getImages(directoryPath, sortBy = 'name', type = MEDIA_REQUEST_TYPE.IMAGE) {
+    const files = (await fs.promises.readdir(directoryPath, { withFileTypes: true }))
         .filter(dirent => dirent.isFile())
         .map(dirent => dirent.name)
         .filter(file => {
@@ -697,8 +738,21 @@ export function getImages(directoryPath, sortBy = 'name', type = MEDIA_REQUEST_T
                 return true;
             }
             return false;
-        })
-        .sort(getSortFunction());
+        });
+
+    switch (sortBy) {
+        case 'name':
+            return files.sort(Intl.Collator().compare);
+        case 'date': {
+            const mtimes = new Map();
+            for (const file of files) {
+                mtimes.set(file, (await fs.promises.stat(path.join(directoryPath, file))).mtimeMs);
+            }
+            return files.sort((a, b) => (mtimes.get(a) ?? 0) - (mtimes.get(b) ?? 0));
+        }
+        default:
+            return files;
+    }
 }
 
 /**
@@ -1323,6 +1377,23 @@ export function safeReadFileSync(filePath, options = { encoding: 'utf-8' }) {
 }
 
 /**
+ * A 'safe' version of `fs.promises.readFile()`. Returns the contents of a file if it exists, falling back to `null` if not.
+ * @param {string} filePath Path of the file to be read.
+ * @param {Parameters<typeof fs.promises.readFile>[1]} options Options object to pass through to `fs.promises.readFile()` (default: `{ encoding: 'utf-8' }`).
+ * @returns {Promise<string|Buffer|null>} The contents at `filePath` if it exists, or `null` if not.
+ */
+export async function safeReadFile(filePath, options = { encoding: 'utf-8' }) {
+    try {
+        return await fs.promises.readFile(filePath, options);
+    } catch (error) {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+            return null;
+        }
+        throw error;
+    }
+}
+
+/**
  * Set the title of the terminal window
  * @param {string} title Desired title for the window
  */
@@ -1354,33 +1425,34 @@ export function mutateJsonString(jsonString, mutation) {
 /**
  * Sets the permissions of a file or directory to be writable.
  * @param {string} targetPath Path to the file or directory
+ * @returns {Promise<void>}
  */
-export function setPermissionsSync(targetPath) {
+export async function setPermissions(targetPath) {
     /**
      * Appends writable permission to the file mode.
      * @param {string} filePath Path to the file
      * @param {fs.Stats} stats File stats
      */
-    function appendWritablePermission(filePath, stats) {
+    async function appendWritablePermission(filePath, stats) {
         const currentMode = stats.mode;
         const newMode = currentMode | 0o200;
         if (newMode != currentMode) {
-            fs.chmodSync(filePath, newMode);
+            await fs.promises.chmod(filePath, newMode);
         }
     }
 
     try {
-        const stats = fs.statSync(targetPath);
+        const stats = await fs.promises.stat(targetPath);
 
         if (stats.isDirectory()) {
-            appendWritablePermission(targetPath, stats);
-            const files = fs.readdirSync(targetPath);
+            await appendWritablePermission(targetPath, stats);
+            const files = await fs.promises.readdir(targetPath);
 
-            files.forEach((file) => {
-                setPermissionsSync(path.join(targetPath, file));
-            });
+            for (const file of files) {
+                await setPermissions(path.join(targetPath, file));
+            }
         } else {
-            appendWritablePermission(targetPath, stats);
+            await appendWritablePermission(targetPath, stats);
         }
     } catch (error) {
         log.sys.error(`Error setting write permissions for ${targetPath}:`, error);
@@ -1497,6 +1569,7 @@ export function flattenSchema(schema, api) {
 
 /**
  * Writes to a file, creating it's parent directories if needed.
+ * Sync path kept only for chat backupChat's process-exit flush; request paths use tryWriteFile.
  * @param {string} filePath
  * @param {string} data
  */
@@ -1510,34 +1583,48 @@ export function tryWriteFileSync(filePath, data) {
 }
 
 /**
+ * Writes to a file, creating it's parent directories if needed.
+ * @param {string} filePath
+ * @param {string} data
+ * @returns {Promise<void>}
+ */
+export async function tryWriteFile(filePath, data) {
+    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+    await writeFileAtomic(filePath, data, 'utf8');
+}
+
+/**
 * Attempts to read a file as utf8.
 * @param {string} filePath
-* @returns {string|null}
+* @returns {Promise<string|null>}
 */
-export function tryReadFileSync(filePath) {
+export async function tryReadFile(filePath) {
     try {
-        if (fs.existsSync(filePath)) {
-            return fs.readFileSync(filePath, 'utf8');
-        }
+        return await fs.promises.readFile(filePath, 'utf8');
     } catch (error) {
-        log.content.error(`Error reading ${filePath}: ${error.message}`);
+        if (!(typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')) {
+            log.content.error(`Error reading ${filePath}: ${error.message}`);
+        }
+        return null;
     }
-    return null;
 }
 
 /**
 * Attempts to delete a file.
 * @param {string} filePath Target file.
-* @returns {boolean} Returns true if the file was found and deleted.
+* @returns {Promise<boolean>} Returns true if the file was found and deleted.
 */
-export function tryDeleteFile(filePath) {
-    if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
+export async function tryDeleteFile(filePath) {
+    try {
+        await fs.promises.unlink(filePath);
         log.content.info(`Deleted file: ${filePath}`);
         return true;
-    } else {
-        log.content.error(`File not found '${filePath}'`);
-        return false;
+    } catch (error) {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+            log.content.error(`File not found '${filePath}'`);
+            return false;
+        }
+        throw error;
     }
 }
 

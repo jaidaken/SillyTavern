@@ -17,7 +17,7 @@ import sanitize from 'sanitize-filename';
 import ipMatching from 'ip-matching';
 
 import { USER_DIRECTORY_TEMPLATE, DEFAULT_USER, PUBLIC_DIRECTORIES, SETTINGS_FILE, UPLOADS_DIRECTORY } from './constants.js';
-import { getConfigValue, color, delay, generateTimestamp, invalidateFirefoxCache, isPathUnderParent, setPermissionsSync } from './util.js';
+import { getConfigValue, color, delay, generateTimestamp, invalidateFirefoxCache, isPathUnderParent, setPermissions } from './util.js';
 import { allowKeysExposure, readSecret, writeSecret, SECRETS_FILE } from './endpoints/secrets.js';
 import { getContentOfType } from './endpoints/content-manager.js';
 import { serverDirectory } from './server-directory.js';
@@ -113,18 +113,14 @@ const STORAGE_KEYS = {
  */
 export async function ensurePublicDirectoriesExist() {
     for (const dir of Object.values(PUBLIC_DIRECTORIES)) {
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
+        await fs.promises.mkdir(dir, { recursive: true });
     }
 
     const userHandles = await getAllUserHandles();
     const directoriesList = userHandles.map(handle => getUserDirectories(handle));
     for (const userDirectories of directoriesList) {
         for (const dir of Object.values(userDirectories)) {
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
+            await fs.promises.mkdir(dir, { recursive: true });
         }
     }
     return directoriesList;
@@ -194,6 +190,7 @@ export async function verifySecuritySettings() {
     }
 }
 
+// Stays sync: runs once pre-listen from server-main preSetupTasks.
 export function cleanUploads() {
     try {
         const uploadsPath = path.join(globalThis.DATA_ROOT, UPLOADS_DIRECTORY);
@@ -227,6 +224,7 @@ export async function getUserDirectoriesList() {
 
 /**
  * Perform migration from the old user data format to the new one.
+ * Sync fs stays: runs once pre-listen in the server-main init chain.
  */
 export async function migrateUserData() {
     const publicDirectory = path.join(process.cwd(), 'public');
@@ -429,6 +427,7 @@ export async function migrateUserData() {
     log.users.info(color.green('Migration completed!'));
 }
 
+// Sync fs stays: runs once pre-listen in the server-main init chain.
 export async function migrateSystemPrompts() {
     /**
      * Gets the default system prompts.
@@ -436,7 +435,7 @@ export async function migrateSystemPrompts() {
      */
     async function getDefaultSystemPrompts() {
         try {
-            return getContentOfType('sysprompt', 'json');
+            return await getContentOfType('sysprompt', 'json');
         } catch {
             return [];
         }
@@ -486,6 +485,7 @@ export async function migrateSystemPrompts() {
     }
 }
 
+// Sync fs stays: runs once pre-listen in the server-main init chain.
 export async function migratePublicOverrides() {
     const migrationMap = [
         {
@@ -519,7 +519,7 @@ export async function migratePublicOverrides() {
                 fs.mkdirSync(path.dirname(newPath), { recursive: true });
                 fs.cpSync(oldPath, newPath, { force: true });
                 fs.unlinkSync(oldPath);
-                setPermissionsSync(newPath);
+                await setPermissions(newPath);
                 log.users.debug(`Migrated ${path.basename(oldPath)} to data root.`);
             }
         } catch (error) {
@@ -571,6 +571,7 @@ export async function initUserStorage(dataRoot) {
  * Get the cookie secret from the config. If it doesn't exist, generate a new one.
  * @param {string} dataRoot The root directory for user data
  * @returns {string} The cookie secret
+ * Stays sync: called once at middleware setup, pre-listen.
  */
 export function getCookieSecret(dataRoot) {
     const cookieSecretPath = path.join(dataRoot, COOKIE_SECRET_PATH);
@@ -646,18 +647,18 @@ export function getPasswordHash(password, salt) {
 /**
  * Get the CSRF secret from the storage.
  * @param {import('express').Request} [request] HTTP request object
- * @returns {string} The CSRF secret
+ * @returns {Promise<string>} The CSRF secret
  */
-export function getCsrfSecret(request) {
+export async function getCsrfSecret(request) {
     if (!request || !request.user) {
         return ANON_CSRF_SECRET;
     }
 
-    let csrfSecret = readSecret(request.user.directories, STORAGE_KEYS.csrfSecret);
+    let csrfSecret = await readSecret(request.user.directories, STORAGE_KEYS.csrfSecret);
 
     if (!csrfSecret) {
         csrfSecret = crypto.randomBytes(64).toString('base64');
-        writeSecret(request.user.directories, STORAGE_KEYS.csrfSecret, csrfSecret);
+        await writeSecret(request.user.directories, STORAGE_KEYS.csrfSecret, csrfSecret);
     }
 
     return csrfSecret;
@@ -712,17 +713,18 @@ export async function getUserAvatar(handle) {
         // Fallback to reading from files if custom avatar is not set
         const directory = getUserDirectories(handle);
         const pathToSettings = path.join(directory.root, SETTINGS_FILE);
-        const settings = fs.existsSync(pathToSettings) ? JSON.parse(fs.readFileSync(pathToSettings, 'utf8')) : {};
+        const settingsContent = await fs.promises.readFile(pathToSettings, 'utf8').catch(() => null);
+        const settings = settingsContent !== null ? JSON.parse(settingsContent) : {};
         const avatarFile = settings?.power_user?.default_persona || settings?.user_avatar;
         if (!avatarFile) {
             return PUBLIC_USER_AVATAR;
         }
         const avatarPath = path.join(directory.avatars, sanitize(avatarFile));
-        if (!fs.existsSync(avatarPath)) {
+        if (!(await fs.promises.stat(avatarPath).catch(() => null))) {
             return PUBLIC_USER_AVATAR;
         }
         const mimeType = mime.lookup(avatarPath);
-        const base64Content = fs.readFileSync(avatarPath, 'base64');
+        const base64Content = await fs.promises.readFile(avatarPath, 'base64');
         return `data:${mimeType};base64,${base64Content}`;
     } catch {
         // Ignore errors
@@ -1079,7 +1081,7 @@ function createRouteHandler(directoryFn) {
             if (!isPathUnderParent(directory, path.resolve(fullPath))) {
                 return res.sendStatus(403);
             }
-            const exists = fs.existsSync(fullPath);
+            const exists = await fs.promises.stat(fullPath).catch(() => null);
             if (!exists) {
                 return res.sendStatus(404);
             }
@@ -1106,7 +1108,7 @@ function createExtensionsRouteHandler(directoryFn) {
             if (!isPathUnderParent(directory, path.resolve(localPath))) {
                 return res.sendStatus(403);
             }
-            const existsLocal = fs.existsSync(localPath);
+            const existsLocal = await fs.promises.stat(localPath).catch(() => null);
             if (existsLocal) {
                 return res.sendFile(filePath, { root: directory });
             }
@@ -1115,7 +1117,7 @@ function createExtensionsRouteHandler(directoryFn) {
             if (!isPathUnderParent(PUBLIC_DIRECTORIES.globalExtensions, path.resolve(globalPath))) {
                 return res.sendStatus(403);
             }
-            const existsGlobal = fs.existsSync(globalPath);
+            const existsGlobal = await fs.promises.stat(globalPath).catch(() => null);
             if (existsGlobal) {
                 return res.sendFile(filePath, { root: PUBLIC_DIRECTORIES.globalExtensions });
             }

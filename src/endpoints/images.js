@@ -102,7 +102,7 @@ router.post('/list{/:folder}', async (request, response) => {
             await fs.promises.mkdir(directoryPath, { recursive: true });
         }
 
-        const images = getImages(directoryPath, sort, type);
+        const images = await getImages(directoryPath, sort, type);
         if (order === 'desc') {
             images.reverse();
         }

@@ -14,10 +14,11 @@ import {
     humanizedDateTime,
     tryParse,
     generateTimestamp,
-    removeOldBackups,
+    removeOldBackupsSync,
     formatBytes,
     tryWriteFileSync,
-    tryReadFileSync,
+    tryWriteFile,
+    tryReadFile,
     tryDeleteFile,
     readFirstLine,
     isPathUnderParent,
@@ -52,11 +53,11 @@ function backupChat(directory, name, data, backupPrefix = CHAT_BACKUPS_PREFIX) {
         const backupFile = path.join(directory, `${backupPrefix}${name}_${generateTimestamp()}.jsonl`);
 
         tryWriteFileSync(backupFile, data);
-        removeOldBackups(directory, `${backupPrefix}${name}_`);
+        removeOldBackupsSync(directory, `${backupPrefix}${name}_`);
         if (isNaN(maxTotalChatBackups) || maxTotalChatBackups < 0) {
             return;
         }
-        removeOldBackups(directory, backupPrefix, maxTotalChatBackups);
+        removeOldBackupsSync(directory, backupPrefix, maxTotalChatBackups);
     } catch (err) {
         log.chat.error(`Could not backup chat for ${name}`, err);
     }
@@ -466,7 +467,7 @@ export async function trySaveChat(chatData, filePath, skipIntegrityCheck = false
     if (chatIntegritySlug && !await checkChatIntegrity(filePath, chatIntegritySlug)) {
         throw new IntegrityMismatchError(`Chat integrity check failed for "${filePath}". The expected integrity slug was "${chatIntegritySlug}".`);
     }
-    tryWriteFileSync(filePath, jsonlData);
+    await tryWriteFile(filePath, jsonlData);
     getBackupFunction(handle)(backupDirectory, cardName, jsonlData);
 }
 
@@ -500,12 +501,12 @@ router.post('/save', validateAvatarUrlMiddleware, async function (request, respo
 /**
  * Gets the chat as an object.
  * @param {string} chatFilePath The full chat file path.
- * @returns {Array}} If the chatFilePath cannot be read, this will return [].
+ * @returns {Promise<Array>} If the chatFilePath cannot be read, this will return [].
  */
-export function getChatData(chatFilePath) {
+export async function getChatData(chatFilePath) {
     let chatData = [];
 
-    const chatJSON = tryReadFileSync(chatFilePath) ?? '';
+    const chatJSON = await tryReadFile(chatFilePath) ?? '';
     if (chatJSON.length > 0) {
         const lines = chatJSON.split('\n');
         // Iterate through the array of strings and parse each line as JSON
@@ -539,7 +540,7 @@ router.post('/get', validateAvatarUrlMiddleware, async function (request, respon
         const chatFileName = `${String(request.body.file_name)}.jsonl`;
         const chatFilePath = path.join(directoryPath, sanitize(chatFileName));
 
-        return response.send(getChatData(chatFilePath));
+        return response.send(await getChatData(chatFilePath));
     } catch (error) {
         log.chat.error(error);
         return response.send({});
@@ -581,7 +582,7 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
     }
 });
 
-router.post('/delete', validateAvatarUrlMiddleware, function (request, response) {
+router.post('/delete', validateAvatarUrlMiddleware, async function (request, response) {
     try {
         if (!path.extname(request.body.chatfile)) {
             request.body.chatfile += '.jsonl';
@@ -594,7 +595,7 @@ router.post('/delete', validateAvatarUrlMiddleware, function (request, response)
             return response.sendStatus(400);
         }
         //Return success if the file was deleted.
-        if (tryDeleteFile(chatFilePath)) {
+        if (await tryDeleteFile(chatFilePath)) {
             return response.send({ ok: true });
         } else {
             log.chat.error('The chat file was not deleted.');
@@ -802,7 +803,7 @@ router.post('/import', validateAvatarUrlMiddleware, async function (request, res
     }
 });
 
-router.post('/group/get', (request, response) => {
+router.post('/group/get', async (request, response) => {
     if (!request.body || !request.body.id) {
         return response.sendStatus(400);
     }
@@ -810,7 +811,7 @@ router.post('/group/get', (request, response) => {
     const id = request.body.id;
     const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
 
-    return response.send(getChatData(chatFilePath));
+    return response.send(await getChatData(chatFilePath));
 });
 
 router.post('/group/info', async (request, response) => {
@@ -830,7 +831,7 @@ router.post('/group/info', async (request, response) => {
     }
 });
 
-router.post('/group/delete', (request, response) => {
+router.post('/group/delete', async (request, response) => {
     try {
         if (!request.body || !request.body.id) {
             return response.sendStatus(400);
@@ -840,7 +841,7 @@ router.post('/group/delete', (request, response) => {
         const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
 
         //Return success if the file was deleted.
-        if (tryDeleteFile(chatFilePath)) {
+        if (await tryDeleteFile(chatFilePath)) {
             return response.send({ ok: true });
         } else {
             log.chat.error('The group chat file was not deleted.');

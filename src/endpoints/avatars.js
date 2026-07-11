@@ -15,8 +15,8 @@ import { log } from '../log.js';
 
 export const router = express.Router();
 
-router.post('/get', function (request, response) {
-    const images = getImages(request.user.directories.avatars);
+router.post('/get', async function (request, response) {
+    const images = await getImages(request.user.directories.avatars);
     response.send(images);
 });
 
@@ -40,7 +40,7 @@ router.post('/delete', getFileNameValidationFunction('avatar'), async function (
         throw error;
     }
 
-    invalidateThumbnail(request.user.directories, 'persona', sanitize(request.body.avatar));
+    await invalidateThumbnail(request.user.directories, 'persona', sanitize(request.body.avatar));
     return response.send({ result: 'ok' });
 });
 
@@ -55,7 +55,7 @@ router.post('/upload', getFileNameValidationFunction('overwrite_name'), async (r
 
         // Remove previous thumbnail and bust cache if overwriting
         if (request.body.overwrite_name) {
-            invalidateThumbnail(request.user.directories, 'persona', sanitize(request.body.overwrite_name));
+            await invalidateThumbnail(request.user.directories, 'persona', sanitize(request.body.overwrite_name));
             cacheBuster.bust(request, response);
         }
 

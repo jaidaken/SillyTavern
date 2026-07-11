@@ -33,8 +33,8 @@ router.post('/generate-voice', async (request, response) => {
             language,
         } = request.body;
 
-        const apiKey = readSecret(request.user.directories, SECRET_KEYS.MINIMAX);
-        const groupId = readSecret(request.user.directories, SECRET_KEYS.MINIMAX_GROUP_ID);
+        const apiKey = await readSecret(request.user.directories, SECRET_KEYS.MINIMAX);
+        const groupId = await readSecret(request.user.directories, SECRET_KEYS.MINIMAX_GROUP_ID);
 
         // Validate required parameters
         if (!text || !voiceId || !apiKey || !groupId) {

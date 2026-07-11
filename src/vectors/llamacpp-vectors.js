@@ -15,7 +15,7 @@ export async function getLlamaCppBatchVector(texts, apiUrl, directories) {
     const url = new URL(urlJoin(trimV1(apiUrl), '/v1/embeddings'));
 
     const headers = {};
-    setAdditionalHeadersByType(headers, TEXTGEN_TYPES.LLAMACPP, apiUrl, directories);
+    await setAdditionalHeadersByType(headers, TEXTGEN_TYPES.LLAMACPP, apiUrl, directories);
 
     const response = await fetch(url, {
         method: 'POST',

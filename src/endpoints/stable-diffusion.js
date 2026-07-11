@@ -636,7 +636,7 @@ const comfyRunPod = express.Router();
 
 comfyRunPod.post('/ping', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.COMFY_RUNPOD);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.COMFY_RUNPOD);
 
         if (!key) {
             log.media.warn('RunPod key not found.');
@@ -667,7 +667,7 @@ comfyRunPod.post('/ping', async (request, response) => {
 
 comfyRunPod.post('/generate', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.COMFY_RUNPOD);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.COMFY_RUNPOD);
 
         if (!key) {
             log.media.warn('RunPod key not found.');
@@ -738,7 +738,7 @@ const together = express.Router();
 
 together.post('/models', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.TOGETHERAI);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.TOGETHERAI);
 
         if (!key) {
             log.media.warn('TogetherAI key not found.');
@@ -777,7 +777,7 @@ together.post('/models', async (request, response) => {
 
 together.post('/generate', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.TOGETHERAI);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.TOGETHERAI);
 
         if (!key) {
             log.media.warn('TogetherAI key not found.');
@@ -1037,7 +1037,7 @@ pollinations.post('/models', async (_request, response) => {
 
 pollinations.post('/generate', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.POLLINATIONS);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.POLLINATIONS);
         if (!key) {
             log.media.warn('Pollinations API key not found.');
             return response.sendStatus(400);
@@ -1084,7 +1084,7 @@ const stability = express.Router();
 
 stability.post('/generate', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.STABILITY);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.STABILITY);
 
         if (!key) {
             log.media.warn('Stability AI key not found.');
@@ -1144,7 +1144,7 @@ const huggingface = express.Router();
 
 huggingface.post('/generate', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.HUGGINGFACE);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.HUGGINGFACE);
 
         if (!key) {
             log.media.warn('Hugging Face key not found.');
@@ -1183,7 +1183,7 @@ const electronhub = express.Router();
 
 electronhub.post('/models', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.ELECTRONHUB);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.ELECTRONHUB);
 
         if (!key) {
             log.media.warn('Electron Hub key not found.');
@@ -1223,7 +1223,7 @@ electronhub.post('/models', async (request, response) => {
 
 electronhub.post('/generate', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.ELECTRONHUB);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.ELECTRONHUB);
 
         if (!key) {
             log.media.warn('Electron Hub key not found.');
@@ -1309,7 +1309,7 @@ const chutes = express.Router();
 
 chutes.post('/models', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.CHUTES);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.CHUTES);
 
         if (!key) {
             log.media.warn('Chutes key not found.');
@@ -1342,7 +1342,7 @@ chutes.post('/models', async (request, response) => {
 
 chutes.post('/generate', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.CHUTES);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.CHUTES);
 
         if (!key) {
             log.media.warn('Chutes key not found.');
@@ -1390,7 +1390,7 @@ const nanogpt = express.Router();
 
 nanogpt.post('/models', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.NANOGPT);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.NANOGPT);
 
         if (!key) {
             log.media.warn('NanoGPT key not found.');
@@ -1429,7 +1429,7 @@ nanogpt.post('/models', async (request, response) => {
 
 nanogpt.post('/generate', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.NANOGPT);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.NANOGPT);
 
         if (!key) {
             log.media.warn('NanoGPT key not found.');
@@ -1472,7 +1472,7 @@ const bfl = express.Router();
 
 bfl.post('/generate', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.BFL);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.BFL);
 
         if (!key) {
             log.media.warn('BFL key not found.');
@@ -1634,7 +1634,7 @@ falai.post('/models', async (_request, response) => {
 
 falai.post('/generate', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.FALAI);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.FALAI);
 
         if (!key) {
             log.media.warn('FAL.AI key not found.');
@@ -1731,7 +1731,7 @@ const xai = express.Router();
 
 xai.post('/generate', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.XAI);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.XAI);
 
         if (!key) {
             log.media.warn('xAI key not found.');
@@ -1789,7 +1789,7 @@ const aimlapi = express.Router();
 
 aimlapi.post('/models', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.AIMLAPI);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.AIMLAPI);
 
         if (!key) {
             log.media.warn('AI/ML API key not found.');
@@ -1830,7 +1830,7 @@ aimlapi.post('/models', async (request, response) => {
 
 aimlapi.post('/generate-image', async (req, res) => {
     try {
-        const key = readSecret(req.user.directories, SECRET_KEYS.AIMLAPI);
+        const key = await readSecret(req.user.directories, SECRET_KEYS.AIMLAPI);
         if (!key) return res.sendStatus(400);
 
         log.media.debug('AI/ML API image request:', req.body);
@@ -1873,7 +1873,7 @@ const zai = express.Router();
 
 zai.post('/generate', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.ZAI);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.ZAI);
 
         if (!key) {
             log.media.warn('Z.AI key not found.');
@@ -1956,7 +1956,7 @@ zai.post('/generate-video', async (request, response) => {
             controller.abort();
         });
 
-        const key = readSecret(request.user.directories, SECRET_KEYS.ZAI);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.ZAI);
 
         if (!key) {
             log.media.warn('Z.AI key not found.');
@@ -2055,7 +2055,7 @@ const workersai = express.Router();
 
 workersai.post('/models', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.WORKERS_AI);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.WORKERS_AI);
 
         if (!key) {
             log.media.warn('Cloudflare Workers AI API key not found.');
@@ -2101,7 +2101,7 @@ workersai.post('/models', async (request, response) => {
 
 workersai.post('/generate', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.WORKERS_AI);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.WORKERS_AI);
 
         if (!key) {
             log.media.warn('Cloudflare Workers AI API key not found.');

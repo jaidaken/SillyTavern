@@ -54,11 +54,14 @@ async function collectModuleGraph(entryUrls) {
         }
 
         const filePath = path.join(PUBLIC_DIRECTORY, url);
-        if (!filePath.startsWith(PUBLIC_DIRECTORY) || !fs.existsSync(filePath)) {
+        if (!filePath.startsWith(PUBLIC_DIRECTORY)) {
             continue;
         }
 
-        const source = fs.readFileSync(filePath, 'utf8');
+        const source = await fs.promises.readFile(filePath, 'utf8').catch(() => null);
+        if (source === null) {
+            continue;
+        }
         const [imports] = parse(source, url);
         for (const record of imports) {
             // d >= 0 marks dynamic imports; those stay lazy on purpose
@@ -87,7 +90,7 @@ export async function getIndexHtmlWithModulePreloads() {
         return cachedIndexHtml;
     }
 
-    const rawHtml = fs.readFileSync(INDEX_PATH, 'utf8');
+    const rawHtml = await fs.promises.readFile(INDEX_PATH, 'utf8');
 
     try {
         // HTML src attributes are document-relative even without a leading ./ or /

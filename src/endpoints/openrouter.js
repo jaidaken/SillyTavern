@@ -103,7 +103,7 @@ router.post('/models/image', async (_req, res) => {
 
 router.post('/credits', async (req, res) => {
     try {
-        const key = readSecret(req.user.directories, SECRET_KEYS.OPENROUTER);
+        const key = await readSecret(req.user.directories, SECRET_KEYS.OPENROUTER);
 
         if (!key) {
             log.net.warn('OpenRouter API key not found');
@@ -138,7 +138,7 @@ router.post('/credits', async (req, res) => {
 
 router.post('/image/generate', async (req, res) => {
     try {
-        const key = readSecret(req.user.directories, SECRET_KEYS.OPENROUTER);
+        const key = await readSecret(req.user.directories, SECRET_KEYS.OPENROUTER);
 
         if (!key) {
             log.net.warn('OpenRouter API key not found');

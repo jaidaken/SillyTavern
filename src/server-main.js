@@ -398,9 +398,9 @@ async function postSetupTasks(result) {
 
         log.sys.info(`Heartbeat enabled. Updating ${color.green(heartbeatPath)} every ${cliArgs.heartbeatInterval} seconds`);
 
-        const writeHeartbeat = () => {
+        const writeHeartbeat = async () => {
             try {
-                fs.writeFileSync(heartbeatPath, JSON.stringify({ timestamp: Date.now() }));
+                await fs.promises.writeFile(heartbeatPath, JSON.stringify({ timestamp: Date.now() }));
             } catch (err) {
                 log.sys.error(`Failed to write heartbeat file at ${color.green(heartbeatPath)}:`, err.message);
             }

@@ -88,11 +88,11 @@ router.post('/delete', async function (request, response) {
     }
 });
 
-router.post('/restore', function (request, response) {
+router.post('/restore', async function (request, response) {
     try {
         const settings = getPresetSettingsByAPI(request.body.apiId, request.user.directories);
         const name = sanitize(request.body.name);
-        const defaultPresets = getDefaultPresets(request.user.directories);
+        const defaultPresets = await getDefaultPresets(request.user.directories);
 
         const defaultPreset = defaultPresets.find(p => p.name === name && p.folder === settings.folder);
 
@@ -100,7 +100,7 @@ router.post('/restore', function (request, response) {
 
         if (defaultPreset) {
             result.isDefault = true;
-            result.preset = getDefaultPresetFile(defaultPreset.filename) || {};
+            result.preset = await getDefaultPresetFile(defaultPreset.filename) || {};
         }
 
         return response.send(result);

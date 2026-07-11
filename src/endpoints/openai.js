@@ -22,15 +22,15 @@ router.post('/caption-image', async (request, response) => {
         let bodyParams = {};
 
         if (request.body.api === 'openai' && !request.body.reverse_proxy) {
-            key = readSecret(request.user.directories, SECRET_KEYS.OPENAI);
+            key = await readSecret(request.user.directories, SECRET_KEYS.OPENAI);
         }
 
         if (request.body.api === 'xai' && !request.body.reverse_proxy) {
-            key = readSecret(request.user.directories, SECRET_KEYS.XAI);
+            key = await readSecret(request.user.directories, SECRET_KEYS.XAI);
         }
 
         if (request.body.api === 'mistral' && !request.body.reverse_proxy) {
-            key = readSecret(request.user.directories, SECRET_KEYS.MISTRALAI);
+            key = await readSecret(request.user.directories, SECRET_KEYS.MISTRALAI);
         }
 
         if (request.body.reverse_proxy && request.body.proxy_password) {
@@ -38,62 +38,62 @@ router.post('/caption-image', async (request, response) => {
         }
 
         if (request.body.api === 'custom') {
-            key = readSecret(request.user.directories, SECRET_KEYS.CUSTOM);
+            key = await readSecret(request.user.directories, SECRET_KEYS.CUSTOM);
             mergeObjectWithYaml(bodyParams, request.body.custom_include_body);
             mergeObjectWithYaml(headers, request.body.custom_include_headers);
         }
 
         if (request.body.api === 'openrouter') {
-            key = readSecret(request.user.directories, SECRET_KEYS.OPENROUTER);
+            key = await readSecret(request.user.directories, SECRET_KEYS.OPENROUTER);
         }
 
         if (request.body.api === 'ooba') {
-            key = readSecret(request.user.directories, SECRET_KEYS.OOBA);
+            key = await readSecret(request.user.directories, SECRET_KEYS.OOBA);
             bodyParams.temperature = 0.1;
         }
 
         if (request.body.api === 'koboldcpp') {
-            key = readSecret(request.user.directories, SECRET_KEYS.KOBOLDCPP);
+            key = await readSecret(request.user.directories, SECRET_KEYS.KOBOLDCPP);
         }
 
         if (request.body.api === 'llamacpp') {
-            key = readSecret(request.user.directories, SECRET_KEYS.LLAMACPP);
+            key = await readSecret(request.user.directories, SECRET_KEYS.LLAMACPP);
         }
 
         if (request.body.api === 'vllm') {
-            key = readSecret(request.user.directories, SECRET_KEYS.VLLM);
+            key = await readSecret(request.user.directories, SECRET_KEYS.VLLM);
         }
 
         if (request.body.api === 'aimlapi') {
-            key = readSecret(request.user.directories, SECRET_KEYS.AIMLAPI);
+            key = await readSecret(request.user.directories, SECRET_KEYS.AIMLAPI);
         }
 
         if (request.body.api === 'groq') {
-            key = readSecret(request.user.directories, SECRET_KEYS.GROQ);
+            key = await readSecret(request.user.directories, SECRET_KEYS.GROQ);
         }
 
         if (request.body.api === 'cohere') {
-            key = readSecret(request.user.directories, SECRET_KEYS.COHERE);
+            key = await readSecret(request.user.directories, SECRET_KEYS.COHERE);
         }
 
         if (request.body.api === 'moonshot' && !request.body.reverse_proxy) {
-            key = readSecret(request.user.directories, SECRET_KEYS.MOONSHOT);
+            key = await readSecret(request.user.directories, SECRET_KEYS.MOONSHOT);
         }
 
         if (request.body.api === 'nanogpt') {
-            key = readSecret(request.user.directories, SECRET_KEYS.NANOGPT);
+            key = await readSecret(request.user.directories, SECRET_KEYS.NANOGPT);
         }
 
         if (request.body.api === 'chutes') {
-            key = readSecret(request.user.directories, SECRET_KEYS.CHUTES);
+            key = await readSecret(request.user.directories, SECRET_KEYS.CHUTES);
         }
 
         if (request.body.api === 'electronhub') {
-            key = readSecret(request.user.directories, SECRET_KEYS.ELECTRONHUB);
+            key = await readSecret(request.user.directories, SECRET_KEYS.ELECTRONHUB);
         }
 
         if (request.body.api === 'zai' && !request.body.reverse_proxy) {
-            key = readSecret(request.user.directories, SECRET_KEYS.ZAI);
+            key = await readSecret(request.user.directories, SECRET_KEYS.ZAI);
         }
 
         if (request.body.api === 'zai') {
@@ -101,12 +101,12 @@ router.post('/caption-image', async (request, response) => {
         }
 
         if (request.body.api === 'pollinations') {
-            key = readSecret(request.user.directories, SECRET_KEYS.POLLINATIONS);
+            key = await readSecret(request.user.directories, SECRET_KEYS.POLLINATIONS);
             bodyParams.seed = Math.floor(Math.random() * Math.pow(2, 32));
         }
 
         if (request.body.api === 'workers_ai') {
-            key = readSecret(request.user.directories, SECRET_KEYS.WORKERS_AI);
+            key = await readSecret(request.user.directories, SECRET_KEYS.WORKERS_AI);
         }
 
         const noKeyTypes = ['custom', 'ooba', 'koboldcpp', 'vllm', 'llamacpp'];
@@ -248,7 +248,7 @@ router.post('/caption-image', async (request, response) => {
             });
         }
 
-        setAdditionalHeaders(request, { headers }, apiUrl);
+        await setAdditionalHeaders(request, { headers }, apiUrl);
         log.net.debug('Multimodal captioning request', body);
 
         const result = await fetch(apiUrl, {
@@ -285,7 +285,7 @@ router.post('/caption-image', async (request, response) => {
 
 router.post('/generate-voice', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.OPENAI);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.OPENAI);
 
         if (!key) {
             log.net.warn('No OpenAI key found');
@@ -333,7 +333,7 @@ router.post('/generate-voice', async (request, response) => {
 // ElectronHub TTS proxy
 router.post('/electronhub/generate-voice', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.ELECTRONHUB);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.ELECTRONHUB);
 
         if (!key) {
             log.net.warn('No ElectronHub key found');
@@ -399,7 +399,7 @@ router.post('/electronhub/generate-voice', async (request, response) => {
 // ElectronHub model list
 router.post('/electronhub/models', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.ELECTRONHUB);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.ELECTRONHUB);
 
         if (!key) {
             log.net.warn('No ElectronHub key found');
@@ -431,7 +431,7 @@ router.post('/electronhub/models', async (request, response) => {
 // Chutes TTS
 router.post('/chutes/generate-voice', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.CHUTES);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.CHUTES);
 
         if (!key) {
             log.net.warn('No Chutes key found');
@@ -473,7 +473,7 @@ router.post('/chutes/generate-voice', async (request, response) => {
 
 router.post('/chutes/models/embedding', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.CHUTES);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.CHUTES);
 
         if (!key) {
             log.net.warn('No Chutes key found');
@@ -509,7 +509,7 @@ router.post('/chutes/models/embedding', async (request, response) => {
 
 router.post('/nanogpt/models/embedding', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.NANOGPT);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.NANOGPT);
 
         if (!key) {
             log.net.warn('No NanoGPT key found');
@@ -546,7 +546,7 @@ router.post('/nanogpt/models/embedding', async (request, response) => {
 
 router.post('/siliconflow/models/embedding', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.SILICONFLOW);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.SILICONFLOW);
 
         if (!key) {
             log.net.warn('No SiliconFlow key found');
@@ -587,7 +587,7 @@ router.post('/siliconflow/models/embedding', async (request, response) => {
 
 router.post('/workers-ai/models/embedding', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.WORKERS_AI);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.WORKERS_AI);
 
         if (!key) {
             log.net.warn('No Workers AI key found');
@@ -631,7 +631,7 @@ router.post('/workers-ai/models/embedding', async (request, response) => {
 
 router.post('/generate-image', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.OPENAI);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.OPENAI);
 
         if (!key) {
             log.net.warn('No OpenAI key found');
@@ -671,7 +671,7 @@ router.post('/generate-video', async (request, response) => {
             controller.abort();
         });
 
-        const key = readSecret(request.user.directories, SECRET_KEYS.OPENAI);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.OPENAI);
 
         if (!key) {
             log.net.warn('No OpenAI key found');
@@ -768,7 +768,7 @@ const custom = express.Router();
 
 custom.post('/generate-voice', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.CUSTOM_OPENAI_TTS);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.CUSTOM_OPENAI_TTS);
         const { input, provider_endpoint, response_format, voice, speed, model } = request.body;
 
         if (!provider_endpoint) {
@@ -819,7 +819,7 @@ router.use('/custom', custom);
 function createTranscribeHandler({ secretKey, apiUrl, providerName }) {
     return async (request, response) => {
         try {
-            const key = readSecret(request.user.directories, secretKey);
+            const key = await readSecret(request.user.directories, secretKey);
 
             if (!key) {
                 log.net.warn(`No ${providerName} key found`);
@@ -892,7 +892,7 @@ router.post('/zai/transcribe-audio', createTranscribeHandler({
 
 router.post('/chutes/transcribe-audio', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.CHUTES);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.CHUTES);
 
         if (!key) {
             log.net.warn('No Chutes key found');

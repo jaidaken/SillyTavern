@@ -16,8 +16,8 @@ export const router = express.Router();
 
 router.post('/libre', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.LIBRE);
-        const url = readSecret(request.user.directories, SECRET_KEYS.LIBRE_URL);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.LIBRE);
+        const url = await readSecret(request.user.directories, SECRET_KEYS.LIBRE_URL);
 
         if (!url) {
             log.ext.warn('LibreTranslate URL is not configured.');
@@ -159,7 +159,7 @@ router.post('/yandex', async (request, response) => {
 
 router.post('/lingva', async (request, response) => {
     try {
-        const secretUrl = readSecret(request.user.directories, SECRET_KEYS.LINGVA_URL);
+        const secretUrl = await readSecret(request.user.directories, SECRET_KEYS.LINGVA_URL);
         const baseUrl = secretUrl || LINGVA_DEFAULT;
 
         if (!secretUrl && baseUrl === LINGVA_DEFAULT) {
@@ -203,7 +203,7 @@ router.post('/lingva', async (request, response) => {
 
 router.post('/deepl', async (request, response) => {
     try {
-        const key = readSecret(request.user.directories, SECRET_KEYS.DEEPL);
+        const key = await readSecret(request.user.directories, SECRET_KEYS.DEEPL);
 
         if (!key) {
             log.ext.warn('DeepL key is not configured.');
@@ -265,7 +265,7 @@ router.post('/deepl', async (request, response) => {
 
 router.post('/onering', async (request, response) => {
     try {
-        const secretUrl = readSecret(request.user.directories, SECRET_KEYS.ONERING_URL);
+        const secretUrl = await readSecret(request.user.directories, SECRET_KEYS.ONERING_URL);
         const url = secretUrl || ONERING_URL_DEFAULT;
 
         if (!url) {
@@ -322,7 +322,7 @@ router.post('/onering', async (request, response) => {
 
 router.post('/deeplx', async (request, response) => {
     try {
-        const secretUrl = readSecret(request.user.directories, SECRET_KEYS.DEEPLX_URL);
+        const secretUrl = await readSecret(request.user.directories, SECRET_KEYS.DEEPLX_URL);
         const url = secretUrl || DEEPLX_URL_DEFAULT;
 
         if (!url) {

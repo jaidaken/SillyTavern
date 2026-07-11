@@ -10,6 +10,7 @@ const knownIPs = new Set();
 
 export const getAccessLogPath = () => path.join(globalThis.DATA_ROOT, 'access.log');
 
+// Stays sync: runs once pre-listen from server-main preSetupTasks.
 export function migrateAccessLog() {
     try {
         if (!fs.existsSync('access.log')) {

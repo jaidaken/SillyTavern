@@ -13,9 +13,9 @@ import { log } from '../log.js';
  * @param {import('../users.js').UserDirectoryList} directories User directories
  * @param {string} worldInfoName Name of the World Info file
  * @param {boolean} allowDummy If true, returns an empty object if the file doesn't exist
- * @returns {object} World Info file contents
+ * @returns {Promise<object>} World Info file contents
  */
-export function readWorldInfoFile(directories, worldInfoName, allowDummy) {
+export async function readWorldInfoFile(directories, worldInfoName, allowDummy) {
     const dummyObject = allowDummy ? { entries: {} } : null;
 
     if (!worldInfoName) {
@@ -25,12 +25,17 @@ export function readWorldInfoFile(directories, worldInfoName, allowDummy) {
     const filename = sanitize(`${worldInfoName}.json`);
     const pathToWorldInfo = path.join(directories.worlds, filename);
 
-    if (!fs.existsSync(pathToWorldInfo)) {
-        log.wi.error(`World info file ${filename} doesn't exist.`);
-        return dummyObject;
+    let worldInfoText;
+    try {
+        worldInfoText = await fs.promises.readFile(pathToWorldInfo, 'utf8');
+    } catch (error) {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+            log.wi.error(`World info file ${filename} doesn't exist.`);
+            return dummyObject;
+        }
+        throw error;
     }
 
-    const worldInfoText = fs.readFileSync(pathToWorldInfo, 'utf8');
     const worldInfo = JSON.parse(worldInfoText);
     return worldInfo;
 }
@@ -69,12 +74,12 @@ router.post('/list', async (request, response) => {
     }
 });
 
-router.post('/get', (request, response) => {
+router.post('/get', async (request, response) => {
     if (!request.body?.name) {
         return response.sendStatus(400);
     }
 
-    const file = readWorldInfoFile(request.user.directories, request.body.name, true);
+    const file = await readWorldInfoFile(request.user.directories, request.body.name, true);
 
     return response.send(file);
 });

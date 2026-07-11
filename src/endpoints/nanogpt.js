@@ -36,7 +36,7 @@ function normalizeUsage(usage) {
 
 router.post('/credits', async (req, res) => {
     try {
-        const key = readSecret(req.user.directories, SECRET_KEYS.NANOGPT);
+        const key = await readSecret(req.user.directories, SECRET_KEYS.NANOGPT);
 
         if (!key) {
             log.net.warn('NanoGPT API key not found');

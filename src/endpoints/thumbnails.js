@@ -80,16 +80,15 @@ function getOriginalFolder(directories, type) {
  * @param {import('../users.js').UserDirectoryList} directories User directories
  * @param {ThumbnailType} type Type of the thumbnail
  * @param {string} file Name of the file
+ * @returns {Promise<void>}
  */
-export function invalidateThumbnail(directories, type, file) {
+export async function invalidateThumbnail(directories, type, file) {
     const folder = getThumbnailFolder(directories, type);
     if (folder === undefined) throw new Error('Invalid thumbnail type');
 
     const pathToThumbnail = path.join(folder, sanitize(file));
 
-    if (fs.existsSync(pathToThumbnail)) {
-        fs.unlinkSync(pathToThumbnail);
-    }
+    await fs.promises.rm(pathToThumbnail, { force: true });
 }
 
 /**

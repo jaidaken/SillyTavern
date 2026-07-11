@@ -158,7 +158,7 @@ router.post('/status', async function (request, response) {
         headers: { 'Content-Type': 'application/json' },
     };
 
-    setAdditionalHeaders(request, args, api_server);
+    await setAdditionalHeaders(request, args, api_server);
 
     const result = {};
 
@@ -214,7 +214,7 @@ router.post('/transcribe-audio', async function (request, response) {
         await fs.promises.unlink(request.file.path);
 
         const headers = {};
-        setAdditionalHeadersByType(headers, TEXTGEN_TYPES.KOBOLDCPP, server, request.user.directories);
+        await setAdditionalHeadersByType(headers, TEXTGEN_TYPES.KOBOLDCPP, server, request.user.directories);
 
         const url = new URL(server);
         url.pathname = '/api/extra/transcribe';
@@ -255,7 +255,7 @@ router.post('/embed', async function (request, response) {
         }
 
         const headers = {};
-        setAdditionalHeadersByType(headers, TEXTGEN_TYPES.KOBOLDCPP, server, request.user.directories);
+        await setAdditionalHeadersByType(headers, TEXTGEN_TYPES.KOBOLDCPP, server, request.user.directories);
 
         const embeddingsUrl = new URL(server);
         embeddingsUrl.pathname = '/api/extra/embeddings';

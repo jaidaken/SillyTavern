@@ -1086,7 +1086,7 @@ router.post('/remote/textgenerationwebui/encode', async function (request, respo
             headers: { 'Content-Type': 'application/json' },
         };
 
-        setAdditionalHeaders(request, args, baseUrl);
+        await setAdditionalHeaders(request, args, baseUrl);
 
         // Convert to string + remove trailing slash + /v1 suffix
         let url = String(baseUrl).replace(/\/$/, '').replace(/\/v1$/, '');

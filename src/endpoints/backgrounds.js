@@ -14,7 +14,7 @@ export const router = express.Router();
 
 router.post('/all', async function (request, response) {
     try {
-        const images = getImages(request.user.directories.backgrounds);
+        const images = await getImages(request.user.directories.backgrounds);
         const config = { width: thumbnailDimensions.bg[0], height: thumbnailDimensions.bg[1] };
 
         // Get metadata for all images to provide isAnimated flag to client
@@ -86,7 +86,7 @@ router.post('/delete', getFileNameValidationFunction('bg'), async function (requ
             }
             throw error;
         }
-        invalidateThumbnail(request.user.directories, 'bg', request.body.bg);
+        await invalidateThumbnail(request.user.directories, 'bg', request.body.bg);
 
         // Remove metadata for deleted image
         const relativePath = path.join('backgrounds', request.body.bg);
@@ -120,7 +120,7 @@ router.post('/rename', async function (request, response) {
 
         await fs.promises.copyFile(oldFileName, newFileName);
         await fs.promises.unlink(oldFileName);
-        invalidateThumbnail(request.user.directories, 'bg', request.body.old_bg);
+        await invalidateThumbnail(request.user.directories, 'bg', request.body.old_bg);
 
         // Update metadata for renamed image
         const oldRelativePath = path.join('backgrounds', request.body.old_bg);
@@ -144,7 +144,7 @@ router.post('/upload', async function (request, response) {
         const filename = sanitize(request.file.originalname);
         await fs.promises.copyFile(img_path, path.join(request.user.directories.backgrounds, filename));
         await fs.promises.unlink(img_path);
-        invalidateThumbnail(request.user.directories, 'bg', filename);
+        await invalidateThumbnail(request.user.directories, 'bg', filename);
 
         // Generate metadata for the new image
         const relativePath = path.join('backgrounds', filename);

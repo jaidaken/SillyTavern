@@ -244,6 +244,7 @@ export class ServerStartup {
 
     /**
      * Checks if SSL options are valid. If not, it will print an error message and exit the process.
+     * Sync fs stays here and in createHttpsServer: both run once during listen setup.
      * @returns {void}
      */
     #verifySslOptions() {

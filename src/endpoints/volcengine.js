@@ -15,8 +15,8 @@ router.post('/generate-voice', async (req, res) => {
             provider_endpoint = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional';
         }
 
-        const appId = readSecret(req.user.directories, SECRET_KEYS.VOLCENGINE_APP_ID);
-        const accessKey = readSecret(req.user.directories, SECRET_KEYS.VOLCENGINE_ACCESS_KEY);
+        const appId = await readSecret(req.user.directories, SECRET_KEYS.VOLCENGINE_APP_ID);
+        const accessKey = await readSecret(req.user.directories, SECRET_KEYS.VOLCENGINE_ACCESS_KEY);
 
         if (!appId || !accessKey) {
             log.net.warn('Volcengine generate-voice request missing required parameters appId or accessKey');

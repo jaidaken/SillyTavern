@@ -109,12 +109,13 @@ async function migrateCacheToDataDir() {
     const oldCacheDir = path.join(process.cwd(), 'cache');
     const newCacheDir = path.join(globalThis.DATA_ROOT, '_cache');
 
-    if (!fs.existsSync(newCacheDir)) {
-        fs.mkdirSync(newCacheDir, { recursive: true });
+    if (!(await fs.promises.stat(newCacheDir).catch(() => null))) {
+        await fs.promises.mkdir(newCacheDir, { recursive: true });
     }
 
-    if (fs.existsSync(oldCacheDir) && fs.statSync(oldCacheDir).isDirectory()) {
-        const files = fs.readdirSync(oldCacheDir);
+    const oldStats = await fs.promises.stat(oldCacheDir).catch(() => null);
+    if (oldStats && oldStats.isDirectory()) {
+        const files = await fs.promises.readdir(oldCacheDir);
 
         if (files.length === 0) {
             return;
@@ -126,8 +127,8 @@ async function migrateCacheToDataDir() {
             try {
                 const oldPath = path.join(oldCacheDir, file);
                 const newPath = path.join(newCacheDir, file);
-                fs.cpSync(oldPath, newPath, { recursive: true, force: true });
-                fs.rmSync(oldPath, { recursive: true, force: true });
+                await fs.promises.cp(oldPath, newPath, { recursive: true, force: true });
+                await fs.promises.rm(oldPath, { recursive: true, force: true });
             } catch (error) {
                 log.tok.warn('Failed to migrate cache file. The model will be re-downloaded.', error);
             }

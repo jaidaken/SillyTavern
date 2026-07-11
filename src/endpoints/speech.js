@@ -117,7 +117,7 @@ pollinations.post('/voices', async (req, res) => {
 
 pollinations.post('/generate', async (req, res) => {
     try {
-        const key = readSecret(req.user.directories, SECRET_KEYS.POLLINATIONS);
+        const key = await readSecret(req.user.directories, SECRET_KEYS.POLLINATIONS);
         if (!key) {
             log.tts.warn('No API key saved for Pollinations TTS.');
             return res.sendStatus(400);
@@ -179,7 +179,7 @@ const elevenlabs = express.Router();
 
 elevenlabs.post('/voices', async (req, res) => {
     try {
-        const apiKey = readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
+        const apiKey = await readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
         if (!apiKey) {
             log.tts.warn('ElevenLabs API key not found');
             return res.sendStatus(400);
@@ -207,7 +207,7 @@ elevenlabs.post('/voices', async (req, res) => {
 
 elevenlabs.post('/voice-settings', async (req, res) => {
     try {
-        const apiKey = readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
+        const apiKey = await readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
         if (!apiKey) {
             log.tts.warn('ElevenLabs API key not found');
             return res.sendStatus(400);
@@ -234,7 +234,7 @@ elevenlabs.post('/voice-settings', async (req, res) => {
 
 elevenlabs.post('/synthesize', async (req, res) => {
     try {
-        const apiKey = readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
+        const apiKey = await readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
         if (!apiKey) {
             log.tts.warn('ElevenLabs API key not found');
             return res.sendStatus(400);
@@ -274,7 +274,7 @@ elevenlabs.post('/synthesize', async (req, res) => {
 
 elevenlabs.post('/history', async (req, res) => {
     try {
-        const apiKey = readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
+        const apiKey = await readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
         if (!apiKey) {
             log.tts.warn('ElevenLabs API key not found');
             return res.sendStatus(400);
@@ -302,7 +302,7 @@ elevenlabs.post('/history', async (req, res) => {
 
 elevenlabs.post('/history-audio', async (req, res) => {
     try {
-        const apiKey = readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
+        const apiKey = await readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
         if (!apiKey) {
             log.tts.warn('ElevenLabs API key not found');
             return res.sendStatus(400);
@@ -338,7 +338,7 @@ elevenlabs.post('/history-audio', async (req, res) => {
 
 elevenlabs.post('/voices/add', async (req, res) => {
     try {
-        const apiKey = readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
+        const apiKey = await readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
         if (!apiKey) {
             log.tts.warn('ElevenLabs API key not found');
             return res.sendStatus(400);
@@ -390,7 +390,7 @@ elevenlabs.post('/voices/add', async (req, res) => {
 
 elevenlabs.post('/recognize', async (req, res) => {
     try {
-        const apiKey = readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
+        const apiKey = await readSecret(req.user.directories, SECRET_KEYS.ELEVENLABS);
         if (!apiKey) {
             log.tts.warn('ElevenLabs API key not found');
             return res.sendStatus(400);

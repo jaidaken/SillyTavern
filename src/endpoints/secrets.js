@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import express from 'express';
-import { sync as writeFileAtomicSync } from 'write-file-atomic';
+import writeFileAtomic, { sync as writeFileAtomicSync } from 'write-file-atomic';
 import { color, getConfigValue, uuidv4 } from '../util.js';
 import { log } from '../log.js';
 
@@ -124,21 +124,22 @@ export class SecretManager {
     /**
      * Ensures the secrets file exists, creating an empty one if necessary
      * @private
+     * @returns {Promise<void>}
      */
-    _ensureSecretsFile() {
-        if (!fs.existsSync(this.filePath)) {
-            writeFileAtomicSync(this.filePath, JSON.stringify(this.defaultSecrets), 'utf-8');
+    async _ensureSecretsFile() {
+        if (!(await fs.promises.stat(this.filePath).catch(() => null))) {
+            await writeFileAtomic(this.filePath, JSON.stringify(this.defaultSecrets), 'utf-8');
         }
     }
 
     /**
      * Reads and parses the secrets file
      * @private
-     * @returns {SecretKeys}
+     * @returns {Promise<SecretKeys>}
      */
-    _readSecretsFile() {
-        this._ensureSecretsFile();
-        const fileContents = fs.readFileSync(this.filePath, 'utf-8');
+    async _readSecretsFile() {
+        await this._ensureSecretsFile();
+        const fileContents = await fs.promises.readFile(this.filePath, 'utf-8');
         return /** @type {SecretKeys} */ (JSON.parse(fileContents));
     }
 
@@ -146,9 +147,10 @@ export class SecretManager {
      * Writes secrets to the file atomically
      * @private
      * @param {SecretKeys} secrets
+     * @returns {Promise<void>}
      */
-    _writeSecretsFile(secrets) {
-        writeFileAtomicSync(this.filePath, JSON.stringify(secrets, null, 4), 'utf-8');
+    async _writeSecretsFile(secrets) {
+        await writeFileAtomic(this.filePath, JSON.stringify(secrets, null, 4), 'utf-8');
     }
 
     /**
@@ -200,10 +202,10 @@ export class SecretManager {
      * @param {string} key Secret key
      * @param {string} value Secret value
      * @param {string} label Label for the secret
-     * @returns {string} The ID of the newly created secret
+     * @returns {Promise<string>} The ID of the newly created secret
      */
-    writeSecret(key, value, label = 'Unlabeled') {
-        const secrets = this._readSecretsFile();
+    async writeSecret(key, value, label = 'Unlabeled') {
+        const secrets = await this._readSecretsFile();
 
         if (!Array.isArray(secrets[key])) {
             secrets[key] = [];
@@ -219,7 +221,7 @@ export class SecretManager {
         };
         secrets[key].push(secret);
 
-        this._writeSecretsFile(secrets);
+        await this._writeSecretsFile(secrets);
         return secret.id;
     }
 
@@ -227,13 +229,14 @@ export class SecretManager {
      * Deletes a secret from the secrets file by its ID
      * @param {string} key Secret key
      * @param {string?} id Secret ID to delete
+     * @returns {Promise<void>}
      */
-    deleteSecret(key, id) {
-        if (!fs.existsSync(this.filePath)) {
+    async deleteSecret(key, id) {
+        if (!(await fs.promises.stat(this.filePath).catch(() => null))) {
             return;
         }
 
-        const secrets = this._readSecretsFile();
+        const secrets = await this._readSecretsFile();
 
         if (!this._validateSecretKey(secrets, key)) {
             return;
@@ -257,21 +260,21 @@ export class SecretManager {
             delete secrets[key];
         }
 
-        this._writeSecretsFile(secrets);
+        await this._writeSecretsFile(secrets);
     }
 
     /**
      * Reads the active secret value for a given key
      * @param {string} key Secret key
      * @param {string?} id ID of the secret to read (optional)
-     * @returns {string} Secret value or empty string if not found
+     * @returns {Promise<string>} Secret value or empty string if not found
      */
-    readSecret(key, id) {
-        if (!fs.existsSync(this.filePath)) {
+    async readSecret(key, id) {
+        if (!(await fs.promises.stat(this.filePath).catch(() => null))) {
             return '';
         }
 
-        const secrets = this._readSecretsFile();
+        const secrets = await this._readSecretsFile();
         const secretArray = secrets[key];
 
         if (Array.isArray(secretArray) && secretArray.length > 0) {
@@ -286,13 +289,14 @@ export class SecretManager {
      * Activates a specific secret by ID for a given key
      * @param {string} key Secret key to rotate
      * @param {string} id ID of the secret to activate
+     * @returns {Promise<void>}
      */
-    rotateSecret(key, id) {
-        if (!fs.existsSync(this.filePath)) {
+    async rotateSecret(key, id) {
+        if (!(await fs.promises.stat(this.filePath).catch(() => null))) {
             return;
         }
 
-        const secrets = this._readSecretsFile();
+        const secrets = await this._readSecretsFile();
 
         if (!this._validateSecretKey(secrets, key)) {
             return;
@@ -309,7 +313,7 @@ export class SecretManager {
         this._deactivateAllSecrets(secretArray);
         secretArray[targetIndex].active = true;
 
-        this._writeSecretsFile(secrets);
+        await this._writeSecretsFile(secrets);
     }
 
     /**
@@ -317,9 +321,10 @@ export class SecretManager {
      * @param {string} key Secret key to rename
      * @param {string} id ID of the secret to rename
      * @param {string} label New label for the secret
+     * @returns {Promise<void>}
      */
-    renameSecret(key, id, label) {
-        const secrets = this._readSecretsFile();
+    async renameSecret(key, id, label) {
+        const secrets = await this._readSecretsFile();
 
         if (!this._validateSecretKey(secrets, key)) {
             return;
@@ -334,15 +339,15 @@ export class SecretManager {
         }
 
         secretArray[targetIndex].label = label;
-        this._writeSecretsFile(secrets);
+        await this._writeSecretsFile(secrets);
     }
 
     /**
      * Gets the state of all secrets (whether they exist or not)
-     * @returns {SecretStateMap} Secret state
+     * @returns {Promise<SecretStateMap>} Secret state
      */
-    getSecretState() {
-        const secrets = this._readSecretsFile();
+    async getSecretState() {
+        const secrets = await this._readSecretsFile();
         /** @type {SecretStateMap} */
         const state = {};
 
@@ -370,14 +375,15 @@ export class SecretManager {
 
     /**
      * Gets all secrets (for admin viewing)
-     * @returns {SecretKeys} All secrets
+     * @returns {Promise<SecretKeys>} All secrets
      */
     getAllSecrets() {
         return this._readSecretsFile();
     }
 
     /**
-     * Migrates legacy flat secrets format to new format
+     * Migrates legacy flat secrets format to new format.
+     * Stays fully sync: runs pre-listen from server-main, so it keeps its own sync write path.
      */
     migrateFlatSecrets() {
         if (!fs.existsSync(this.filePath)) {
@@ -414,7 +420,7 @@ export class SecretManager {
         const backupFilePath = path.join(this.directories.backups, `secrets_migration_${Date.now()}.json`);
         fs.cpSync(this.filePath, backupFilePath);
 
-        this._writeSecretsFile(migratedSecrets);
+        writeFileAtomicSync(this.filePath, JSON.stringify(migratedSecrets, null, 4), 'utf-8');
         log.settings.info(color.green('Secrets migrated successfully, old secrets backed up to:'), backupFilePath);
     }
 }
@@ -425,6 +431,7 @@ export class SecretManager {
  * @param {import('../users.js').UserDirectoryList} directories User directories
  * @param {string} key Secret key
  * @param {string} value Secret value
+ * @returns {Promise<string>} The ID of the newly created secret
  */
 export function writeSecret(directories, key, value) {
     return new SecretManager(directories).writeSecret(key, value);
@@ -434,6 +441,7 @@ export function writeSecret(directories, key, value) {
  * Deletes a secret from the secrets file
  * @param {import('../users.js').UserDirectoryList} directories User directories
  * @param {string} key Secret key
+ * @returns {Promise<void>}
  */
 export function deleteSecret(directories, key) {
     return new SecretManager(directories).deleteSecret(key, null);
@@ -444,7 +452,7 @@ export function deleteSecret(directories, key) {
  * @param {import('../users.js').UserDirectoryList} directories User directories
  * @param {string} key Secret key
  * @param {string?} id Secret ID (optional)
- * @returns {string} Secret value
+ * @returns {Promise<string>} Secret value
  */
 export function readSecret(directories, key, id = null) {
     return new SecretManager(directories).readSecret(key, id);
@@ -453,10 +461,10 @@ export function readSecret(directories, key, id = null) {
 /**
  * Reads the secret state from the secrets file
  * @param {import('../users.js').UserDirectoryList} directories User directories
- * @returns {Record<string, boolean>} Secret state
+ * @returns {Promise<Record<string, boolean>>} Secret state
  */
-export function readSecretState(directories) {
-    const state = new SecretManager(directories).getSecretState();
+export async function readSecretState(directories) {
+    const state = await new SecretManager(directories).getSecretState();
     const result = /** @type {Record<string, boolean>} */ ({});
     for (const key of Object.values(SECRET_KEYS)) {
         // Skip migration marker
@@ -471,10 +479,10 @@ export function readSecretState(directories) {
 /**
  * Reads all secrets from the secrets file
  * @param {import('../users.js').UserDirectoryList} directories User directories
- * @returns {Record<string, string>} Secrets
+ * @returns {Promise<Record<string, string>>} Secrets
  */
-export function getAllSecrets(directories) {
-    const secrets = new SecretManager(directories).getAllSecrets();
+export async function getAllSecrets(directories) {
+    const secrets = await new SecretManager(directories).getAllSecrets();
     const result = /** @type {Record<string, string>} */ ({});
     for (const [key, values] of Object.entries(secrets)) {
         // Skip migration marker
@@ -509,7 +517,7 @@ export function migrateFlatSecrets(directoriesList) {
 
 export const router = express.Router();
 
-router.post('/write', (request, response) => {
+router.post('/write', async (request, response) => {
     try {
         const { key, value, label } = request.body;
 
@@ -518,7 +526,7 @@ router.post('/write', (request, response) => {
         }
 
         const manager = new SecretManager(request.user.directories);
-        const id = manager.writeSecret(key, value, label);
+        const id = await manager.writeSecret(key, value, label);
 
         return response.send({ id });
     } catch (error) {
@@ -527,10 +535,10 @@ router.post('/write', (request, response) => {
     }
 });
 
-router.post('/read', (request, response) => {
+router.post('/read', async (request, response) => {
     try {
         const manager = new SecretManager(request.user.directories);
-        const state = manager.getSecretState();
+        const state = await manager.getSecretState();
         return response.send(state);
     } catch (error) {
         log.settings.error('Error reading secret state:', error);
@@ -538,14 +546,14 @@ router.post('/read', (request, response) => {
     }
 });
 
-router.post('/view', (request, response) => {
+router.post('/view', async (request, response) => {
     try {
         if (!allowKeysExposure) {
             log.settings.error('secrets.json could not be viewed unless allowKeysExposure in config.yaml is set to true');
             return response.sendStatus(403);
         }
 
-        const secrets = getAllSecrets(request.user.directories);
+        const secrets = await getAllSecrets(request.user.directories);
 
         if (!secrets) {
             return response.sendStatus(404);
@@ -558,7 +566,7 @@ router.post('/view', (request, response) => {
     }
 });
 
-router.post('/find', (request, response) => {
+router.post('/find', async (request, response) => {
     try {
         const { key, id } = request.body;
 
@@ -572,13 +580,13 @@ router.post('/find', (request, response) => {
         }
 
         const manager = new SecretManager(request.user.directories);
-        const state = manager.getSecretState();
+        const state = await manager.getSecretState();
 
         if (!state[key]) {
             return response.sendStatus(404);
         }
 
-        const secretValue = manager.readSecret(key, id);
+        const secretValue = await manager.readSecret(key, id);
         return response.send({ value: secretValue });
     } catch (error) {
         log.settings.error('Error finding secret:', error);
@@ -586,7 +594,7 @@ router.post('/find', (request, response) => {
     }
 });
 
-router.post('/delete', (request, response) => {
+router.post('/delete', async (request, response) => {
     try {
         const { key, id } = request.body;
 
@@ -595,7 +603,7 @@ router.post('/delete', (request, response) => {
         }
 
         const manager = new SecretManager(request.user.directories);
-        manager.deleteSecret(key, id);
+        await manager.deleteSecret(key, id);
 
         return response.sendStatus(204);
     } catch (error) {
@@ -604,7 +612,7 @@ router.post('/delete', (request, response) => {
     }
 });
 
-router.post('/rotate', (request, response) => {
+router.post('/rotate', async (request, response) => {
     try {
         const { key, id } = request.body;
 
@@ -613,7 +621,7 @@ router.post('/rotate', (request, response) => {
         }
 
         const manager = new SecretManager(request.user.directories);
-        manager.rotateSecret(key, id);
+        await manager.rotateSecret(key, id);
 
         return response.sendStatus(204);
     } catch (error) {
@@ -622,7 +630,7 @@ router.post('/rotate', (request, response) => {
     }
 });
 
-router.post('/rename', (request, response) => {
+router.post('/rename', async (request, response) => {
     try {
         const { key, id, label } = request.body;
 
@@ -631,7 +639,7 @@ router.post('/rename', (request, response) => {
         }
 
         const manager = new SecretManager(request.user.directories);
-        manager.renameSecret(key, id, label);
+        await manager.renameSecret(key, id, label);
 
         return response.sendStatus(204);
     } catch (error) {

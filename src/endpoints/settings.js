@@ -154,7 +154,7 @@ async function backupUserSettings(handle, preventDuplicates) {
     }
 
     await fs.promises.copyFile(sourceFile, backupFile);
-    removeOldBackups(userDirectories.backups, `settings_${handle}`);
+    await removeOldBackups(userDirectories.backups, `settings_${handle}`);
 }
 
 /**
