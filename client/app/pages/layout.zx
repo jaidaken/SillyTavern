@@ -5,6 +5,7 @@ pub fn Layout(ctx: zx.LayoutContext, children: zx.Component) zx.Component {
                 <meta charset="UTF-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
                 <meta name="color-scheme" content="dark" />
+                <meta name="description" content="A self-hosted frontend for local and API-driven LLM roleplay and chat." />
                 <title>SillyTavern</title>
                 <link rel="icon" type="image/png" href="/glue/favicon.png" />
                 <link rel="stylesheet" href="/glue/vendor/hljs-theme.css" />

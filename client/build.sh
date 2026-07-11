@@ -20,6 +20,9 @@ zig build export "-Doptimize=$OPT"
 # Order is load-bearing: export writes dist, patch-door edits the door in place, prune trims the
 # unpruned ziex npm tree export copied in. verify.sh then runs against the pruned artifact.
 ./patch-door.sh
+# Private site: keep crawlers out, and give Lighthouse a valid robots.txt to parse instead of the
+# SPA index.html fallback. Written before prune, which keeps it via its allowlist.
+printf 'User-agent: *\nDisallow: /\n' > dist/robots.txt
 ./prune-dist.sh dist
 
 echo "build.sh: done (opt=$OPT). Run ./verify.sh for the browser gate."

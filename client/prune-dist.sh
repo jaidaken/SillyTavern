@@ -17,6 +17,7 @@ esac
 
 KEEP=(
     "index.html"
+    "robots.txt"
     "assets/_/main.wasm"
     "glue/main.js"
     "glue/app.css"
