@@ -14,6 +14,11 @@ PORT="${PORT:-8901}"
 TOKENS="${TOKENS:-60}"
 MSGS="${MSGS:-4}"
 
+# render.mjs needs Node's global WebSocket + fetch (>=22; project pins >=26).
+node -e 'process.exit(typeof WebSocket==="function"&&typeof fetch==="function"?0:1)' 2>/dev/null || {
+    echo "node with global WebSocket/fetch required for render.mjs" >&2; exit 1
+}
+
 DOM=$(mktemp)
 PROFILE=$(mktemp -d)
 FAILURES=0
@@ -39,9 +44,11 @@ setsid timeout 120 python3 devserve.py --port "$PORT" --dist dist >/dev/null 2>&
 SRV=$!
 sleep 2
 
-timeout 60 google-chrome-stable --headless --disable-gpu --no-sandbox \
-    --user-data-dir="$PROFILE" --dump-dom --virtual-time-budget=20000 \
-    "http://127.0.0.1:$PORT/?rendercount=1&msgs=$MSGS&tokens=$TOKENS" 2>/dev/null > "$DOM"
+# Deterministic capture (see verify.sh render()): wait for the sync render-count probe to have
+# written its metrics, not a wall-clock budget that races wasm boot under load.
+node render.mjs --url "http://127.0.0.1:$PORT/?rendercount=1&msgs=$MSGS&tokens=$TOKENS" \
+    --wait "JSON.parse(document.querySelector('#probe-metrics').textContent).streamTokens===$TOKENS" \
+    2>>"$PROFILE/render.err" > "$DOM"
 
 BASELINE=$(python3 - "$DOM" "$TOKENS" <<'PY'
 import json, re, sys

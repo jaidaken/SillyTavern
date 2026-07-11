@@ -60,6 +60,12 @@ WASM="dist/assets/_/main.wasm"
 command -v google-chrome-stable >/dev/null 2>&1 || {
     echo "google-chrome-stable not on PATH: the browser gate cannot run" >&2; exit 1
 }
+# render.mjs drives Chrome over CDP with Node's global WebSocket + fetch. Test the capability, not a
+# version string: they are stable in Node 22+, and this project pins >=26.
+command -v node >/dev/null 2>&1 || { echo "node not on PATH: render.mjs cannot run" >&2; exit 1; }
+node -e 'process.exit(typeof WebSocket==="function"&&typeof fetch==="function"?0:1)' 2>/dev/null || {
+    echo "node lacks global WebSocket/fetch (need >=22; project pins >=26): render.mjs cannot run" >&2; exit 1
+}
 
 echo "== zig gates =="
 if zig build check; then echo "  ok    zig fmt --check"; else echo "  FAIL  zig fmt --check"; FAILURES=$((FAILURES + 1)); fi
@@ -97,9 +103,11 @@ if [ "$ready" != yes ]; then
     exit 1
 fi
 
-chrome() {
-    timeout 60 google-chrome-stable --headless --disable-gpu --no-sandbox \
-        --user-data-dir="$PROFILE" --dump-dom --virtual-time-budget="$2" "$1" 2>/dev/null
+# Poll the check's own completion predicate ($2), then dump: replaces chrome --virtual-time-budget,
+# which raced hydration under load and snapshot an empty DOM. Timeout dumps partial + exits 1 (a
+# broken build still fails). render.mjs stderr is logged, never mixed into the captured DOM.
+render() {
+    node render.mjs --url "$1" --wait "$2" --timeout "${3:-30000}" 2>>"$PROFILE/render.err"
 }
 
 # The two adversarial stream URLs. Each drives one hostile body through the real render pipeline via
@@ -132,7 +140,10 @@ PY
 
 echo
 echo "== rendered dom (default) =="
-chrome "http://127.0.0.1:$PORT/" 9000 > "$DOM"
+# Completion: the client adds .hydrated to #chat-root once the SSR frames hold real bodies (main.js
+# boot), and all twelve fixtures are in the log.
+render "http://127.0.0.1:$PORT/" \
+    "document.querySelector('#chat-root.hydrated') && document.querySelectorAll('#chat .mes').length>=12" > "$DOM"
 check "ssr placeholder replaced" "$(count 'ST_SSR_PLACEHOLDER' "$DOM")" 0
 check "messages rendered" "$(count 'class="mes"' "$DOM")" 12
 check "shell region present" "$(count 'id="shell"' "$DOM")" 1
@@ -147,7 +158,10 @@ atleast "emphasis" "$(count '<em>' "$DOM")" 1
 
 echo
 echo "== sanitize boundary (hostile body driven through the render) =="
-chrome "$SAN_URL" 30000 > "$SAN_DOM"
+# Completion: #probe-metrics is empty until the stream seals (main.js fills it in stream end), and the
+# one streamed hostile body makes the thirteenth message.
+render "$SAN_URL" \
+    "JSON.parse(document.querySelector('#probe-metrics').textContent) && document.querySelectorAll('#chat .mes').length>=13" > "$SAN_DOM"
 # The hostile message must have rendered at all: three fixtures plus the streamed one. If the body
 # were dropped, the strip checks below would pass vacuously, so this is the anti-vacuous guard.
 check   "hostile message rendered" "$(count 'class="mes"' "$SAN_DOM")" 13
@@ -161,7 +175,9 @@ atleast "real link href preserved" "$(count 'href="https://ziglang.org"' "$SAN_D
 
 echo
 echo "== markdown and highlighting (markdown body driven through the render) =="
-chrome "$MD_URL" 30000 > "$MD_DOM"
+# Same seal signal as the sanitize check: the two-token markdown body streams into the thirteenth message.
+render "$MD_URL" \
+    "JSON.parse(document.querySelector('#probe-metrics').textContent) && document.querySelectorAll('#chat .mes').length>=13" > "$MD_DOM"
 atleast "headings" "$(count '<h1>' "$MD_DOM")" 1
 atleast "tables" "$(count '<table>' "$MD_DOM")" 1
 atleast "task list items" "$(count 'task-list-item' "$MD_DOM")" 2
@@ -197,7 +213,9 @@ kill -TERM -- -"$NODEV" 2>/dev/null
 
 echo
 echo "== streaming and the render cache =="
-chrome "http://127.0.0.1:$PORT/?stream=1&hold=6000" 30000 > "$STREAM_DOM"
+# Completion: the 200-token stream has sealed and written its final metrics.
+render "http://127.0.0.1:$PORT/?stream=1&hold=6000" \
+    "JSON.parse(document.querySelector('#probe-metrics').textContent).tokens===200" > "$STREAM_DOM"
 python3 - "$STREAM_DOM" <<'PY'
 import json, re, sys
 h = open(sys.argv[1], encoding="utf-8", errors="replace").read()
@@ -227,7 +245,10 @@ PY
 
 echo
 echo "== two consecutive streams keep separate bodies =="
-chrome "http://127.0.0.1:$PORT/?stream=2&hold=5000" 20000 > "$STREAM_DOM"
+# Completion: the SECOND stream ran to its last token (bbb19). The first stream fills #probe-metrics
+# before the second even begins, so gate on the second stream's tail, not on the metrics block.
+render "http://127.0.0.1:$PORT/?stream=2&hold=5000" \
+    "document.body.textContent.includes('bbb19')" > "$STREAM_DOM"
 python3 - "$STREAM_DOM" <<'PY2'
 import re, sys
 h = open(sys.argv[1], encoding="utf-8", errors="replace").read()
