@@ -53,7 +53,14 @@ Landed by a parallel team (m-app/m-css/m-glue/m-treefree/m-chrome + m-edge draft
 - TEST QUALITY + GATE: markdown fuzz determinism + full-byte-range, quotes no-q-in-fence property, adopt unpack native test `5102f5b03`; the real adversarial verify.sh gate (hostile bytes driven through the live pipeline, regression-proven) `56e178e74`.
 
 Still OPEN after Wave 2 (see the Addendum at the foot for detail):
-- rel=noopener verify check = 0 [ROOT-CAUSED, NOT a wave-2 regression]: bisected out glue + quotes.zig + sanitized.zig, then rebuilt the pre-wave commit 56e178e74 EXACTLY and it also gives 0 now though it gave 2 ~1.5h earlier (same code, same patches). So it is environmental: DOMPurify drops the `target`/`rel` the afterSanitizeAttributes hook sets because they are not in the config allow-add set. Fix = `ADD_ATTR: ['target', 'rel']` in MESSAGE_CONFIG so the hook-added attributes survive the final pass (version-robust). Low severity (browsers imply noopener for target=_blank; all XSS strips pass).
+- rel=noopener verify check = 0 [FIXED, was a verify.sh grep-pattern bug, never an app defect]: the app
+  always applies `rel="noopener noreferrer"` to outbound links (confirmed three ways: Playwright
+  getAttribute + outerHTML twice, and raw google-chrome-stable --dump-dom). verify.sh grepped the literal
+  `rel="noopener"`, which cannot match `rel="noopener noreferrer"` (a space follows `noopener`, not the
+  closing quote). It intermittently passed only because an older google-chrome-stable serialized a form
+  the pattern happened to catch; a mid-session chrome update flipped it to a consistent false-fail. Fix:
+  broaden the pattern to `rel="noopener[^"]*"` (verify.sh:159). Proven: rel now 2, full gate rc=0.
+  Two earlier hypotheses (DOMPurify strips it / --dump-dom drops it) were both wrong and retracted.
 - DEFERRED features/refactors: per-speaker colour (#7), glue/main.js + app.css structure splits (#6), Phase 7 tree-free + its coupled leaks (#10), edge Caddy security/cache headers (drafted in nixos-config, awaiting operator rebuild).
 - The un-actioned W05 items in the sections below (dead code, further CSS, scripts, perf, supply-chain) remain as listed; this wave took the security/correctness/a11y/leak/distinctiveness slice.
 

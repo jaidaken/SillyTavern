@@ -156,7 +156,7 @@ check   "javascript: href stripped" "$(count 'href="javascript:' "$SAN_DOM")" 0
 check   "svg data uri stripped" "$(count 'src="data:image/svg' "$SAN_DOM")" 0
 atleast "png data uri preserved" "$(count 'src="data:image/png' "$SAN_DOM")" 1
 atleast "author class namespaced to custom-" "$(count 'class="custom-danger"' "$SAN_DOM")" 1
-atleast "rel=noopener forced on links" "$(count 'rel="noopener"' "$SAN_DOM")" 1
+atleast "rel=noopener forced on links" "$(count 'rel="noopener[^"]*"' "$SAN_DOM")" 1
 atleast "real link href preserved" "$(count 'href="https://ziglang.org"' "$SAN_DOM")" 1
 
 echo
