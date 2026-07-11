@@ -8,6 +8,7 @@ pub fn Layout(ctx: zx.LayoutContext, children: zx.Component) zx.Component {
                 <meta name="description" content="A self-hosted frontend for local and API-driven LLM roleplay and chat." />
                 <title>SillyTavern</title>
                 <link rel="icon" type="image/png" href="/glue/favicon.png" />
+                <link rel="preload" as="font" type="font/woff2" href="/glue/fonts/Newsreader-latin.woff2" crossorigin />
                 <link rel="stylesheet" href="/glue/vendor/hljs-theme.css" />
                 <link rel="stylesheet" href="/glue/app.css" />
             </head>
