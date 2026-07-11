@@ -1,10 +1,9 @@
-import fs from 'node:fs';
 import { promises as fsPromises } from 'node:fs';
 import path from 'node:path';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
-import { sync as writeFileAtomicSync, default as writeFileAtomic } from 'write-file-atomic';
+import writeFileAtomic from 'write-file-atomic';
 
 import { color, tryParse } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
@@ -52,9 +51,7 @@ export async function migrateGroupChatsMetadataFormat(userDirectories) {
                     if (!needsMigration) {
                         continue;
                     }
-                    if (!fs.existsSync(backupPath)) {
-                        await fsPromises.mkdir(backupPath, { recursive: true });
-                    }
+                    await fsPromises.mkdir(backupPath, { recursive: true });
                     await fsPromises.copyFile(groupFilePath, path.join(backupPath, groupFile.name));
                     const allMetadata = {
                         ...(groupData.past_metadata || {}),
@@ -111,22 +108,23 @@ export async function migrateGroupChatsMetadataFormat(userDirectories) {
     }
 }
 
-router.post('/all', (request, response) => {
+router.post('/all', async (request, response) => {
     const groups = [];
 
-    if (!fs.existsSync(request.user.directories.groups)) {
-        fs.mkdirSync(request.user.directories.groups);
+    const groupsDirStat = await fsPromises.stat(request.user.directories.groups).catch(() => null);
+    if (!groupsDirStat) {
+        await fsPromises.mkdir(request.user.directories.groups);
     }
 
-    const files = fs.readdirSync(request.user.directories.groups).filter(x => path.extname(x) === '.json');
-    const chats = fs.readdirSync(request.user.directories.groupChats).filter(x => path.extname(x) === '.jsonl');
+    const files = (await fsPromises.readdir(request.user.directories.groups)).filter(x => path.extname(x) === '.json');
+    const chats = (await fsPromises.readdir(request.user.directories.groupChats)).filter(x => path.extname(x) === '.jsonl');
 
-    files.forEach(function (file) {
+    for (const file of files) {
         try {
             const filePath = path.join(request.user.directories.groups, file);
-            const fileContents = fs.readFileSync(filePath, 'utf8');
+            const fileContents = await fsPromises.readFile(filePath, 'utf8');
             const group = JSON.parse(fileContents);
-            const groupStat = fs.statSync(filePath);
+            const groupStat = await fsPromises.stat(filePath);
             group.date_added = groupStat.birthtimeMs;
             group.create_date = new Date(groupStat.birthtimeMs).toISOString();
 
@@ -136,7 +134,7 @@ router.post('/all', (request, response) => {
             if (Array.isArray(group.chats) && Array.isArray(chats)) {
                 for (const chat of chats) {
                     if (group.chats.includes(path.parse(chat).name)) {
-                        const chatStat = fs.statSync(path.join(request.user.directories.groupChats, chat));
+                        const chatStat = await fsPromises.stat(path.join(request.user.directories.groupChats, chat));
                         chat_size += chatStat.size;
                         date_last_chat = Math.max(date_last_chat, chatStat.mtimeMs);
                     }
@@ -149,12 +147,12 @@ router.post('/all', (request, response) => {
         } catch (error) {
             log.chat.error(error);
         }
-    });
+    }
 
     return response.send(groups);
 });
 
-router.post('/create', (request, response) => {
+router.post('/create', async (request, response) => {
     if (!request.body) {
         return response.sendStatus(400);
     }
@@ -180,15 +178,16 @@ router.post('/create', (request, response) => {
     const pathToFile = path.join(request.user.directories.groups, sanitize(`${id}.json`));
     const fileData = JSON.stringify(groupMetadata, null, 4);
 
-    if (!fs.existsSync(request.user.directories.groups)) {
-        fs.mkdirSync(request.user.directories.groups);
+    const groupsDirStat = await fsPromises.stat(request.user.directories.groups).catch(() => null);
+    if (!groupsDirStat) {
+        await fsPromises.mkdir(request.user.directories.groups);
     }
 
-    writeFileAtomicSync(pathToFile, fileData);
+    await writeFileAtomic(pathToFile, fileData);
     return response.send(groupMetadata);
 });
 
-router.post('/edit', getFileNameValidationFunction('id'), (request, response) => {
+router.post('/edit', getFileNameValidationFunction('id'), async (request, response) => {
     if (!request.body || !request.body.id) {
         return response.sendStatus(400);
     }
@@ -197,7 +196,7 @@ router.post('/edit', getFileNameValidationFunction('id'), (request, response) =>
     const pathToFile = path.join(request.user.directories.groups, sanitize(`${id}.json`));
     const fileData = JSON.stringify(request.body, null, 4);
 
-    writeFileAtomicSync(pathToFile, fileData);
+    await writeFileAtomic(pathToFile, fileData);
     return response.send({ ok: true });
 });
 
@@ -211,25 +210,21 @@ router.post('/delete', getFileNameValidationFunction('id'), async (request, resp
 
     try {
         // Delete group chats
-        const group = JSON.parse(fs.readFileSync(pathToGroup, 'utf8'));
+        const group = JSON.parse(await fsPromises.readFile(pathToGroup, 'utf8'));
 
         if (group && Array.isArray(group.chats)) {
             for (const chat of group.chats) {
                 log.chat.info('Deleting group chat', chat);
                 const pathToFile = path.join(request.user.directories.groupChats, sanitize(`${chat}.jsonl`));
 
-                if (fs.existsSync(pathToFile)) {
-                    fs.unlinkSync(pathToFile);
-                }
+                await fsPromises.rm(pathToFile, { force: true });
             }
         }
     } catch (error) {
         log.chat.error('Could not delete group chats. Clean them up manually.', error);
     }
 
-    if (fs.existsSync(pathToGroup)) {
-        fs.unlinkSync(pathToGroup);
-    }
+    await fsPromises.rm(pathToGroup, { force: true });
 
     return response.send({ ok: true });
 });

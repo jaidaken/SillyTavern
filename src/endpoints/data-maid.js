@@ -134,7 +134,7 @@ export class DataMaidService {
      * @returns {Promise<DataMaidSanitizedRecord>} A sanitized record with the file name, hash, parent directory name, size, and modification time.
      */
     async #sanitizeRecord(name, withParent) {
-        const stat = fs.existsSync(name) ? await fs.promises.stat(name) : null;
+        const stat = await fs.promises.stat(name).catch(() => null);
         return {
             name: path.basename(name),
             hash: sha256(name),
@@ -272,7 +272,8 @@ export class DataMaidService {
                 }
             }
             const pathToSettings = path.join(this.directories.root, SETTINGS_FILE);
-            if (fs.existsSync(pathToSettings)) {
+            const settingsStat = await fs.promises.stat(pathToSettings).catch(() => null);
+            if (settingsStat) {
                 try {
                     const settingsContent = await fs.promises.readFile(pathToSettings, 'utf-8');
                     const settings = tryParse(settingsContent);
@@ -752,9 +753,9 @@ router.get('/view', async (req, res) => {
         }
 
         const pathToFile = fileEntry.path;
-        const fileExists = fs.existsSync(pathToFile);
+        const fileStat = await fs.promises.stat(pathToFile).catch(() => null);
 
-        if (!fileExists) {
+        if (!fileStat) {
             return res.sendStatus(404);
         }
 
@@ -800,13 +801,7 @@ router.post('/delete', async (req, res) => {
             }
 
             const pathToFile = fileEntry.path;
-            const fileExists = fs.existsSync(pathToFile);
-
-            if (!fileExists) {
-                continue;
-            }
-
-            await fs.promises.unlink(pathToFile);
+            await fs.promises.rm(pathToFile, { force: true });
         }
 
         return res.sendStatus(204);

@@ -1,5 +1,5 @@
 import express from 'express';
-import fs, { promises as fsPromises } from 'node:fs';
+import { promises as fsPromises } from 'node:fs';
 import path from 'node:path';
 import sanitize from 'sanitize-filename';
 import { CHAT_BACKUPS_PREFIX, getChatInfo } from './chats.js';
@@ -40,11 +40,14 @@ router.post('/chat/delete', async (request, response) => {
             return response.sendStatus(400);
         }
 
-        if (!fs.existsSync(filePath)) {
-            return response.sendStatus(404);
+        try {
+            await fsPromises.unlink(filePath);
+        } catch (error) {
+            if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+                return response.sendStatus(404);
+            }
+            throw error;
         }
-
-        await fsPromises.unlink(filePath);
         return response.sendStatus(200);
     } catch (error) {
         log.content.error(error);
@@ -62,7 +65,8 @@ router.post('/chat/download', async (request, response) => {
             return response.sendStatus(400);
         }
 
-        if (!fs.existsSync(filePath)) {
+        const fileStat = await fsPromises.stat(filePath).catch(() => null);
+        if (!fileStat) {
             return response.sendStatus(404);
         }
 

@@ -224,12 +224,12 @@ export async function onExit() {
  * Reads the contents of a file and returns the lines in the file as an array.
  *
  * @param {string} filepath - The path of the file to be read.
- * @returns {Array<string>} - The lines in the file.
+ * @returns {Promise<Array<string>>} - The lines in the file.
  * @throws Will throw an error if the file cannot be read.
  */
-function readAndParseFile(filepath) {
+async function readAndParseFile(filepath) {
     try {
-        let file = fs.readFileSync(filepath, 'utf8');
+        let file = await readFile(filepath, 'utf8');
         let lines = file.split('\n');
         return lines;
     } catch (error) {
@@ -267,9 +267,9 @@ function countWordsInString(str) {
  *
  * @param  {string} chatsPath The directory containing the chat files.
  * @param  {string} item     The name of the character.
- * @return {object}          An object containing the calculated statistics.
+ * @return {Promise<object>}          An object containing the calculated statistics.
  */
-const calculateStats = (chatsPath, item) => {
+const calculateStats = async (chatsPath, item) => {
     const chatDir = path.join(chatsPath, item.replace('.png', ''));
     const stats = {
         total_gen_time: 0,
@@ -284,11 +284,12 @@ const calculateStats = (chatsPath, item) => {
     };
     let uniqueGenStartTimes = new Set();
 
-    if (fs.existsSync(chatDir)) {
-        const chats = fs.readdirSync(chatDir);
+    const chatDirStat = await fs.promises.stat(chatDir).catch(() => null);
+    if (chatDirStat) {
+        const chats = await readdir(chatDir);
         if (Array.isArray(chats) && chats.length) {
             for (const chat of chats) {
-                const result = calculateTotalGenTimeAndWordCount(
+                const result = await calculateTotalGenTimeAndWordCount(
                     chatDir,
                     chat,
                     uniqueGenStartTimes,
@@ -300,7 +301,7 @@ const calculateStats = (chatsPath, item) => {
                 stats.non_user_msg_count += result.nonUserMsgCount || 0;
                 stats.total_swipe_count += result.totalSwipeCount || 0;
 
-                const chatStat = fs.statSync(path.join(chatDir, chat));
+                const chatStat = await fs.promises.stat(path.join(chatDir, chat));
                 stats.chat_size += chatStat.size;
                 stats.date_last_chat = Math.max(
                     stats.date_last_chat,
@@ -332,16 +333,16 @@ function setCharStats(handle, stats) {
  *
  * @param {string} chatDir - The directory path where character chat files are stored.
  * @param {string} chat - The name of the chat file.
- * @returns {Object} - An object containing the total generation time, user word count, and non-user word count.
+ * @returns {Promise<Object>} - An object containing the total generation time, user word count, and non-user word count.
  * @throws Will throw an error if the file cannot be read or parsed.
  */
-function calculateTotalGenTimeAndWordCount(
+async function calculateTotalGenTimeAndWordCount(
     chatDir,
     chat,
     uniqueGenStartTimes,
 ) {
     let filepath = path.join(chatDir, chat);
-    let lines = readAndParseFile(filepath);
+    let lines = await readAndParseFile(filepath);
 
     let totalGenTime = 0;
     let userWordCount = 0;
