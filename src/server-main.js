@@ -74,6 +74,7 @@ import { init as settingsInit } from './endpoints/settings.js';
 import { redirectDeprecatedEndpoints, ServerStartup, setupPrivateEndpoints } from './server-startup.js';
 import { diskCache } from './endpoints/characters.js';
 import { migrateFlatSecrets } from './endpoints/secrets.js';
+import { runConfigValidation } from './config-validate.js';
 import { migrateGroupChatsMetadataFormat } from './endpoints/groups.js';
 import { backendErrorHandler } from './endpoints/backends/errors.js';
 
@@ -301,6 +302,7 @@ async function preSetupTasks() {
     migrateFlatSecrets(directories);
     cleanUploads();
     migrateAccessLog();
+    await runConfigValidation(serverDirectory);
 
     await settingsInit();
     await statsInit();
