@@ -1,0 +1,35 @@
+// Persona list panel body. Right dock.
+pub fn PersonaList(allocator: zx.Allocator) zx.Component {
+    const ps = persona_store.slice();
+    if (ps.len == 0) {
+        return (
+            <p @allocator={allocator} class="panel-empty">No personas loaded. Connect to the SillyTavern backend to see your personas.</p>
+        );
+    }
+    return (
+        <div @allocator={allocator} id="persona-list" class="char-list" role="list" aria-label="Personas">
+            {for (ps, 0..) |p, i| (
+                <div class={personaClass(i)} role="listitem" data-persona-index={i} tabindex="0">
+                    <img class="char-avatar" src={personaAvatarUrl(allocator, p.avatar)} alt={p.name} loading="lazy" />
+                    <div class="char-info">
+                        <div class="char-name">{p.name}</div>
+                        <div class="char-desc">{p.description}</div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+fn personaClass(index: usize) []const u8 {
+    const sel = persona_store.selectedIndex();
+    return if (sel != null and sel.? == index) "char-item is-selected" else "char-item";
+}
+
+fn personaAvatarUrl(alloc: std.mem.Allocator, avatar: []const u8) []const u8 {
+    return std.fmt.allocPrint(alloc, "../thumbnail?type=persona&file={s}", .{avatar}) catch "";
+}
+
+const zx = @import("zx");
+const std = @import("std");
+const persona_store = @import("../persona_store.zig");

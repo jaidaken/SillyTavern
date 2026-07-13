@@ -1,0 +1,41 @@
+// Top-bar drawer wrapper. Routes panel.id to the matching body component.
+pub const DrawerProps = struct {
+    panel: ui.Panel,
+};
+
+pub fn TopDrawer(allocator: zx.Allocator, props: DrawerProps) zx.Component {
+    const p = props.panel;
+    return (
+        <section @allocator={allocator} id="panel-view" class="top-drawer" aria-labelledby="panel-heading">
+            <PanelHead title={p.title} />
+            <div class="panel-body">
+                {if (p.id == .connections) (
+                    <ConnectionsBody />
+                ) else if (p.id == .formatting) (
+                    <FormattingBody />
+                ) else if (p.id == .world_info) (
+                    <WorldInfoBody />
+                ) else if (p.id == .settings) (
+                    <SettingsBody />
+                ) else if (p.id == .backgrounds) (
+                    <BackgroundsBody />
+                ) else if (p.id == .extensions) (
+                    <ExtensionsBody />
+                ) else (
+                    <PanelEmpty />
+                )}
+            </div>
+        </section>
+    );
+}
+
+const zx = @import("zx");
+const ui = @import("../ui.zig");
+const PanelHead = @import("../panelchrome.zx").PanelHead;
+const PanelEmpty = @import("../panelchrome.zx").PanelEmpty;
+const ConnectionsBody = @import("connections_body.zx").ConnectionsBody;
+const FormattingBody = @import("formatting_body.zx").FormattingBody;
+const WorldInfoBody = @import("world_info_body.zx").WorldInfoBody;
+const SettingsBody = @import("settings_body.zx").SettingsBody;
+const BackgroundsBody = @import("backgrounds_body.zx").BackgroundsBody;
+const ExtensionsBody = @import("extensions_body.zx").ExtensionsBody;

@@ -18,6 +18,6 @@ pub fn TopBar(allocator: zx.Allocator) zx.Component {
 
 const zx = @import("zx");
 const ui = @import("./ui.zig");
-const TopDrawer = @import("./topdrawer.zx").TopDrawer;
+const TopDrawer = @import("./panels/topdrawer.zx").TopDrawer;
 // The .zx transpiler appends `.len`, so the loop target must already be a slice.
 const panel_list: []const ui.Panel = &ui.panels;

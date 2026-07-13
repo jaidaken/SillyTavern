@@ -58,6 +58,13 @@ pub fn SettingsBody(allocator: zx.Allocator) zx.Component {
                         <button class="seg-btn" data-reading-set="theme" data-reading-val="paper" type="button">Paper</button>
                     </div>
                 </div>
+                <div class="setting-row">
+                    <span class="setting-label">Avatars</span>
+                    <div class="seg" role="group" aria-label="Chat message avatars">
+                        <button class="seg-btn" data-reading-set="avatars" data-reading-val="on" type="button">On</button>
+                        <button class="seg-btn" data-reading-set="avatars" data-reading-val="off" type="button">Off</button>
+                    </div>
+                </div>
                 <p class="setting-note">Reading styles apply to the chat area only.</p>
             </div>
 
@@ -78,7 +85,7 @@ pub fn SettingsBody(allocator: zx.Allocator) zx.Component {
 
 const zx = @import("zx");
 const std = @import("std");
-const ui = @import("./ui.zig");
+const ui = @import("../ui.zig");
 
 // aria-checked keys off the segment's active class, so motionSegClass stays the single source of the
 // current motion pref for both the styling and the radio state.

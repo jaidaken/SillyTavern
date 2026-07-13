@@ -1,0 +1,10 @@
+// World Info panel body. Top-bar drawer.
+pub fn WorldInfoBody(allocator: zx.Allocator) zx.Component {
+    _ = allocator;
+    return (
+        <PanelEmpty />
+    );
+}
+
+const zx = @import("zx");
+const PanelEmpty = @import("../panelchrome.zx").PanelEmpty;

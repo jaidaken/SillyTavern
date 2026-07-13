@@ -1,0 +1,33 @@
+// Docked side panel wrapper. Routes panel.id to the matching body component.
+pub const PanelProps = struct {
+    panel: ui.Panel,
+};
+
+pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
+    const p = props.panel;
+    return (
+        <aside @allocator={allocator} id="panel-view" aria-labelledby="panel-heading" class={ui.sideClass(p.side)} style={ui.widthStyle(allocator, p.side)}>
+            <PanelHead title={p.title} />
+            <div class="panel-body">
+                {if (p.id == .ai_config) (
+                    <AiConfigBody />
+                ) else if (p.id == .persona) (
+                    <PersonaList />
+                ) else if (p.id == .characters) (
+                    <CharacterList />
+                ) else (
+                    <PanelEmpty />
+                )}
+            </div>
+            <div class="panel-resize" data-side={ui.sideStr(p.side)} role="separator" tabindex="0" aria-orientation="vertical" aria-label="Resize panel" aria-valuenow={ui.widthFor(p.side)} aria-valuemin={ui.min_width} aria-valuemax={ui.max_width}></div>
+        </aside>
+    );
+}
+
+const zx = @import("zx");
+const ui = @import("../ui.zig");
+const PanelHead = @import("../panelchrome.zx").PanelHead;
+const PanelEmpty = @import("../panelchrome.zx").PanelEmpty;
+const AiConfigBody = @import("ai_config_body.zx").AiConfigBody;
+const PersonaList = @import("persona_list.zx").PersonaList;
+const CharacterList = @import("character_list.zx").CharacterList;

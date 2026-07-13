@@ -26,4 +26,4 @@ const ui = @import("./ui.zig");
 const regions = @import("./regions.zig");
 const instrument = @import("./instrument.zig");
 const TopBar = @import("./topbar.zx").TopBar;
-const SidePanel = @import("./sidepanel.zx").SidePanel;
+const SidePanel = @import("./panels/sidepanel.zx").SidePanel;
