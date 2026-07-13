@@ -251,7 +251,8 @@ app.use(express.static(publicDirectory, {
 }));
 
 // Zig/wasm client (ziex) — built separately, served at /client/
-const clientDist = path.join(serverDirectory, 'client', 'dist');
+// Check CLIENT_DIST env var first, then default to <serverDirectory>/client/dist/
+const clientDist = process.env.CLIENT_DIST || path.join(serverDirectory, 'client', 'dist');
 app.use('/client', express.static(clientDist, {
     maxAge: '1h',
     setHeaders: (res, filePath) => {
