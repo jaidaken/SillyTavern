@@ -250,6 +250,18 @@ app.use(express.static(publicDirectory, {
     },
 }));
 
+// Zig/wasm client (ziex) — built separately, served at /client/
+const clientDist = path.join(serverDirectory, 'client', 'dist');
+app.use('/client', express.static(clientDist, {
+    maxAge: '1h',
+    setHeaders: (res, filePath) => {
+        const relativePath = path.relative(clientDist, filePath);
+        if (relativePath.endsWith('.html') || relativePath.endsWith('.wasm')) {
+            res.setHeader('Cache-Control', 'no-cache');
+        }
+    },
+}));
+
 // Public API
 app.use('/api/users', usersPublicRouter);
 

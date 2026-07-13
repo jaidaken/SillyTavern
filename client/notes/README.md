@@ -20,6 +20,10 @@ Audit + design notes for the WASM/Zig SillyTavern client rebuild.
 - [tier2-knuth-plass-justification.md](tier2-knuth-plass-justification.md) - DEFERRED reading-surface upgrade:
   Knuth-Plass optimal justification on message-seal, the design, honest caveats (marginal delta, reflow pop,
   measurement risk), and the prototype-and-judge gate. Tier 1 (native justify+hyphens) ships first.
+- [reading-surface-isolation-model.md](reading-surface-isolation-model.md) - APPROVED-DIRECTION design +
+  standing contract: the chat area as a hardened light-DOM island (overlay panels + containment, cascade
+  layers chat-wins, @scope, build-gate checker), the motive + threat model, invariants I1-I5, why
+  shadow-DOM/iframe were rejected, and the build plan w/ its design-probe slice.
 
 ## Source audits
 

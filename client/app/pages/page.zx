@@ -12,3 +12,7 @@ const zx = @import("zx");
 pub const Shell = @import("./shell.zx").Shell;
 pub const MessageLog = @import("./messagelog.zx").MessageLog;
 pub const Composer = @import("./composer.zx").Composer;
+
+comptime {
+    _ = @import("./character_store.zig");
+}

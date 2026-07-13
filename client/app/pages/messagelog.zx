@@ -1,22 +1,16 @@
-// The MessageLog region: the scrolling chat log. One of the three sibling client components mounted
-// by page.zx. A store append or a stream token calls regions.bumpMessageLog(), which re-renders
-// ONLY this region; the Shell (docks/topbar) and Composer are untouched. The {for} carries the R3
-// reconcile-memo attributes verbatim (key = stable sequence index, memo = store.signal content
-// signal), so a streamed token still resolves exactly one MessageView: a sealed message's signal is
-// stable and the reconciler skips it, the streaming message's grows so it never skips.
 pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
     regions.message_log = ctx.state(u32, 0);
     instrument.bumpMessageLog();
-    // Retires the streaming HTML this render's diff no longer reads. Must precede every renderMessage.
     sanitized.renderTick();
+
+    const msgs = store.slice();
+    const display: []const store.Message = if (msgs.len > 0) msgs else convo;
+
     return (
         <main @allocator={ctx.allocator} id="chat">
             <div class="chat-inner" role="log" aria-live="polite">
-                {for (convo, 0..) |m, i| (
-                    <MessageView msg={m} key={i} memo={store.signal(m)} />
-                )}
-                {for (store.slice(), 0..) |m, i| (
-                    <MessageView msg={m} cacheable={!store.isStreaming(i)} key={convo.len + i} memo={store.signal(m)} streaming={store.isStreaming(i)} />
+                {for (display, 0..) |m, i| (
+                    <MessageView msg={m} key={i} memo={store.signal(m)} streaming={msgs.len > 0 and store.isStreaming(i)} />
                 )}
             </div>
         </main>
@@ -31,11 +25,8 @@ const regions = @import("./regions.zig");
 const instrument = @import("./instrument.zig");
 pub const MessageView = @import("./message.zx").MessageView;
 
-// The example conversation shown in the shell; the first three roleplay fixtures read as a real chat.
 const convo: []const store.Message = fixtures.sections[0].messages;
 
-// ziex transpiles app/pages into a cache dir, so only an import from THIS graph reaches the same
-// store instance the regions read. Nothing else references bridge.zig; this forces its exports.
 comptime {
     _ = @import("./bridge.zig");
 }

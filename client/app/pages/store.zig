@@ -49,6 +49,17 @@ pub const Store = struct {
         self.* = undefined;
     }
 
+    pub fn clear(self: *Store) void {
+        for (self.messages.items) |m| {
+            if (m.name_owned) |b| self.allocator.free(b);
+            if (m.body_owned) |b| self.allocator.free(b);
+        }
+        self.messages.clearRetainingCapacity();
+        self.tail.deinit(self.allocator);
+        self.tail = .empty;
+        self.stream_index = null;
+    }
+
     pub fn slice(self: *const Store) []const Message {
         return self.messages.items;
     }
@@ -152,6 +163,10 @@ pub fn signal(m: Message) u64 {
         h = (h ^ @as(u64, v)) *% 0x100000001b3;
     }
     return h | 1;
+}
+
+pub fn clearStore() void {
+    return global.clear();
 }
 
 pub fn appendCopy(name: []const u8, body: []const u8) Allocator.Error!void {

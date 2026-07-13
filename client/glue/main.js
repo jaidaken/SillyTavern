@@ -449,6 +449,76 @@
         document.body.appendChild(el);
     }
 
+    // Characters known to JS (parallel to the wasm store). Each entry mirrors what was passed to
+    // __st_add_character so we have the avatar_url and chat name for API calls.
+    let jsCharacters = [];
+
+    function initCharacters() {
+        wasm.__st_clear_characters();
+        jsCharacters = [];
+    }
+
+    function addCharacterToWasm(c) {
+        const n = writeBytes(c.name);
+        const a = writeBytes(c.avatar);
+        const d = writeBytes(c.description || '');
+        const ch = writeBytes(c.chat || '');
+        const fm = writeBytes(c.first_mes || '');
+        wasm.__st_add_character(n.ptr, n.len, a.ptr, a.len, d.ptr, d.len, ch.ptr, ch.len, fm.ptr, fm.len, c.fav ? 1 : 0);
+    }
+
+    async function fetchCharacters() {
+        try {
+            const res = await fetch('/api/characters/all', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            if (!res.ok) { console.warn('[st-client] char fetch failed', res.status); return; }
+            const list = await res.json();
+            if (!Array.isArray(list)) return;
+            initCharacters();
+            for (const c of list) {
+                jsCharacters.push(c);
+                addCharacterToWasm(c);
+            }
+            console.log('[st-client] loaded', list.length, 'characters');
+        } catch (err) {
+            console.warn('[st-client] char fetch error (is the backend running?)', err);
+        }
+    }
+
+    async function loadCharacterChat(index) {
+        const c = jsCharacters[index];
+        if (!c) return;
+        try {
+            const chatName = c.chat || (c.name + ' - ' + new Date().toISOString().slice(0, 10));
+            const res = await fetch('/api/chats/get', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ avatar_url: c.avatar, file_name: chatName }),
+            });
+            if (!res.ok) { console.warn('[st-client] chat fetch failed', res.status); return; }
+            const data = await res.json();
+            wasm.__st_clear_messages();
+            wasm.__st_select_character(index);
+            if (Array.isArray(data) && data.length > 0) {
+                for (let i = 1; i < data.length; i++) {
+                    const m = data[i];
+                    const sender = m.name || (m.is_user ? 'You' : c.name);
+                    const body = m.mes || '';
+                    appendMessageInWasm(sender, body);
+                }
+                console.log('[st-client] loaded', data.length - 1, 'messages for', c.name);
+            }
+        } catch (err) {
+            console.warn('[st-client] chat load error', err);
+        }
+    }
+
+    // Like appendMessage but takes ownership of its strings.
+    function appendMessageInWasm(name, body) {
+        const n = writeBytes(name);
+        const b = writeBytes(body);
+        wasm.__st_append_message(n.ptr, n.len, b.ptr, b.len);
+    }
+
     async function boot() {
         const [door, purifyMod, hljsMod] = await Promise.all([
             import(ZIEX_DOOR),
@@ -659,12 +729,25 @@
             if (wasm && wasm.__st_close_panel) wasm.__st_close_panel();
         });
 
+        // Character selection: clicking a [data-char-select] item loads that character's chat.
+        document.addEventListener('click', function (e) {
+            const item = e.target && e.target.closest ? e.target.closest('[data-char-select]') : null;
+            if (!item) return;
+            const index = parseInt(item.getAttribute('data-char-select'), 10);
+            if (isNaN(index) || index < 0) return;
+            loadCharacterChat(index);
+        });
+
         const params = new URLSearchParams(window.location.search);
 
         // Everything below is the dev + probe harness (render-harness.sh, verify.sh). A production
         // page carries none of these params, so the test globals and probe blocks never load for it.
         devMode = params.has('rendercount') || params.has('growth') || params.has('stream');
-        if (!devMode) return;
+        if (devMode) return;
+
+        // Load characters from the backend. Non-blocking: the wasm is ready and the panel shows
+        // the demo fixture until characters arrive. Silently skips if the backend is unreachable.
+        fetchCharacters();
 
         window.stAppendMessage = appendMessage;
         window.stStartStream = startStream;

@@ -70,6 +70,7 @@ pub fn build(b: *std.Build) !void {
     check_step.dependOn(&fmt_check.step);
 
     var ziex_b = try ziex.init(b, app_exe, .{
+        .app = .{ .base_path = "/client" },
         .cli = .{
             .steps = .{ .serve = "serve", .@"export" = "export" },
         },

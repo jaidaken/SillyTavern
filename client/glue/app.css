@@ -908,6 +908,65 @@ body {
     to { opacity: 1; transform: scaleY(1); }
 }
 
+/* ---- Character list (in the right dock) ---- */
+.char-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.char-item {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    padding: var(--s-2) var(--s-2);
+    border-radius: var(--r-2);
+    cursor: pointer;
+    user-select: none;
+}
+
+.char-item:hover {
+    background: var(--surface-2);
+}
+
+.char-item.is-selected {
+    background: color-mix(in oklch, var(--accent) 18%, var(--surface-2));
+    outline: 1px solid color-mix(in oklch, var(--accent) 40%, transparent);
+}
+
+.char-avatar {
+    flex: 0 0 auto;
+    width: 2.4rem;
+    height: 2.4rem;
+    border-radius: var(--r-2);
+    object-fit: cover;
+    background: var(--bg);
+}
+
+.char-info {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.char-name {
+    font-family: var(--font-serif);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.char-desc {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-block-start: 1px;
+}
+
 /* Composer buttons also ease transform + filter, so the send press and hover brighten do not snap. */
 .composer-btn {
     transition: background 120ms ease, color 120ms ease, filter 120ms ease, transform 120ms ease;
