@@ -23,6 +23,9 @@ jest.unstable_mockModule('../src/util.js', () => ({
         blue: text => text,
         yellow: text => text,
     },
+    // src/log.js (imported transitively via private-request-filter.js) reads config through util.js;
+    // returning the caller's default keeps the logger at its stock levels under the mock.
+    getConfigValue: (key, defaultValue) => defaultValue,
 }));
 
 jest.unstable_mockModule('../src/express-common.js', () => ({

@@ -484,7 +484,9 @@
                 jsCharacters.push(c);
                 addCharacterToWasm(c);
                 const cd = writeBytes(c.create_date || '');
-                wasm.__st_set_character_meta(i, cd.ptr, cd.len, c.date_last_chat || 0, c.chat_size || 0, c.data_size || 0);
+                // u64 params cross the wasm boundary as BigInt; Math.trunc guards fractional values.
+                const u64 = v => BigInt(Math.trunc(v) || 0);
+                wasm.__st_set_character_meta(i, cd.ptr, cd.len, u64(c.date_last_chat), u64(c.chat_size), u64(c.data_size));
             });
             console.log('[st-client] loaded', list.length, 'characters');
         } catch (err) {

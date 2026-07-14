@@ -4,6 +4,7 @@ import { PassThrough } from 'node:stream';
 import { Response } from 'node-fetch';
 import { CHAT_COMPLETION_SOURCES } from '../src/constants';
 import { flattenSchema, forwardFetchResponse } from '../src/util';
+import { log } from '../src/log';
 
 function createMockExpressResponse() {
     const response = new PassThrough();
@@ -133,7 +134,7 @@ describe('flattenSchema', () => {
 
 describe('forwardFetchResponse', () => {
     test('should log JSON error bodies and return the original body for non-2xx streaming responses', async () => {
-        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const warnSpy = jest.spyOn(log.net, 'warn').mockImplementation(() => undefined);
         const body = JSON.stringify({ error: { message: 'Forbidden by upstream policy' }, detail: 'policy_denied' });
         const response = createMockExpressResponse();
         const bodyPromise = collectResponseBody(response);
@@ -149,7 +150,7 @@ describe('forwardFetchResponse', () => {
     });
 
     test('should log plain text error bodies and return the original body for non-2xx streaming responses', async () => {
-        const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const warnSpy = jest.spyOn(log.net, 'warn').mockImplementation(() => undefined);
         const body = 'Plain text upstream failure';
         const response = createMockExpressResponse();
         const bodyPromise = collectResponseBody(response);
