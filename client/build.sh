@@ -31,7 +31,7 @@ for f in dist/glue/vendor/purify.es.mjs dist/glue/vendor/hljs.mjs dist/vendor/zi
 done
 # main.js (classic-script IIFE, deps via dynamic import()) + app.css take plain --minify: no
 # --format=esm, so the non-module script contract survives. esbuild picks the loader by extension.
-for f in dist/glue/main.js dist/glue/app.css; do
+for f in dist/glue/custom.js dist/glue/app.css; do
     b=$(wc -c < "$f")
     npx --yes esbuild "$f" --minify --allow-overwrite --outfile="$f"
     echo "minify $f: $b -> $(wc -c < "$f") bytes"

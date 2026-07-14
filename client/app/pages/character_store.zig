@@ -15,15 +15,22 @@ pub const Character = struct {
     fav: bool,
     tags: []const []const u8,
 
-    name_owned: ?[]u8 = null,
-    avatar_owned: ?[]u8 = null,
-    description_owned: ?[]u8 = null,
-    personality_owned: ?[]u8 = null,
-    first_mes_owned: ?[]u8 = null,
-    scenario_owned: ?[]u8 = null,
-    mes_example_owned: ?[]u8 = null,
-    chat_owned: ?[]u8 = null,
-    tags_owned: ?[]u8 = null,
+    /// Metadata used by the list view (sort/search). Derived from /api/characters/all (toShallow).
+    create_date: []const u8 = "",
+    date_last_chat: u64 = 0,
+    chat_size: u64 = 0,
+    data_size: u64 = 0,
+
+    name_owned: ?[]const u8 = null,
+    avatar_owned: ?[]const u8 = null,
+    description_owned: ?[]const u8 = null,
+    personality_owned: ?[]const u8 = null,
+    first_mes_owned: ?[]const u8 = null,
+    scenario_owned: ?[]const u8 = null,
+    mes_example_owned: ?[]const u8 = null,
+    chat_owned: ?[]const u8 = null,
+    tags_owned: ?[]const u8 = null,
+    create_date_owned: ?[]const u8 = null,
 };
 
 pub const CharacterStore = struct {
@@ -51,6 +58,7 @@ pub const CharacterStore = struct {
         if (c.mes_example_owned) |b| self.allocator.free(b);
         if (c.chat_owned) |b| self.allocator.free(b);
         if (c.tags_owned) |b| self.allocator.free(b);
+        if (c.create_date_owned) |b| self.allocator.free(b);
     }
 
     pub fn slice(self: *const CharacterStore) []const Character {
@@ -75,6 +83,24 @@ pub const CharacterStore = struct {
 
     pub fn append(self: *CharacterStore, c: Character) Allocator.Error!void {
         try self.characters.append(self.allocator, c);
+    }
+
+    /// Attach list-view metadata (sort/search) to the character at `index`, taking ownership of
+    /// `create_date`. No-op if the index is out of range. Used by the door after the host loads a
+    /// character from /api/characters/all.
+    pub fn setMeta(self: *CharacterStore, index: usize, create_date: []const u8, date_last_chat: u64, chat_size: u64, data_size: u64) void {
+        if (index >= self.characters.items.len) return;
+        const c = &self.characters.items[index];
+        if (c.create_date_owned) |b| self.allocator.free(b);
+        c.create_date = "";
+        c.create_date_owned = null;
+        if (create_date.len > 0) {
+            c.create_date = self.allocator.dupe(u8, create_date) catch "";
+            if (c.create_date.len > 0) c.create_date_owned = c.create_date;
+        }
+        c.date_last_chat = date_last_chat;
+        c.chat_size = chat_size;
+        c.data_size = data_size;
     }
 };
 

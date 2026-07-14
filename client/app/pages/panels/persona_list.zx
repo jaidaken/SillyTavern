@@ -1,16 +1,22 @@
 // Persona list panel body. Right dock.
-pub fn PersonaList(allocator: zx.Allocator) zx.Component {
-    const ps = persona_store.slice();
+pub fn PersonaList(ctx: *zx.ComponentCtx(void)) zx.Component {
+    const ps = persona_store.global.slice();
     if (ps.len == 0) {
         return (
-            <p @allocator={allocator} class="panel-empty">No personas loaded. Connect to the SillyTavern backend to see your personas.</p>
+            <p @allocator={ctx.allocator} class="panel-empty">No personas loaded. Connect to the SillyTavern backend to see your personas.</p>
         );
     }
     return (
-        <div @allocator={allocator} id="persona-list" class="char-list" role="list" aria-label="Personas">
+        <div @allocator={ctx.allocator} id="persona-list" class="char-list" role="list" aria-label="Personas" @rendering={.client}>
             {for (ps, 0..) |p, i| (
-                <div class={personaClass(i)} role="listitem" data-persona-index={i} tabindex="0">
-                    <img class="char-avatar" src={personaAvatarUrl(allocator, p.avatar)} alt={p.name} loading="lazy" />
+                <div
+                    class={personaClass(i)}
+                    role="listitem"
+                    data-persona-index={i}
+                    tabindex="0"
+                    onclick={ctx.bind(onPersonaSelect)}
+                >
+                    <img class="char-avatar" src={personaAvatarUrl(ctx.allocator, p.avatar)} alt={p.name} loading="lazy" />
                     <div class="char-info">
                         <div class="char-name">{p.name}</div>
                         <div class="char-desc">{p.description}</div>
@@ -28,6 +34,27 @@ fn personaClass(index: usize) []const u8 {
 
 fn personaAvatarUrl(alloc: std.mem.Allocator, avatar: []const u8) []const u8 {
     return std.fmt.allocPrint(alloc, "../thumbnail?type=persona&file={s}", .{avatar}) catch "";
+}
+
+fn onPersonaSelect(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const event = e.getEvent();
+    const current_target = event.ref.get(zx.client.js.Object, "currentTarget") catch return;
+    // Find the element with data-persona-index (could be target or ancestor)
+    var el: ?zx.client.js.Object = current_target;
+    while (el) |elem| {
+        const dataset = elem.get(zx.client.js.Object, "dataset") catch { el = elem.get(zx.client.js.Object, "parentElement") catch null; continue; };
+        const index_str = dataset.getAlloc(zx.client.js.String, zx.allocator, "personaIndex") catch { el = elem.get(zx.client.js.Object, "parentElement") catch null; continue; };
+        defer zx.allocator.free(index_str);
+        if (index_str.len > 0) {
+            const index = std.fmt.parseInt(u32, index_str, 10) catch return;
+            if (index < persona_store.global.slice().len) {
+                persona_store.global.select(@intCast(index));
+            }
+            return;
+        }
+        el = elem.get(zx.client.js.Object, "parentElement") catch null;
+    }
 }
 
 const zx = @import("zx");

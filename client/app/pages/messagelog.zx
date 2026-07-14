@@ -4,28 +4,25 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
     sanitized.renderTick();
 
     const msgs = store.slice();
-    const display: []const store.Message = if (msgs.len > 0) msgs else convo;
 
     return (
         <main @allocator={ctx.allocator} id="chat">
             <div class="chat-inner" role="log" aria-live="polite">
-                {for (display, 0..) |m, i| (
+                {for (msgs, 0..) |m, i| (
                     <MessageView msg={m} key={i} memo={store.signal(m)} streaming={msgs.len > 0 and store.isStreaming(i)} />
                 )}
+                <div class="chat-resize" role="separator" tabindex="0" aria-label="Resize reading width" aria-orientation="vertical"></div>
             </div>
         </main>
     );
 }
 
 const zx = @import("zx");
-const fixtures = @import("./fixtures.zig");
 const sanitized = @import("./sanitized.zig");
 const store = @import("./store.zig");
 const regions = @import("./regions.zig");
 const instrument = @import("./instrument.zig");
 pub const MessageView = @import("./message.zx").MessageView;
-
-const convo: []const store.Message = fixtures.sections[0].messages;
 
 comptime {
     _ = @import("./bridge.zig");

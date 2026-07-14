@@ -3,6 +3,11 @@ const builtin = @import("builtin");
 const store = @import("./store.zig");
 const stream_mod = @import("./stream.zig");
 const char_store = @import("./character_store.zig");
+const character_view = @import("./character_view.zig");
+const persona_store = @import("./persona_store.zig");
+const reading_prefs = @import("./reading_prefs.zig");
+const handlers = @import("./handlers.zig");
+const ui = @import("./ui.zig");
 const regions = @import("./regions.zig");
 const instrument = @import("./instrument.zig");
 
@@ -15,12 +20,14 @@ fn doorBuf(addr: usize, len: usize) []u8 {
     return @as([*]u8, @ptrFromInt(addr))[0..len];
 }
 
-fn appendMessage(name_ptr: usize, name_len: usize, body_ptr: usize, body_len: usize) callconv(.c) void {
+fn appendMessage(name_ptr: usize, name_len: usize, body_ptr: usize, body_len: usize, avatar_ptr: usize, avatar_len: usize) callconv(.c) void {
     const name = doorBuf(name_ptr, name_len);
     const body = doorBuf(body_ptr, body_len);
-    store.global.append(name, body) catch |err| {
+    const avatar = doorBuf(avatar_ptr, avatar_len);
+    store.global.append(name, body, avatar) catch |err| {
         store.global.allocator.free(name);
         store.global.allocator.free(body);
+        store.global.allocator.free(avatar);
         std.log.err("append_message: {s}, message dropped", .{@errorName(err)});
         return;
     };
@@ -70,12 +77,36 @@ fn addCharacter(
     };
     char_store.global.append(c) catch |err| {
         std.log.err("add_character: {s}, character dropped", .{@errorName(err)});
+        regions.bumpShell();
+        return;
+    };
+    character_view.global.compute(char_store.global.slice()) catch |err| {
+        std.log.err("add_character: compute {s}", .{@errorName(err)});
     };
     regions.bumpShell();
 }
 
 fn clearCharacters() callconv(.c) void {
     char_store.global.clear();
+    character_view.global.compute(&.{}) catch |err| {
+        std.log.err("clear_characters: compute {s}", .{@errorName(err)});
+    };
+    regions.bumpShell();
+}
+
+fn setCharacterMeta(
+    index: u32,
+    create_date_ptr: usize,
+    create_date_len: usize,
+    date_last_chat: u64,
+    chat_size: u64,
+    data_size: u64,
+) callconv(.c) void {
+    const create_date = doorBuf(create_date_ptr, create_date_len);
+    char_store.global.setMeta(index, create_date, date_last_chat, chat_size, data_size);
+    character_view.global.compute(char_store.global.slice()) catch |err| {
+        std.log.err("set_character_meta: compute {s}", .{@errorName(err)});
+    };
     regions.bumpShell();
 }
 
@@ -84,10 +115,69 @@ fn selectCharacter(index: u32) callconv(.c) void {
     regions.bumpShell();
 }
 
-fn streamBegin(name_ptr: usize, name_len: usize) callconv(.c) u32 {
+fn addPersona(
+    name_ptr: usize,
+    name_len: usize,
+    avatar_ptr: usize,
+    avatar_len: usize,
+    desc_ptr: usize,
+    desc_len: usize,
+) callconv(.c) void {
     const name = doorBuf(name_ptr, name_len);
-    live.begin(name) catch |err| {
+    const avatar = doorBuf(avatar_ptr, avatar_len);
+    const desc = doorBuf(desc_ptr, desc_len);
+
+    const p = persona_store.Persona{
+        .name = name,
+        .avatar = avatar,
+        .description = desc,
+        .name_owned = if (name.len > 0) name else null,
+        .avatar_owned = if (avatar.len > 0) avatar else null,
+        .description_owned = if (desc.len > 0) desc else null,
+    };
+    persona_store.global.append(p) catch |err| {
+        std.log.err("add_persona: {s}, persona dropped", .{@errorName(err)});
+    };
+    regions.bumpShell();
+}
+
+fn clearPersonas() callconv(.c) void {
+    persona_store.global.clear();
+    regions.bumpShell();
+}
+
+fn selectPersona(index: u32) callconv(.c) void {
+    persona_store.global.select(@intCast(index));
+    regions.bumpShell();
+}
+
+fn applyReadingPrefs() callconv(.c) void {
+    reading_prefs.applyAll();
+    reading_prefs.syncAria();
+}
+
+fn bootInit() callconv(.c) void {
+    const fixtures = @import("./fixtures.zig");
+    _ = fixtures.loadRoleplay(&store.global);
+    regions.bumpMessageLog();
+    handlers.init();
+    const stored = ui.getStoredMotion() orelse "system";
+    ui.__st_set_motion(motionCode(stored));
+}
+
+fn motionCode(name: []const u8) u32 {
+    if (std.mem.eql(u8, name, "system")) return 0;
+    if (std.mem.eql(u8, name, "on")) return 1;
+    if (std.mem.eql(u8, name, "off")) return 2;
+    return 0;
+}
+
+fn streamBegin(name_ptr: usize, name_len: usize, avatar_ptr: usize, avatar_len: usize) callconv(.c) u32 {
+    const name = doorBuf(name_ptr, name_len);
+    const avatar = doorBuf(avatar_ptr, avatar_len);
+    live.begin(name, avatar) catch |err| {
         store.global.allocator.free(name);
+        store.global.allocator.free(avatar);
         std.log.err("stream_begin: {s}, stream not started", .{@errorName(err)});
         return 1;
     };
@@ -141,6 +231,12 @@ comptime {
         @export(&addCharacter, .{ .name = "__st_add_character" });
         @export(&clearCharacters, .{ .name = "__st_clear_characters" });
         @export(&selectCharacter, .{ .name = "__st_select_character" });
+        @export(&setCharacterMeta, .{ .name = "__st_set_character_meta" });
+        @export(&applyReadingPrefs, .{ .name = "__st_apply_reading_prefs" });
+        @export(&bootInit, .{ .name = "__st_boot_init" });
+        @export(&addPersona, .{ .name = "__st_add_persona" });
+        @export(&clearPersonas, .{ .name = "__st_clear_personas" });
+        @export(&selectPersona, .{ .name = "__st_select_persona" });
         @export(&streamBegin, .{ .name = "__st_stream_begin" });
         @export(&streamAppend, .{ .name = "__st_stream_append" });
         @export(&streamEnd, .{ .name = "__st_stream_end" });

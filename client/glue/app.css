@@ -242,6 +242,41 @@ body {
     max-width: var(--reading-measure, var(--measure));
     margin: 0 auto;
     padding: var(--s-5) var(--s-4) var(--s-6);
+    position: relative;
+}
+
+/* Chat reading-width resize handle: a thin vertical bar at the content area's right edge.
+   The hit area is always present (12px) but the accent line stays hidden until hover near the
+   content edge or on the handle itself. Drag makes it fully opaque. */
+.chat-resize {
+    position: absolute;
+    right: -6px;
+    top: 0;
+    bottom: 0;
+    width: 12px;
+    cursor: col-resize;
+    z-index: 10;
+}
+.chat-resize::before {
+    content: '';
+    position: absolute;
+    right: 5px;
+    top: 8px;
+    bottom: 8px;
+    width: 2px;
+    background: var(--accent);
+    border-radius: 2px;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.chat-inner:hover .chat-resize::before {
+    opacity: 0.3;
+}
+.chat-resize:hover::before {
+    opacity: 0.7;
+}
+.chat-resize.is-dragging::before {
+    opacity: 1;
 }
 
 /* ---- Side panels (AI config left, characters right) ---- */
@@ -494,6 +529,10 @@ body {
 
 /* ---- Messages: the reading surface (book flow, not chat cards) ---- */
 .mes {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: var(--s-3) var(--s-4);
+    align-items: start;
     position: relative;
     padding-block: var(--s-4);
     padding-inline-start: var(--s-4);
@@ -519,11 +558,27 @@ body {
     transform-origin: top;
 }
 
+/* Chat message avatar: small rounded square to the left of the speaker name. */
+.mes_avatar {
+    grid-row: 1 / -1;
+    flex: 0 0 auto;
+    width: 1.8rem;
+    height: 1.8rem;
+    border-radius: 4px;
+    object-fit: cover;
+    margin-top: 0.15em;
+    cursor: pointer;
+}
+.mes_avatar:hover {
+    filter: brightness(1.1);
+}
+#chat-root[data-reading-avatars="off"] .mes_avatar {
+    display: none;
+}
+
 /* The speaker name is the character's voice on the page: book serif, warm-tinted, mixed case. */
 .mes_name {
-    display: flex;
-    align-items: baseline;
-    gap: var(--s-2);
+    grid-column: 2;
     font-family: var(--font-serif);
     font-size: var(--text-name);
     font-weight: 600;
@@ -533,16 +588,21 @@ body {
 }
 
 .mes_text {
+    grid-column: 2;
     font-family: var(--font-serif);
     /* Size + line-height are reading-control vars (glue sets them per user); default to the base tokens. */
     font-size: var(--reading-size, var(--text-md));
     line-height: var(--reading-lh, var(--lh-prose));
     color: var(--text);
     overflow-wrap: break-word;
+    /* Avoid stranded single lines at paragraph breaks. */
+    orphans: 2;
+    widows: 2;
     /* Reading-surface typography: pretty wrapping avoids a stranded last word; Newsreader's oldstyle
        proportional figures sit like lowercase for a book feel. Code is in <pre> (no wrap) and mono
        (fixed width) so neither tweak affects it. */
     text-wrap: pretty;
+    hanging-punctuation: first allow-end;
     font-variant-numeric: oldstyle-figures proportional-nums;
     /* Trim the font leading so text sits optically centred in the bubble; progressive, ignored where unsupported. */
     text-box: trim-both cap alphabetic;
@@ -583,9 +643,21 @@ body {
     -webkit-hyphens: none;
 }
 
-/* Novel paragraphs: first-line indent, no inter-paragraph gap. Default (or "chat") keeps the spacing. */
-#chat-root[data-reading-indent="novel"] .mes_text p { margin-block-end: 0; }
-#chat-root[data-reading-indent="novel"] .mes_text p + p { text-indent: 1.4em; }
+/* Novel paragraphs: first-line indent, tiny inter-paragraph gap so the reader can always see the
+   break. Default ("chat") keeps block spacing with no indent — the standard web convention. */
+#chat-root[data-reading-indent="novel"] .mes_text p {
+    margin-block-end: 0.35em;
+    text-indent: 1.2em;
+}
+#chat-root[data-reading-indent="novel"] .mes_text p:first-of-type {
+    text-indent: 1.2em;
+}
+/* The old p+p+indent approach broke when non-<p> siblings sat between paragraphs. Now every <p>
+   gets indent + a sliver of margin-bottom, so the break is always visible regardless of nesting. */
+#chat-root[data-reading-indent="chat"] .mes_text p {
+    margin-block: 0 0.5em;
+    text-indent: 0;
+}
 
 /* Reading themes recolor the message area only (scoped to #chat); accent darkens so links/names stay
    legible on the light grounds. Default (dark) needs no override. */
@@ -929,6 +1001,10 @@ body {
     background: var(--surface-2);
 }
 
+.char-list {
+    min-height: 8rem;
+}
+
 .char-item.is-selected {
     background: color-mix(in oklch, var(--accent) 18%, var(--surface-2));
     outline: 1px solid color-mix(in oklch, var(--accent) 40%, transparent);
@@ -974,4 +1050,174 @@ body {
 
 .composer-btn:active {
     transform: translateY(calc(var(--move) * 1px)) scale(calc(1 - var(--move) * 0.03));
+}
+
+/* Avatar popup: full-size preview to the left of the chat area. */
+#avatar-popup {
+    display: none;
+    position: fixed;
+    z-index: 100;
+    inset: 0;
+    background: oklch(0 0 0 / 0.4);
+    cursor: zoom-out;
+}
+#avatar-popup.is-open {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    padding: var(--s-6);
+}
+#avatar-popup img {
+    max-width: min(40vw, 480px);
+    max-height: 80vh;
+    border-radius: var(--r-3);
+    box-shadow: 0 8px 32px oklch(0 0 0 / 0.5);
+    object-fit: contain;
+    background: var(--bg);
+    cursor: default;
+}
+
+/* Character panel stack: toolbar + actions + list. */
+.char-panel-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+    min-height: 0;
+}
+
+/* Search / sort / fav / view toolbar above the list. */
+.char-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+}
+.char-toolbar-row {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+}
+.char-search {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.char-tool {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-1);
+    padding: var(--s-1) var(--s-2);
+    border-radius: var(--r-2);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    cursor: pointer;
+    font-size: var(--text-xs);
+}
+.char-tool:hover {
+    background: color-mix(in oklch, var(--accent) 14%, var(--surface-2));
+}
+.char-tool[aria-pressed="true"] {
+    background: color-mix(in oklch, var(--accent) 28%, var(--surface-2));
+    outline: 1px solid color-mix(in oklch, var(--accent) 50%, transparent);
+}
+.char-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-1);
+}
+.char-tag {
+    padding: 1px var(--s-2);
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--muted);
+    font-size: var(--text-xs);
+    cursor: pointer;
+}
+.char-tag[aria-pressed="true"] {
+    background: color-mix(in oklch, var(--accent) 22%, var(--surface-2));
+    color: var(--text);
+    outline: 1px solid color-mix(in oklch, var(--accent) 50%, transparent);
+}
+
+/* Grid view variant. */
+.char-list.char-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr));
+    gap: var(--s-2);
+    align-items: start;
+}
+.char-list.char-grid .char-item {
+    flex-direction: column;
+    align-items: stretch;
+    text-align: center;
+}
+.char-list.char-grid .char-avatar {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1 / 1;
+}
+.char-list.char-grid .char-desc {
+    display: none;
+}
+
+/* CRUD action bar + selected-character panel. */
+.char-actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+    border-top: 1px solid var(--border);
+    padding-top: var(--s-2);
+}
+.char-actions-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+}
+.char-act-btn {
+    flex: 0 0 auto;
+    padding: var(--s-1) var(--s-3);
+    border-radius: var(--r-2);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text);
+    cursor: pointer;
+    font-size: var(--text-xs);
+}
+.char-act-btn:hover {
+    background: color-mix(in oklch, var(--accent) 14%, var(--surface-2));
+}
+.char-act-danger:hover {
+    background: color-mix(in oklch, var(--danger, red) 22%, var(--surface-2));
+    outline: 1px solid color-mix(in oklch, var(--danger, red) 50%, transparent);
+}
+.char-import-input {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    max-width: 9rem;
+}
+.char-actions-selected {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-1);
+}
+.char-actions-name {
+    font-family: var(--font-serif);
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.char-actions-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-1);
+}
+.char-actions-hint {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    margin: 0;
 }

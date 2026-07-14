@@ -1,0 +1,85 @@
+// Character CRUD action panel.
+//
+// Toolbar-level New + Import, plus a panel for the currently selected character
+// (favourite, rename, duplicate, delete, export). Each action calls a glue function on `window`
+// via zx.client.js.global.call (see glue/custom.js): the glue does the fetch + reloads the wasm
+// character store. One dispatcher reads data-char-action / data-char-index from the event target,
+// matching the convention used by character_list.zx's onCharSelect.
+
+const zx = @import("zx");
+const std = @import("std");
+const char_store = @import("../character_store.zig");
+
+pub fn CharacterActions(ctx: *zx.ComponentCtx(void)) zx.Component {
+    const sel = char_store.selectedIndex();
+    return (
+        <div @allocator={ctx.allocator} class="char-actions" @rendering={.client}>
+            <div class="char-actions-bar">
+                <button class="char-act-btn" type="button" data-char-action="create" onclick={ctx.bind(onCharAction)}>New</button>
+                <input id="char-import-input" type="file" accept=".png,.json,.yaml,.yml,.charx,.byaf" class="char-import-input" aria-label="Import character file" data-char-action="import" onchange={ctx.bind(onCharAction)} />
+            </div>
+            {if (sel) |i| (selectedBlock(ctx, i)) else (
+                <p class="char-actions-hint">Select a character to manage it.</p>
+            )}
+        </div>
+    );
+}
+
+fn selectedBlock(ctx: *zx.ComponentCtx(void), index: usize) zx.Component {
+    const sel = char_store.selectedIndex();
+    if (sel == null) {
+        return (
+            <p @allocator={ctx.allocator} class="char-actions-hint">Select a character to manage it.</p>
+        );
+    }
+    const c_opt = char_store.selected();
+    if (c_opt == null) {
+        return (
+            <p @allocator={ctx.allocator} class="char-actions-hint">Select a character to manage it.</p>
+        );
+    }
+    const c = c_opt.?;
+    return (
+        <div @allocator={ctx.allocator} class="char-actions-selected">
+            <div class="char-actions-name">{c.name}</div>
+            <div class="char-actions-row">
+                <button class="char-act-btn" type="button" data-char-action="fav" data-char-index={index} onclick={ctx.bind(onCharAction)}>{if (c.fav) "Unfavourite" else "Favourite"}</button>
+                <button class="char-act-btn" type="button" data-char-action="rename" data-char-index={index} onclick={ctx.bind(onCharAction)}>Rename</button>
+                <button class="char-act-btn" type="button" data-char-action="duplicate" data-char-index={index} onclick={ctx.bind(onCharAction)}>Duplicate</button>
+                <button class="char-act-btn char-act-danger" type="button" data-char-action="delete" data-char-index={index} onclick={ctx.bind(onCharAction)}>Delete</button>
+                <button class="char-act-btn" type="button" data-char-action="export" data-char-index={index} onclick={ctx.bind(onCharAction)}>Export</button>
+            </div>
+        </div>
+    );
+}
+
+fn onCharAction(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const event = e.getEvent();
+    const target = event.ref.get(zx.client.js.Object, "currentTarget") catch return;
+    const dataset = target.get(zx.client.js.Object, "dataset") catch return;
+    const action = dataset.getAlloc(zx.client.js.String, zx.allocator, "charAction") catch return;
+    defer zx.allocator.free(action);
+    if (action.len == 0) return;
+
+    const index: ?u32 = blk: {
+        const s = dataset.getAlloc(zx.client.js.String, zx.allocator, "charIndex") catch break :blk null;
+        defer zx.allocator.free(s);
+        if (s.len == 0) break :blk null;
+        break :blk std.fmt.parseInt(u32, s, 10) catch null;
+    };
+
+    const global = zx.client.js.global;
+    if (std.mem.eql(u8, action, "create")) {
+        global.call(void, "__st_char_create", .{}) catch return;
+    }
+    if (std.mem.eql(u8, action, "import")) {
+        global.call(void, "__st_char_import", .{}) catch return;
+    }
+    const idx = index orelse return;
+    if (std.mem.eql(u8, action, "fav")) global.call(void, "__st_char_fav", .{idx}) catch return;
+    if (std.mem.eql(u8, action, "rename")) global.call(void, "__st_char_rename", .{idx}) catch return;
+    if (std.mem.eql(u8, action, "duplicate")) global.call(void, "__st_char_duplicate", .{idx}) catch return;
+    if (std.mem.eql(u8, action, "delete")) global.call(void, "__st_char_delete", .{idx}) catch return;
+    if (std.mem.eql(u8, action, "export")) global.call(void, "__st_char_export", .{idx}) catch return;
+}

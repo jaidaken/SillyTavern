@@ -75,7 +75,7 @@ pub fn build(b: *std.Build) !void {
             .steps = .{ .serve = "serve", .@"export" = "export" },
         },
         .client = .{
-            .jsglue_href = "/glue/main.js",
+            .jsglue_href = "/glue/custom.js",
             .jsglue_install_subdir = "static/vendor/ziex",
         },
     });

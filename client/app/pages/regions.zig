@@ -14,6 +14,7 @@ const zx = @import("zx");
 
 pub var shell: ?*zx.State(u32) = null;
 pub var message_log: ?*zx.State(u32) = null;
+pub var character_list: ?*zx.State(u32) = null;
 
 /// Re-render the Shell region (topbar + docks) after a ui mutation. No-op before its first render.
 pub fn bumpShell() void {
@@ -24,4 +25,10 @@ pub fn bumpShell() void {
 /// first render.
 pub fn bumpMessageLog() void {
     if (message_log) |h| h.set(h.get() +% 1);
+}
+
+/// Re-render only the character list subtree (not its toolbar) after a filter/search change, so the
+/// search input keeps focus. No-op before its first render.
+pub fn bumpCharacterList() void {
+    if (character_list) |h| h.set(h.get() +% 1);
 }

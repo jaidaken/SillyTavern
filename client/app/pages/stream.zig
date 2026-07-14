@@ -51,7 +51,7 @@ pub const Stream = struct {
 
     /// Takes ownership of `name` on success. On failure the caller still owns it, and the counters
     /// are already those of the refused stream rather than the finished one.
-    pub fn begin(self: *Stream, name: []u8) Error!void {
+    pub fn begin(self: *Stream, name: []u8, avatar: []u8) Error!void {
         if (self.state == .streaming) return error.StreamInProgress;
 
         self.decoder = .{};
@@ -59,7 +59,7 @@ pub const Stream = struct {
         self.tokens = 0;
         self.saw_done = false;
 
-        try self.store.beginStream(name);
+        try self.store.beginStream(name, avatar);
         self.state = .streaming;
     }
 
@@ -206,8 +206,10 @@ const Fixture = struct {
 
     fn open(self: *Fixture, gpa: Allocator, name: []const u8) !void {
         const owned = try gpa.dupe(u8, name);
-        self.stream.begin(owned) catch |err| {
+        const empty_avatar = try gpa.dupe(u8, "");
+        self.stream.begin(owned, empty_avatar) catch |err| {
             gpa.free(owned);
+            gpa.free(empty_avatar);
             return err;
         };
     }
@@ -567,14 +569,15 @@ test "begin_resets_the_token_count_when_the_store_refuses_the_new_stream" {
     try testing.expectEqual(@as(usize, 2), f.stream.tokens);
 
     // beginStream allocates only when the message list grows, so bring it to capacity first.
-    while (f.store.messages.items.len < f.store.messages.capacity) try f.store.appendCopy("You", "hi");
+    while (f.store.messages.items.len < f.store.messages.capacity) try f.store.appendCopy("You", "hi", "");
 
     const name = try gpa.dupe(u8, "Second");
     defer gpa.free(name);
     const sealed = f.store.slice().len;
 
     failing.fail_index = failing.alloc_index;
-    try testing.expectError(error.OutOfMemory, f.stream.begin(name));
+    var empty_av: [0]u8 = .{};
+    try testing.expectError(error.OutOfMemory, f.stream.begin(name, &empty_av));
     failing.fail_index = std.math.maxInt(usize);
 
     try testing.expectEqual(@as(usize, 0), f.stream.tokens);

@@ -19,7 +19,7 @@ KEEP=(
     "index.html"
     "robots.txt"
     "assets/_/main.wasm"
-    "glue/main.js"
+    "glue/custom.js"
     "glue/app.css"
     "glue/favicon.png"
     "glue/vendor/hljs.mjs"

@@ -1,0 +1,152 @@
+// Character list toolbar: search, sort, favourites-only, grid/list, and tag-filter chips.
+// Client-only (no backend): every handler mutates cv.global and recomputes the filtered
+// list. Search re-renders only the list region (so the focused input keeps focus); the other
+// controls re-render the Shell region so their active state updates. Mirrors the old frontend's
+// rm_characters_block controls.
+
+const zx = @import("zx");
+const std = @import("std");
+const char_store = @import("../character_store.zig");
+const cv = @import("../character_view.zig");
+const regions = @import("../regions.zig");
+
+pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
+    const view = cv.global;
+    return (
+        <div @allocator={ctx.allocator} class="char-toolbar" role="toolbar" aria-label="Character list controls" @rendering={.client}>
+            <div class="char-toolbar-row">
+                <input
+                    type="search"
+                    class="char-search text_pole"
+                    name="character_search"
+                    aria-label="Search characters"
+                    placeholder="Search..."
+                    value={view.query}
+                    oninput={ctx.bind(onSearchInput)}
+                />
+                <select
+                    class="char-sort text_pole"
+                    aria-label="Sort characters"
+                    value={sortValue(view.sort)}
+                    onchange={ctx.bind(onSortChange)}
+                >
+                    {for (sort_options[0..]) |opt| (
+                        <option value={opt.value}>{opt.label}</option>
+                    )}
+                </select>
+            </div>
+            <div class="char-toolbar-row">
+                <button
+                    type="button"
+                    class={favBtnClass(view.fav_only)}
+                    aria-pressed={if (view.fav_only) "true" else "false"}
+                    aria-label="Show favourites only"
+                    onclick={ctx.bind(onFavToggle)}
+                >Favourites</button>
+                <button
+                    type="button"
+                    class={gridBtnClass(view.grid)}
+                    aria-pressed={if (view.grid) "true" else "false"}
+                    aria-label="Toggle grid view"
+                    onclick={ctx.bind(onGridToggle)}
+                >Grid</button>
+            </div>
+            <div class="char-tags" role="group" aria-label="Filter by tag">
+                {for (view.tags_all.items) |tag| (
+                    <button
+                        type="button"
+                        class={tagBtnClass(view, tag)}
+                        aria-pressed={if (view.isTagActive(tag)) "true" else "false"}
+                        data-tag={tag}
+                        onclick={ctx.bind(onTagToggle)}
+                    >{tag}</button>
+                )}
+            </div>
+        </div>
+    );
+}
+
+const SortOption = struct {
+    value: []const u8,
+    label: []const u8,
+    key: cv.SortKey,
+};
+
+const sort_options = [_]SortOption{
+    .{ .value = "name_asc", .label = "A-Z", .key = .name_asc },
+    .{ .value = "name_desc", .label = "Z-A", .key = .name_desc },
+    .{ .value = "newest", .label = "Newest", .key = .newest },
+    .{ .value = "oldest", .label = "Oldest", .key = .oldest },
+    .{ .value = "favs", .label = "Favourites", .key = .favs },
+    .{ .value = "recent", .label = "Recent", .key = .recent },
+    .{ .value = "most_chats", .label = "Most chats", .key = .most_chats },
+    .{ .value = "least_chats", .label = "Least chats", .key = .least_chats },
+    .{ .value = "most_tokens", .label = "Most tokens", .key = .most_tokens },
+    .{ .value = "least_tokens", .label = "Least tokens", .key = .least_tokens },
+    .{ .value = "random", .label = "Random", .key = .random },
+};
+
+fn favBtnClass(active: bool) []const u8 {
+    return if (active) "char-tool is-active" else "char-tool";
+}
+
+fn gridBtnClass(active: bool) []const u8 {
+    return if (active) "char-tool is-active" else "char-tool";
+}
+
+fn tagBtnClass(view: cv.View, tag: []const u8) []const u8 {
+    return if (view.isTagActive(tag)) "char-tag is-active" else "char-tag";
+}
+
+fn sortValue(key: cv.SortKey) []const u8 {
+    return @tagName(key);
+}
+
+fn onSearchInput(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const event = e.getEvent();
+    const target = event.ref.get(zx.client.js.Object, "target") catch return;
+    const val = target.getAlloc(zx.client.js.String, zx.allocator, "value") catch return;
+    defer zx.allocator.free(val);
+    cv.global.setQuery(val) catch return;
+    cv.global.compute(char_store.slice()) catch return;
+    regions.bumpCharacterList();
+}
+
+fn onSortChange(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const event = e.getEvent();
+    const target = event.ref.get(zx.client.js.Object, "target") catch return;
+    const val = target.getAlloc(zx.client.js.String, zx.allocator, "value") catch return;
+    defer zx.allocator.free(val);
+    if (std.meta.stringToEnum(cv.SortKey, val)) |key| {
+        cv.global.setSort(key);
+        cv.global.compute(char_store.slice()) catch return;
+        regions.bumpShell();
+    }
+}
+
+fn onFavToggle(_: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    cv.global.setFavOnly(!cv.global.fav_only);
+    cv.global.compute(char_store.slice()) catch return;
+    regions.bumpShell();
+}
+
+fn onGridToggle(_: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    cv.global.setGrid(!cv.global.grid);
+    regions.bumpShell();
+}
+
+fn onTagToggle(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const event = e.getEvent();
+    const target = event.ref.get(zx.client.js.Object, "target") catch return;
+    const dataset = target.get(zx.client.js.Object, "dataset") catch return;
+    const tag = dataset.getAlloc(zx.client.js.String, zx.allocator, "tag") catch return;
+    defer zx.allocator.free(tag);
+    cv.global.toggleTag(tag) catch return;
+    cv.global.compute(char_store.slice()) catch return;
+    regions.bumpShell();
+}

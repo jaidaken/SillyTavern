@@ -1,4 +1,12 @@
 pub fn Page(ctx: zx.PageContext) !zx.Component {
+    // Load fixture messages during SSR so the SSR output contains the roleplay messages.
+    // On the client, bootInit() (bridge.zig) loads them into the WASM store after the
+    // door hydrates, so the two sides stay in sync.
+    if (comptime zx.platform.role == .server) {
+        const fixtures = @import("./fixtures.zig");
+        _ = fixtures.loadRoleplay(&store.global);
+    }
+
     return (
         <div @allocator={ctx.arena} id="chat-root">
             <Shell @rendering={.client} />
@@ -9,6 +17,7 @@ pub fn Page(ctx: zx.PageContext) !zx.Component {
 }
 
 const zx = @import("zx");
+const store = @import("./store.zig");
 pub const Shell = @import("./shell.zx").Shell;
 pub const MessageLog = @import("./messagelog.zx").MessageLog;
 pub const Composer = @import("./composer.zx").Composer;

@@ -65,6 +65,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         if self.is_proxied():
             return self.proxy()
+        # The ziex base_path="/client" means the HTML references /client/* but the
+        # dist layout puts files at the root.  Strip the prefix for static serving.
+        if self.path.startswith("/client/"):
+            self.path = self.path[len("/client"):]
         return super().do_GET()
 
     # Headless --dump-dom snapshots at the load event; a slow subresource holds it open.
@@ -108,6 +112,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_HEAD(self):
         if self.is_proxied():
             return self.proxy()
+        if self.path.startswith("/client/"):
+            self.path = self.path[len("/client"):]
         return super().do_HEAD()
 
     def do_POST(self):

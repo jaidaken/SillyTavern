@@ -14,7 +14,11 @@ pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
                 ) else if (p.id == .persona) (
                     <PersonaList />
                 ) else if (p.id == .characters) (
-                    <CharacterList />
+                    <div class="char-panel-stack">
+                        <CharacterToolbar />
+                        <CharacterActions />
+                        <CharacterListRegion />
+                    </div>
                 ) else (
                     <PanelEmpty />
                 )}
@@ -30,4 +34,6 @@ const PanelHead = @import("../panelchrome.zx").PanelHead;
 const PanelEmpty = @import("../panelchrome.zx").PanelEmpty;
 const AiConfigBody = @import("ai_config_body.zx").AiConfigBody;
 const PersonaList = @import("persona_list.zx").PersonaList;
-const CharacterList = @import("character_list.zx").CharacterList;
+const CharacterToolbar = @import("character_toolbar.zx").CharacterToolbar;
+const CharacterActions = @import("character_actions.zx").CharacterActions;
+const CharacterListRegion = @import("character_list_region.zx").CharacterListRegion;

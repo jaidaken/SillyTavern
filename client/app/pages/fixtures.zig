@@ -194,3 +194,9 @@ pub const sections = [_]Section{
         .messages = &security,
     },
 };
+
+pub fn loadRoleplay(store: *@import("./store.zig").Store) void {
+    for (roleplay) |msg| {
+        store.appendCopy(msg.name, msg.body, "") catch {};
+    }
+}

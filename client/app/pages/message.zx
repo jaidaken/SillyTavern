@@ -22,6 +22,9 @@ pub fn MessageView(allocator: zx.Allocator, props: MessageProps) zx.Component {
 
     return (
         <div @allocator={allocator} class="mes" aria-busy={if (props.streaming) "true" else "false"}>
+            { if (props.msg.avatar.len > 0) (
+                <img class="mes_avatar" src={props.msg.avatar} alt={props.msg.name} loading="lazy" />
+            ) }
             <div class="mes_name">{props.msg.name}</div>
             <div class={text_class} @escaping={.none}>{html.sink(body)}</div>
         </div>

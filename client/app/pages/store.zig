@@ -23,8 +23,10 @@ const Allocator = std.mem.Allocator;
 pub const Message = struct {
     name: []const u8,
     body: []const u8,
+    avatar: []const u8 = "",
     name_owned: ?[]u8 = null,
     body_owned: ?[]u8 = null,
+    avatar_owned: ?[]u8 = null,
 };
 
 pub const Store = struct {
@@ -43,6 +45,7 @@ pub const Store = struct {
         for (self.messages.items) |m| {
             if (m.name_owned) |b| self.allocator.free(b);
             if (m.body_owned) |b| self.allocator.free(b);
+            if (m.avatar_owned) |b| self.allocator.free(b);
         }
         self.messages.deinit(self.allocator);
         self.tail.deinit(self.allocator);
@@ -53,6 +56,7 @@ pub const Store = struct {
         for (self.messages.items) |m| {
             if (m.name_owned) |b| self.allocator.free(b);
             if (m.body_owned) |b| self.allocator.free(b);
+            if (m.avatar_owned) |b| self.allocator.free(b);
         }
         self.messages.clearRetainingCapacity();
         self.tail.deinit(self.allocator);
@@ -71,30 +75,34 @@ pub const Store = struct {
         return streaming == index;
     }
 
-    /// Takes ownership of `name` and `body` on success. On failure the caller still owns them.
-    pub fn append(self: *Store, name: []u8, body: []u8) Allocator.Error!void {
+    /// Takes ownership of `name`, `body`, and `avatar` on success. On failure the caller still owns them.
+    pub fn append(self: *Store, name: []u8, body: []u8, avatar: []u8) Allocator.Error!void {
         try self.messages.append(self.allocator, .{
             .name = name,
             .body = body,
+            .avatar = avatar,
             .name_owned = name,
             .body_owned = body,
+            .avatar_owned = avatar,
         });
     }
 
-    /// Copies `name` and `body`. For callers holding literals or borrowed bytes.
-    pub fn appendCopy(self: *Store, name: []const u8, body: []const u8) Allocator.Error!void {
+    /// Copies `name`, `body`, and `avatar`. For callers holding literals or borrowed bytes.
+    pub fn appendCopy(self: *Store, name: []const u8, body: []const u8, avatar: []const u8) Allocator.Error!void {
         const n = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(n);
         const b = try self.allocator.dupe(u8, body);
         errdefer self.allocator.free(b);
-        try self.append(n, b);
+        const a = try self.allocator.dupe(u8, avatar);
+        errdefer self.allocator.free(a);
+        try self.append(n, b, a);
     }
 
-    /// Takes ownership of `name` on success. Any in-flight stream is sealed first, so a second
+    /// Takes ownership of `name` and `avatar` on success. Any in-flight stream is sealed first, so a second
     /// stream can never alias the first message's body.
-    pub fn beginStream(self: *Store, name: []u8) Allocator.Error!void {
+    pub fn beginStream(self: *Store, name: []u8, avatar: []u8) Allocator.Error!void {
         self.endStream();
-        try self.messages.append(self.allocator, .{ .name = name, .body = "", .name_owned = name });
+        try self.messages.append(self.allocator, .{ .name = name, .body = "", .avatar = avatar, .name_owned = name, .avatar_owned = avatar });
         self.stream_index = self.messages.items.len - 1;
     }
 
@@ -159,7 +167,7 @@ pub fn isStreaming(index: usize) bool {
 /// the reconciler "no signal, always resolve".
 pub fn signal(m: Message) u64 {
     var h: u64 = 0xcbf29ce484222325;
-    inline for (.{ @intFromPtr(m.name.ptr), m.name.len, @intFromPtr(m.body.ptr), m.body.len }) |v| {
+    inline for (.{ @intFromPtr(m.name.ptr), m.name.len, @intFromPtr(m.body.ptr), m.body.len, @intFromPtr(m.avatar.ptr), m.avatar.len }) |v| {
         h = (h ^ @as(u64, v)) *% 0x100000001b3;
     }
     return h | 1;
@@ -169,8 +177,8 @@ pub fn clearStore() void {
     return global.clear();
 }
 
-pub fn appendCopy(name: []const u8, body: []const u8) Allocator.Error!void {
-    return global.appendCopy(name, body);
+pub fn appendCopy(name: []const u8, body: []const u8, avatar: []const u8) Allocator.Error!void {
+    return global.appendCopy(name, body, avatar);
 }
 
 const testing = std.testing;
@@ -290,12 +298,12 @@ test "store_keeps_older_message_text_live_while_the_tail_streams" {
     var sim = RenderSim{ .tracker = &tracker };
     defer sim.deinit(testing.allocator);
 
-    try s.appendCopy("Seraphina", "The lantern gutters.");
-    try s.appendCopy("You", "What is that?");
-    try s.appendCopy("Seraphina", "A wreck, or a warning.");
+    try s.appendCopy("Seraphina", "The lantern gutters.", "");
+    try s.appendCopy("You", "What is that?", "");
+    try s.appendCopy("Seraphina", "A wreck, or a warning.", "");
     try sim.render(&s, testing.allocator);
 
-    try s.beginStream(try gpa.dupe(u8, "Seraphina"));
+    try s.beginStream(try gpa.dupe(u8, "Seraphina"), try gpa.dupe(u8, ""));
     for (0..200) |i| {
         var buf: [8]u8 = undefined;
         try s.appendTail(try std.fmt.bufPrint(&buf, "t{d} ", .{i}));
@@ -322,8 +330,8 @@ test "store_survives_a_message_appended_while_a_stream_is_running" {
     var sim = RenderSim{ .tracker = &tracker };
     defer sim.deinit(testing.allocator);
 
-    try s.appendCopy("You", "Tell me about the shoals.");
-    try s.beginStream(try gpa.dupe(u8, "Seraphina"));
+    try s.appendCopy("You", "Tell me about the shoals.", "");
+    try s.beginStream(try gpa.dupe(u8, "Seraphina"), try gpa.dupe(u8, ""));
 
     for (0..20) |_| {
         try s.appendTail("a");
@@ -332,7 +340,7 @@ test "store_survives_a_message_appended_while_a_stream_is_running" {
 
     // The streaming message is no longer last. Keying `isStreaming` on the last index would let
     // the render cache retain the moving tail buffer, which the next append frees.
-    try s.appendCopy("Narrator", "A gull cries.");
+    try s.appendCopy("Narrator", "A gull cries.", "");
     try sim.render(&s, testing.allocator);
 
     for (0..20) |_| {
@@ -358,11 +366,11 @@ test "begin_stream_while_streaming_seals_the_first_body_instead_of_aliasing_it" 
     var sim = RenderSim{ .tracker = &tracker };
     defer sim.deinit(testing.allocator);
 
-    try s.beginStream(try gpa.dupe(u8, "First"));
+    try s.beginStream(try gpa.dupe(u8, "First"), try gpa.dupe(u8, ""));
     try s.appendTail("first body");
     try sim.render(&s, testing.allocator);
 
-    try s.beginStream(try gpa.dupe(u8, "Second"));
+    try s.beginStream(try gpa.dupe(u8, "Second"), try gpa.dupe(u8, ""));
     try s.appendTail("second body");
     try sim.render(&s, testing.allocator);
     s.endStream();
@@ -378,7 +386,7 @@ test "append_tail_without_a_stream_is_silent" {
     var s = Store.init(testing.allocator);
     defer s.deinit();
 
-    try s.appendCopy("You", "hello");
+    try s.appendCopy("You", "hello", "");
     try s.appendTail("dropped");
 
     try testing.expectEqual(@as(usize, 1), s.slice().len);
@@ -389,7 +397,7 @@ test "end_stream_with_no_tokens_yields_an_empty_body" {
     var s = Store.init(testing.allocator);
     defer s.deinit();
 
-    try s.beginStream(try testing.allocator.dupe(u8, "Seraphina"));
+    try s.beginStream(try testing.allocator.dupe(u8, "Seraphina"), try testing.allocator.dupe(u8, ""));
     s.endStream();
 
     try testing.expectEqual(@as(usize, 1), s.slice().len);
@@ -401,12 +409,12 @@ test "sealed_body_keeps_its_address_across_later_appends" {
     var s = Store.init(testing.allocator);
     defer s.deinit();
 
-    try s.beginStream(try testing.allocator.dupe(u8, "Seraphina"));
+    try s.beginStream(try testing.allocator.dupe(u8, "Seraphina"), try testing.allocator.dupe(u8, ""));
     try s.appendTail("sealed text");
     s.endStream();
     const sealed = s.slice()[0].body.ptr;
 
-    for (0..64) |_| try s.appendCopy("You", "filler");
+    for (0..64) |_| try s.appendCopy("You", "filler", "");
 
     try testing.expectEqual(sealed, s.slice()[0].body.ptr);
     try testing.expectEqualStrings("sealed text", s.slice()[0].body);
@@ -416,17 +424,19 @@ fn streamScenario(gpa: Allocator, tokens: usize) !void {
     var s = Store.init(gpa);
     defer s.deinit();
 
-    try s.appendCopy("You", "one");
+    try s.appendCopy("You", "one", "");
 
     const name = try gpa.dupe(u8, "Seraphina");
+    const avatar = try gpa.dupe(u8, "");
     // Scoped to this call: past it the store owns `name`, and an errdefer would double-free.
-    s.beginStream(name) catch |err| {
+    s.beginStream(name, avatar) catch |err| {
         gpa.free(name);
+        gpa.free(avatar);
         return err;
     };
 
     for (0..tokens) |_| try s.appendTail("x");
-    try s.appendCopy("Narrator", "mid");
+    try s.appendCopy("Narrator", "mid", "");
     for (0..tokens) |_| try s.appendTail("y");
     s.endStream();
 
@@ -441,7 +451,7 @@ test "signal_is_stable_across_reads_of_a_sealed_message" {
     var s = Store.init(testing.allocator);
     defer s.deinit();
 
-    try s.beginStream(try testing.allocator.dupe(u8, "Seraphina"));
+    try s.beginStream(try testing.allocator.dupe(u8, "Seraphina"), try testing.allocator.dupe(u8, ""));
     try s.appendTail("a sealed line");
     s.endStream();
 
@@ -449,7 +459,7 @@ test "signal_is_stable_across_reads_of_a_sealed_message" {
     const second = signal(s.slice()[0]);
     try testing.expectEqual(first, second);
 
-    for (0..32) |_| try s.appendCopy("You", "filler");
+    for (0..32) |_| try s.appendCopy("You", "filler", "");
     try testing.expectEqual(first, signal(s.slice()[0]));
 }
 
@@ -457,7 +467,7 @@ test "signal_changes_on_every_token_while_the_body_streams" {
     var s = Store.init(testing.allocator);
     defer s.deinit();
 
-    try s.beginStream(try testing.allocator.dupe(u8, "Seraphina"));
+    try s.beginStream(try testing.allocator.dupe(u8, "Seraphina"), try testing.allocator.dupe(u8, ""));
 
     var seen = std.AutoHashMapUnmanaged(u64, void).empty;
     defer seen.deinit(testing.allocator);
@@ -480,8 +490,8 @@ test "signal_distinguishes_two_messages_with_different_bodies" {
     var s = Store.init(testing.allocator);
     defer s.deinit();
 
-    try s.appendCopy("You", "the lantern gutters");
-    try s.appendCopy("You", "a wreck, or a warning");
+    try s.appendCopy("You", "the lantern gutters", "");
+    try s.appendCopy("You", "a wreck, or a warning", "");
 
     try testing.expect(signal(s.slice()[0]) != signal(s.slice()[1]));
 }
@@ -495,10 +505,12 @@ fn signalScenario(gpa: Allocator) !void {
     var s = Store.init(gpa);
     defer s.deinit();
 
-    try s.appendCopy("You", "hello");
+    try s.appendCopy("You", "hello", "");
     const name = try gpa.dupe(u8, "Seraphina");
-    s.beginStream(name) catch |err| {
+    const avatarSig = try gpa.dupe(u8, "");
+    s.beginStream(name, avatarSig) catch |err| {
         gpa.free(name);
+        gpa.free(avatarSig);
         return err;
     };
     for (0..8) |_| {
@@ -518,10 +530,10 @@ test "store_leaves_no_leak_under_a_debug_allocator" {
     const gpa = debug.allocator();
 
     var s = Store.init(gpa);
-    try s.appendCopy("You", "hello");
-    try s.beginStream(try gpa.dupe(u8, "Seraphina"));
+    try s.appendCopy("You", "hello", "");
+    try s.beginStream(try gpa.dupe(u8, "Seraphina"), try gpa.dupe(u8, ""));
     for (0..512) |_| try s.appendTail("token ");
-    try s.appendCopy("Narrator", "interjection");
+    try s.appendCopy("Narrator", "interjection", "");
     for (0..512) |_| try s.appendTail("more ");
     s.endStream();
     try testing.expectEqual(@as(usize, 3072 + 2560), s.slice()[1].body.len);

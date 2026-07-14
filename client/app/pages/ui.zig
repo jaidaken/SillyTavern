@@ -93,19 +93,26 @@ pub fn onClose(_: zx.client.Event) void {
     close();
 }
 
+/// Read motion preference from localStorage (WASM only).
+pub fn getStoredMotion() ?[]const u8 {
+    if (zx.platform.role != .client) return null;
+    const ls = zx.client.js.global.get(zx.client.js.Object, "localStorage") catch return null;
+    return ls.callAlloc(zx.client.js.String, zx.allocator, "getItem", .{zx.client.js.string("st-motion")}) catch null;
+}
+
 /// Called from the resize glue with the new pixel width for a side. Clamps and re-renders the Shell region.
-export fn __st_set_panel_width(is_left: u32, width: f64) callconv(.c) void {
+pub export fn __st_set_panel_width(is_left: u32, width: f64) callconv(.c) void {
     setWidth(if (is_left != 0) .left else .right, @floatCast(width));
 }
 
 /// Called from the glue to dismiss the open panel (used for click-outside on a drawer).
-export fn __st_close_panel() callconv(.c) void {
+pub export fn __st_close_panel() callconv(.c) void {
     close();
 }
 
 /// Set the motion preference from the glue (0 = system, 1 = on, 2 = off). The glue owns persistence
 /// and seeds this at boot from localStorage; Zig owns the reactive class the CSS reads.
-export fn __st_set_motion(pref: u32) callconv(.c) void {
+pub export fn __st_set_motion(pref: u32) callconv(.c) void {
     ui.motion = switch (pref) {
         1 => .on,
         2 => .off,
