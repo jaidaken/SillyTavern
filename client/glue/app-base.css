@@ -1262,3 +1262,8 @@ body {
     color: var(--muted);
     margin: 0;
 }
+
+/* Chat load in flight (aria-busy set by loadCharacterChat): dim the log so the click visibly took. */
+#chat[aria-busy="true"] .chat-inner {
+    opacity: 0.55;
+}

@@ -134,7 +134,7 @@ md = ('# Heading one\n\n'
       '```python\ndef greet(name):\n    return "hi " + name\n```\n')
 def top(inner_query):
     stream = "/dev/stream?" + inner_query
-    return "http://127.0.0.1:%s/?hold=6000&stream=%s" % (port, urllib.parse.quote(stream, safe=""))
+    return "http://127.0.0.1:%s/?demo=1&hold=6000&stream=%s" % (port, urllib.parse.quote(stream, safe=""))
 # One token carries every sanitize vector; two tokens for the markdown body so the first code fence
 # is not the streaming tail and actually gets highlighted.
 print(top("n=1&prefix=" + urllib.parse.quote(san, safe="")),
@@ -146,7 +146,7 @@ echo
 echo "== rendered dom (default) =="
 # Completion: the client adds .hydrated to #chat-root once the SSR frames hold real bodies (main.js
 # boot), and all twelve fixtures are in the log.
-render "http://127.0.0.1:$PORT/" \
+render "http://127.0.0.1:$PORT/?demo=1" \
     "document.querySelector('#chat-root.hydrated') && document.querySelectorAll('#chat .mes').length>=12" > "$DOM"
 check "ssr placeholder replaced" "$(count 'ST_SSR_PLACEHOLDER' "$DOM")" 0
 check "messages rendered" "$(count 'class="mes"' "$DOM")" 12
@@ -218,7 +218,7 @@ kill -TERM -- -"$NODEV" 2>/dev/null
 echo
 echo "== streaming and the render cache =="
 # Completion: the 200-token stream has sealed and written its final metrics.
-render "http://127.0.0.1:$PORT/?stream=1&hold=6000" \
+render "http://127.0.0.1:$PORT/?demo=1&stream=1&hold=6000" \
     "JSON.parse(document.querySelector('#probe-metrics').textContent).tokens===200" > "$STREAM_DOM"
 python3 - "$STREAM_DOM" <<'PY'
 import json, re, sys
@@ -251,7 +251,7 @@ echo
 echo "== two consecutive streams keep separate bodies =="
 # Completion: the SECOND stream ran to its last token (bbb19). The first stream fills #probe-metrics
 # before the second even begins, so gate on the second stream's tail, not on the metrics block.
-render "http://127.0.0.1:$PORT/?stream=2&hold=5000" \
+render "http://127.0.0.1:$PORT/?demo=1&stream=2&hold=5000" \
     "document.body.textContent.includes('bbb19')" > "$STREAM_DOM"
 python3 - "$STREAM_DOM" <<'PY2'
 import re, sys

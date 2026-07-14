@@ -547,10 +547,20 @@ router.post('/get', validateAvatarUrlMiddleware, async function (request, respon
         const chatFileName = `${String(request.body.file_name)}.jsonl`;
         const chatFilePath = path.join(directoryPath, sanitize(chatFileName));
 
-        return response.send(await getChatData(chatFilePath));
+        // Absent file = fresh chat (200 empty); existing-but-unreadable = 500, so the client never
+        // seeds a greeting over real history it merely failed to read.
+        const fileStat = await fs.promises.stat(chatFilePath).catch(() => null);
+        if (!fileStat) {
+            return response.send({});
+        }
+        const chatData = await getChatData(chatFilePath);
+        if (fileStat.size > 0 && chatData.length === 0) {
+            return response.status(500).send({ error: true });
+        }
+        return response.send(chatData);
     } catch (error) {
         log.chat.error(error);
-        return response.send({});
+        return response.status(500).send({ error: true });
     }
 });
 

@@ -161,12 +161,18 @@ fn applyReadingPrefs() callconv(.c) void {
 }
 
 fn bootInit() callconv(.c) void {
-    const fixtures = @import("./fixtures.zig");
-    _ = fixtures.loadRoleplay(&store.global);
     regions.bumpMessageLog();
     handlers.init();
     const stored = ui.getStoredMotion() orelse "system";
     ui.__st_set_motion(motionCode(stored));
+}
+
+// Demo fixtures are opt-in (glue calls this on ?demo or when no backend answers), so a real
+// deployment shows honest state instead of roleplay prose masking a dead load path.
+fn seedDemo() callconv(.c) void {
+    const fixtures = @import("./fixtures.zig");
+    _ = fixtures.loadRoleplay(&store.global);
+    regions.bumpMessageLog();
 }
 
 fn motionCode(name: []const u8) u32 {
@@ -238,6 +244,7 @@ comptime {
         @export(&setCharacterMeta, .{ .name = "__st_set_character_meta" });
         @export(&applyReadingPrefs, .{ .name = "__st_apply_reading_prefs" });
         @export(&bootInit, .{ .name = "__st_boot_init" });
+        @export(&seedDemo, .{ .name = "__st_seed_demo" });
         @export(&addPersona, .{ .name = "__st_add_persona" });
         @export(&clearPersonas, .{ .name = "__st_clear_personas" });
         @export(&selectPersona, .{ .name = "__st_select_persona" });

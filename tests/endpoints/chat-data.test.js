@@ -196,6 +196,25 @@ describe('SillyTavern chat and character data endpoints', () => {
             expect(response.status).toBe(400);
         }, CASE_TIMEOUT_MS);
 
+        test('chat_get_for_a_missing_chat_file_returns_empty_success', async () => {
+            const response = await client.postJson('/api/chats/get', { avatar_url: avatarUrl, file_name: 'NoSuchChatEver' });
+            expect(response.status).toBe(200);
+            expect(await response.json()).toEqual({});
+        }, CASE_TIMEOUT_MS);
+
+        test('chat_get_for_an_unreadable_existing_chat_returns_500_not_empty_success', async () => {
+            // A directory posing as the .jsonl: stat succeeds w/ size>0 semantics vary, so seed a
+            // real unparseable file instead - non-empty bytes that yield zero parseable lines.
+            const corruptName = 'CorruptChat';
+            const corruptPath = path.join(server.userDirectory(), 'chats', 'P8CreateChar', `${corruptName}.jsonl`);
+            fs.writeFileSync(corruptPath, '{not json at all\n ');
+
+            const response = await client.postJson('/api/chats/get', { avatar_url: avatarUrl, file_name: corruptName });
+            expect(response.status).toBe(500);
+
+            fs.rmSync(corruptPath, { force: true });
+        }, CASE_TIMEOUT_MS);
+
         test('chat_delete_removes_the_chat_file_from_disk', async () => {
             const chatPath = path.join(server.userDirectory(), 'chats', 'P8CreateChar', `${fileName}.jsonl`);
             expect(fs.existsSync(chatPath)).toBe(true);

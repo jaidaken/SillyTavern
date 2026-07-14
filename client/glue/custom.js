@@ -494,6 +494,25 @@
         }
     }
 
+    // All API POSTs route through here: a 403 means the cached CSRF token went stale (server
+    // restart under a long-lived tab), so refresh it and retry once instead of failing forever.
+    async function apiPost(url, body) {
+        await ensureCsrfToken();
+        const doPost = () => loggedFetch(url, {
+            method: 'POST',
+            headers: withCsrf({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify(body || {}),
+        });
+        let res = await doPost();
+        if (res.status === 403) {
+            log.net.warn(url, 'returned 403 - refreshing csrf token and retrying once');
+            csrfToken = null;
+            await ensureCsrfToken();
+            res = await doPost();
+        }
+        return res;
+    }
+
     function withCsrf(headers) {
         if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
         return headers;
@@ -515,12 +534,11 @@
 
     async function fetchCharacters() {
         log.chars.debug('character load start');
-        await ensureCsrfToken();
         try {
-            const res = await loggedFetch('/api/characters/all', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: '{}' });
-            if (!res.ok) { log.net.warn('char fetch failed:', res.status); return; }
+            const res = await apiPost('/api/characters/all', {});
+            if (!res.ok) { log.net.warn('char fetch failed:', res.status); return false; }
             const list = await res.json();
-            if (!Array.isArray(list)) { log.net.warn('char list response is not an array, got', typeof list); return; }
+            if (!Array.isArray(list)) { log.net.warn('char list response is not an array, got', typeof list); return false; }
             initCharacters();
             list.forEach(function (c, i) {
                 jsCharacters.push(c);
@@ -531,16 +549,28 @@
                 wasm.__st_set_character_meta(i, cd.ptr, cd.len, u64(c.date_last_chat), u64(c.chat_size), u64(c.data_size));
             });
             log.chars.info('loaded', list.length, 'characters');
+            return true;
         } catch (err) {
             log.chars.error('character load failed:', err);
+            return false;
         }
+    }
+
+    // Boot lands in the most recently used chat (upstream ST behavior); demo mode keeps fixtures.
+    function autoOpenRecentChat() {
+        if (!jsCharacters.length) { log.chars.debug('auto-open: no characters'); return; }
+        let best = 0;
+        jsCharacters.forEach(function (c, i) {
+            if ((c.date_last_chat || 0) > (jsCharacters[best].date_last_chat || 0)) best = i;
+        });
+        log.chars.info('auto-opening most recent chat:', jsCharacters[best].name);
+        loadCharacterChat(best);
     }
 
     async function fetchPersonas() {
         log.personas.debug('persona load start');
-        await ensureCsrfToken();
         try {
-            const res = await loggedFetch('/api/settings/get', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: '{}' });
+            const res = await apiPost('/api/settings/get', {});
             if (!res.ok) {
                 log.net.warn('persona settings fetch returned', res.status);
                 return;
@@ -624,21 +654,26 @@
         wasm.__st_append_message(n.ptr, n.len, b.ptr, b.len, a.ptr, a.len);
     }
 
+    let chatLoadSeq = 0;
+
     async function loadCharacterChat(index) {
         const c = jsCharacters[index];
-        if (!c) return;
-        await ensureCsrfToken();
+        log.chars.debug('load chat request: index', index, c ? c.name : '(none)');
+        if (!c) { log.chars.warn('load chat: no character at index', index, 'of', jsCharacters.length); return; }
+        // Ticket per load: any await below is a window for a newer click; stale loads abandon
+        // before touching the store so two quick clicks cannot interleave their messages.
+        const seq = ++chatLoadSeq;
+        const chatEl = document.getElementById('chat');
+        if (chatEl) chatEl.setAttribute('aria-busy', 'true');
         try {
             const chatName = c.chat || (c.name + ' - ' + new Date().toISOString().slice(0, 10));
-            const res = await loggedFetch('/api/chats/get', {
-                method: 'POST',
-                headers: withCsrf({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify({ avatar_url: c.avatar, file_name: chatName }),
-            });
-            // A missing chat file is a fresh chat, not a failure: fall through and seed the greeting.
-            let data = null;
-            if (res.ok) data = await res.json();
-            else log.chars.debug('no existing chat (', res.status, ') - starting fresh');
+            const res = await apiPost('/api/chats/get', { avatar_url: c.avatar, file_name: chatName });
+            if (seq !== chatLoadSeq) { log.chars.debug('load chat: superseded mid-fetch, abandoning', c.name); return; }
+            // Server contract: 200 [] / 200 {} = no chat yet (fresh chat, seed the greeting below);
+            // any error status = the chat may exist but could not be read - keep the current view.
+            if (!res.ok) { log.chars.error('chat fetch failed:', res.status, '- keeping current chat'); return; }
+            const data = await res.json();
+            if (seq !== chatLoadSeq) { log.chars.debug('load chat: superseded mid-parse, abandoning', c.name); return; }
             wasm.__st_clear_messages();
             wasm.__st_select_character(index);
             var charAvatarUrl = c.avatar ? '../thumbnail?type=avatar&file=' + encodeURIComponent(c.avatar) : '';
@@ -659,6 +694,8 @@
             }
         } catch (err) {
             log.chars.error('chat load failed:', err);
+        } finally {
+            if (seq === chatLoadSeq && chatEl) chatEl.removeAttribute('aria-busy');
         }
     }
 
@@ -669,12 +706,7 @@
     window.__st_load_character_chat = loadCharacterChat;
 
     async function charApiPost(url, body) {
-        await ensureCsrfToken();
-        const res = await loggedFetch(url, {
-            method: 'POST',
-            headers: withCsrf({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify(body),
-        });
+        const res = await apiPost(url, body);
         if (!res.ok) { log.net.warn(url, 'failed:', res.status); return null; }
         return res;
     }
@@ -890,7 +922,21 @@
                 log.boot.debug('boot_init done');
             }
 
-            fetchCharacters();
+            // Demo fixtures only on explicit ?demo (verify.sh, demos) or when no backend answers;
+            // a real deployment boots into the most recently used chat instead.
+            const demoMode = new URLSearchParams(window.location.search).has('demo');
+            if (demoMode && wasm.__st_seed_demo) {
+                wasm.__st_seed_demo();
+                log.boot.info('demo fixtures seeded (?demo)');
+            }
+            fetchCharacters().then(function (ok) {
+                if (demoMode) return;
+                if (ok) { autoOpenRecentChat(); return; }
+                if (wasm.__st_seed_demo) {
+                    wasm.__st_seed_demo();
+                    log.boot.info('backend unreachable - demo fixtures seeded');
+                }
+            });
             fetchPersonas();
 
             // Dev-mode streaming: the verify.sh gate drives hostile/markdown/streaming
