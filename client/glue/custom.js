@@ -760,6 +760,15 @@
 
     // Delegate event listeners
     document.addEventListener('click', function (e) {
+        // Click telemetry: identify the pressed control (nearest interactive ancestor) at ui:debug.
+        const ctl = e.target.closest('button, [role=button], a, select, input, textarea, label');
+        if (ctl) {
+            logFor('ui').debug('click',
+                ctl.tagName.toLowerCase()
+                + (ctl.id ? '#' + ctl.id : '')
+                + (ctl.className && typeof ctl.className === 'string' ? '.' + ctl.className.trim().split(/\s+/).join('.') : ''),
+                ctl.getAttribute('aria-label') || ctl.textContent.trim().slice(0, 30) || '');
+        }
         // Motion toggle
         if (e.target.matches('[data-motion-set]')) {
             const name = e.target.getAttribute('data-motion-set');
