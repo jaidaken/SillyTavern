@@ -237,26 +237,27 @@ async function main() {
             'A2 drawer opens the settings panel (plain zx handler)');
 
         await page.click('.seg-btn[data-reading-set="size"][data-reading-val="s"]');
-        row('pending', await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-size')==='s'", 2500),
-            'A3 [B1] reading Small sets data-reading-size on #chat-root');
+        row('must', await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-size')==='s'", 2500),
+            'A3 reading Small sets data-reading-size on #chat-root');
 
         await page.click('.settings-tab[data-reading-val="appearance"]');
-        row('pending', await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-tab')==='appearance'", 2500),
-            'A4 [B2] settings tab switches to Appearance');
+        row('must', await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-tab')==='appearance'", 2500),
+            'A4 settings tab switches to Appearance');
 
-        // The motion buttons sit on the appearance tab, display:none until the (dead) tab handler
-        // sets data-reading-tab: motion is UNREACHABLE by real input at HEAD. Both rows gate on B2.
+        // The motion buttons sit on the appearance tab, display:none until the tab handler sets
+        // data-reading-tab, so A5a/A5b also prove A4 reached the DOM: a dead tab handler makes the
+        // click itself unreachable (the element is not visible in the viewport) and both rows fail.
         let motionClicked = false;
         try {
             await page.click('[data-motion-set="on"]');
             motionClicked = true;
-        } catch (_) { /* hidden while B2 is red */ }
-        row('pending', motionClicked
+        } catch (_) { /* unreachable if the appearance panel never showed */ }
+        row('must', motionClicked
             && await page.waitFor("document.getElementById('shell').classList.contains('motion-on')", 2500),
-            'A5a [B2] motion On reaches the shell class (JS delegate path)');
-        row('pending', motionClicked
+            'A5a motion On reaches the shell class (zx handler -> ui.selectMotion)');
+        row('must', motionClicked
             && await page.waitFor("document.querySelector('[data-motion-set=\\'on\\']').getAttribute('aria-checked')==='true'", 2500),
-            'A5b [B2+B3] motion On updates the segmented highlight (zx state path)');
+            'A5b motion On updates the segmented highlight + aria-checked');
 
         const h0 = await page.eval("document.getElementById('send_textarea').clientHeight");
         await page.focus('#send_textarea');
@@ -273,8 +274,8 @@ async function main() {
             'A8 characters dock opens on the right');
         const pw0 = await page.eval("document.querySelector('#panel-view.panel-right').getBoundingClientRect().width");
         await page.drag('#panel-view .panel-resize', -60);
-        row('pending', await page.waitFor(`Math.abs(document.querySelector('#panel-view.panel-right').getBoundingClientRect().width - ${pw0}) > 20`, 2500),
-            'A9 [B7] side-panel handle drags the dock width');
+        row('must', await page.waitFor(`Math.abs(document.querySelector('#panel-view.panel-right').getBoundingClientRect().width - ${pw0}) > 20`, 2500),
+            'A9 side-panel handle drags the dock width (glue gesture -> Zig state)');
 
         // ---- Session B: mock backend, real boot path ----
         console.log('== session B: mock backend (no demo) ==');
@@ -350,8 +351,8 @@ async function main() {
         await page.eval("localStorage.setItem('st-reading-size','s')");
         await page.navigate(`${args.base}/?demo=1`);
         await page.waitFor(hydrated, 15000);
-        row('pending', await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-size')==='s'", 2500),
-            'B10 [B6] persisted reading prefs re-apply at boot');
+        row('must', await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-size')==='s'", 2500),
+            'B10 persisted reading prefs re-apply at boot');
     } finally {
         clearTimeout(watchdog);
         cleanup();

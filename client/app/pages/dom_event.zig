@@ -44,6 +44,42 @@ pub fn datasetUp(start: js.Object, comptime key: []const u8) ?[]const u8 {
     return null;
 }
 
+/// True when `start` or any ancestor carries `id`. The membership test behind click-outside: the
+/// panels (dock and drawer alike) render as #panel-view, so a click inside one is a click on the
+/// panel however deep it landed.
+pub fn hasAncestorId(start: js.Object, comptime id: []const u8) bool {
+    if (zx.platform.role != .client) return false;
+    var el: ?js.Object = start;
+    while (el) |elem| {
+        blk: {
+            const value = elem.getAlloc(js.String, zx.allocator, "id") catch break :blk;
+            defer zx.allocator.free(value);
+            if (std.mem.eql(u8, value, id)) return true;
+        }
+        el = elem.get(js.Object, "parentElement") catch null;
+    }
+    return false;
+}
+
+/// True when `start` or any ancestor carries `class` among its class tokens. Token-wise, so
+/// "drawers" never matches a "drawers-wide" that means something else.
+pub fn hasAncestorClass(start: js.Object, comptime class: []const u8) bool {
+    if (zx.platform.role != .client) return false;
+    var el: ?js.Object = start;
+    while (el) |elem| {
+        blk: {
+            const value = elem.getAlloc(js.String, zx.allocator, "className") catch break :blk;
+            defer zx.allocator.free(value);
+            var tokens = std.mem.tokenizeAny(u8, value, " \t\n");
+            while (tokens.next()) |token| {
+                if (std.mem.eql(u8, token, class)) return true;
+            }
+        }
+        el = elem.get(js.Object, "parentElement") catch null;
+    }
+    return false;
+}
+
 /// document.getElementById via ziex's Document wrapper (the jsz-safe path; a hand-rolled
 /// `get("getElementById")` + `call("")` always errors). Caller deinits the element.
 pub fn elementById(allocator: std.mem.Allocator, id: []const u8) ?zx.client.Document.HTMLElement {

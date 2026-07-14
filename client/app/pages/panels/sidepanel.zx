@@ -23,7 +23,7 @@ pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
                     <PanelEmpty />
                 )}
             </div>
-            <div class="panel-resize" data-side={ui.sideStr(p.side)} role="separator" tabindex="0" aria-orientation="vertical" aria-label="Resize panel" aria-valuenow={ui.widthFor(p.side)} aria-valuemin={ui.min_width} aria-valuemax={ui.max_width}></div>
+            <div class="panel-resize" data-side={ui.sideStr(p.side)} role="separator" tabindex="0" aria-orientation="vertical" aria-label="Resize panel" aria-valuenow={ui.widthFor(p.side)} aria-valuemin={ui.min_width} aria-valuemax={ui.max_width} onkeydown={ui.onResizeKey}></div>
         </aside>
     );
 }

@@ -208,10 +208,13 @@
     }
 
     const env = {
+        // Console sink only: Zig owns the category thresholds (log.zig), so a message that reaches
+        // here already passed its filter. Print it, never re-filter it.
         st_log: function (level, scopePtr, scopeLen, msgPtr, msgLen) {
-            const scope = readString(scopePtr, scopeLen);
+            const scope = readString(scopePtr, scopeLen) || 'wasm';
             const name = level === 0 ? 'error' : level === 1 ? 'warn' : level === 2 ? 'info' : 'debug';
-            logFor(scope || 'wasm')[name](readString(msgPtr, msgLen));
+            // eslint-disable-next-line no-console -- the logger is the one legitimate console binding site
+            console[CONSOLE_METHOD[name]]('[st:' + scope + ']', readString(msgPtr, msgLen));
         },
         sanitize: function (ptr, len) {
             let out;
@@ -334,36 +337,6 @@
         },
         st_release_handle: function (handle) {
             _handleMap.delete(handle);
-        },
-        st_save_reading_prefs: function () {
-            function defaultForKey(k) {
-                if (k === 'size') return 'm';
-                if (k === 'measure') return 'normal';
-                if (k === 'lh') return 'normal';
-                if (k === 'justify') return 'on';
-                if (k === 'indent') return 'novel';
-                if (k === 'theme') return 'dark';
-                if (k === 'tab') return 'reading';
-                if (k === 'avatars') return 'on';
-                return 'm';
-            }
-            var prefs = {};
-            ['size', 'measure', 'lh', 'justify', 'indent', 'theme', 'tab', 'avatars'].forEach(function (k) {
-                var v;
-                try { v = localStorage.getItem('st-reading-' + k); } catch (err) { log.panels.debug('localStorage read failed:', err); v = null; }
-                prefs[k] = v || defaultForKey(k);
-            });
-            ensureCsrfToken().then(function () {
-                loggedFetch('/api/settings/get', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: '{}' })
-                    .then(function (r) { return r.json(); })
-                    .then(function (data) {
-                        var settings = {};
-                        if (data.settings) { try { settings = JSON.parse(data.settings); } catch (err) { log.net.warn('settings JSON parse failed:', err); } }
-                        settings.clientReadingPrefs = prefs;
-                        loggedFetch('/api/settings/save', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: JSON.stringify(settings) });
-                    })
-                    .catch(function (err) { log.net.error('reading prefs save failed:', err); });
-            });
         },
     };
 
@@ -545,39 +518,18 @@
         input.value = '';
     };
 
-    // Delegate event listeners
+    // Click telemetry, deliberate: it sees clicks on dead vnodes too, which is what a silently-dead
+    // handler looks like. Motion, autogrow, reading presets and click-outside are zx handlers now.
     document.addEventListener('click', function (e) {
-        // Click telemetry: identify the pressed control (nearest interactive ancestor) at ui:debug.
         const ctl = e.target.closest('button, [role=button], a, select, input, textarea, label');
-        if (ctl) {
-            logFor('ui').debug('click',
-                ctl.tagName.toLowerCase()
-                + (ctl.id ? '#' + ctl.id : '')
-                + (ctl.className && typeof ctl.className === 'string' ? '.' + ctl.className.trim().split(/\s+/).join('.') : ''),
-                ctl.getAttribute('aria-label') || ctl.textContent.trim().slice(0, 30) || '');
-        }
-        // Motion toggle
-        if (e.target.matches('[data-motion-set]')) {
-            const name = e.target.getAttribute('data-motion-set');
-            if (name) {
-                localStorage.setItem('st-motion', name);
-                if (wasm.__st_set_motion) wasm.__st_set_motion(name === 'system' ? 0 : name === 'on' ? 1 : 2);
-            }
-            return;
-        }
-        // Character + persona selection: zx handlers own them (their target-walk covers child clicks).
+        if (!ctl) return;
+        logFor('ui').debug('click',
+            ctl.tagName.toLowerCase()
+            + (ctl.id ? '#' + ctl.id : '')
+            + (ctl.className && typeof ctl.className === 'string' ? '.' + ctl.className.trim().split(/\s+/).join('.') : ''),
+            ctl.getAttribute('aria-label') || ctl.textContent.trim().slice(0, 30) || '');
     }, false);
 
-    // Composer auto-grow
-    document.addEventListener('input', function (e) {
-        if (e.target.id === 'send_textarea') {
-            const sh = e.target.scrollHeight;
-            e.target.style.height = 'auto';
-            e.target.style.height = sh + 'px';
-        }
-    }, false);
-
-    // Click-outside drawer (composite env shim)
     // Chat reading-width drag: the .chat-resize separator sets an inline --reading-measure override
     // on #chat-root (inline beats the preset data-attribute rules); a preset pick clears it.
     (function initChatResize() {
@@ -646,26 +598,65 @@
         document.addEventListener('dblclick', function (e) {
             if (e.target && e.target.closest && e.target.closest('.chat-resize')) clearMeasure();
         });
-
-        // A measure preset pick (zig-owned buttons) drops the pixel override so presets stay live.
-        document.addEventListener('click', function (e) {
-            const btn = e.target && e.target.closest ? e.target.closest('[data-reading-set="measure"]') : null;
-            if (btn) clearMeasure();
-        });
+        // A measure preset pick clears the override in Zig (reading_prefs.handleClick), which owns
+        // both halves of that state; no listener here.
     })();
 
-    function setupClickOutside() {
-        document.addEventListener('click', function (e) {
-            if (wasm && wasm.__st_close_panel) {
-                const panel = document.querySelector('.panel');
-                const drawers = document.querySelector('.drawers');
-                if (panel && drawers && !panel.contains(e.target) && !drawers.contains(e.target)) {
-                    wasm.__st_close_panel();
-                }
+    // Panel dock resize, split per ZX7: the gesture stays here (ziex's delegated events cannot hold
+    // a pointer capture; the cursor leaves the vnode mid-drag) and Zig owns the width. The drag
+    // paints an inline width for feedback, then hands the final pixels to __st_set_panel_width,
+    // which clamps, stores and re-renders. Keyboard resize is Zig's own (ui.onResizeKey).
+    (function initPanelResize() {
+        const MIN_W = 240;
+        const MAX_W = 620;
+        let drag = null;
+
+        function widthAt(clientX) {
+            const dx = clientX - drag.startX;
+            // A left dock widens as the separator moves right; a right dock does the opposite.
+            const raw = drag.left ? drag.startW + dx : drag.startW - dx;
+            return Math.round(Math.max(MIN_W, Math.min(raw, MAX_W)));
+        }
+
+        document.addEventListener('pointerdown', function (e) {
+            const handle = e.target && e.target.closest ? e.target.closest('.panel-resize') : null;
+            if (!handle) return;
+            const panel = handle.closest('#panel-view');
+            if (!panel) return;
+            e.preventDefault();
+            drag = {
+                startX: e.clientX,
+                startW: panel.getBoundingClientRect().width,
+                left: handle.getAttribute('data-side') === 'left',
+                panel: panel,
+                handle: handle,
+                last: null,
+            };
+            handle.classList.add('is-dragging');
+            try { handle.setPointerCapture(e.pointerId); } catch (_) { /* synthetic events may lack a capturable id */ }
+            document.body.style.userSelect = 'none';
+        });
+
+        document.addEventListener('pointermove', function (e) {
+            if (!drag) return;
+            drag.last = widthAt(e.clientX);
+            drag.panel.style.width = drag.last + 'px';
+        });
+
+        function endPanelDrag() {
+            if (!drag) return;
+            const w = drag.last;
+            drag.handle.classList.remove('is-dragging');
+            document.body.style.userSelect = '';
+            if (w !== null && wasm && wasm.__st_set_panel_width) {
+                wasm.__st_set_panel_width(drag.left ? 1 : 0, w);
+                logFor('ui').debug('panel width set:', w);
             }
-        }, false);
-    }
-    setupClickOutside();
+            drag = null;
+        }
+        document.addEventListener('pointerup', endPanelDrag);
+        document.addEventListener('pointercancel', endPanelDrag);
+    })();
 
     // Initialize: load deps, then init wasm
     async function init() {

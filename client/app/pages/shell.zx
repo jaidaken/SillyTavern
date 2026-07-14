@@ -9,7 +9,13 @@ pub fn Shell(ctx: *zx.ComponentCtx(void)) zx.Component {
     regions.shell = ctx.state(u32, 0);
     instrument.bumpShell();
     return (
-        <div @allocator={ctx.allocator} id="shell" class={ui.motionClass()}>
+        // The dismiss surface, not a control: a click that lands anywhere but inside the panel or on
+        // the drawer buttons closes the open panel, and Escape does the same from the keyboard (the
+        // job the glue's document listener used to hold, now owned by ui.zig). It is bound on the
+        // three hydrated region roots, here and in MessageLog and Composer, because the SSR page
+        // root carries no client handler. The div itself gains no behaviour, so it needs no role.
+        // allow-div-onclick: region-level dismiss surface, keyboard parity via the Escape handler
+        <div @allocator={ctx.allocator} id="shell" class={ui.motionClass()} onclick={ui.onPageClick} onkeydown={ui.onPageKey}>
             <TopBar key="topbar" />
             {if (ui.openOn(.left)) |p| (
                 <SidePanel panel={p} key="dock-left" />

@@ -1,69 +1,69 @@
 // The User Settings drawer body, split into sub-panels (Reading, Appearance) so it stays legible as
-// controls grow. Reading controls are presentational: each button sets a data-reading-* attribute on
-// #chat-root (glue owns persistence + application), and the active highlight + panel visibility are
-// CSS keyed off those attrs, so they survive a Shell re-render without Zig reactive state. Motion is
-// now a native zieux component with its own reactive state.
+// controls grow. The two tabs are reading state like any other control (data-reading-set="tab"), so
+// they run through the same handler and the same owner; which sub-panel shows is CSS keyed off
+// data-reading-tab on #chat-root. reading_prefs.zig owns persistence, application and the server
+// save; this file only reads the clicked control and hands it over. Motion reads the one
+// authoritative MotionPref in ui.zig, so its highlight and aria-checked survive any re-render.
 pub fn SettingsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
-    const motion = ctx.state(ui_state.MotionPref, .system);
     return (
         <div @allocator={ctx.allocator} class="settings-body" @rendering={.client}>
             <div class="settings-tabs" role="group" aria-label="Settings sections">
-                <button class="settings-tab" data-reading-set="tab" data-reading-val="reading" type="button">Reading</button>
-                <button class="settings-tab" data-reading-set="tab" data-reading-val="appearance" type="button">Appearance</button>
+                <button class="settings-tab" data-reading-set="tab" data-reading-val="reading" type="button" onclick={onReadingClick}>Reading</button>
+                <button class="settings-tab" data-reading-set="tab" data-reading-val="appearance" type="button" onclick={onReadingClick}>Appearance</button>
             </div>
 
             <div class="settings-panel" data-tab="reading" aria-label="Reading">
                 <div class="setting-row">
                     <span class="setting-label">Text size</span>
                     <div class="seg" role="group" aria-label="Text size">
-                        <button class="seg-btn" data-reading-set="size" data-reading-val="s" type="button" onclick={ctx.bind(onReadingClick)}>Small</button>
-                        <button class="seg-btn" data-reading-set="size" data-reading-val="m" type="button" onclick={ctx.bind(onReadingClick)}>Medium</button>
-                        <button class="seg-btn" data-reading-set="size" data-reading-val="l" type="button" onclick={ctx.bind(onReadingClick)}>Large</button>
+                        <button class="seg-btn" data-reading-set="size" data-reading-val="s" type="button" onclick={onReadingClick}>Small</button>
+                        <button class="seg-btn" data-reading-set="size" data-reading-val="m" type="button" onclick={onReadingClick}>Medium</button>
+                        <button class="seg-btn" data-reading-set="size" data-reading-val="l" type="button" onclick={onReadingClick}>Large</button>
                     </div>
                 </div>
                 <div class="setting-row">
                     <span class="setting-label">Line width</span>
                     <div class="seg" role="group" aria-label="Line width">
-                        <button class="seg-btn" data-reading-set="measure" data-reading-val="narrow" type="button" onclick={ctx.bind(onReadingClick)}>Narrow</button>
-                        <button class="seg-btn" data-reading-set="measure" data-reading-val="normal" type="button" onclick={ctx.bind(onReadingClick)}>Normal</button>
-                        <button class="seg-btn" data-reading-set="measure" data-reading-val="wide" type="button" onclick={ctx.bind(onReadingClick)}>Wide</button>
+                        <button class="seg-btn" data-reading-set="measure" data-reading-val="narrow" type="button" onclick={onReadingClick}>Narrow</button>
+                        <button class="seg-btn" data-reading-set="measure" data-reading-val="normal" type="button" onclick={onReadingClick}>Normal</button>
+                        <button class="seg-btn" data-reading-set="measure" data-reading-val="wide" type="button" onclick={onReadingClick}>Wide</button>
                     </div>
                 </div>
                 <div class="setting-row">
                     <span class="setting-label">Line height</span>
                     <div class="seg" role="group" aria-label="Line height">
-                        <button class="seg-btn" data-reading-set="lh" data-reading-val="tight" type="button" onclick={ctx.bind(onReadingClick)}>Tight</button>
-                        <button class="seg-btn" data-reading-set="lh" data-reading-val="normal" type="button" onclick={ctx.bind(onReadingClick)}>Normal</button>
-                        <button class="seg-btn" data-reading-set="lh" data-reading-val="loose" type="button" onclick={ctx.bind(onReadingClick)}>Loose</button>
+                        <button class="seg-btn" data-reading-set="lh" data-reading-val="tight" type="button" onclick={onReadingClick}>Tight</button>
+                        <button class="seg-btn" data-reading-set="lh" data-reading-val="normal" type="button" onclick={onReadingClick}>Normal</button>
+                        <button class="seg-btn" data-reading-set="lh" data-reading-val="loose" type="button" onclick={onReadingClick}>Loose</button>
                     </div>
                 </div>
                 <div class="setting-row">
                     <span class="setting-label">Justify</span>
                     <div class="seg" role="group" aria-label="Justify long messages">
-                        <button class="seg-btn" data-reading-set="justify" data-reading-val="on" type="button" onclick={ctx.bind(onReadingClick)}>On</button>
-                        <button class="seg-btn" data-reading-set="justify" data-reading-val="off" type="button" onclick={ctx.bind(onReadingClick)}>Off</button>
+                        <button class="seg-btn" data-reading-set="justify" data-reading-val="on" type="button" onclick={onReadingClick}>On</button>
+                        <button class="seg-btn" data-reading-set="justify" data-reading-val="off" type="button" onclick={onReadingClick}>Off</button>
                     </div>
                 </div>
                 <div class="setting-row">
                     <span class="setting-label">Paragraphs</span>
                     <div class="seg" role="group" aria-label="Paragraph style">
-                        <button class="seg-btn" data-reading-set="indent" data-reading-val="novel" type="button" onclick={ctx.bind(onReadingClick)}>Novel</button>
-                        <button class="seg-btn" data-reading-set="indent" data-reading-val="chat" type="button" onclick={ctx.bind(onReadingClick)}>Chat</button>
+                        <button class="seg-btn" data-reading-set="indent" data-reading-val="novel" type="button" onclick={onReadingClick}>Novel</button>
+                        <button class="seg-btn" data-reading-set="indent" data-reading-val="chat" type="button" onclick={onReadingClick}>Chat</button>
                     </div>
                 </div>
                 <div class="setting-row">
                     <span class="setting-label">Theme</span>
                     <div class="seg" role="group" aria-label="Reading theme">
-                        <button class="seg-btn" data-reading-set="theme" data-reading-val="dark" type="button" onclick={ctx.bind(onReadingClick)}>Dark</button>
-                        <button class="seg-btn" data-reading-set="theme" data-reading-val="sepia" type="button" onclick={ctx.bind(onReadingClick)}>Sepia</button>
-                        <button class="seg-btn" data-reading-set="theme" data-reading-val="paper" type="button" onclick={ctx.bind(onReadingClick)}>Paper</button>
+                        <button class="seg-btn" data-reading-set="theme" data-reading-val="dark" type="button" onclick={onReadingClick}>Dark</button>
+                        <button class="seg-btn" data-reading-set="theme" data-reading-val="sepia" type="button" onclick={onReadingClick}>Sepia</button>
+                        <button class="seg-btn" data-reading-set="theme" data-reading-val="paper" type="button" onclick={onReadingClick}>Paper</button>
                     </div>
                 </div>
                 <div class="setting-row">
                     <span class="setting-label">Avatars</span>
                     <div class="seg" role="group" aria-label="Chat message avatars">
-                        <button class="seg-btn" data-reading-set="avatars" data-reading-val="on" type="button" onclick={ctx.bind(onReadingClick)}>On</button>
-                        <button class="seg-btn" data-reading-set="avatars" data-reading-val="off" type="button" onclick={ctx.bind(onReadingClick)}>Off</button>
+                        <button class="seg-btn" data-reading-set="avatars" data-reading-val="on" type="button" onclick={onReadingClick}>On</button>
+                        <button class="seg-btn" data-reading-set="avatars" data-reading-val="off" type="button" onclick={onReadingClick}>Off</button>
                     </div>
                 </div>
                 <p class="setting-note">Reading styles apply to the chat area only.</p>
@@ -74,28 +74,28 @@ pub fn SettingsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     <span class="setting-label" id="motion-label">Motion</span>
                     <div class="seg" role="radiogroup" aria-labelledby="motion-label" aria-describedby="motion-note">
                         <button
-                            class={motionSegClass(motion.get(), .system)}
+                            class={ui.motionSegClass(.system)}
                             data-motion-set="system"
                             type="button"
                             role="radio"
-                            aria-checked={motionChecked(.system, motion.get())}
-                            onclick={ctx.bind(onMotionClick)}
+                            aria-checked={motionChecked(.system)}
+                            onclick={onMotionClick}
                         >System</button>
                         <button
-                            class={motionSegClass(motion.get(), .on)}
+                            class={ui.motionSegClass(.on)}
                             data-motion-set="on"
                             type="button"
                             role="radio"
-                            aria-checked={motionChecked(.on, motion.get())}
-                            onclick={ctx.bind(onMotionClick)}
+                            aria-checked={motionChecked(.on)}
+                            onclick={onMotionClick}
                         >On</button>
                         <button
-                            class={motionSegClass(motion.get(), .off)}
+                            class={ui.motionSegClass(.off)}
                             data-motion-set="off"
                             type="button"
                             role="radio"
-                            aria-checked={motionChecked(.off, motion.get())}
-                            onclick={ctx.bind(onMotionClick)}
+                            aria-checked={motionChecked(.off)}
+                            onclick={onMotionClick}
                         >Off</button>
                     </div>
                 </div>
@@ -105,136 +105,50 @@ pub fn SettingsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
     );
 }
 
-fn onReadingClick(e: *zx.client.Event.Stateful) void {
+// A click lands on the button or on anything inside it, and ziex reports the delegation root as
+// currentTarget (T1), so the control is found by walking target upward for its data attributes.
+fn onReadingClick(ev: zx.client.Event) void {
     if (zx.platform.role != .client) return;
-    const event = e.getEvent();
-    const current_target = event.ref.get(zx.client.js.Object, "currentTarget") catch return;
-    var el: ?zx.client.js.Object = current_target;
-    while (el) |elem| {
-        const dataset = elem.get(zx.client.js.Object, "dataset") catch { el = elem.get(zx.client.js.Object, "parentElement") catch null; continue; };
-        const key = dataset.getAlloc(zx.client.js.String, zx.allocator, "readingSet") catch { el = elem.get(zx.client.js.Object, "parentElement") catch null; continue; };
-        const val = dataset.getAlloc(zx.client.js.String, zx.allocator, "readingVal") catch { zx.allocator.free(key); el = elem.get(zx.client.js.Object, "parentElement") catch null; continue; };
-        defer zx.allocator.free(key);
-        defer zx.allocator.free(val);
-        if (key.len > 0 and val.len > 0) {
-            // Update localStorage
-            var ls_key_buf: [64]u8 = undefined;
-            var ls_key_len: usize = 0;
-            _ = std.mem.copyForwards(u8, ls_key_buf[ls_key_len..], "st-reading-");
-            ls_key_len += "st-reading-".len;
-            _ = std.mem.copyForwards(u8, ls_key_buf[ls_key_len..], key);
-            ls_key_len += key.len;
-            const ls_key = ls_key_buf[0..ls_key_len];
-            
-            const localStorage = event.ref.get(zx.client.js.Object, "localStorage") catch { return; };
-            localStorage.call(void, "setItem", .{ zx.client.js.string(ls_key), zx.client.js.string(val) }) catch return;
-            
-            // Update chat-root attribute
-            const doc = event.ref.get(zx.client.js.Object, "document") catch { return; };
-            const getElementById = doc.get(zx.client.js.Object, "getElementById") catch { return; };
-const root = getElementById.call(zx.client.js.Object, "", .{ zx.client.js.string("chat-root") }) catch { return; };
-            
-            var attr_buf: [64]u8 = undefined;
-            var attr_len: usize = 0;
-            _ = std.mem.copyForwards(u8, attr_buf[attr_len..], "data-reading-");
-            attr_len += "data-reading-".len;
-            _ = std.mem.copyForwards(u8, attr_buf[attr_len..], key);
-            attr_len += key.len;
-            const attr_name = attr_buf[0..attr_len];
-            root.call(void, "setAttribute", .{ zx.client.js.string(attr_name), zx.client.js.string(val) }) catch return;
-            
-            // Special handling for measure
-            if (std.mem.eql(u8, key, "measure")) {
-                root.call(void, "style.removeProperty", .{ zx.client.js.string("--reading-measure") }) catch return;
-                localStorage.call(void, "removeItem", .{ zx.client.js.string("st-reading-custom-measure") }) catch return;
-            }
-            
-            // Sync ARIA on all reading buttons
-            syncReadingAria(e);
-            
-            // Debounced server save
-            triggerReadingSave();
-            return;
-        }
-        el = elem.get(zx.client.js.Object, "parentElement") catch null;
-    }
+    const target = dom_event.plainTarget(ev) orelse return;
+    const key = dom_event.datasetUp(target, "readingSet") orelse {
+        log.warn("reading click: target has no data-reading-set ancestor", .{});
+        return;
+    };
+    defer zx.allocator.free(key);
+    const val = dom_event.datasetUp(target, "readingVal") orelse {
+        log.warn("reading click: control carries no data-reading-val", .{});
+        return;
+    };
+    defer zx.allocator.free(val);
+    reading_prefs.handleClick(key, val);
 }
 
-fn syncReadingAria(e: *zx.client.Event.Stateful) void {
-    const event = e.getEvent();
-    const doc = event.ref.get(zx.client.js.Object, "document") catch { return; };
-    const getElementById = doc.get(zx.client.js.Object, "getElementById") catch { return; };
-    const root = getElementById.call(zx.client.js.Object, "", .{ zx.client.js.string("chat-root") }) catch { return; };
-    const buttons = root.call(zx.client.js.Object, "querySelectorAll", .{ zx.client.js.string("[data-reading-set]") }) catch { return; };
-    const len = buttons.get(u32, "length") catch { return; };
-    var i: u32 = 0;
-    while (i < len) : (i += 1) {
-        const btn = buttons.call(zx.client.js.Object, "item", .{ i }) catch continue;
-        const dataset = btn.get(zx.client.js.Object, "dataset") catch continue;
-        const set_key = dataset.getAlloc(zx.client.js.String, zx.allocator, "readingSet") catch continue;
-        const set_val = dataset.getAlloc(zx.client.js.String, zx.allocator, "readingVal") catch { zx.allocator.free(set_key); continue; };
-        defer zx.allocator.free(set_key);
-        defer zx.allocator.free(set_val);
-        var attr_name_buf: [64]u8 = undefined;
-        var attr_name_len: usize = 0;
-        _ = std.mem.copyForwards(u8, attr_name_buf[attr_name_len..], "data-reading-");
-        attr_name_len += "data-reading-".len;
-        _ = std.mem.copyForwards(u8, attr_name_buf[attr_name_len..], set_key);
-        attr_name_len += set_key.len;
-        const attr_name = attr_name_buf[0..attr_name_len];
-        const on_val = root.getAlloc(zx.client.js.String, zx.allocator, attr_name) catch { continue; };
-        const on = std.mem.eql(u8, on_val, set_val);
-        btn.call(void, "setAttribute", .{ zx.client.js.string("aria-pressed"), zx.client.js.string(if (on) "true" else "false") }) catch return;
-    }
-}
-
-var save_timer: u32 = 0;
-const SAVE_MS: u32 = 3000;
-
-fn triggerReadingSave() void {
+fn onMotionClick(ev: zx.client.Event) void {
     if (zx.platform.role != .client) return;
-    if (save_timer != 0) {
-        const global = zx.client.js.global;
-        global.call(void, "clearTimeout", .{ save_timer }) catch return;
-    }
-    const global = zx.client.js.global;
-    const saveReadingPrefsNow = global.get(zx.client.js.Object, "saveReadingPrefsNow") catch return;
-    save_timer = global.call(u32, "setTimeout", .{ saveReadingPrefsNow, SAVE_MS }) catch return;
-}
-
-fn onMotionClick(e: *zx.client.Event.Stateful) void {
-    if (zx.platform.role != .client) return;
-    const motion = e.state(ui_state.MotionPref);
-    const event = e.getEvent();
-    const target = event.ref.get(zx.client.js.Object, "target") catch return;
-    const name = target.getAlloc(zx.client.js.String, zx.allocator, "dataset.motionSet") catch return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    const name = dom_event.datasetUp(target, "motionSet") orelse {
+        log.warn("motion click: target has no data-motion-set ancestor", .{});
+        return;
+    };
     defer zx.allocator.free(name);
-    
-    // Update the reactive state
-    if (ui_state.motionPrefFromStr(name)) |pref| {
-        motion.set(pref);
-    }
-    
-    // Also sync to the bridge export for the CSS class on #shell
-    ui.__st_set_motion(motionCode(name));
+    const pref = ui_state.motionPrefFromStr(name) orelse {
+        log.warn("motion click: unknown preference {s}", .{name});
+        return;
+    };
+    // One call persists the choice, re-renders the segment (highlight + aria-checked) and switches
+    // the #shell class the CSS reads.
+    ui.selectMotion(pref);
 }
 
-fn motionCode(name: []const u8) u32 {
-    if (std.mem.eql(u8, name, "system")) return 0;
-    if (std.mem.eql(u8, name, "on")) return 1;
-    if (std.mem.eql(u8, name, "off")) return 2;
-    return 0;
-}
-
-fn motionSegClass(current: ui_state.MotionPref, which: ui_state.MotionPref) []const u8 {
-    return if (current == which) "seg-btn is-active" else "seg-btn";
-}
-
-fn motionChecked(which: ui_state.MotionPref, current: ui_state.MotionPref) []const u8 {
-    return if (current == which) "true" else "false";
+fn motionChecked(which: ui_state.MotionPref) []const u8 {
+    return if (ui.motionPref() == which) "true" else "false";
 }
 
 const zx = @import("zx");
+const std = @import("std");
 const ui = @import("../ui.zig");
 const ui_state = @import("../ui_state.zig");
-const std = @import("std");
+const dom_event = @import("../dom_event.zig");
+const reading_prefs = @import("../reading_prefs.zig");
+
+const log = std.log.scoped(.panels);

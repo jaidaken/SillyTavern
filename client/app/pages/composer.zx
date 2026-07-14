@@ -5,7 +5,7 @@
 pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
     instrument.bumpComposer();
     return (
-        <footer @allocator={ctx.allocator} id="composer" @rendering={.client}>
+        <footer @allocator={ctx.allocator} id="composer" @rendering={.client} onclick={ui.onPageClick} onkeydown={ui.onPageKey}>
             <button type="button" class="composer-btn i-menu" aria-label="Options"></button>
             <label for="send_textarea" class="visually-hidden">Message</label>
             <textarea
@@ -22,24 +22,28 @@ pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
     );
 }
 
+// The textarea grows to fit its content and shrinks back when lines are deleted. Height is reset to
+// auto BEFORE scrollHeight is read, because scrollHeight of an already-tall box reports the old
+// height, not the content's. Style is a two-step (get the style object, then set height): jsz
+// property names are literal, so a "style.height" set writes a junk property and moves nothing (T2).
 fn onComposerInput(e: *zx.client.Event.Stateful) void {
     if (zx.platform.role != .client) return;
 
-    const event = e.getEvent();
-    const target = event.ref.get(zx.client.js.Object, "target") catch return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const style = target.get(js.Object, "style") catch return;
+    defer style.deinit();
 
-    // Get scrollHeight (JS numbers are f64)
+    style.set("height", js.string("auto")) catch return;
     const scroll_h: f64 = target.get(f64, "scrollHeight") catch return;
 
-    // Set height to 'auto' first to reset
-    target.set("style.height", "auto") catch return;
-
-    // Then set to scrollHeight + 'px'
     var buf: [32]u8 = undefined;
-    const height_str = std.fmt.bufPrint(&buf, "{d}px", .{@as(u32, @intFromFloat(scroll_h))}) catch return;
-    target.set("style.height", height_str) catch return;
+    const height = std.fmt.bufPrint(&buf, "{d}px", .{@as(u32, @intFromFloat(scroll_h))}) catch return;
+    style.set("height", js.string(height)) catch return;
 }
 
 const zx = @import("zx");
+const js = zx.client.js;
+const ui = @import("./ui.zig");
 const instrument = @import("./instrument.zig");
+const dom_event = @import("./dom_event.zig");
 const std = @import("std");

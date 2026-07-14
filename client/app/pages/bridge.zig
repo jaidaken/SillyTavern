@@ -157,18 +157,13 @@ fn selectPersona(index: u32) callconv(.c) void {
     regions.bumpShell();
 }
 
-fn applyReadingPrefs() callconv(.c) void {
-    reading_prefs.applyAll();
-    reading_prefs.syncAria();
-}
-
 fn bootInit() callconv(.c) void {
     regions.bumpMessageLog();
     handlers.init();
-    const stored = ui.getStoredMotion();
-    // getStoredMotion's callAlloc string is owned here (D6: it used to leak).
-    defer if (stored) |s| zx.allocator.free(s);
-    ui.__st_set_motion(motionCode(stored orelse "system"));
+    ui.setMotion(ui.storedMotion());
+    // Persisted reading prefs land on #chat-root before the first paint of the chat.
+    reading_prefs.applyAll();
+    reading_prefs.syncAria();
     // Zig owns boot data orchestration (Z-BOOT): ?demo fixtures, characters + personas,
     // auto-open. The glue only calls __st_boot_init.
     char_api.boot();
@@ -186,13 +181,6 @@ fn seedDemo() callconv(.c) void {
     const fixtures = @import("./fixtures.zig");
     _ = fixtures.loadRoleplay(&store.global);
     regions.bumpMessageLog();
-}
-
-fn motionCode(name: []const u8) u32 {
-    if (std.mem.eql(u8, name, "system")) return 0;
-    if (std.mem.eql(u8, name, "on")) return 1;
-    if (std.mem.eql(u8, name, "off")) return 2;
-    return 0;
 }
 
 fn streamBegin(name_ptr: usize, name_len: usize, avatar_ptr: usize, avatar_len: usize) callconv(.c) u32 {
@@ -257,7 +245,6 @@ comptime {
         @export(&clearCharacters, .{ .name = "__st_clear_characters" });
         @export(&selectCharacter, .{ .name = "__st_select_character" });
         @export(&setCharacterMeta, .{ .name = "__st_set_character_meta" });
-        @export(&applyReadingPrefs, .{ .name = "__st_apply_reading_prefs" });
         @export(&bootInit, .{ .name = "__st_boot_init" });
         @export(&seedDemo, .{ .name = "__st_seed_demo" });
         @export(&refreshCharacters, .{ .name = "__st_refresh_characters" });
