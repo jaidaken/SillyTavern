@@ -259,6 +259,8 @@ body {
     width: 12px;
     cursor: col-resize;
     z-index: 10;
+    touch-action: none;
+    user-select: none;
 }
 .chat-resize::before {
     content: '';
@@ -272,10 +274,8 @@ body {
     opacity: 0;
     transition: opacity 0.15s;
 }
-.chat-inner:hover .chat-resize::before {
-    opacity: 0.3;
-}
-.chat-resize:hover::before {
+.chat-resize:hover::before,
+.chat-resize:focus-visible::before {
     opacity: 0.7;
 }
 .chat-resize.is-dragging::before {

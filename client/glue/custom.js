@@ -864,6 +864,82 @@
     }, false);
 
     // Click-outside drawer (composite env shim)
+    // Chat reading-width drag: the .chat-resize separator sets an inline --reading-measure override
+    // on #chat-root (inline beats the preset data-attribute rules); a preset pick clears it.
+    (function initChatResize() {
+        const MIN_W = 320;
+        const KEY = 'st-reading-measurepx';
+        const root = function () { return document.getElementById('chat-root'); };
+
+        function setMeasure(px, persist) {
+            const r = root();
+            if (!r) return;
+            const chat = document.getElementById('chat');
+            const max = chat ? chat.clientWidth - 32 : 1200;
+            const w = Math.max(MIN_W, Math.min(px, max));
+            r.style.setProperty('--reading-measure', w + 'px');
+            if (persist) { try { localStorage.setItem(KEY, String(w)); } catch (_) { /* private mode */ } }
+        }
+
+        function clearMeasure() {
+            const r = root();
+            if (r) r.style.removeProperty('--reading-measure');
+            try { localStorage.removeItem(KEY); } catch (_) { /* private mode */ }
+        }
+
+        let stored = null;
+        try { stored = parseInt(localStorage.getItem(KEY), 10); } catch (_) { /* private mode */ }
+        if (stored && stored >= MIN_W) setMeasure(stored, false);
+
+        let drag = null;
+        document.addEventListener('pointerdown', function (e) {
+            const handle = e.target && e.target.closest ? e.target.closest('.chat-resize') : null;
+            if (!handle) return;
+            e.preventDefault();
+            const inner = handle.closest('.chat-inner');
+            drag = { startX: e.clientX, startW: inner ? inner.getBoundingClientRect().width : 640, handle: handle };
+            handle.classList.add('is-dragging');
+            try { handle.setPointerCapture(e.pointerId); } catch (_) { /* synthetic events may lack a capturable id */ }
+            document.body.style.userSelect = 'none';
+        });
+        document.addEventListener('pointermove', function (e) {
+            if (!drag) return;
+            // Centered column: moving the right edge by dx widens by 2dx.
+            setMeasure(Math.round(drag.startW + (e.clientX - drag.startX) * 2), false);
+        });
+        function endDrag() {
+            if (!drag) return;
+            const inner = drag.handle.closest('.chat-inner');
+            const w = inner ? Math.round(inner.getBoundingClientRect().width) : null;
+            if (w) setMeasure(w, true);
+            drag.handle.classList.remove('is-dragging');
+            document.body.style.userSelect = '';
+            logFor('ui').debug('reading width set:', w);
+            drag = null;
+        }
+        document.addEventListener('pointerup', endDrag);
+        document.addEventListener('pointercancel', endDrag);
+
+        // Keyboard on the focusable separator (WCAG 2.1.1): arrows nudge, Home returns to preset.
+        document.addEventListener('keydown', function (e) {
+            const handle = e.target && e.target.closest ? e.target.closest('.chat-resize') : null;
+            if (!handle) return;
+            const inner = handle.closest('.chat-inner');
+            const cur = inner ? inner.getBoundingClientRect().width : 640;
+            if (e.key === 'ArrowRight' || e.key === 'ArrowUp') { setMeasure(Math.round(cur + 16), true); e.preventDefault(); } else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') { setMeasure(Math.round(cur - 16), true); e.preventDefault(); } else if (e.key === 'Home') { clearMeasure(); e.preventDefault(); }
+        });
+
+        document.addEventListener('dblclick', function (e) {
+            if (e.target && e.target.closest && e.target.closest('.chat-resize')) clearMeasure();
+        });
+
+        // A measure preset pick (zig-owned buttons) drops the pixel override so presets stay live.
+        document.addEventListener('click', function (e) {
+            const btn = e.target && e.target.closest ? e.target.closest('[data-reading-set="measure"]') : null;
+            if (btn) clearMeasure();
+        });
+    })();
+
     function setupClickOutside() {
         document.addEventListener('click', function (e) {
             if (wasm && wasm.__st_close_panel) {
