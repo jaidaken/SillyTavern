@@ -494,8 +494,8 @@
         }
     }
 
-    // All API POSTs route through here: a 403 means the cached CSRF token went stale (server
-    // restart under a long-lived tab), so refresh it and retry once instead of failing forever.
+    // 403 = stale CSRF token (server restarted under a long-lived tab): refresh + retry once.
+    // NEVER for generation/relay endpoints: the server remaps upstream 401->403 and a blind retry double-submits a paid call.
     async function apiPost(url, body) {
         await ensureCsrfToken();
         const doPost = () => loggedFetch(url, {
@@ -521,6 +521,8 @@
     function initCharacters() {
         wasm.__st_clear_characters();
         jsCharacters = [];
+        // Store rebuild invalidates any in-flight chat load: its captured index is now stale.
+        chatLoadSeq++;
     }
 
     function addCharacterToWasm(c) {
@@ -532,13 +534,16 @@
         wasm.__st_add_character(n.ptr, n.len, a.ptr, a.len, d.ptr, d.len, ch.ptr, ch.len, fm.ptr, fm.len, c.fav ? 1 : 0);
     }
 
+    // Returns 'ok' | 'error' | 'unreachable': only 'unreachable' (network throw, or a dead-proxy
+    // 502/504) may fall back to demo fixtures - a reachable backend's failure must stay visible.
     async function fetchCharacters() {
         log.chars.debug('character load start');
         try {
             const res = await apiPost('/api/characters/all', {});
-            if (!res.ok) { log.net.warn('char fetch failed:', res.status); return false; }
+            if (res.status === 502 || res.status === 504) { log.net.warn('char fetch: upstream gone,', res.status); return 'unreachable'; }
+            if (!res.ok) { log.net.warn('char fetch failed:', res.status); return 'error'; }
             const list = await res.json();
-            if (!Array.isArray(list)) { log.net.warn('char list response is not an array, got', typeof list); return false; }
+            if (!Array.isArray(list)) { log.net.warn('char list response is not an array, got', typeof list); return 'error'; }
             initCharacters();
             list.forEach(function (c, i) {
                 jsCharacters.push(c);
@@ -549,10 +554,10 @@
                 wasm.__st_set_character_meta(i, cd.ptr, cd.len, u64(c.date_last_chat), u64(c.chat_size), u64(c.data_size));
             });
             log.chars.info('loaded', list.length, 'characters');
-            return true;
+            return 'ok';
         } catch (err) {
             log.chars.error('character load failed:', err);
-            return false;
+            return 'unreachable';
         }
     }
 
@@ -929,15 +934,18 @@
                 wasm.__st_seed_demo();
                 log.boot.info('demo fixtures seeded (?demo)');
             }
-            fetchCharacters().then(function (ok) {
+            // Personas resolve before the auto-open so the seeded chat bakes the right user avatar.
+            Promise.all([fetchCharacters(), fetchPersonas()]).then(function (results) {
                 if (demoMode) return;
-                if (ok) { autoOpenRecentChat(); return; }
-                if (wasm.__st_seed_demo) {
+                const outcome = results[0];
+                if (outcome === 'ok') { autoOpenRecentChat(); return; }
+                if (outcome === 'unreachable' && wasm.__st_seed_demo) {
                     wasm.__st_seed_demo();
                     log.boot.info('backend unreachable - demo fixtures seeded');
+                    return;
                 }
+                log.boot.error('character load failed against a reachable backend - see [st:net] above');
             });
-            fetchPersonas();
 
             // Dev-mode streaming: the verify.sh gate drives hostile/markdown/streaming
             // bodies through the real pipeline via ?stream=URL&hold=MS query params.

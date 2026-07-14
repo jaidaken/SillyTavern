@@ -1,7 +1,6 @@
 pub fn Page(ctx: zx.PageContext) !zx.Component {
-    // Load fixture messages during SSR so the SSR output contains the roleplay messages.
-    // On the client, bootInit() (bridge.zig) loads them into the WASM store after the
-    // door hydrates, so the two sides stay in sync.
+    // SSR-only skeleton: fixture prose fills the pre-hydration frames. The runtime store does NOT
+    // mirror it (demo is opt-in via __st_seed_demo); hydration replaces these with real state.
     if (comptime zx.platform.role == .server) {
         const fixtures = @import("./fixtures.zig");
         _ = fixtures.loadRoleplay(&store.global);
