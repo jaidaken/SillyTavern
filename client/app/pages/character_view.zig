@@ -114,9 +114,7 @@ pub const View = struct {
             return;
         }
         const pc = self.pageCount();
-        if (pc == 0) self.page = 0
-        else if (page >= pc) self.page = pc - 1
-        else self.page = page;
+        if (pc == 0) self.page = 0 else if (page >= pc) self.page = pc - 1 else self.page = page;
     }
 
     pub fn setPageSize(self: *View, page_size: usize) void {
