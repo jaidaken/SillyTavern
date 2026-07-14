@@ -635,20 +635,27 @@
                 headers: withCsrf({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({ avatar_url: c.avatar, file_name: chatName }),
             });
-            if (!res.ok) { log.net.warn('chat fetch failed:', res.status); return; }
-            const data = await res.json();
+            // A missing chat file is a fresh chat, not a failure: fall through and seed the greeting.
+            let data = null;
+            if (res.ok) data = await res.json();
+            else log.chars.debug('no existing chat (', res.status, ') - starting fresh');
             wasm.__st_clear_messages();
             wasm.__st_select_character(index);
             var charAvatarUrl = c.avatar ? '../thumbnail?type=avatar&file=' + encodeURIComponent(c.avatar) : '';
             var personaAvatarUrl = selectedPersona ? '../thumbnail?type=persona&file=' + encodeURIComponent(selectedPersona.avatar) : '';
-            if (Array.isArray(data) && data.length > 0) {
-                for (let i = 1; i < data.length; i++) {
-                    const m = data[i];
+            const msgs = Array.isArray(data) && data.length > 1 ? data.slice(1) : [];
+            if (msgs.length) {
+                for (const m of msgs) {
                     const sender = m.name || (m.is_user ? 'You' : c.name);
                     const body = m.mes || '';
                     const avatar = m.is_user ? personaAvatarUrl : charAvatarUrl;
                     appendMessageInWasm(sender, body, avatar);
                 }
+            } else if (c.first_mes) {
+                const userName = selectedPersona ? selectedPersona.name : 'You';
+                const greeting = c.first_mes.replaceAll('{{char}}', c.name).replaceAll('{{user}}', userName);
+                appendMessageInWasm(c.name, greeting, charAvatarUrl);
+                log.chars.debug('seeded greeting for', c.name);
             }
         } catch (err) {
             log.chars.error('chat load failed:', err);
