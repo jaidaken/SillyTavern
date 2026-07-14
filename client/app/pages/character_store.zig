@@ -3,6 +3,8 @@ const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 
+const log = std.log.scoped(.chars);
+
 pub const Character = struct {
     name: []const u8,
     avatar: []const u8,
@@ -73,9 +75,11 @@ pub const CharacterStore = struct {
 
     pub fn select(self: *CharacterStore, index: usize) void {
         self.selected_index = if (index < self.characters.items.len) index else null;
+        log.debug("store select: {d} -> {?d}", .{ index, self.selected_index });
     }
 
     pub fn clear(self: *CharacterStore) void {
+        log.debug("store clear: {d} characters", .{self.characters.items.len});
         for (self.characters.items) |c| self.freeCharacter(c);
         self.characters.clearRetainingCapacity();
         self.selected_index = null;
@@ -83,6 +87,7 @@ pub const CharacterStore = struct {
 
     pub fn append(self: *CharacterStore, c: Character) Allocator.Error!void {
         try self.characters.append(self.allocator, c);
+        log.debug("store append: {s} ({d} total)", .{ c.name, self.characters.items.len });
     }
 
     /// Attach list-view metadata (sort/search) to the character at `index`, taking ownership of
@@ -101,6 +106,7 @@ pub const CharacterStore = struct {
         c.date_last_chat = date_last_chat;
         c.chat_size = chat_size;
         c.data_size = data_size;
+        log.debug("store setMeta: {d} last_chat={d} chat_size={d} data_size={d}", .{ index, date_last_chat, chat_size, data_size });
     }
 };
 

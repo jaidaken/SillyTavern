@@ -1,3 +1,4 @@
+const std = @import("std");
 const zx = @import("zx");
 
 pub fn main(init: zx.Init) !void {
@@ -7,4 +8,8 @@ pub fn main(init: zx.Init) !void {
     try app.start();
 }
 
-pub const std_options = zx.std_options;
+// log_level .debug: ReleaseSmall would compile only err logs; the JS logger filters at runtime.
+pub const std_options: std.Options = .{
+    .logFn = @import("pages/log.zig").logFn,
+    .log_level = .debug,
+};

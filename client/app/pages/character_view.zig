@@ -5,6 +5,8 @@ const page_gpa = @import("./character_store.zig").page_gpa;
 
 const Allocator = std.mem.Allocator;
 
+const log = std.log.scoped(.chars);
+
 /// Sort orders, mirroring the old frontend's character_sort_order <option data-field> list.
 pub const SortKey = enum {
     name_asc,
@@ -98,14 +100,17 @@ pub const View = struct {
 
     pub fn setSort(self: *View, sort: SortKey) void {
         self.sort = sort;
+        log.debug("view sort: {s}", .{@tagName(sort)});
     }
 
     pub fn setFavOnly(self: *View, fav_only: bool) void {
         self.fav_only = fav_only;
+        log.debug("view fav_only: {}", .{fav_only});
     }
 
     pub fn setGrid(self: *View, grid: bool) void {
         self.grid = grid;
+        log.debug("view grid: {}", .{grid});
     }
 
     pub fn setPage(self: *View, page: usize) void {
@@ -115,11 +120,13 @@ pub const View = struct {
         }
         const pc = self.pageCount();
         if (pc == 0) self.page = 0 else if (page >= pc) self.page = pc - 1 else self.page = page;
+        log.debug("view page: {d} -> {d}", .{ page, self.page });
     }
 
     pub fn setPageSize(self: *View, page_size: usize) void {
         self.page_size = page_size;
         self.page = 0;
+        log.debug("view page_size: {d}", .{page_size});
     }
 
     /// Number of pages given the current total; always at least 1.
@@ -145,10 +152,12 @@ pub const View = struct {
         if (query.len == 0) {
             self.query = "";
             self.query_owned = null;
+            log.debug("view query: cleared", .{});
             return;
         }
         self.query_owned = try self.allocator.dupe(u8, query);
         self.query = self.query_owned.?;
+        log.debug("view query: {d} chars", .{query.len});
     }
 
     /// Toggle `tag` in the active filter set (add if absent, remove if present).
@@ -157,10 +166,12 @@ pub const View = struct {
             if (std.mem.eql(u8, existing, tag)) {
                 self.allocator.free(existing);
                 _ = self.tags.orderedRemove(i);
+                log.debug("view tag off: {s}", .{tag});
                 return;
             }
         }
         try self.tags.append(self.allocator, try self.allocator.dupe(u8, tag));
+        log.debug("view tag on: {s}", .{tag});
     }
 
     /// Recompute `result` and `tags_all` from `chars` (filter then sort, then page). Frees previous first.
@@ -169,6 +180,7 @@ pub const View = struct {
         self.result = null;
         const full = try apply(self.allocator, self.*, chars);
         self.total = full.len;
+        log.debug("view compute: {d} of {d} match", .{ full.len, chars.len });
         // Clamp a stale page (e.g. after a filter narrowed the result) before slicing.
         if (self.page_size > 0 and self.page >= self.pageCount()) {
             self.page = if (self.pageCount() == 0) 0 else self.pageCount() - 1;

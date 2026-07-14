@@ -13,6 +13,10 @@ const instrument = @import("./instrument.zig");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
+const chars_log = std.log.scoped(.chars);
+const personas_log = std.log.scoped(.personas);
+const stream_log = std.log.scoped(.stream);
+
 var live: stream_mod.Stream = .{ .allocator = store.page_gpa, .store = &store.global };
 
 fn doorBuf(addr: usize, len: usize) []u8 {
@@ -28,7 +32,7 @@ fn appendMessage(name_ptr: usize, name_len: usize, body_ptr: usize, body_len: us
         store.global.allocator.free(name);
         store.global.allocator.free(body);
         store.global.allocator.free(avatar);
-        std.log.err("append_message: {s}, message dropped", .{@errorName(err)});
+        stream_log.err("append_message: {s}, message dropped", .{@errorName(err)});
         return;
     };
     regions.bumpMessageLog();
@@ -76,12 +80,12 @@ fn addCharacter(
         .first_mes_owned = if (first_mes.len > 0) first_mes else null,
     };
     char_store.global.append(c) catch |err| {
-        std.log.err("add_character: {s}, character dropped", .{@errorName(err)});
+        chars_log.err("add_character: {s}, character dropped", .{@errorName(err)});
         regions.bumpShell();
         return;
     };
     character_view.global.compute(char_store.global.slice()) catch |err| {
-        std.log.err("add_character: compute {s}", .{@errorName(err)});
+        chars_log.err("add_character: compute {s}", .{@errorName(err)});
     };
     regions.bumpShell();
 }
@@ -89,7 +93,7 @@ fn addCharacter(
 fn clearCharacters() callconv(.c) void {
     char_store.global.clear();
     character_view.global.compute(&.{}) catch |err| {
-        std.log.err("clear_characters: compute {s}", .{@errorName(err)});
+        chars_log.err("clear_characters: compute {s}", .{@errorName(err)});
     };
     regions.bumpShell();
 }
@@ -105,7 +109,7 @@ fn setCharacterMeta(
     const create_date = doorBuf(create_date_ptr, create_date_len);
     char_store.global.setMeta(index, create_date, date_last_chat, chat_size, data_size);
     character_view.global.compute(char_store.global.slice()) catch |err| {
-        std.log.err("set_character_meta: compute {s}", .{@errorName(err)});
+        chars_log.err("set_character_meta: compute {s}", .{@errorName(err)});
     };
     regions.bumpShell();
 }
@@ -136,7 +140,7 @@ fn addPersona(
         .description_owned = if (desc.len > 0) desc else null,
     };
     persona_store.global.append(p) catch |err| {
-        std.log.err("add_persona: {s}, persona dropped", .{@errorName(err)});
+        personas_log.err("add_persona: {s}, persona dropped", .{@errorName(err)});
     };
     regions.bumpShell();
 }
@@ -178,7 +182,7 @@ fn streamBegin(name_ptr: usize, name_len: usize, avatar_ptr: usize, avatar_len: 
     live.begin(name, avatar) catch |err| {
         store.global.allocator.free(name);
         store.global.allocator.free(avatar);
-        std.log.err("stream_begin: {s}, stream not started", .{@errorName(err)});
+        stream_log.err("stream_begin: {s}, stream not started", .{@errorName(err)});
         return 1;
     };
     regions.bumpMessageLog();
@@ -189,7 +193,7 @@ fn streamAppend(ptr: usize, len: usize) callconv(.c) void {
     const buf = doorBuf(ptr, len);
     defer store.global.allocator.free(buf);
     live.feed(buf) catch |err| {
-        std.log.err("stream_append: {s}, stream sealed early", .{@errorName(err)});
+        stream_log.err("stream_append: {s}, stream sealed early", .{@errorName(err)});
         live.end();
     };
     regions.bumpMessageLog();

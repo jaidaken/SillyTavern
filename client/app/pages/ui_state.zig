@@ -4,6 +4,8 @@
 
 const std = @import("std");
 
+const log = std.log.scoped(.panels);
+
 pub const PanelId = enum {
     ai_config,
     connections,
@@ -95,15 +97,22 @@ pub const PanelState = struct {
     /// Open `id`, or close it if it is already the open panel. At most one panel is open at a time.
     pub fn toggle(self: *PanelState, id: PanelId) void {
         self.active = if (self.isActive(id)) null else id;
+        if (self.active) |a| {
+            log.debug("open: {s}", .{@tagName(a)});
+        } else {
+            log.debug("close: {s}", .{@tagName(id)});
+        }
     }
 
     pub fn close(self: *PanelState) void {
+        if (self.active) |prev| log.debug("close: {s}", .{@tagName(prev)});
         self.active = null;
     }
 
     pub fn setWidth(self: *PanelState, side: Side, w: f32) void {
         const c = std.math.clamp(w, min_width, max_width);
         if (side == .left) self.left_w = c else self.right_w = c;
+        log.debug("width {s}: {d}", .{ @tagName(side), c });
     }
 };
 

@@ -147,6 +147,16 @@ export default [
         },
     },
     {
+        // WASM client glue: classic script loaded via <script>, deps via dynamic import().
+        files: ['client/glue/*.js'],
+        languageOptions: {
+            sourceType: 'script',
+            globals: {
+                ...globals.browser,
+            },
+        },
+    },
+    {
         // The logging frameworks bind and call console directly by design; this is their one legitimate implementation.
         files: ['public/scripts/log.js', 'src/log.js'],
         rules: {

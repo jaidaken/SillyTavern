@@ -5,7 +5,6 @@
 
     const PURIFY_URL = '/client/glue/vendor/purify.es.mjs';
     const HLJS_URL = '/client/glue/vendor/hljs.mjs';
-    const WASM_URL = '/client/assets/_/main.wasm';
 
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
@@ -18,8 +17,80 @@
     let _nextHandle = 1;
     let _handleMap = new Map();
 
+    // Logger, mirrors src/log.js: toggle via localStorage st_log = 'cat:level,cat:level' (same
+    // spec as server ST_LOG), read once at load, reload to apply. Default info.
+    const LOG_LEVELS = { TRACE: -1, DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3, SILENT: 100 };
+    const LEVEL_NAMES = ['trace', 'debug', 'info', 'warn', 'error'];
+    const CONSOLE_METHOD = { trace: 'debug', debug: 'debug', info: 'info', warn: 'warn', error: 'error' };
+    const DEFAULT_LOG_LEVEL = LOG_LEVELS.INFO;
+    const LOG_CATEGORIES = ['boot', 'chars', 'personas', 'panels', 'stream', 'net', 'wasm', 'global'];
+    const silentLog = function () {};
+
+    function normalizeLogLevel(value) {
+        if (typeof value !== 'string') return undefined;
+        const upper = value.trim().toUpperCase();
+        return Object.prototype.hasOwnProperty.call(LOG_LEVELS, upper) ? LOG_LEVELS[upper] : undefined;
+    }
+
+    function logSpec() {
+        const map = {};
+        let raw;
+        try { raw = localStorage.getItem('st_log'); } catch (_) { return map; }
+        if (!raw) return map;
+        raw.split(',').forEach(function (part) {
+            const bits = part.split(':');
+            const cat = bits[0] && bits[0].trim();
+            const level = normalizeLogLevel(bits[1]);
+            if (cat && level !== undefined) map[cat] = level;
+        });
+        return map;
+    }
+
+    const logOverrides = logSpec();
+    const logNodes = {};
+
+    function buildLogNode(category) {
+        const threshold = Object.prototype.hasOwnProperty.call(logOverrides, category)
+            ? logOverrides[category]
+            : DEFAULT_LOG_LEVEL;
+        const node = {};
+        LEVEL_NAMES.forEach(function (name) {
+            node[name] = LOG_LEVELS[name.toUpperCase()] < threshold
+                ? silentLog
+                // eslint-disable-next-line no-console -- the logger is the one legitimate console binding site
+                : console[CONSOLE_METHOD[name]].bind(console, '[st:' + category + ']');
+        });
+        logNodes[category] = node;
+        return node;
+    }
+
+    const log = {};
+    LOG_CATEGORIES.forEach(function (c) { log[c] = buildLogNode(c); });
+
+    function logFor(category) {
+        return logNodes[category] || buildLogNode(category);
+    }
+
+    // Global capture: uncaught errors and unhandled rejections carry their stack via the Error object.
+    window.addEventListener('error', function (e) {
+        if (e.error) log.global.error('uncaught error:', e.error);
+        else log.global.error('uncaught error:', e.message, 'at', (e.filename || '?') + ':' + e.lineno + ':' + e.colno);
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+        log.global.error('unhandled rejection:', e.reason);
+    });
+
+    // Every backend fetch logs start and status at net:debug; failures stay with the call sites.
+    function loggedFetch(url, opts) {
+        log.net.debug('fetch', url);
+        return fetch(url, opts).then(function (res) {
+            log.net.debug(url, '->', res.status);
+            return res;
+        });
+    }
+
     if (window.trustedTypes && window.trustedTypes.createPolicy) {
-        try { window.trustedTypes.createPolicy('default', { createHTML: function (s) { return s; } }); } catch (_) {}
+        try { window.trustedTypes.createPolicy('default', { createHTML: function (s) { return s; } }); } catch (err) { log.boot.debug('trustedTypes default policy not installed:', err); }
     }
 
     function readString(ptr, len) {
@@ -38,25 +109,6 @@
     function writeBytes(text) { return writeRaw(encoder.encode(text)); }
     function writeString(text) { const buf = writeBytes(text); return (BigInt(buf.ptr) << 32n) | BigInt(buf.len); }
     function freeRaw(buf) { if (buf.len !== 0) wasm.__zx_free(buf.ptr, buf.len); }
-
-    function appendMessage(name, body, avatar) {
-        const n = writeBytes(name);
-        let b = null;
-        let a = null;
-        let adopted = false;
-        try {
-            b = writeBytes(body);
-            a = writeBytes(avatar || '');
-            wasm.__st_append_message(n.ptr, n.len, b.ptr, b.len, a.ptr, a.len);
-            adopted = true;
-        } finally {
-            if (!adopted) {
-                freeRaw(n);
-                if (b) freeRaw(b);
-                if (a) freeRaw(a);
-            }
-        }
-    }
 
     const MESSAGE_CONFIG = {
         RETURN_DOM: false, RETURN_DOM_FRAGMENT: false, RETURN_TRUSTED_TYPE: false, MESSAGE_SANITIZE: true,
@@ -107,7 +159,7 @@
     const highlightCache = new Map();
     function highlightKey(lang, source) { return (lang || '') + '\u0000' + source; }
     function cacheHighlight(key, value) {
-        if (highlightCache.size >= 128) highlightCache.delete(highlightCache.keys().next().value);
+        if (highlightCache.size >= HIGHLIGHT_CACHE_MAX) highlightCache.delete(highlightCache.keys().next().value);
         highlightCache.set(key, value);
     }
 
@@ -156,6 +208,11 @@
     }
 
     const env = {
+        st_log: function (level, scopePtr, scopeLen, msgPtr, msgLen) {
+            const scope = readString(scopePtr, scopeLen);
+            const name = level === 0 ? 'error' : level === 1 ? 'warn' : level === 2 ? 'info' : 'debug';
+            logFor(scope || 'wasm')[name](readString(msgPtr, msgLen));
+        },
         sanitize: function (ptr, len) {
             let out;
             try {
@@ -163,23 +220,23 @@
                 try {
                     out = highlightBlocks(clean);
                 } catch (err) {
-                    console.error('[st-client] highlight failed', err);
+                    log.stream.error('highlight failed:', err);
                     out = clean;
                 }
             } catch (err) {
-                console.error('[st-client] sanitize failed', err);
+                log.stream.error('sanitize failed:', err);
                 out = '';
             }
             try {
                 return writeString(out);
             } catch (err) {
-                console.error('[st-client] sanitize writeback failed', err);
+                log.wasm.error('sanitize writeback failed:', err);
                 return 0n;
             }
         },
         sse_start: function (ptr, len) {
             startStream(readString(ptr, len), 'Seraphina').catch(function (err) {
-                console.error('[st-client] stream failed', err);
+                log.stream.error('stream failed:', err);
             });
         },
         // DOM bridge functions (Zig imports these via extern "env")
@@ -214,16 +271,16 @@
                 if (ptr === 0) return 0n;
                 new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
                 return (BigInt(ptr) << 32n) | BigInt(bytes.length);
-            } catch (_) { return 0n; }
+            } catch (err) { log.wasm.debug('localStorage get failed:', err); return 0n; }
         },
         st_local_storage_set: function (keyPtr, keyLen, valPtr, valLen) {
             try {
                 localStorage.setItem(keyLen === 0 ? '' : decoder.decode(new Uint8Array(wasm.memory.buffer, keyPtr, keyLen)),
                     valLen === 0 ? '' : decoder.decode(new Uint8Array(wasm.memory.buffer, valPtr, valLen)));
-            } catch (_) {}
+            } catch (err) { log.wasm.debug('localStorage set failed:', err); }
         },
         st_local_storage_remove: function (keyPtr, keyLen) {
-            try { localStorage.removeItem(keyLen === 0 ? '' : decoder.decode(new Uint8Array(wasm.memory.buffer, keyPtr, keyLen))); } catch (_) {}
+            try { localStorage.removeItem(keyLen === 0 ? '' : decoder.decode(new Uint8Array(wasm.memory.buffer, keyPtr, keyLen))); } catch (err) { log.wasm.debug('localStorage remove failed:', err); }
         },
         st_style_remove_property: function (idPtr, idLen, namePtr, nameLen) {
             var el = document.getElementById(idLen === 0 ? '' : decoder.decode(new Uint8Array(wasm.memory.buffer, idPtr, idLen)));
@@ -278,14 +335,6 @@
         st_release_handle: function (handle) {
             _handleMap.delete(handle);
         },
-        st_set_timeout: function (ms) {
-            return setTimeout(function () {
-                if (wasm && wasm.__st_reading_save_timer) wasm.__st_reading_save_timer();
-            }, ms);
-        },
-        st_clear_timeout: function (id) {
-            clearTimeout(id);
-        },
         st_save_reading_prefs: function () {
             function defaultForKey(k) {
                 if (k === 'size') return 'm';
@@ -299,21 +348,21 @@
                 return 'm';
             }
             var prefs = {};
-            ['size','measure','lh','justify','indent','theme','tab','avatars'].forEach(function (k) {
+            ['size', 'measure', 'lh', 'justify', 'indent', 'theme', 'tab', 'avatars'].forEach(function (k) {
                 var v;
-                try { v = localStorage.getItem('st-reading-' + k); } catch (_) { v = null; }
+                try { v = localStorage.getItem('st-reading-' + k); } catch (err) { log.panels.debug('localStorage read failed:', err); v = null; }
                 prefs[k] = v || defaultForKey(k);
             });
             ensureCsrfToken().then(function () {
-                fetch('/api/settings/get', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: '{}' })
+                loggedFetch('/api/settings/get', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: '{}' })
                     .then(function (r) { return r.json(); })
                     .then(function (data) {
                         var settings = {};
-                        if (data.settings) { try { settings = JSON.parse(data.settings); } catch (_) {} }
+                        if (data.settings) { try { settings = JSON.parse(data.settings); } catch (err) { log.net.warn('settings JSON parse failed:', err); } }
                         settings.clientReadingPrefs = prefs;
-                        fetch('/api/settings/save', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: JSON.stringify(settings) });
+                        loggedFetch('/api/settings/save', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: JSON.stringify(settings) });
                     })
-                    .catch(function (err) { console.error('[st-client] reading prefs save failed', err); });
+                    .catch(function (err) { log.net.error('reading prefs save failed:', err); });
             });
         },
     };
@@ -367,12 +416,12 @@
 
                 if (wasm.__st_stream_done && wasm.__st_stream_done()) {
                     ended = true;
-                    if (reader) reader.cancel().catch(function () {});
+                    if (reader) reader.cancel().catch(function (err) { log.stream.debug('reader cancel failed:', err); });
                 }
             } catch (err) {
-                console.error('[st-client] stream flush failed', err);
+                log.stream.error('stream flush failed:', err);
                 ended = true;
-                if (reader) reader.cancel().catch(function () {});
+                if (reader) reader.cancel().catch(function (err) { log.stream.debug('reader cancel failed:', err); });
             }
         }
 
@@ -391,7 +440,7 @@
             }
             begun = true;
 
-            const response = await fetch(url, { headers: { Accept: 'text/event-stream' } });
+            const response = await loggedFetch(url, { headers: { Accept: 'text/event-stream' } });
             if (!response.ok || !response.body) throw new Error('stream failed: ' + response.status);
 
             reader = response.body.getReader();
@@ -427,22 +476,21 @@
     let jsCharacters = [];
     let personas = [];
     let selectedPersona = null;
-    let _personasFetched = false;
 
     let csrfToken = null;
 
     async function ensureCsrfToken() {
         if (csrfToken) return;
         try {
-            const res = await fetch('/csrf-token');
+            const res = await loggedFetch('/csrf-token');
             if (res.ok) {
                 const data = await res.json();
                 csrfToken = data.token;
             } else {
-                console.warn('[st-client] csrf: token fetch returned', res.status);
+                log.net.warn('csrf token fetch returned', res.status);
             }
         } catch (err) {
-            console.warn('[st-client] csrf: token fetch error:', err);
+            log.net.error('csrf token fetch failed:', err);
         }
     }
 
@@ -465,20 +513,14 @@
         wasm.__st_add_character(n.ptr, n.len, a.ptr, a.len, d.ptr, d.len, ch.ptr, ch.len, fm.ptr, fm.len, c.fav ? 1 : 0);
     }
 
-    function addPersonaToWasm(p) {
-        const n = writeBytes(p.name);
-        const a = writeBytes(p.avatar);
-        const d = writeBytes(p.description || '');
-        wasm.__st_add_persona(n.ptr, n.len, a.ptr, a.len, d.ptr, d.len);
-    }
-
     async function fetchCharacters() {
+        log.chars.debug('character load start');
         await ensureCsrfToken();
         try {
-            const res = await fetch('/api/characters/all', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: '{}' });
-            if (!res.ok) { console.warn('[st-client] char fetch failed', res.status); return; }
+            const res = await loggedFetch('/api/characters/all', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: '{}' });
+            if (!res.ok) { log.net.warn('char fetch failed:', res.status); return; }
             const list = await res.json();
-            if (!Array.isArray(list)) { console.warn('[st-client] char list response is not an array, got', typeof list); return; }
+            if (!Array.isArray(list)) { log.net.warn('char list response is not an array, got', typeof list); return; }
             initCharacters();
             list.forEach(function (c, i) {
                 jsCharacters.push(c);
@@ -488,61 +530,54 @@
                 const u64 = v => BigInt(Math.trunc(v) || 0);
                 wasm.__st_set_character_meta(i, cd.ptr, cd.len, u64(c.date_last_chat), u64(c.chat_size), u64(c.data_size));
             });
-            console.log('[st-client] loaded', list.length, 'characters');
+            log.chars.info('loaded', list.length, 'characters');
         } catch (err) {
-            console.warn('[st-client] char fetch error (is the backend running?)', err);
+            log.chars.error('character load failed:', err);
         }
     }
 
     async function fetchPersonas() {
-        console.log('[st-client] fetchPersonas: start');
+        log.personas.debug('persona load start');
         await ensureCsrfToken();
         try {
-            const res = await fetch('/api/settings/get', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: '{}' });
+            const res = await loggedFetch('/api/settings/get', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: '{}' });
             if (!res.ok) {
-                console.warn('[st-client] persona: settings fetch returned', res.status);
-                _personasFetched = true;
+                log.net.warn('persona settings fetch returned', res.status);
                 return;
             }
 
             const data = await res.json();
             if (!data || typeof data !== 'object') {
-                console.warn('[st-client] persona: settings response is not an object, got', typeof data);
-                _personasFetched = true;
+                log.personas.warn('settings response is not an object, got', typeof data);
                 return;
             }
 
             if (typeof data.settings !== 'string') {
-                console.warn('[st-client] persona: settings.settings is not a string, got', typeof data.settings);
-                _personasFetched = true;
+                log.personas.warn('settings.settings is not a string, got', typeof data.settings);
                 return;
             }
 
             var parsed;
             try {
                 parsed = JSON.parse(data.settings);
-            } catch (e) {
-                console.warn('[st-client] persona: failed to parse settings JSON:', e.message);
-                _personasFetched = true;
+            } catch (err) {
+                log.personas.warn('settings JSON parse failed:', err);
                 return;
             }
 
             if (!parsed || typeof parsed !== 'object') {
-                console.warn('[st-client] persona: parsed settings is not an object');
-                _personasFetched = true;
+                log.personas.warn('parsed settings is not an object');
                 return;
             }
 
             var powerUser = parsed.power_user;
             if (!powerUser || typeof powerUser !== 'object') {
-                _personasFetched = true;
                 return;
             }
 
             var personsDict = powerUser.personas;
             var descsDict = powerUser.persona_descriptions;
             if (!personsDict || typeof personsDict !== 'object' || Array.isArray(personsDict)) {
-                _personasFetched = true;
                 return;
             }
 
@@ -570,17 +605,15 @@
             } else {
                 selectedPersona = null;
             }
-            _personasFetched = true;
-
             wasm.__st_clear_personas();
-            for (var i = 0; i < personaData.length; i++) {
+            for (i = 0; i < personaData.length; i++) {
                 var n = writeBytes(personaData[i].name);
                 var a = writeBytes(personaData[i].avatar);
                 var d = writeBytes(personaData[i].description || '');
                 wasm.__st_add_persona(n.ptr, n.len, a.ptr, a.len, d.ptr, d.len);
             }
         } catch (err) {
-            console.warn('[st-client] persona fetch error', err);
+            log.personas.error('persona load failed:', err);
         }
     }
 
@@ -597,12 +630,12 @@
         await ensureCsrfToken();
         try {
             const chatName = c.chat || (c.name + ' - ' + new Date().toISOString().slice(0, 10));
-            const res = await fetch('/api/chats/get', {
+            const res = await loggedFetch('/api/chats/get', {
                 method: 'POST',
                 headers: withCsrf({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({ avatar_url: c.avatar, file_name: chatName }),
             });
-            if (!res.ok) { console.warn('[st-client] chat fetch failed', res.status); return; }
+            if (!res.ok) { log.net.warn('chat fetch failed:', res.status); return; }
             const data = await res.json();
             wasm.__st_clear_messages();
             wasm.__st_select_character(index);
@@ -618,7 +651,7 @@
                 }
             }
         } catch (err) {
-            console.warn('[st-client] chat load error', err);
+            log.chars.error('chat load failed:', err);
         }
     }
 
@@ -630,12 +663,12 @@
 
     async function charApiPost(url, body) {
         await ensureCsrfToken();
-        const res = await fetch(url, {
+        const res = await loggedFetch(url, {
             method: 'POST',
             headers: withCsrf({ 'Content-Type': 'application/json' }),
             body: JSON.stringify(body),
         });
-        if (!res.ok) { console.warn('[st-client]', url, 'failed', res.status); return null; }
+        if (!res.ok) { log.net.warn(url, 'failed:', res.status); return null; }
         return res;
     }
 
@@ -655,10 +688,9 @@
         fd.append('file_type', ext);
         await ensureCsrfToken();
         try {
-            const res = await fetch('/api/characters/import', { method: 'POST', headers: withCsrf({}), body: fd });
-            if (!res.ok) { console.warn('[st-client] import failed', res.status); window.alert('Import failed'); }
-            else await fetchCharacters();
-        } catch (err) { console.warn('[st-client] import error', err); }
+            const res = await loggedFetch('/api/characters/import', { method: 'POST', headers: withCsrf({}), body: fd });
+            if (!res.ok) { log.net.warn('import failed:', res.status); window.alert('Import failed'); } else await fetchCharacters();
+        } catch (err) { log.chars.error('import failed:', err); }
         input.value = '';
     };
 
@@ -688,15 +720,15 @@
         if (!c) return;
         await ensureCsrfToken();
         try {
-            const res = await fetch('/api/characters/export', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: JSON.stringify({ avatar_url: c.avatar, format: 'png' }) });
-            if (!res.ok) { console.warn('[st-client] export failed', res.status); return; }
+            const res = await loggedFetch('/api/characters/export', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: JSON.stringify({ avatar_url: c.avatar, format: 'png' }) });
+            if (!res.ok) { log.net.warn('export failed:', res.status); return; }
             const blob = await res.blob();
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url; a.download = c.avatar || (c.name + '.png');
             document.body.appendChild(a); a.click(); a.remove();
             URL.revokeObjectURL(url);
-        } catch (err) { console.warn('[st-client] export error', err); }
+        } catch (err) { log.chars.error('export failed:', err); }
     };
 
     window.__st_char_fav = async function (index) {
@@ -720,10 +752,9 @@
         fd.append('avatar_url', c.avatar);
         await ensureCsrfToken();
         try {
-            const res = await fetch('/api/characters/edit-avatar', { method: 'POST', headers: withCsrf({}), body: fd });
-            if (!res.ok) { console.warn('[st-client] avatar edit failed', res.status); window.alert('Avatar update failed'); }
-            else await fetchCharacters();
-        } catch (err) { console.warn('[st-client] avatar edit error', err); }
+            const res = await loggedFetch('/api/characters/edit-avatar', { method: 'POST', headers: withCsrf({}), body: fd });
+            if (!res.ok) { log.net.warn('avatar edit failed:', res.status); window.alert('Avatar update failed'); } else await fetchCharacters();
+        } catch (err) { log.chars.error('avatar edit failed:', err); }
         input.value = '';
     };
 
@@ -758,15 +789,6 @@
             }
             return;
         }
-        // Reading prefs
-        if (e.target.matches('[data-reading-set]')) {
-            const key = e.target.getAttribute('data-reading-set');
-            const val = e.target.getAttribute('data-reading-val');
-            if (key && val) {
-                if (wasm.__st_reading_click) wasm.__st_reading_click(key, val);
-            }
-            return;
-        }
     }, false);
 
     // Composer auto-grow
@@ -794,20 +816,18 @@
 
     // Initialize: load deps, then init wasm
     async function init() {
-        console.log('[custom.js] Starting init...');
+        log.boot.info('init start');
         try {
             DOMPurify = (await import(PURIFY_URL)).default;
             hljs = (await import(HLJS_URL)).default;
             installHooks();
-            console.log('[custom.js] Dependencies loaded');
+            log.boot.debug('dependencies loaded');
 
             var ZIEX_DOOR = '/client/vendor/ziex/wasm/index.js';
 
             // Capture WASM exports by wrapping instantiate
             const originalInstantiate = WebAssembly.instantiate;
             const originalInstantiateStreaming = WebAssembly.instantiateStreaming;
-
-            let wasmExports = null;
 
             function capture(result) {
                 if (result && result.instance) wasm = result.instance.exports;
@@ -823,7 +843,7 @@
 
             let started;
             try {
-                const door = await import('/client/vendor/ziex/wasm/index.js');
+                const door = await import(ZIEX_DOOR);
                 started = await door.init({ importObject: { env: env } });
             } finally {
                 WebAssembly.instantiateStreaming = originalInstantiateStreaming;
@@ -833,10 +853,10 @@
             // The door's own instance is authoritative
             if (started && started.source && started.source.instance) wasm = started.source.instance.exports;
             if (!wasm || typeof wasm.__zx_alloc !== 'function') {
-                throw new Error('[st-client] door.init exposed no wasm exports: __zx_alloc unreachable');
+                throw new Error('door.init exposed no wasm exports: __zx_alloc unreachable');
             }
 
-            console.log('[custom.js] WASM loaded, exports:', Object.keys(wasm).slice(0, 20));
+            log.boot.debug('wasm loaded, exports:', Object.keys(wasm).slice(0, 20));
 
             // door.init filled real bodies into the invisible SSR frames; add .hydrated past the next
             // paint so the CSS staggers the settle on complete messages, not the empty pre-hydrate frames.
@@ -849,9 +869,9 @@
 
             // Boot
             if (wasm.__st_boot_init) {
-                console.log('[custom.js] Calling __st_boot_init...');
+                log.boot.debug('boot_init start');
                 wasm.__st_boot_init();
-                console.log('[custom.js] __st_boot_init done');
+                log.boot.debug('boot_init done');
             }
 
             fetchCharacters();
@@ -876,7 +896,7 @@
                     // Default: stream 200 tokens from /dev/stream
                     setTimeout(function () {
                         startStream('/dev/stream?n=200', 'Seraphina').catch(function (err) {
-                            console.error('[st-client] dev stream failed', err);
+                            log.stream.error('dev stream failed:', err);
                         });
                     }, holdMs);
                 } else if (streamParam === '2') {
@@ -885,22 +905,22 @@
                         startStream('/dev/stream?n=20&prefix=aaa', 'First').then(function () {
                             return startStream('/dev/stream?n=20&prefix=bbb', 'Second');
                         }).catch(function (err) {
-                            console.error('[st-client] dev stream pair failed', err);
+                            log.stream.error('dev stream pair failed:', err);
                         });
                     }, holdMs);
                 } else {
                     // Custom URL (URL-encoded path from verify.sh)
                     setTimeout(function () {
                         startStream(streamParam, 'Seraphina').catch(function (err) {
-                            console.error('[st-client] dev stream failed', err);
+                            log.stream.error('dev stream failed:', err);
                         });
                     }, holdMs);
                 }
             }
 
-            console.log('[custom.js] Init complete');
+            log.boot.info('init complete');
         } catch (err) {
-            console.error('[custom.js] init failed:', err);
+            log.boot.error('init failed:', err);
         }
     }
 
