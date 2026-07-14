@@ -11,14 +11,27 @@ const cv = @import("../character_view.zig");
 const regions = @import("../regions.zig");
 const dom_event = @import("../dom_event.zig");
 
+// The pressed state of a toggle (favourites-only, grid, a tag chip) is aria-pressed, which these
+// buttons carry for assistive tech anyway, so the highlight is declared off tailwind's built-in
+// aria-pressed variant. Nothing here computes a class.
+pub const tool_class = "char-tool inline-flex flex-none cursor-pointer items-center rounded-md border border-border bg-surface-2 text-xs text-text hover:bg-tool-hover aria-pressed:bg-tool-on aria-pressed:outline-1 aria-pressed:outline-tool-ring max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:px-3 max-[768px]:py-2";
+pub const tag_class = "char-tag cursor-pointer rounded-full border border-border bg-surface-2 px-2 py-px text-xs text-muted aria-pressed:bg-tag-on aria-pressed:text-text aria-pressed:outline-1 aria-pressed:outline-tool-ring max-[768px]:min-h-9 max-[768px]:px-3 max-[768px]:py-1";
+const row_class = "char-toolbar-row flex flex-wrap items-center gap-2 max-[640px]:gap-[0.2rem]";
+
 pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
     const view = cv.global;
     return (
-        <div @allocator={ctx.allocator} class="char-toolbar" role="toolbar" aria-label="Character list controls" @rendering={.client}>
-            <div class="char-toolbar-row">
+        <div
+            @allocator={ctx.allocator}
+            class="char-toolbar flex flex-col gap-2 max-[640px]:gap-[0.2rem]"
+            role="toolbar"
+            aria-label="Character list controls"
+            @rendering={.client}
+        >
+            <div class={row_class}>
                 <input
                     type="search"
-                    class="char-search text_pole"
+                    class="char-search min-w-0 flex-1 max-[640px]:w-full max-[640px]:flex-none"
                     name="character_search"
                     aria-label="Search characters"
                     placeholder="Search..."
@@ -26,7 +39,7 @@ pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
                     oninput={ctx.bind(onSearchInput)}
                 />
                 <select
-                    class="char-sort text_pole"
+                    class="char-sort"
                     aria-label="Sort characters"
                     value={sortValue(view.sort)}
                     onchange={ctx.bind(onSortChange)}
@@ -36,38 +49,43 @@ pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
                     )}
                 </select>
             </div>
-            <div class="char-toolbar-row">
+            <div class={row_class}>
                 <button
                     type="button"
-                    class={favBtnClass(view.fav_only)}
+                    class={tool_class}
                     aria-pressed={if (view.fav_only) "true" else "false"}
                     aria-label="Show favourites only"
                     onclick={ctx.bind(onFavToggle)}
                 >Favourites</button>
                 <button
                     type="button"
-                    class={gridBtnClass(view.grid)}
+                    class={tool_class}
                     aria-pressed={if (view.grid) "true" else "false"}
                     aria-label="Toggle grid view"
                     onclick={ctx.bind(onGridToggle)}
                 >Grid</button>
             </div>
-            <div class="char-tags" role="group" aria-label="Filter by tag">
+            <div class="char-tags flex flex-wrap" role="group" aria-label="Filter by tag">
                 {for (view.tags_all.items) |tag| (
                     <button
                         type="button"
-                        class={tagBtnClass(view, tag)}
+                        class={tag_class}
                         aria-pressed={if (view.isTagActive(tag)) "true" else "false"}
                         data-tag={tag}
                         onclick={ctx.bind(onTagToggle)}
                     >{tag}</button>
                 )}
             </div>
-            <div class="char-pager char-toolbar-row" role="group" aria-label="Pagination">
-                <button type="button" class="char-tool" data-page="prev" aria-label="Previous page" onclick={ctx.bind(onPageStep)}>‹</button>
-                <span class="char-page-label" aria-live="polite">{pageLabel(view)}</span>
-                <button type="button" class="char-tool" data-page="next" aria-label="Next page" onclick={ctx.bind(onPageStep)}>›</button>
-                <select class="char-pagesize text_pole" aria-label="Characters per page" value={pageSizeValue(view)} onchange={ctx.bind(onPageSizeChange)}>
+            <div class={row_class ++ " char-pager justify-between"} role="group" aria-label="Pagination">
+                <button type="button" class={tool_class} data-page="prev" aria-label="Previous page" onclick={ctx.bind(onPageStep)}>‹</button>
+                <span class="char-page-label flex-1 text-center text-xs text-muted" aria-live="polite">{pageLabel(view)}</span>
+                <button type="button" class={tool_class} data-page="next" aria-label="Next page" onclick={ctx.bind(onPageStep)}>›</button>
+                <select
+                    class="char-pagesize max-w-[6rem] flex-none max-[640px]:hidden"
+                    aria-label="Characters per page"
+                    value={pageSizeValue(view)}
+                    onchange={ctx.bind(onPageSizeChange)}
+                >
                     <option value="20">20</option>
                     <option value="50">50</option>
                     <option value="100">100</option>
@@ -97,18 +115,6 @@ const sort_options = [_]SortOption{
     .{ .value = "least_tokens", .label = "Least tokens", .key = .least_tokens },
     .{ .value = "random", .label = "Random", .key = .random },
 };
-
-fn favBtnClass(active: bool) []const u8 {
-    return if (active) "char-tool is-active" else "char-tool";
-}
-
-fn gridBtnClass(active: bool) []const u8 {
-    return if (active) "char-tool is-active" else "char-tool";
-}
-
-fn tagBtnClass(view: cv.View, tag: []const u8) []const u8 {
-    return if (view.isTagActive(tag)) "char-tag is-active" else "char-tag";
-}
 
 fn sortValue(key: cv.SortKey) []const u8 {
     return @tagName(key);

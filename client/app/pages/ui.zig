@@ -48,9 +48,6 @@ pub fn widthFor(side: Side) f32 {
 pub fn motionClass() []const u8 {
     return ui_state.motionClass(ui.motion);
 }
-pub fn motionSegClass(which: MotionPref) []const u8 {
-    return ui_state.motionSegClass(ui.motion, which);
-}
 
 // Mutations re-render only the Shell region so it reflects the new state.
 pub fn toggle(id: PanelId) void {
@@ -69,14 +66,8 @@ pub fn setWidth(side: Side, w: f32) void {
 pub fn widthStyle(alloc: std.mem.Allocator, side: Side) []const u8 {
     return ui_state.widthStyle(alloc, ui.panels.widthFor(side));
 }
-pub fn sideClass(side: Side) []const u8 {
-    return ui_state.sideClass(side);
-}
 pub fn sideStr(side: Side) []const u8 {
     return ui_state.sideStr(side);
-}
-pub fn drawerClass(alloc: std.mem.Allocator, id: PanelId, icon: []const u8) []const u8 {
-    return ui_state.drawerClass(alloc, ui.panels.isActive(id), icon);
 }
 
 /// Drawer button click. Reads the clicked button's element id and toggles its panel. One handler

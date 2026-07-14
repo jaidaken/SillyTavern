@@ -20,10 +20,15 @@ pub fn MessageView(allocator: zx.Allocator, props: MessageProps) zx.Component {
     // short roleplay turns stay ragged. ~180 source bytes is a rough three-line floor at the reading measure.
     const text_class: []const u8 = if (props.msg.body.len > 180) "mes_text mes-justify" else "mes_text";
 
+    // The message frame keeps its bare class names. `mes`, `mes_name` and `mes_text` are the app's
+    // API: the regression gate greps the served HTML for those exact class attributes, and the body
+    // is markdown rendered at runtime, so no class of ours can reach inside it. Their styling, the
+    // candlelight margin rule and the arrival settle with it, stays in the stylesheet. The avatar is
+    // plain authored chrome, so it wears utilities.
     return (
         <div @allocator={allocator} class="mes" aria-busy={if (props.streaming) "true" else "false"}>
             { if (props.msg.avatar.len > 0) (
-                <img class="mes_avatar" src={props.msg.avatar} alt={props.msg.name} loading="lazy" />
+                <img class="mes_avatar row-span-full mt-[0.15em] size-[1.8rem] flex-none cursor-pointer rounded-[4px] object-cover hover:brightness-110 max-[640px]:size-[1.5rem]" src={props.msg.avatar} alt={props.msg.name} loading="lazy" />
             ) }
             <div class="mes_name">{props.msg.name}</div>
             <div class={text_class} @escaping={.none}>{html.sink(body)}</div>

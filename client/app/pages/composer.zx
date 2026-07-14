@@ -2,22 +2,49 @@
 // Its own sibling client region, so a Shell panel toggle or a MessageLog token never re-renders it:
 // the textarea's typed value, caret, and auto-grow height survive both. It has no state mutation of
 // its own yet, so it publishes no region handle; it never re-renders after its first mount.
+// You write prose here, so the input reads in the prose face. Each button carries only the hover it
+// owns: send brightens its amber, stop keeps the active-control look, and only the plain options
+// button takes the ordinary surface hover, so no two rules chase the same property.
+const btn_base = "icon grid size-[2.7rem] flex-none cursor-pointer place-items-center rounded-md border border-control-border transition-[background,color,filter,transform] duration-120 ease-[ease] active:[transform:translateY(calc(var(--move)*1px))_scale(calc(1_-_var(--move)*0.03))] max-[640px]:size-[2.2rem] max-[640px]:before:size-4";
+
 pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
     instrument.bumpComposer();
     return (
-        <footer @allocator={ctx.allocator} id="composer" @rendering={.client} onclick={ui.onPageClick} onkeydown={ui.onPageKey}>
-            <button type="button" class="composer-btn i-menu" aria-label="Options"></button>
-            <label for="send_textarea" class="visually-hidden">Message</label>
+        <footer
+            @allocator={ctx.allocator}
+            id="composer"
+            class="col-start-2 row-start-3 flex items-end gap-2 border-t border-border bg-surface p-3 pb-[env(safe-area-inset-bottom,0.75rem)] max-[640px]:p-2"
+            @rendering={.client}
+            onclick={ui.onPageClick}
+            onkeydown={ui.onPageKey}
+        >
+            <button
+                type="button"
+                class={btn_base ++ " bg-transparent text-muted hover:bg-surface-2 hover:text-text"}
+                data-icon="menu"
+                aria-label="Options"
+            ></button>
+            <label for="send_textarea" class="sr-only top-0 left-0">Message</label>
             <textarea
                 id="send_textarea"
                 name="message"
-                class="composer-input"
+                class="composer-input max-h-[40vh] min-h-[2.7rem] flex-1 resize-none rounded-md border border-control-border bg-bg px-[0.85rem] py-[0.6rem] font-serif text-md leading-ui text-text transition-[border-color] duration-120 ease-[ease] placeholder:text-faint placeholder:italic focus:border-accent focus:not-focus-visible:outline-none max-[640px]:max-h-[30vh] max-[640px]:p-2 max-[640px]:text-[16px]"
                 rows="1"
                 placeholder="Type a message..."
                 oninput={ctx.bind(onComposerInput)}
             ></textarea>
-            <button type="button" class="composer-btn is-send i-send" aria-label="Send"></button>
-            <button type="button" class="composer-btn is-stop i-stop" aria-label="Stop"></button>
+            <button
+                type="button"
+                class={btn_base ++ " border-accent bg-accent text-on-accent hover:bg-accent hover:text-on-accent hover:brightness-[1.06]"}
+                data-icon="send"
+                aria-label="Send"
+            ></button>
+            <button
+                type="button"
+                class={btn_base ++ " bg-surface-2 text-accent"}
+                data-icon="stop"
+                aria-label="Stop"
+            ></button>
         </footer>
     );
 }

@@ -1,26 +1,37 @@
 // Persona list panel body. Right dock.
+//
+// A persona row IS a character row: it reuses that component's class strings rather than restating
+// them, so the two lists cannot drift. The list never goes to grid view, so it carries no data-view;
+// the row's group-data-[view=grid] utilities simply never match.
 pub fn PersonaList(ctx: *zx.ComponentCtx(void)) zx.Component {
     const ps = persona_store.global.slice();
     if (ps.len == 0) {
         return (
-            <p @allocator={ctx.allocator} class="panel-empty">No personas loaded. Connect to the SillyTavern backend to see your personas.</p>
+            <p @allocator={ctx.allocator} class="panel-empty m-0 text-sm leading-ui text-muted">No personas loaded. Connect to the SillyTavern backend to see your personas.</p>
         );
     }
     return (
-        <div @allocator={ctx.allocator} id="persona-list" class="char-list" role="list" aria-label="Personas" @rendering={.client}>
+        <div
+            @allocator={ctx.allocator}
+            id="persona-list"
+            class="char-list group/list flex min-h-[8rem] flex-col gap-[2px]"
+            role="list"
+            aria-label="Personas"
+            @rendering={.client}
+        >
             {for (ps, 0..) |p, i| (
                 <div
-                    class={personaClass(i)}
+                    class={if (isSelected(i)) (char_list.row_class ++ " is-selected") else char_list.row_class}
                     role="listitem"
                     data-persona-index={i}
                     tabindex="0"
                     onclick={ctx.bind(onPersonaSelect)}
                     onkeydown={ctx.bind(onPersonaKey)}
                 >
-                    <img class="char-avatar" src={personaAvatarUrl(ctx.allocator, p.avatar)} alt={p.name} loading="lazy" />
-                    <div class="char-info">
-                        <div class="char-name">{p.name}</div>
-                        <div class="char-desc">{p.description}</div>
+                    <img class={char_list.avatar_class} src={personaAvatarUrl(ctx.allocator, p.avatar)} alt={p.name} loading="lazy" />
+                    <div class={char_list.info_class}>
+                        <div class={char_list.name_class}>{p.name}</div>
+                        <div class={char_list.desc_class}>{p.description}</div>
                     </div>
                 </div>
             )}
@@ -28,9 +39,9 @@ pub fn PersonaList(ctx: *zx.ComponentCtx(void)) zx.Component {
     );
 }
 
-fn personaClass(index: usize) []const u8 {
+fn isSelected(index: usize) bool {
     const sel = persona_store.selectedIndex();
-    return if (sel != null and sel.? == index) "char-item is-selected" else "char-item";
+    return sel != null and sel.? == index;
 }
 
 fn personaAvatarUrl(alloc: std.mem.Allocator, avatar: []const u8) []const u8 {
@@ -64,3 +75,4 @@ const std = @import("std");
 const persona_store = @import("../persona_store.zig");
 const regions = @import("../regions.zig");
 const dom_event = @import("../dom_event.zig");
+const char_list = @import("character_list.zx");

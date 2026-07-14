@@ -14,6 +14,9 @@ pub fn Shell(ctx: *zx.ComponentCtx(void)) zx.Component {
         // job the glue's document listener used to hold, now owned by ui.zig). It is bound on the
         // three hydrated region roots, here and in MessageLog and Composer, because the SSR page
         // root carries no client handler. The div itself gains no behaviour, so it needs no role.
+        // The class attribute is Zig-computed motion STATE (motion-on / motion-off / nothing), which
+        // the interaction gate reads back off #shell, so it cannot also carry utilities. Its one
+        // style, display:contents, stays in the stylesheet.
         // allow-div-onclick: region-level dismiss surface, keyboard parity via the Escape handler
         <div @allocator={ctx.allocator} id="shell" class={ui.motionClass()} onclick={ui.onPageClick} onkeydown={ui.onPageKey}>
             <TopBar key="topbar" />

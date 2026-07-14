@@ -1,20 +1,37 @@
 // Docked side panel wrapper. Routes panel.id to the matching body component.
+//
+// The two dock sides are declared here as two literal class strings, so the scanner sees every
+// utility and Zig computes no appearance: the only thing that varies is the grid column, which edge
+// carries the border, and which way the panel slides in. panel-left / panel-right stay as the first
+// token because they are the app's side hook (the interaction gate selects #panel-view.panel-right).
+//
+// The width stays an inline style: it is a dragged pixel value, which is what an inline style is
+// for. Below 768px the dock goes full-screen, so its width utility is important-flagged; nothing
+// else can beat an inline style.
 pub const PanelProps = struct {
     panel: ui.Panel,
 };
 
+const panel_base = "relative row-start-2 row-end-4 flex min-w-0 flex-col overflow-hidden border-border bg-surface max-[768px]:fixed max-[768px]:inset-x-0 max-[768px]:top-[var(--topbar-h)] max-[768px]:bottom-0 max-[768px]:z-50 max-[768px]:w-full! max-[768px]:max-w-none max-[768px]:rounded-none max-[768px]:border-0 max-[768px]:border-t";
+
 pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
     const p = props.panel;
     return (
-        <aside @allocator={allocator} id="panel-view" aria-labelledby="panel-heading" class={ui.sideClass(p.side)} style={ui.widthStyle(allocator, p.side)}>
+        <aside
+            @allocator={allocator}
+            id="panel-view"
+            aria-labelledby="panel-heading"
+            class={if (p.side == .left) ("panel-left col-start-1 border-r animate-panel-in " ++ panel_base) else ("panel-right col-start-3 border-l animate-panel-in-right " ++ panel_base)}
+            style={ui.widthStyle(allocator, p.side)}
+        >
             <PanelHead title={p.title} />
-            <div class="panel-body">
+            <div class="flex-1 overflow-y-auto p-4 [scrollbar-width:thin] max-[768px]:p-3 max-[768px]:[-webkit-overflow-scrolling:touch]">
                 {if (p.id == .ai_config) (
                     <AiConfigBody />
                 ) else if (p.id == .persona) (
                     <PersonaList />
                 ) else if (p.id == .characters) (
-                    <div class="char-panel-stack">
+                    <div class="flex min-h-0 flex-col gap-2">
                         <CharacterToolbar />
                         <CharacterActions />
                         <CharacterListRegion />
@@ -23,7 +40,18 @@ pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
                     <PanelEmpty />
                 )}
             </div>
-            <div class="panel-resize" data-side={ui.sideStr(p.side)} role="separator" tabindex="0" aria-orientation="vertical" aria-label="Resize panel" aria-valuenow={ui.widthFor(p.side)} aria-valuemin={ui.min_width} aria-valuemax={ui.max_width} onkeydown={ui.onResizeKey}></div>
+            <div
+                class="panel-resize absolute top-0 bottom-0 w-[9px] cursor-col-resize touch-none hover:bg-resize data-[side=left]:right-0 data-[side=right]:left-0 max-[768px]:hidden"
+                data-side={ui.sideStr(p.side)}
+                role="separator"
+                tabindex="0"
+                aria-orientation="vertical"
+                aria-label="Resize panel"
+                aria-valuenow={ui.widthFor(p.side)}
+                aria-valuemin={ui.min_width}
+                aria-valuemax={ui.max_width}
+                onkeydown={ui.onResizeKey}
+            ></div>
         </aside>
     );
 }

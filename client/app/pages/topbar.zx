@@ -1,16 +1,49 @@
 // The top bar: brand plus the drawer buttons, generated from the ui.panels data. One shared
 // onDrawer handler reads the clicked button's id and toggles its panel.
+//
+// Styling is utilities in this markup. A drawer button's open state is aria-expanded, which it
+// carries for assistive tech anyway, so the open highlight is declared here off tailwind's built-in
+// aria-* variant instead of off a class Zig computes. Which glyph the button wears is data, so it
+// rides on data-icon; the stylesheet keys the mask off that.
+//
+// The `drawers` class on the nav is an API, not styling: ui.onPageClick walks a click's ancestors
+// looking for it, which is what stops a drawer button from dismissing the panel it just opened.
 pub fn TopBar(allocator: zx.Allocator) zx.Component {
     return (
-        <header @allocator={allocator} id="topbar">
-            <h1 class="brand" aria-label="SillyTavern beta">
-                <span class="brand-full" aria-hidden="true">SillyTavern</span>
-                <span class="brand-short" aria-hidden="true">ST</span>
-                <span class="brand-beta" aria-hidden="true"><span class="beta-word">beta</span><span class="beta-sym">β</span></span>
+        <header
+            @allocator={allocator}
+            id="topbar"
+            class="relative z-20 col-span-full row-start-1 flex h-[var(--topbar-h)] items-center justify-between border-b border-border bg-surface pt-[env(safe-area-inset-top,0px)] pr-2 pb-0 pl-4 max-[768px]:[--topbar-h:2.6rem] max-[768px]:min-w-0 max-[768px]:gap-2 max-[768px]:pl-3"
+        >
+            <h1
+                class="m-0 flex items-baseline gap-2 font-serif text-[1.1rem] font-semibold tracking-[0.01em] max-[768px]:min-w-0 max-[768px]:shrink max-[768px]:gap-0 max-[768px]:overflow-hidden max-[768px]:text-[0.95rem] max-[768px]:text-ellipsis max-[768px]:whitespace-nowrap"
+                aria-label="SillyTavern beta"
+            >
+                <span class="max-[480px]:hidden" aria-hidden="true">SillyTavern</span>
+                <span class="hidden max-[480px]:inline" aria-hidden="true">ST</span>
+                <span
+                    class="rounded-sm border border-beta-edge px-[0.34rem] py-[0.1rem] font-mono text-[0.58rem] font-medium tracking-[0.14em] text-accent uppercase max-[768px]:px-[0.25rem] max-[768px]:py-[0.05rem] max-[768px]:text-[0.5rem] max-[480px]:px-[0.3rem] max-[480px]:py-[0.1rem]"
+                    aria-hidden="true"
+                >
+                    <span class="max-[480px]:hidden">beta</span>
+                    <span class="hidden normal-case tracking-normal max-[480px]:inline">β</span>
+                </span>
             </h1>
-            <nav class="drawers" aria-label="Panels">
+            <nav
+                class="drawers flex gap-[0.1rem] max-[768px]:min-w-0 max-[768px]:shrink max-[768px]:flex-nowrap max-[768px]:gap-0 max-[768px]:overflow-x-auto max-[768px]:[-webkit-overflow-scrolling:touch] max-[768px]:[scrollbar-width:none] max-[768px]:[&::-webkit-scrollbar]:hidden"
+                aria-label="Panels"
+            >
                 {for (panel_list) |p| (
-                    <button id={p.dom_id} type="button" class={ui.drawerClass(allocator, p.id, p.icon)} aria-label={p.title} aria-expanded={if (ui.isActive(p.id)) "true" else "false"} aria-controls="panel-view" onclick={ui.onDrawer}></button>
+                    <button
+                        id={p.dom_id}
+                        type="button"
+                        class="icon grid size-[2.1rem] cursor-pointer place-items-center rounded-md border-0 bg-transparent text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-text aria-expanded:bg-surface-2 aria-expanded:text-accent max-[768px]:size-[1.8rem] max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:shrink-0 max-[768px]:before:size-[0.95rem]"
+                        data-icon={p.icon}
+                        aria-label={p.title}
+                        aria-expanded={if (ui.isActive(p.id)) "true" else "false"}
+                        aria-controls="panel-view"
+                        onclick={ui.onDrawer}
+                    ></button>
                 )}
             </nav>
             {if (ui.activeDrawer()) |p| (

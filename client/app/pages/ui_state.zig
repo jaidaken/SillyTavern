@@ -29,7 +29,8 @@ pub const Panel = struct {
     id: PanelId,
     /// The drawer button's element id ("d-<panel>"), read back in ui.onDrawer.
     dom_id: []const u8,
-    /// CSS class selecting the button's ::before mask icon.
+    /// Which glyph the button wears, published as data-icon. The stylesheet keys the mask off it.
+    /// A name, not a class: appearance is declared in the markup, never computed here.
     icon: []const u8,
     title: []const u8,
     /// Which side a dock sits on. Ignored for drawer-kind panels.
@@ -38,15 +39,15 @@ pub const Panel = struct {
 };
 
 pub const panels = [_]Panel{
-    .{ .id = .ai_config, .dom_id = "d-ai_config", .icon = "i-sliders", .title = "AI Response Configuration", .side = .left, .kind = .dock },
-    .{ .id = .connections, .dom_id = "d-connections", .icon = "i-plug", .title = "API Connections", .side = .left },
-    .{ .id = .formatting, .dom_id = "d-formatting", .icon = "i-font", .title = "AI Response Formatting", .side = .left },
-    .{ .id = .world_info, .dom_id = "d-world_info", .icon = "i-book", .title = "World Info", .side = .left },
-    .{ .id = .settings, .dom_id = "d-settings", .icon = "i-cog", .title = "User Settings", .side = .left },
-    .{ .id = .backgrounds, .dom_id = "d-backgrounds", .icon = "i-image", .title = "Backgrounds", .side = .left },
-    .{ .id = .extensions, .dom_id = "d-extensions", .icon = "i-cubes", .title = "Extensions", .side = .right },
-    .{ .id = .persona, .dom_id = "d-persona", .icon = "i-user", .title = "Persona Management", .side = .right, .kind = .dock },
-    .{ .id = .characters, .dom_id = "d-characters", .icon = "i-card", .title = "Character Management", .side = .right, .kind = .dock },
+    .{ .id = .ai_config, .dom_id = "d-ai_config", .icon = "sliders", .title = "AI Response Configuration", .side = .left, .kind = .dock },
+    .{ .id = .connections, .dom_id = "d-connections", .icon = "plug", .title = "API Connections", .side = .left },
+    .{ .id = .formatting, .dom_id = "d-formatting", .icon = "font", .title = "AI Response Formatting", .side = .left },
+    .{ .id = .world_info, .dom_id = "d-world_info", .icon = "book", .title = "World Info", .side = .left },
+    .{ .id = .settings, .dom_id = "d-settings", .icon = "cog", .title = "User Settings", .side = .left },
+    .{ .id = .backgrounds, .dom_id = "d-backgrounds", .icon = "image", .title = "Backgrounds", .side = .left },
+    .{ .id = .extensions, .dom_id = "d-extensions", .icon = "cubes", .title = "Extensions", .side = .right },
+    .{ .id = .persona, .dom_id = "d-persona", .icon = "user", .title = "Persona Management", .side = .right, .kind = .dock },
+    .{ .id = .characters, .dom_id = "d-characters", .icon = "card", .title = "Character Management", .side = .right, .kind = .dock },
 };
 
 pub const min_width: f32 = 240;
@@ -144,15 +145,6 @@ pub fn motionClass(m: MotionPref) []const u8 {
     };
 }
 
-/// Segmented-button class for the motion setting: highlights the button matching the current pref.
-pub fn motionSegClass(current: MotionPref, which: MotionPref) []const u8 {
-    return if (current == which) "seg-btn is-active" else "seg-btn";
-}
-
-pub fn sideClass(side: Side) []const u8 {
-    return if (side == .left) "panel panel-left" else "panel panel-right";
-}
-
 pub fn sideStr(side: Side) []const u8 {
     return if (side == .left) "left" else "right";
 }
@@ -161,13 +153,6 @@ pub fn sideStr(side: Side) []const u8 {
 pub fn widthStyle(alloc: std.mem.Allocator, w: f32) []const u8 {
     return std.fmt.allocPrint(alloc, "width:{d}px", .{w}) catch
         std.fmt.comptimePrint("width:{d}px", .{@as(u32, @intFromFloat(default_width))});
-}
-
-/// Drawer button class: the icon class, plus "is-open" when its panel is active. Falls back to the
-/// bare icon on OOM.
-pub fn drawerClass(alloc: std.mem.Allocator, is_open: bool, icon: []const u8) []const u8 {
-    if (!is_open) return icon;
-    return std.fmt.allocPrint(alloc, "{s} is-open", .{icon}) catch icon;
 }
 
 const testing = std.testing;
@@ -254,6 +239,4 @@ test "motion pref parses and maps to the right #shell class" {
     try testing.expectEqualStrings("", motionClass(.system));
     try testing.expectEqualStrings("motion-on", motionClass(.on));
     try testing.expectEqualStrings("motion-off", motionClass(.off));
-    try testing.expectEqualStrings("seg-btn is-active", motionSegClass(.on, .on));
-    try testing.expectEqualStrings("seg-btn", motionSegClass(.on, .off));
 }

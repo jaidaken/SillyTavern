@@ -1,25 +1,52 @@
 // Character list panel body. Right dock.
+//
+// Styling is utilities in this markup. Zig publishes STATE and nothing else: whether the list is in
+// grid view (data-view on the list), whether a row is the selected one (the is-selected hook, which
+// the interaction gate reads back), and whether a row is a favourite (data-fav on the star, the one
+// control whose colour it drives). The grid view restyles the rows from the list, so the list is a
+// named group and the rows read it with group-data-* variants.
+pub const row_class = "char-item group/row flex cursor-pointer items-center gap-3 rounded-md p-2 select-none hover:bg-surface-2 selected:bg-selected selected:outline-1 selected:outline-selected-ring group-data-[view=grid]/list:relative group-data-[view=grid]/list:flex-col group-data-[view=grid]/list:items-stretch group-data-[view=grid]/list:text-center max-[640px]:min-h-[52px] max-[640px]:px-2 max-[640px]:py-[10px]";
+pub const avatar_class = "char-avatar size-[2.4rem] flex-none rounded-md bg-bg object-cover group-data-[view=grid]/list:aspect-square group-data-[view=grid]/list:h-auto group-data-[view=grid]/list:w-full max-[640px]:size-10";
+pub const info_class = "min-w-0 flex-1";
+pub const name_class = "char-name truncate font-serif text-sm font-semibold text-text";
+pub const desc_class = "mt-px truncate text-xs text-muted group-data-[view=grid]/list:hidden";
+
 pub fn CharacterList(ctx: *zx.ComponentCtx(void)) zx.Component {
     const view = character_view.global;
     const items = view.result orelse return emptyState(ctx.allocator);
     if (items.len == 0) return emptyState(ctx.allocator);
     return (
-        <div @allocator={ctx.allocator} class={listClass(view.grid)} role="list" aria-label="Characters" @rendering={.client}>
+        <div
+            @allocator={ctx.allocator}
+            class="char-list group/list flex min-h-[8rem] flex-col gap-[2px] data-[view=grid]:grid data-[view=grid]:grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] data-[view=grid]:items-start data-[view=grid]:gap-2"
+            data-view={if (view.grid) "grid" else "list"}
+            role="list"
+            aria-label="Characters"
+            @rendering={.client}
+        >
             {for (items) |it| (
                 <div
-                    class={charClass(it.index)}
+                    class={if (isSelected(it.index)) (row_class ++ " is-selected") else row_class}
                     role="listitem"
                     data-char-select={it.index}
                     tabindex="0"
                     onclick={ctx.bind(onCharSelect)}
                     onkeydown={ctx.bind(onCharKey)}
                 >
-                    <img class="char-avatar" src={avatarUrl(ctx.allocator, it.char.avatar)} alt={it.char.name} loading="lazy" />
-                    <div class="char-info">
-                        <div class="char-name">{it.char.name}</div>
-                        <div class="char-desc">{it.char.description}</div>
+                    <img class={avatar_class} src={avatarUrl(ctx.allocator, it.char.avatar)} alt={it.char.name} loading="lazy" />
+                    <div class={info_class}>
+                        <div class={name_class}>{it.char.name}</div>
+                        <div class={desc_class}>{it.char.description}</div>
                     </div>
-                    <button type="button" class="char-fav-star" data-char-action="fav" data-char-index={it.index} onclick={ctx.bind(onItemAction)} aria-label={if (it.char.fav) "Remove from favourites" else "Add to favourites"}>{if (it.char.fav) "★" else "☆"}</button>
+                    <button
+                        type="button"
+                        class="char-fav-star ml-auto flex-none cursor-pointer border-none bg-transparent text-lg leading-none text-muted hover:text-accent data-[fav=true]:text-accent group-data-[view=grid]/list:absolute group-data-[view=grid]/list:top-[2px] group-data-[view=grid]/list:right-[2px] group-data-[view=grid]/list:ml-0 group-data-[view=grid]/list:[text-shadow:0_1px_2px_oklch(0_0_0/0.6)] max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:p-2"
+                        data-fav={if (it.char.fav) "true" else "false"}
+                        data-char-action="fav"
+                        data-char-index={it.index}
+                        onclick={ctx.bind(onItemAction)}
+                        aria-label={if (it.char.fav) "Remove from favourites" else "Add to favourites"}
+                    >{if (it.char.fav) "★" else "☆"}</button>
                 </div>
             )}
         </div>
@@ -28,23 +55,13 @@ pub fn CharacterList(ctx: *zx.ComponentCtx(void)) zx.Component {
 
 fn emptyState(allocator: zx.Allocator) zx.Component {
     return (
-        <p @allocator={allocator} class="panel-empty">No characters loaded. Connect to the SillyTavern backend to see your characters.</p>
+        <p @allocator={allocator} class="panel-empty m-0 text-sm leading-ui text-muted">No characters loaded. Connect to the SillyTavern backend to see your characters.</p>
     );
 }
 
-fn listClass(grid: bool) []const u8 {
-    return if (grid) "char-list char-grid" else "char-list";
-}
-
-fn charClass(index: usize) []const u8 {
+fn isSelected(index: usize) bool {
     const sel = char_store.selectedIndex();
-    const selected = sel != null and sel.? == index;
-    const chars = char_store.global.slice();
-    const fav = if (index < chars.len) chars[index].fav else false;
-    if (selected and fav) return "char-item is-selected is-fav";
-    if (selected) return "char-item is-selected";
-    if (fav) return "char-item is-fav";
-    return "char-item";
+    return sel != null and sel.? == index;
 }
 
 fn avatarUrl(alloc: std.mem.Allocator, avatar: []const u8) []const u8 {

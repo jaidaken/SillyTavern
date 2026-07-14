@@ -38,7 +38,9 @@ pub fn build(b: *std.Build) !void {
         .source_dir = b.path("glue"),
         .install_dir = .prefix,
         .install_subdir = "static/glue",
-        .exclude_extensions = &.{ ".py", ".css" },
+        // Only .py. Excluding .css here would also drop glue/vendor/hljs-theme.css, which
+        // prune-dist requires; the source stylesheets it copies are pruned anyway.
+        .exclude_extensions = &.{".py"},
     });
     b.getInstallStep().dependOn(&install_glue.step);
     app_exe.step.dependOn(&install_glue.step);

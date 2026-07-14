@@ -1,58 +1,605 @@
-/* Layer order is fixed by FIRST APPEARANCE, so this must precede the tailwind import: declared
-   after it, `legacy` would register as a new last layer and BEAT utilities. It sits after
-   components (so preflight cannot override it) and before utilities (so a utility can). */
-@layer theme, base, components, legacy, utilities;
+/* ===================================================================================
+   SillyTavern beta client, the whole stylesheet.
 
+   ONE RULE decides what lives here and what lives in the markup: if we author the
+   element, its style is a utility on that element in its .zx file. If the HTML is
+   generated at runtime (a message body: markdown -> md4c -> DOMPurify), no class of
+   ours can reach it, so its style lives here. What is left therefore has one job each:
+   the tokens, the state hooks, the icon masks, and the reading surface.
+
+   The theme is "Scriptorium": a warm near-black writing desk for long dark-room
+   reading. The prose and the speaker names are set in a book serif (Newsreader), the
+   chrome ticks along in mono, and one committed candlelight amber marks the single
+   active/focus signal.
+   =================================================================================== */
 @import "tailwindcss";
-@import "./app-base.css" layer(legacy);
-@import "./app-responsive.css" layer(legacy);
 
-/* Markup only. Scanning *.zig fed 2174 candidates (vs 619 from .zx) of ordinary Zig identifiers
-   and generated ~3KB of CSS nothing uses; Zig publishes state as attributes, never class names. */
+/* Markup only. Scanning *.zig fed 2174 candidates (vs 619 from .zx) of ordinary Zig identifiers and
+   generated ~3KB of CSS nothing used. Zig publishes state as attributes and never computes a class
+   name, so no name it emits has to be safelisted here. */
 @source "../app/**/*.zx";
 
-/* ---- Safelist: runtime-computed classes that no static scanner can detect ----
-   ui_state.zig drawerClass() concatenates icon ++ " is-open" at runtime;
-   motionClass() / sideClass() return state-dependent strings. These must
-   always be emitted even if the scanner never sees a complete literal. */
-@source inline("panel-left panel-right motion-on motion-off is-open is-active is-fav seg-btn char-grid char-tag char-panel-stack char-toolbar char-toolbar-row char-search char-tool char-tags char-pager char-page-label char-pagesize char-list char-item char-fav-star char-avatar char-info char-name char-desc char-actions char-actions-bar char-act-btn char-act-danger char-actions-selected char-actions-name char-actions-row char-actions-hint char-import-input i-sliders i-plug i-font i-book i-cog i-image i-cubes i-user i-card i-menu i-send i-stop");
-
-/* ---- Theme: map Scriptorium design tokens into Tailwind's system ----
-   This makes utilities like bg-surface, text-muted, font-serif, p-2, gap-3,
-   rounded-lg available for use in .zx files. Existing app-base.css uses
-   var(--token) directly so this is additive, not breaking. */
+/* ---- Tokens. THE source: every utility and every rule below reads these, and nothing else defines
+   one. (They used to be defined twice, here and again as a :root block; the drift that invites is
+   why the second copy is gone.) ---- */
 @theme {
-    /* Colors */
+    /* Warm near-black ground, hue ~70 (candlelit amber-grey), small warm chroma on neutrals. */
     --color-bg: oklch(0.180 0.012 70);
     --color-surface: oklch(0.215 0.013 70);
     --color-surface-2: oklch(0.262 0.014 70);
     --color-border: oklch(0.320 0.014 70);
     --color-border-soft: oklch(0.268 0.012 70);
+    /* Interactive control edges: >= 3:1 vs bg (3.71) and vs surface (3.46), WCAG 1.4.11. */
     --color-control-border: oklch(0.540 0.018 72);
     --color-text: oklch(0.905 0.010 80);
     --color-muted: oklch(0.780 0.012 74);
     --color-faint: oklch(0.680 0.012 74);
     --color-code-bg: oklch(0.150 0.010 70);
+
+    /* One committed accent (candlelight amber, gold not terracotta), for interactive + focus. */
     --color-accent: oklch(0.770 0.130 72);
     --color-on-accent: oklch(0.185 0.020 70);
+
+    /* Roleplay text roles: speech in spoken gold, action/scene in warm grey. */
     --color-st-quote: oklch(0.850 0.088 78);
     --color-st-em: oklch(0.800 0.014 74);
 
-    /* Typography */
+    /* Accent mixes for the CHROME, named once so one amber drives every state surface. Each sits on
+       its own ground rather than as alpha over it, so it reads the same whatever is behind it. The
+       reading surface deliberately does NOT use these: inside #chat a reading theme repoints the
+       accent, and a mix resolved up here would keep the dark theme's amber, so those few mixes are
+       written in place instead. */
+    --color-selected: color-mix(in oklch, var(--color-accent) 18%, var(--color-surface-2));
+    --color-selected-ring: color-mix(in oklch, var(--color-accent) 40%, transparent);
+    --color-tool-hover: color-mix(in oklch, var(--color-accent) 14%, var(--color-surface-2));
+    --color-tool-on: color-mix(in oklch, var(--color-accent) 28%, var(--color-surface-2));
+    --color-tool-ring: color-mix(in oklch, var(--color-accent) 50%, transparent);
+    --color-tag-on: color-mix(in oklch, var(--color-accent) 22%, var(--color-surface-2));
+    --color-danger-hover: color-mix(in oklch, var(--danger, red) 22%, var(--color-surface-2));
+    --color-danger-ring: color-mix(in oklch, var(--danger, red) 50%, transparent);
+    --color-beta-edge: color-mix(in oklch, var(--color-accent) 40%, transparent);
+    --color-resize: color-mix(in oklch, var(--color-accent) 30%, transparent);
+
+    /* Type: 2 self-hosted Latin families (book serif for reading + UI, mono for chrome + code). Any
+       script they don't cover (CJK, Thai, Arabic, Indic, Cyrillic, Greek...) falls through to the
+       OS font: ui-serif/ui-monospace pick the platform UI face, and the trailing generic keyword is
+       the script-aware catch-all the browser resolves per character. Non-Latin renders in the
+       viewer's own system font, never tofu. */
     --font-serif: "Newsreader", ui-serif, Georgia, Cambria, "Times New Roman", serif;
     --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
 
-    /* Spacing (mapped from existing --s-* tokens) */
-    --spacing-1: 0.25rem;
-    --spacing-2: 0.5rem;
-    --spacing-3: 0.75rem;
-    --spacing-4: 1rem;
-    --spacing-5: 1.5rem;
-    --spacing-6: 2rem;
+    /* The scale is ours: `initial` clears tailwind's, INCLUDING its paired --text-*--line-height
+       values, so a text-* utility sets the size alone and the line-height keeps cascading from the
+       region. Line-height belongs to the reading controls; a font size must not overrule them. */
+    --text-*: initial;
+    --text-xs: 0.75rem;
+    --text-sm: 0.85rem;
+    --text-base: 1rem;
+    --text-md: 1.0625rem;
+    --text-lg: 1.25rem;
+    --text-name: 1.12rem;
 
-    /* Radii */
+    --leading-*: initial;
+    --leading-tight: 1.2;
+    --leading-ui: 1.45;
+    --leading-prose: 1.62;
+
+    /* Radius: tight, a sharp writing-desk edge, not pill-everything. */
     --radius-sm: 2px;
     --radius-md: 3px;
     --radius-lg: 4px;
     --radius-full: 9999px;
+
+    /* Motion curves: settle for enter, drawer curve for the docks. */
+    --ease-settle: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+    --animate-panel-in: panel-in 220ms var(--ease-drawer);
+    --animate-panel-in-right: panel-in-right 220ms var(--ease-drawer);
+    --animate-drawer-in: drawer-in 200ms var(--ease-drawer);
+
+    /* --move scales MOVEMENT (transform) only; the opacity fade always plays, so reduced motion is
+       gentler rather than absent (WD25). */
+    @keyframes panel-in {
+        from { opacity: 0; transform: translateX(calc(var(--move) * -12px)); }
+        to { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes panel-in-right {
+        from { opacity: 0; transform: translateX(calc(var(--move) * 12px)); }
+        to { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes drawer-in {
+        from { opacity: 0; transform: translateY(calc(var(--move) * -10px)); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+}
+
+/* No utility reads these, so they are not theme keys: the reading measure the chat column is capped
+   at, the top bar's height (the drawer and the mobile docks position against it), and the motion
+   scale. --move follows the OS preference; the in-app setting overrides it through the class Zig
+   puts on #shell, and :has() lifts that to :root so it reaches all three sibling regions. */
+:root {
+    --measure: 40rem;
+    --topbar-h: 3rem;
+    --move: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :root { --move: 0; }
+}
+
+:root:has(#shell.motion-on) { --move: 1; }
+:root:has(#shell.motion-off) { --move: 0; }
+
+/* ---- State hooks: Zig publishes the STATE, the markup declares what it LOOKS like ----
+   Zig emits a data attribute, or a class where the interaction gate already pins the name; the
+   variant turns that state into an appearance the markup asks for (selected:bg-selected). No
+   appearance class is computed in Zig, so nothing here needs safelisting. Where valid ARIA already
+   carries the state (aria-expanded on a drawer button, aria-pressed on a toggle, aria-checked on a
+   motion radio), the markup styles off tailwind's built-in aria-* variants instead of inventing a
+   hook. */
+@custom-variant selected (&:is([data-selected="true"], .is-selected));
+@custom-variant dragging (&.is-dragging);
+
+/* ---- Icon masks (Feather-style; the mask uses the path, the colour comes from currentColor) ----
+   `icon` draws the mask on the control. WHICH glyph is data, not appearance: the panel table in
+   ui_state.zig names it, and the scanner reads .zx only, so a utility class named there would never
+   be generated. The glyph is keyed by the data-icon attribute Zig already emits. */
+@utility icon {
+    &::before {
+        content: "";
+        display: block;
+        width: 1.1rem;
+        height: 1.1rem;
+        background: currentColor;
+        -webkit-mask: var(--i) center / contain no-repeat;
+        mask: var(--i) center / contain no-repeat;
+    }
+}
+
+[data-icon="sliders"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>'); }
+[data-icon="plug"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>'); }
+[data-icon="font"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>'); }
+[data-icon="book"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>'); }
+[data-icon="cog"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>'); }
+[data-icon="image"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>'); }
+[data-icon="cubes"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>'); }
+[data-icon="user"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>'); }
+[data-icon="card"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><circle cx="8" cy="10" r="2"/><path d="M14 9h4M14 13h4M6 16h5"/></svg>'); }
+[data-icon="menu"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>'); }
+[data-icon="send"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>'); }
+[data-icon="stop"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="black" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>'); }
+[data-icon="close"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'); }
+
+/* ---- Fonts (self-hosted, latin subset). Newsreader is a variable face: one file carries weight
+   400-600 plus optical sizing, so names read as display and body as text. */
+@font-face { font-family: "Newsreader"; font-style: normal; font-weight: 400 700; font-display: swap; font-optical-sizing: auto; src: url("./fonts/Newsreader-latin.woff2") format("woff2"); }
+@font-face { font-family: "Newsreader"; font-style: italic; font-weight: 400 700; font-display: swap; font-optical-sizing: auto; src: url("./fonts/Newsreader-latin-italic.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 100 800; font-display: swap; src: url("./fonts/JetBrainsMono-latin.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: italic; font-weight: 100 800; font-display: swap; src: url("./fonts/JetBrainsMono-latin-italic.woff2") format("woff2"); }
+/* The latin subsets carry no Greek: a bare beta would silently fall back to a system face inside the
+   wordmark. This 712-byte cut of JetBrains Mono holds U+03B2 alone, and unicode-range means the
+   browser fetches it only where the compact mark actually renders it (narrow viewports). */
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 100 800; font-display: swap; src: url("./fonts/JetBrainsMono-beta.woff2") format("woff2"); unicode-range: U+03B2; }
+
+/* ---- The three rules no element can carry ----
+   A selection and a focus ring are drawn on elements we do not author (a link inside a rendered
+   message), and both must pick up the reading theme's accent where they land, so each mix is written
+   in place rather than read from a token resolved at the root. #shell's box vanishes so the topbar
+   and the docks lay out directly in #chat-root's grid; its class attribute is the motion state Zig
+   publishes, so it cannot also carry a utility. */
+::selection {
+    background: color-mix(in oklch, var(--color-accent) 30%, transparent);
+}
+
+:where(a, button, input, select, textarea, summary, [tabindex], [contenteditable]):focus-visible {
+    outline: 2px solid color-mix(in oklch, var(--color-accent) 70%, transparent);
+    outline-offset: 2px;
+}
+
+#shell {
+    display: contents;
+}
+
+/* ===================================================================================
+   THE READING SURFACE.
+   A message body is markdown turned into HTML at runtime, so we never author its
+   elements and no utility can reach them: their styling is here, and only here. The
+   frame around the body (.mes, the speaker name, the candlelight margin rule) stays
+   with it, because the regression gate pins those three class attributes exactly as
+   they read today and the signature has to survive intact.
+   =================================================================================== */
+.mes {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.75rem 1rem;
+    align-items: start;
+    position: relative;
+    padding-block: 1rem;
+    padding-inline-start: 1rem;
+    border-bottom: 1px solid var(--color-border-soft);
+    /* Skip layout + paint for off-screen messages so a long roleplay log stays cheap; the intrinsic
+       size reserves scroll height for what is not yet rendered. */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 5rem;
+}
+
+.mes:last-child {
+    border-bottom: 0;
+}
+
+/* Signature (WD63): a candlelight margin rule down each message; it draws in as the arrival "ink". */
+.mes::before {
+    content: "";
+    position: absolute;
+    inset-block: 1rem;
+    inset-inline-start: 0;
+    width: 2px;
+    background: color-mix(in oklch, var(--color-accent) 42%, transparent);
+    transform-origin: top;
+}
+
+/* The speaker name is the character's voice on the page: book serif, warm-tinted, mixed case. */
+.mes_name {
+    grid-column: 2;
+    font-family: var(--font-serif);
+    font-size: var(--text-name);
+    font-weight: 600;
+    letter-spacing: 0.005em;
+    color: color-mix(in oklch, var(--color-accent) 24%, var(--color-text));
+    margin-block-end: 0.5rem;
+}
+
+.mes_text {
+    grid-column: 2;
+    font-family: var(--font-serif);
+    /* Size and line-height are reading-control vars (the settings panel sets them per user); they
+       default to the base tokens. */
+    font-size: var(--reading-size, var(--text-md));
+    line-height: var(--reading-lh, var(--leading-prose));
+    color: var(--color-text);
+    overflow-wrap: break-word;
+    /* Avoid stranded single lines at paragraph breaks. */
+    orphans: 2;
+    widows: 2;
+    /* Reading-surface typography: pretty wrapping avoids a stranded last word; Newsreader's oldstyle
+       proportional figures sit like lowercase for a book feel. Code is in <pre> (no wrap) and mono
+       (fixed width) so neither tweak affects it. */
+    text-wrap: pretty;
+    hanging-punctuation: first allow-end;
+    font-variant-numeric: oldstyle-figures proportional-nums;
+    /* Trim the font leading so text sits optically centred; progressive, ignored where unsupported. */
+    text-box: trim-both cap alphabetic;
+}
+
+.mes_text > *:first-child { margin-top: 0; }
+.mes_text > *:last-child { margin-bottom: 0; }
+
+.mes_text p {
+    margin: 0 0 0.7em;
+}
+
+/* Speech in warm amber, action/scene text in muted italic: the RP reading convention. */
+.mes_text q {
+    color: var(--color-st-quote);
+    quotes: none;
+}
+
+.mes_text q i,
+.mes_text q em {
+    color: inherit;
+}
+
+.mes_text em,
+.mes_text i {
+    color: var(--color-st-em);
+}
+
+.mes_text a {
+    color: var(--color-accent);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.15em;
+}
+
+.mes_text a:hover {
+    color: var(--color-st-quote);
+}
+
+.mes_text h1,
+.mes_text h2 {
+    font-size: var(--text-lg);
+    font-weight: 600;
+    line-height: var(--leading-tight);
+    margin: 0.7em 0 0.3em;
+}
+
+.mes_text h3,
+.mes_text h4,
+.mes_text h5,
+.mes_text h6 {
+    font-size: var(--text-md);
+    font-weight: 600;
+    line-height: var(--leading-tight);
+    margin: 0.7em 0 0.3em;
+}
+
+.mes_text blockquote {
+    margin: 0.6em 0;
+    padding-left: 0.75rem;
+    border-left: 2px solid color-mix(in oklch, var(--color-accent) 55%, transparent);
+    color: var(--color-muted);
+    font-style: italic;
+}
+
+.mes_text table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    border-collapse: collapse;
+    margin: 0.5em 0;
+    font-family: var(--font-serif);
+    font-size: var(--text-sm);
+}
+
+.mes_text th,
+.mes_text td {
+    border: 1px solid var(--color-border);
+    padding: 0.25rem 0.6rem;
+    text-align: left;
+}
+
+.mes_text pre {
+    background: var(--color-code-bg);
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-md);
+    padding: 0.75rem 1rem;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    line-height: 1.5;
+}
+
+/* hljs paints its own cool bg + 1em padding on code.hljs; strip both so only the warm pre shows. */
+.mes_text pre code.hljs {
+    background: transparent;
+    padding: 0;
+}
+
+.mes_text :not(pre) > code {
+    background: var(--color-surface-2);
+    border-radius: var(--radius-sm);
+    padding: 0.1rem 0.3rem;
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+}
+
+.mes_text hr {
+    border: 0;
+    border-top: 1px solid var(--color-border);
+    margin: 1em 0;
+}
+
+.mes_text img {
+    max-width: 100%;
+    height: auto;
+    vertical-align: middle;
+}
+
+.mes_text ul,
+.mes_text ol {
+    padding-inline-start: 1.5rem;
+}
+
+/* Match the bullet-list indent (no negative pull): checklist and bullet items align in one column. */
+.mes_text li.task-list-item {
+    list-style: none;
+}
+
+.mes_text li.task-list-item input {
+    margin-inline-end: 0.4rem;
+}
+
+/* ---- Reading controls ----
+   The client sets data-reading-* on #chat-root, which does NOT re-render with the Shell region, so
+   the values (and the control highlights keyed off them) survive a settings re-render. Every rule is
+   scoped to the message reading area, never the app chrome. */
+#chat-root[data-reading-size="s"] { --reading-size: 0.95rem; }
+#chat-root[data-reading-size="m"] { --reading-size: var(--text-md); }
+#chat-root[data-reading-size="l"] { --reading-size: 1.2rem; }
+#chat-root[data-reading-measure="narrow"] { --reading-measure: 34rem; }
+#chat-root[data-reading-measure="normal"] { --reading-measure: var(--measure); }
+#chat-root[data-reading-measure="wide"] { --reading-measure: 48rem; }
+#chat-root[data-reading-lh="tight"] { --reading-lh: 1.45; }
+#chat-root[data-reading-lh="normal"] { --reading-lh: var(--leading-prose); }
+#chat-root[data-reading-lh="loose"] { --reading-lh: 1.85; }
+#chat-root[data-reading-avatars="off"] .mes_avatar { display: none; }
+
+/* Justify defaults on; only long messages carry mes-justify (message.zx). Hyphenation is what stops
+   native justification opening whitespace rivers. The pref turns it off. */
+.mes_text.mes-justify {
+    text-align: justify;
+    hyphens: auto;
+    -webkit-hyphens: auto;
+    hyphenate-limit-chars: 6 3 2;
+}
+#chat-root[data-reading-justify="off"] .mes_text.mes-justify {
+    text-align: left;
+    hyphens: none;
+    -webkit-hyphens: none;
+}
+
+/* Novel paragraphs: first-line indent, a tiny inter-paragraph gap so the reader can always see the
+   break. The default ("chat") keeps block spacing with no indent, the standard web convention. Every
+   <p> gets the indent and a sliver of margin, so the break shows whatever sits between them. */
+#chat-root[data-reading-indent="novel"] .mes_text p {
+    margin-block-end: 0.35em;
+    text-indent: 1.2em;
+}
+#chat-root[data-reading-indent="novel"] .mes_text p:first-of-type {
+    text-indent: 1.2em;
+}
+#chat-root[data-reading-indent="chat"] .mes_text p {
+    margin-block: 0 0.5em;
+    text-indent: 0;
+}
+
+/* Reading themes recolour the message area only (scoped to #chat); the accent darkens so links and
+   names stay legible on the light grounds. The default (dark) needs no override. */
+#chat-root[data-reading-theme="sepia"] #chat {
+    --color-bg: oklch(0.923 0.028 84);
+    --color-text: oklch(0.315 0.021 60);
+    --color-accent: oklch(0.520 0.110 55);
+    --color-border-soft: oklch(0.86 0.02 84);
+    /* Speech + emphasis must darken too, or dialogue (the most common styled RP text) sits near-invisible. */
+    --color-st-quote: oklch(0.450 0.115 72);
+    --color-st-em: oklch(0.400 0.020 66);
+    background: var(--color-bg);
+}
+#chat-root[data-reading-theme="paper"] #chat {
+    --color-bg: oklch(0.968 0.006 90);
+    --color-text: oklch(0.255 0.012 60);
+    --color-accent: oklch(0.470 0.130 45);
+    --color-border-soft: oklch(0.90 0.006 90);
+    --color-st-quote: oklch(0.420 0.125 55);
+    --color-st-em: oklch(0.360 0.015 60);
+    background: var(--color-bg);
+}
+
+@media (max-width: 640px) {
+    .mes {
+        font-size: 0.92rem;
+        line-height: 1.55;
+        gap: 0.5rem 0.75rem;
+        padding-inline-start: 0.75rem;
+    }
+
+    .mes_name {
+        font-size: 0.82rem;
+    }
+
+    /* Headings tighten with the body text. Unscoped on purpose: it has to reach the headings inside
+       a rendered message, which carry no class of ours. */
+    h1, h2, h3, h4, h5, h6 {
+        line-height: 1.3;
+    }
+}
+
+/* ---- The arrival settle (WD63, the one signature move) ----
+   The block lifts in, the speaker name follows, and the amber margin rule draws down like ink. ziex
+   keeps stable element identity, so this fires once per message, not per re-render. --move zeroes
+   the movement alone under reduced motion: the opacity and the amber still play, and the character
+   carries on serif names, amber and warm ground regardless. Messages are held invisible until the
+   client adds .hydrated to #chat-root after the first render, so a message settles in complete (its
+   name never precedes its body) and the load reveals top to bottom. */
+#chat-root:not(.hydrated) .mes { opacity: 0; }
+
+#chat-root.hydrated .mes {
+    animation: mes-rise 300ms var(--ease-settle) both;
+    animation-delay: var(--md, 0ms);
+}
+
+#chat-root.hydrated .mes_name {
+    animation: mes-name 300ms var(--ease-settle) both;
+    animation-delay: calc(var(--md, 0ms) + 45ms);
+}
+
+#chat-root.hydrated .mes::before {
+    animation: mes-ink 420ms var(--ease-settle) both;
+    animation-delay: calc(var(--md, 0ms) + 80ms);
+}
+
+/* Stagger the initial reveal top-to-bottom; a live message past this list settles with no delay. */
+.chat-inner .mes:nth-child(1) { --md: 0ms; }
+.chat-inner .mes:nth-child(2) { --md: 100ms; }
+.chat-inner .mes:nth-child(3) { --md: 200ms; }
+.chat-inner .mes:nth-child(4) { --md: 300ms; }
+.chat-inner .mes:nth-child(5) { --md: 400ms; }
+.chat-inner .mes:nth-child(6) { --md: 500ms; }
+.chat-inner .mes:nth-child(7) { --md: 600ms; }
+.chat-inner .mes:nth-child(8) { --md: 700ms; }
+.chat-inner .mes:nth-child(9) { --md: 800ms; }
+.chat-inner .mes:nth-child(10) { --md: 900ms; }
+.chat-inner .mes:nth-child(11) { --md: 1000ms; }
+.chat-inner .mes:nth-child(12) { --md: 1100ms; }
+.chat-inner .mes:nth-child(13) { --md: 1200ms; }
+.chat-inner .mes:nth-child(14) { --md: 1300ms; }
+
+@keyframes mes-rise {
+    from { opacity: 0; transform: translateY(calc(var(--move) * 8px)); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes mes-name {
+    from { opacity: 0; transform: translateY(calc(var(--move) * 4px)); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes mes-ink {
+    from { opacity: 0; transform: scaleY(calc(1 - var(--move))); }
+    to { opacity: 1; transform: scaleY(1); }
+}
+
+/* ===================================================================================
+   GENERATED-STATE RULES. Deliberately UNLAYERED, so they beat any utility: the element
+   they light up is not the element whose state decides it. Which reading control is lit
+   is a property of #chat-root's data-reading-*, which the Shell region does not
+   re-render, so the highlight survives a re-render and no button carries an active
+   class. The avatar popup is built by the glue at runtime, so it has no markup of ours
+   to carry utilities either.
+   =================================================================================== */
+#chat-root[data-reading-size="s"] .seg-btn[data-reading-set="size"][data-reading-val="s"],
+#chat-root[data-reading-size="m"] .seg-btn[data-reading-set="size"][data-reading-val="m"],
+#chat-root[data-reading-size="l"] .seg-btn[data-reading-set="size"][data-reading-val="l"],
+#chat-root[data-reading-measure="narrow"] .seg-btn[data-reading-set="measure"][data-reading-val="narrow"],
+#chat-root[data-reading-measure="normal"] .seg-btn[data-reading-set="measure"][data-reading-val="normal"],
+#chat-root[data-reading-measure="wide"] .seg-btn[data-reading-set="measure"][data-reading-val="wide"],
+#chat-root[data-reading-lh="tight"] .seg-btn[data-reading-set="lh"][data-reading-val="tight"],
+#chat-root[data-reading-lh="normal"] .seg-btn[data-reading-set="lh"][data-reading-val="normal"],
+#chat-root[data-reading-lh="loose"] .seg-btn[data-reading-set="lh"][data-reading-val="loose"],
+#chat-root[data-reading-justify="on"] .seg-btn[data-reading-set="justify"][data-reading-val="on"],
+#chat-root[data-reading-justify="off"] .seg-btn[data-reading-set="justify"][data-reading-val="off"],
+#chat-root[data-reading-indent="novel"] .seg-btn[data-reading-set="indent"][data-reading-val="novel"],
+#chat-root[data-reading-indent="chat"] .seg-btn[data-reading-set="indent"][data-reading-val="chat"],
+#chat-root[data-reading-theme="dark"] .seg-btn[data-reading-set="theme"][data-reading-val="dark"],
+#chat-root[data-reading-theme="sepia"] .seg-btn[data-reading-set="theme"][data-reading-val="sepia"],
+#chat-root[data-reading-theme="paper"] .seg-btn[data-reading-set="theme"][data-reading-val="paper"] {
+    background: var(--color-surface-2);
+    color: var(--color-accent);
+}
+
+#chat-root[data-reading-tab="reading"] .settings-tab[data-reading-val="reading"],
+#chat-root[data-reading-tab="appearance"] .settings-tab[data-reading-val="appearance"] {
+    color: var(--color-accent);
+    border-bottom-color: var(--color-accent);
+}
+
+.settings-panel { display: none; }
+.settings-panel[data-tab="reading"] { display: block; }
+#chat-root[data-reading-tab="appearance"] .settings-panel[data-tab="reading"] { display: none; }
+#chat-root[data-reading-tab="appearance"] .settings-panel[data-tab="appearance"] { display: block; }
+
+/* Avatar popup: full-size preview to the left of the chat area. */
+#avatar-popup {
+    display: none;
+    position: fixed;
+    z-index: 100;
+    inset: 0;
+    background: oklch(0 0 0 / 0.4);
+    cursor: zoom-out;
+}
+#avatar-popup.is-open {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 2rem;
+}
+#avatar-popup img {
+    max-width: min(40vw, 480px);
+    max-height: 80vh;
+    border-radius: var(--radius-lg);
+    box-shadow: 0 8px 32px oklch(0 0 0 / 0.5);
+    object-fit: contain;
+    background: var(--color-bg);
+    cursor: default;
 }
