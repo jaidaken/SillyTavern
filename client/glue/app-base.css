@@ -121,6 +121,9 @@ body {
 /* Present to assistive tech, removed from the visual flow (the composer's <label for=send_textarea>). */
 .visually-hidden {
     position: absolute;
+    /* Pinned: the flex static position put the composer label 1px past the viewport, growing the page. */
+    top: 0;
+    left: 0;
     width: 1px;
     height: 1px;
     padding: 0;
