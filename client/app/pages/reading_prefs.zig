@@ -37,7 +37,7 @@ fn defaultFor(comptime key: []const u8) []const u8 {
     if (std.mem.eql(u8, key, "measure")) return "normal";
     if (std.mem.eql(u8, key, "lh")) return "normal";
     if (std.mem.eql(u8, key, "justify")) return "on";
-    if (std.mem.eql(u8, key, "indent")) return "novel";
+    if (std.mem.eql(u8, key, "indent")) return "chat";
     if (std.mem.eql(u8, key, "theme")) return "dark";
     if (std.mem.eql(u8, key, "tab")) return "reading";
     if (std.mem.eql(u8, key, "avatars")) return "on";
