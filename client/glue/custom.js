@@ -698,6 +698,14 @@
                 log.chars.debug('seeded greeting for', c.name);
             }
             log.chars.info('opened chat:', c.name, '(' + msgs.length + ' messages)');
+            // Land on the newest message (upstream ST behavior); the wasm render lands on the
+            // next frame, so scroll after two rAFs.
+            requestAnimationFrame(function () {
+                requestAnimationFrame(function () {
+                    const lastMes = document.querySelector('#chat .mes:last-child');
+                    if (lastMes) lastMes.scrollIntoView({ block: 'end' });
+                });
+            });
         } catch (err) {
             log.chars.error('chat load failed:', err);
         } finally {
