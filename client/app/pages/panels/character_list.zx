@@ -50,35 +50,46 @@ fn avatarUrl(alloc: std.mem.Allocator, avatar: []const u8) []const u8 {
     return std.fmt.allocPrint(alloc, "../thumbnail?type=avatar&file={s}", .{avatar}) catch "";
 }
 
-fn onCharSelect(e: *zx.client.Event.Stateful) void {
-    if (zx.platform.role != .client) return;
-    const event = e.getEvent();
-    // If the click landed on an inline action control (e.g. the fav star), let that handler run
-    // instead of selecting/loading the character.
-    const real_target = event.ref.get(zx.client.js.Object, "target") catch return;
-    var t: ?zx.client.js.Object = real_target;
-    while (t) |elem| {
-        const ds = elem.get(zx.client.js.Object, "dataset") catch { t = elem.get(zx.client.js.Object, "parentElement") catch null; continue; };
-        const act = ds.getAlloc(zx.client.js.String, zx.allocator, "charAction") catch { t = elem.get(zx.client.js.Object, "parentElement") catch null; continue; };
-        defer zx.allocator.free(act);
-        if (act.len > 0) return;
-        t = elem.get(zx.client.js.Object, "parentElement") catch null;
-    }
-    const current_target = event.ref.get(zx.client.js.Object, "currentTarget") catch return;
-    // Find the element with data-char-select (could be target or ancestor)
-    var el: ?zx.client.js.Object = current_target;
+const chars_log = std.log.scoped(.chars);
+
+// Walk target -> parents for a dataset key, returning the owned value. ziex delegated dispatch
+// reports currentTarget as the delegation root (body), never the bound element, so every lookup
+// MUST start from `target` (audit trap T1); starting from currentTarget makes clicks on child
+// elements (avatar, name) silently dead.
+fn datasetUp(start: zx.client.js.Object, comptime key: []const u8) ?[]const u8 {
+    var el: ?zx.client.js.Object = start;
     while (el) |elem| {
-        const dataset = elem.get(zx.client.js.Object, "dataset") catch { el = elem.get(zx.client.js.Object, "parentElement") catch null; continue; };
-        const index_str = dataset.getAlloc(zx.client.js.String, zx.allocator, "charSelect") catch { el = elem.get(zx.client.js.Object, "parentElement") catch null; continue; };
-        defer zx.allocator.free(index_str);
-        if (index_str.len > 0) {
-            const index = std.fmt.parseInt(u32, index_str, 10) catch return;
-            // Load character chat via fetch
-            loadCharacterChat(index);
-            return;
+        blk: {
+            const ds = elem.get(zx.client.js.Object, "dataset") catch break :blk;
+            const val = ds.getAlloc(zx.client.js.String, zx.allocator, key) catch break :blk;
+            if (val.len > 0) return val;
+            zx.allocator.free(val);
         }
         el = elem.get(zx.client.js.Object, "parentElement") catch null;
     }
+    return null;
+}
+
+fn onCharSelect(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const event = e.getEvent();
+    const target = event.ref.get(zx.client.js.Object, "target") catch {
+        chars_log.warn("char select: event carries no target", .{});
+        return;
+    };
+    // An inline action control (fav star) owns its click; the select handler stands down.
+    if (datasetUp(target, "charAction")) |act| {
+        zx.allocator.free(act);
+        return;
+    }
+    if (datasetUp(target, "charSelect")) |index_str| {
+        defer zx.allocator.free(index_str);
+        const index = std.fmt.parseInt(u32, index_str, 10) catch return;
+        chars_log.debug("char select: index {d}", .{index});
+        loadCharacterChat(index);
+        return;
+    }
+    chars_log.warn("char select: click target has no data-char-select ancestor", .{});
 }
 
 fn loadCharacterChat(index: u32) void {
@@ -90,12 +101,13 @@ fn loadCharacterChat(index: u32) void {
 fn onItemAction(e: *zx.client.Event.Stateful) void {
     if (zx.platform.role != .client) return;
     const event = e.getEvent();
-    const target = event.ref.get(zx.client.js.Object, "currentTarget") catch return;
-    const dataset = target.get(zx.client.js.Object, "dataset") catch return;
-    const action = dataset.getAlloc(zx.client.js.String, zx.allocator, "charAction") catch return;
+    const target = event.ref.get(zx.client.js.Object, "target") catch return;
+    const action = datasetUp(target, "charAction") orelse {
+        chars_log.warn("item action: click target has no data-char-action ancestor", .{});
+        return;
+    };
     defer zx.allocator.free(action);
-    if (action.len == 0) return;
-    const idx_str = dataset.getAlloc(zx.client.js.String, zx.allocator, "charIndex") catch return;
+    const idx_str = datasetUp(target, "charIndex") orelse return;
     defer zx.allocator.free(idx_str);
     const index = std.fmt.parseInt(u32, idx_str, 10) catch return;
     const global = zx.client.js.global;

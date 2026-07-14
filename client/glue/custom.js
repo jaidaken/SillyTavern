@@ -697,6 +697,7 @@
                 appendMessageInWasm(c.name, greeting, charAvatarUrl);
                 log.chars.debug('seeded greeting for', c.name);
             }
+            log.chars.info('opened chat:', c.name, '(' + msgs.length + ' messages)');
         } catch (err) {
             log.chars.error('chat load failed:', err);
         } finally {
