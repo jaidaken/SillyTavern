@@ -9,6 +9,7 @@
 const zx = @import("zx");
 const std = @import("std");
 const char_store = @import("../character_store.zig");
+const dom_event = @import("../dom_event.zig");
 
 pub fn CharacterActions(ctx: *zx.ComponentCtx(void)) zx.Component {
     const sel = char_store.selectedIndex();
@@ -63,17 +64,16 @@ fn selectedBlock(ctx: *zx.ComponentCtx(void), index: usize) zx.Component {
 
 fn onCharAction(e: *zx.client.Event.Stateful) void {
     if (zx.platform.role != .client) return;
-    const event = e.getEvent();
-    const target = event.ref.get(zx.client.js.Object, "currentTarget") catch return;
-    const dataset = target.get(zx.client.js.Object, "dataset") catch return;
-    const action = dataset.getAlloc(zx.client.js.String, zx.allocator, "charAction") catch return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const action = dom_event.datasetUp(target, "charAction") orelse {
+        std.log.scoped(.chars).warn("char action: event target has no data-char-action ancestor", .{});
+        return;
+    };
     defer zx.allocator.free(action);
-    if (action.len == 0) return;
 
     const index: ?u32 = blk: {
-        const s = dataset.getAlloc(zx.client.js.String, zx.allocator, "charIndex") catch break :blk null;
+        const s = dom_event.datasetUp(target, "charIndex") orelse break :blk null;
         defer zx.allocator.free(s);
-        if (s.len == 0) break :blk null;
         break :blk std.fmt.parseInt(u32, s, 10) catch null;
     };
 

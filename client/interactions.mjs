@@ -310,8 +310,8 @@ async function main() {
             'B5 page size select paginates (working target-based handler)');
         const label0 = await page.eval("document.querySelector('.char-page-label').textContent");
         await page.click('.char-pager [data-page="next"]');
-        row('pending', await page.waitFor(`document.querySelector('.char-page-label').textContent !== ${JSON.stringify(label0)}`, 2500),
-            'B6 [B4] pagination next advances the page');
+        row('must', await page.waitFor(`document.querySelector('.char-page-label').textContent !== ${JSON.stringify(label0)}`, 2500),
+            'B6 pagination next advances the page');
 
         await page.focus('.char-search');
         await page.insertText('rita');
@@ -319,12 +319,29 @@ async function main() {
         const kept = await page.eval("document.activeElement === document.querySelector('.char-search')");
         row('must', filtered && kept, 'B7 search filters and the input keeps focus', `filtered=${filtered} focus=${kept}`);
 
+        // Keyboard parity on the still-filtered single row: focus + Enter opens the chat.
+        consoleLines.length = 0;
+        await page.eval("document.querySelector('#chat-root .char-item').focus()");
+        await page.cdp.send('Input.dispatchKeyEvent',
+            { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }, page.sessionId);
+        await page.cdp.send('Input.dispatchKeyEvent',
+            { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }, page.sessionId);
+        const sawKeyOpen = await (async () => {
+            const deadline = Date.now() + 5000;
+            while (Date.now() < deadline) {
+                if (page.sawConsole('opened chat: Rita Recent')) return true;
+                await sleep(100);
+            }
+            return false;
+        })();
+        row('must', sawKeyOpen, 'B8a Enter on a focused character row opens the chat');
+
         await page.click('#d-persona');
         row('must', await page.waitFor("document.querySelectorAll('#persona-list .char-item').length >= 2", 5000),
             'B8 persona dock lists the mock personas');
         await page.click('#persona-list .char-item[data-persona-index="1"] .char-name');
-        row('pending', await page.waitFor("document.querySelector('#persona-list .char-item[data-persona-index=\\'1\\']').classList.contains('is-selected')", 2500),
-            'B9 [B4] persona row-child click selects the persona');
+        row('must', await page.waitFor("document.querySelector('#persona-list .char-item[data-persona-index=\\'1\\']').classList.contains('is-selected')", 2500),
+            'B9 persona row-child click selects the persona');
 
         await page.eval("localStorage.setItem('st-reading-size','s')");
         await page.navigate(`${args.base}/?demo=1`);

@@ -832,26 +832,7 @@
             }
             return;
         }
-        // Character select
-        if (e.target.matches('[data-char-select]')) {
-            const indexStr = e.target.getAttribute('data-char-select');
-            if (indexStr) {
-                const index = parseInt(indexStr, 10);
-                if (!isNaN(index)) loadCharacterChat(index);
-            }
-            return;
-        }
-        // Persona select
-        if (e.target.matches('[data-persona-index]')) {
-            const indexStr = e.target.getAttribute('data-persona-index');
-            if (indexStr) {
-                const index = parseInt(indexStr, 10);
-                if (!isNaN(index) && index < personas.length) {
-                    wasm.__st_select_persona(index);
-                }
-            }
-            return;
-        }
+        // Character + persona selection: zx handlers own them (their target-walk covers child clicks).
     }, false);
 
     // Composer auto-grow

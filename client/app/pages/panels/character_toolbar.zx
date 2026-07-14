@@ -9,6 +9,7 @@ const std = @import("std");
 const char_store = @import("../character_store.zig");
 const cv = @import("../character_view.zig");
 const regions = @import("../regions.zig");
+const dom_event = @import("../dom_event.zig");
 
 pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
     const view = cv.global;
@@ -174,10 +175,11 @@ fn onTagToggle(e: *zx.client.Event.Stateful) void {
 
 fn onPageStep(e: *zx.client.Event.Stateful) void {
     if (zx.platform.role != .client) return;
-    const event = e.getEvent();
-    const target = event.ref.get(zx.client.js.Object, "currentTarget") catch return;
-    const dataset = target.get(zx.client.js.Object, "dataset") catch return;
-    const step = dataset.getAlloc(zx.client.js.String, zx.allocator, "page") catch return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const step = dom_event.datasetUp(target, "page") orelse {
+        std.log.scoped(.chars).warn("page step: click target has no data-page ancestor", .{});
+        return;
+    };
     defer zx.allocator.free(step);
     const cur = cv.global.page;
     const pc = cv.global.pageCount();

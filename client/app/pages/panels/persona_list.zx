@@ -15,6 +15,7 @@ pub fn PersonaList(ctx: *zx.ComponentCtx(void)) zx.Component {
                     data-persona-index={i}
                     tabindex="0"
                     onclick={ctx.bind(onPersonaSelect)}
+                    onkeydown={ctx.bind(onPersonaKey)}
                 >
                     <img class="char-avatar" src={personaAvatarUrl(ctx.allocator, p.avatar)} alt={p.name} loading="lazy" />
                     <div class="char-info">
@@ -38,25 +39,28 @@ fn personaAvatarUrl(alloc: std.mem.Allocator, avatar: []const u8) []const u8 {
 
 fn onPersonaSelect(e: *zx.client.Event.Stateful) void {
     if (zx.platform.role != .client) return;
-    const event = e.getEvent();
-    const current_target = event.ref.get(zx.client.js.Object, "currentTarget") catch return;
-    // Find the element with data-persona-index (could be target or ancestor)
-    var el: ?zx.client.js.Object = current_target;
-    while (el) |elem| {
-        const dataset = elem.get(zx.client.js.Object, "dataset") catch { el = elem.get(zx.client.js.Object, "parentElement") catch null; continue; };
-        const index_str = dataset.getAlloc(zx.client.js.String, zx.allocator, "personaIndex") catch { el = elem.get(zx.client.js.Object, "parentElement") catch null; continue; };
-        defer zx.allocator.free(index_str);
-        if (index_str.len > 0) {
-            const index = std.fmt.parseInt(u32, index_str, 10) catch return;
-            if (index < persona_store.global.slice().len) {
-                persona_store.global.select(@intCast(index));
-            }
-            return;
-        }
-        el = elem.get(zx.client.js.Object, "parentElement") catch null;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const index_str = dom_event.datasetUp(target, "personaIndex") orelse {
+        std.log.scoped(.personas).warn("persona select: event target has no data-persona-index ancestor", .{});
+        return;
+    };
+    defer zx.allocator.free(index_str);
+    const index = std.fmt.parseInt(u32, index_str, 10) catch return;
+    if (index < persona_store.global.slice().len) {
+        persona_store.global.select(@intCast(index));
+        regions.bumpShell();
     }
+}
+
+// Enter/Space on a focused row selects it, matching the click path (WD37 keyboard parity).
+fn onPersonaKey(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    if (!dom_event.isActivationKey(e)) return;
+    onPersonaSelect(e);
 }
 
 const zx = @import("zx");
 const std = @import("std");
 const persona_store = @import("../persona_store.zig");
+const regions = @import("../regions.zig");
+const dom_event = @import("../dom_event.zig");
