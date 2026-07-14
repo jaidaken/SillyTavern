@@ -14,7 +14,9 @@ const dom_event = @import("../dom_event.zig");
 // The pressed state of a toggle (favourites-only, grid, a tag chip) is aria-pressed, which these
 // buttons carry for assistive tech anyway, so the highlight is declared off tailwind's built-in
 // aria-pressed variant. Nothing here computes a class.
-pub const tool_class = "char-tool inline-flex flex-none cursor-pointer items-center rounded-md border border-border bg-surface-2 text-xs text-text hover:bg-tool-hover aria-pressed:bg-tool-on aria-pressed:outline-1 aria-pressed:outline-tool-ring max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:px-3 max-[768px]:py-2";
+// gap-1 / px-2 py-1: the legacy rules asked for `var(--s-1)`, which the token scale never defined
+// (it starts at --s-2), so these controls rendered with no padding and no gap.
+pub const tool_class = "char-tool inline-flex flex-none cursor-pointer items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-1 text-xs text-text hover:bg-tool-hover aria-pressed:bg-tool-on aria-pressed:outline-1 aria-pressed:outline-tool-ring max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:px-3 max-[768px]:py-2";
 pub const tag_class = "char-tag cursor-pointer rounded-full border border-border bg-surface-2 px-2 py-px text-xs text-muted aria-pressed:bg-tag-on aria-pressed:text-text aria-pressed:outline-1 aria-pressed:outline-tool-ring max-[768px]:min-h-9 max-[768px]:px-3 max-[768px]:py-1";
 const row_class = "char-toolbar-row flex flex-wrap items-center gap-2 max-[640px]:gap-[0.2rem]";
 
@@ -65,7 +67,7 @@ pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
                     onclick={ctx.bind(onGridToggle)}
                 >Grid</button>
             </div>
-            <div class="char-tags flex flex-wrap" role="group" aria-label="Filter by tag">
+            <div class="char-tags flex flex-wrap gap-1" role="group" aria-label="Filter by tag">
                 {for (view.tags_all.items) |tag| (
                     <button
                         type="button"

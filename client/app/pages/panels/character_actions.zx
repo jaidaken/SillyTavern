@@ -16,8 +16,10 @@ const dom_event = @import("../dom_event.zig");
 // Delete is the one destructive action, so it wears the danger hover instead of the ordinary one:
 // its class list carries hover:bg-danger-hover and NOT hover:bg-tool-hover, which keeps the two
 // hovers from racing for the same property.
-const act_btn = "char-act-btn flex-none cursor-pointer rounded-md border border-border bg-surface-2 text-xs text-text hover:bg-tool-hover max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:px-3 max-[768px]:py-2 max-[640px]:flex-1 max-[640px]:justify-center";
-const act_danger = "char-act-btn char-act-danger flex-none cursor-pointer rounded-md border border-border bg-surface-2 text-xs text-text hover:bg-danger-hover hover:outline-1 hover:outline-danger-ring max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:px-3 max-[768px]:py-2 max-[640px]:flex-1 max-[640px]:justify-center";
+// py-1 px-3: the legacy rule asked for `var(--s-1) var(--s-3)`, but --s-1 was never defined in the
+// token scale (which starts at --s-2), so these buttons rendered with no padding at all.
+const act_btn = "char-act-btn flex-none cursor-pointer rounded-md border border-border bg-surface-2 px-3 py-1 text-xs text-text hover:bg-tool-hover max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:px-3 max-[768px]:py-2 max-[640px]:flex-1 max-[640px]:justify-center";
+const act_danger = "char-act-btn char-act-danger flex-none cursor-pointer rounded-md border border-border bg-surface-2 px-3 py-1 text-xs text-text hover:bg-danger-hover hover:outline-1 hover:outline-danger-ring max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:px-3 max-[768px]:py-2 max-[640px]:flex-1 max-[640px]:justify-center";
 const file_input = "char-import-input max-w-[9rem] text-xs text-muted";
 const hint_class = "char-actions-hint m-0 text-xs text-muted";
 
@@ -51,7 +53,7 @@ fn selectedBlock(ctx: *zx.ComponentCtx(void), index: usize) zx.Component {
     }
     const c = c_opt.?;
     return (
-        <div @allocator={ctx.allocator} class="char-actions-selected flex flex-col">
+        <div @allocator={ctx.allocator} class="char-actions-selected flex flex-col gap-1">
             <div class="char-actions-name truncate font-serif font-semibold text-text">{c.name}</div>
             {if (c.tags.len > 0) (
                 <div class="char-actions-tags" role="group" aria-label="Tags">
@@ -60,7 +62,7 @@ fn selectedBlock(ctx: *zx.ComponentCtx(void), index: usize) zx.Component {
                     )}
                 </div>
             )}
-            <div class="char-actions-row flex flex-wrap max-[640px]:gap-[0.4rem]">
+            <div class="char-actions-row flex flex-wrap gap-1 max-[640px]:gap-[0.4rem]">
                 <button class={act_btn} type="button" data-char-action="fav" data-char-index={index} onclick={ctx.bind(onCharAction)}>{if (c.fav) "Unfavourite" else "Favourite"}</button>
                 <button class={act_btn} type="button" data-char-action="rename" data-char-index={index} onclick={ctx.bind(onCharAction)}>Rename</button>
                 <button class={act_btn} type="button" data-char-action="duplicate" data-char-index={index} onclick={ctx.bind(onCharAction)}>Duplicate</button>

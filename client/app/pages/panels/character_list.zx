@@ -40,7 +40,7 @@ pub fn CharacterList(ctx: *zx.ComponentCtx(void)) zx.Component {
                     </div>
                     <button
                         type="button"
-                        class="char-fav-star ml-auto flex-none cursor-pointer border-none bg-transparent text-lg leading-none text-muted hover:text-accent data-[fav=true]:text-accent group-data-[view=grid]/list:absolute group-data-[view=grid]/list:top-[2px] group-data-[view=grid]/list:right-[2px] group-data-[view=grid]/list:ml-0 group-data-[view=grid]/list:[text-shadow:0_1px_2px_oklch(0_0_0/0.6)] max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:p-2"
+                        class="char-fav-star ml-auto flex-none cursor-pointer border-none bg-transparent px-1 text-lg leading-none text-muted hover:text-accent data-[fav=true]:text-accent group-data-[view=grid]/list:absolute group-data-[view=grid]/list:top-[2px] group-data-[view=grid]/list:right-[2px] group-data-[view=grid]/list:ml-0 group-data-[view=grid]/list:[text-shadow:0_1px_2px_oklch(0_0_0/0.6)] max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:p-2"
                         data-fav={if (it.char.fav) "true" else "false"}
                         data-char-action="fav"
                         data-char-index={it.index}

@@ -563,7 +563,9 @@
 #chat-root[data-reading-indent="chat"] .seg-btn[data-reading-set="indent"][data-reading-val="chat"],
 #chat-root[data-reading-theme="dark"] .seg-btn[data-reading-set="theme"][data-reading-val="dark"],
 #chat-root[data-reading-theme="sepia"] .seg-btn[data-reading-set="theme"][data-reading-val="sepia"],
-#chat-root[data-reading-theme="paper"] .seg-btn[data-reading-set="theme"][data-reading-val="paper"] {
+#chat-root[data-reading-theme="paper"] .seg-btn[data-reading-set="theme"][data-reading-val="paper"],
+#chat-root[data-reading-avatars="on"] .seg-btn[data-reading-set="avatars"][data-reading-val="on"],
+#chat-root[data-reading-avatars="off"] .seg-btn[data-reading-set="avatars"][data-reading-val="off"] {
     background: var(--color-surface-2);
     color: var(--color-accent);
 }
