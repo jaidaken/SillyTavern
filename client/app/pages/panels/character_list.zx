@@ -18,6 +18,7 @@ pub fn CharacterList(ctx: *zx.ComponentCtx(void)) zx.Component {
                         <div class="char-name">{it.char.name}</div>
                         <div class="char-desc">{it.char.description}</div>
                     </div>
+                    <button type="button" class="char-fav-star" data-char-action="fav" data-char-index={it.index} onclick={ctx.bind(onItemAction)} aria-label={if (it.char.fav) "Remove from favourites" else "Add to favourites"}>{if (it.char.fav) "★" else "☆"}</button>
                 </div>
             )}
         </div>
@@ -36,7 +37,13 @@ fn listClass(grid: bool) []const u8 {
 
 fn charClass(index: usize) []const u8 {
     const sel = char_store.selectedIndex();
-    return if (sel != null and sel.? == index) "char-item is-selected" else "char-item";
+    const selected = sel != null and sel.? == index;
+    const chars = char_store.global.slice();
+    const fav = if (index < chars.len) chars[index].fav else false;
+    if (selected and fav) return "char-item is-selected is-fav";
+    if (selected) return "char-item is-selected";
+    if (fav) return "char-item is-fav";
+    return "char-item";
 }
 
 fn avatarUrl(alloc: std.mem.Allocator, avatar: []const u8) []const u8 {
@@ -46,6 +53,17 @@ fn avatarUrl(alloc: std.mem.Allocator, avatar: []const u8) []const u8 {
 fn onCharSelect(e: *zx.client.Event.Stateful) void {
     if (zx.platform.role != .client) return;
     const event = e.getEvent();
+    // If the click landed on an inline action control (e.g. the fav star), let that handler run
+    // instead of selecting/loading the character.
+    const real_target = event.ref.get(zx.client.js.Object, "target") catch return;
+    var t: ?zx.client.js.Object = real_target;
+    while (t) |elem| {
+        const ds = elem.get(zx.client.js.Object, "dataset") catch { t = elem.get(zx.client.js.Object, "parentElement") catch null; continue; };
+        const act = ds.getAlloc(zx.client.js.String, zx.allocator, "charAction") catch { t = elem.get(zx.client.js.Object, "parentElement") catch null; continue; };
+        defer zx.allocator.free(act);
+        if (act.len > 0) return;
+        t = elem.get(zx.client.js.Object, "parentElement") catch null;
+    }
     const current_target = event.ref.get(zx.client.js.Object, "currentTarget") catch return;
     // Find the element with data-char-select (could be target or ancestor)
     var el: ?zx.client.js.Object = current_target;
@@ -67,6 +85,21 @@ fn loadCharacterChat(index: u32) void {
     // Trigger the bridge export to load the character chat
     const global = zx.client.js.global;
     global.call(void, "__st_load_character_chat", .{ index }) catch return;
+}
+
+fn onItemAction(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const event = e.getEvent();
+    const target = event.ref.get(zx.client.js.Object, "currentTarget") catch return;
+    const dataset = target.get(zx.client.js.Object, "dataset") catch return;
+    const action = dataset.getAlloc(zx.client.js.String, zx.allocator, "charAction") catch return;
+    defer zx.allocator.free(action);
+    if (action.len == 0) return;
+    const idx_str = dataset.getAlloc(zx.client.js.String, zx.allocator, "charIndex") catch return;
+    defer zx.allocator.free(idx_str);
+    const index = std.fmt.parseInt(u32, idx_str, 10) catch return;
+    const global = zx.client.js.global;
+    if (std.mem.eql(u8, action, "fav")) global.call(void, "__st_char_fav", .{index}) catch return;
 }
 
 const zx = @import("zx");

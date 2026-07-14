@@ -62,6 +62,17 @@ pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
                     >{tag}</button>
                 )}
             </div>
+            <div class="char-pager char-toolbar-row" role="group" aria-label="Pagination">
+                <button type="button" class="char-tool" data-page="prev" aria-label="Previous page" onclick={ctx.bind(onPageStep)}>‹</button>
+                <span class="char-page-label" aria-live="polite">{pageLabel(view)}</span>
+                <button type="button" class="char-tool" data-page="next" aria-label="Next page" onclick={ctx.bind(onPageStep)}>›</button>
+                <select class="char-pagesize text_pole" aria-label="Characters per page" value={pageSizeValue(view)} onchange={ctx.bind(onPageSizeChange)}>
+                    <option value="20">20</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="all">All</option>
+                </select>
+            </div>
         </div>
     );
 }
@@ -100,6 +111,16 @@ fn tagBtnClass(view: cv.View, tag: []const u8) []const u8 {
 
 fn sortValue(key: cv.SortKey) []const u8 {
     return @tagName(key);
+}
+
+fn pageSizeValue(view: cv.View) []const u8 {
+    if (view.page_size == 0) return "all";
+    return std.fmt.allocPrint(char_store.page_gpa, "{d}", .{view.page_size}) catch "20";
+}
+
+fn pageLabel(view: cv.View) []const u8 {
+    if (view.total == 0) return "No characters";
+    return std.fmt.allocPrint(char_store.page_gpa, "{d}–{d} of {d}", .{ view.pageFrom(), view.pageTo(), view.total }) catch "";
 }
 
 fn onSearchInput(e: *zx.client.Event.Stateful) void {
@@ -147,6 +168,40 @@ fn onTagToggle(e: *zx.client.Event.Stateful) void {
     const tag = dataset.getAlloc(zx.client.js.String, zx.allocator, "tag") catch return;
     defer zx.allocator.free(tag);
     cv.global.toggleTag(tag) catch return;
+    cv.global.compute(char_store.slice()) catch return;
+    regions.bumpShell();
+}
+
+fn onPageStep(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const event = e.getEvent();
+    const target = event.ref.get(zx.client.js.Object, "currentTarget") catch return;
+    const dataset = target.get(zx.client.js.Object, "dataset") catch return;
+    const step = dataset.getAlloc(zx.client.js.String, zx.allocator, "page") catch return;
+    defer zx.allocator.free(step);
+    const cur = cv.global.page;
+    const pc = cv.global.pageCount();
+    if (std.mem.eql(u8, step, "prev")) {
+        if (cur > 0) cv.global.setPage(cur - 1);
+    } else if (std.mem.eql(u8, step, "next")) {
+        if (cur + 1 < pc) cv.global.setPage(cur + 1);
+    }
+    cv.global.compute(char_store.slice()) catch return;
+    regions.bumpShell();
+}
+
+fn onPageSizeChange(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const event = e.getEvent();
+    const target = event.ref.get(zx.client.js.Object, "target") catch return;
+    const val = target.getAlloc(zx.client.js.String, zx.allocator, "value") catch return;
+    defer zx.allocator.free(val);
+    if (std.mem.eql(u8, val, "all")) {
+        cv.global.setPageSize(0);
+    } else {
+        const ps = std.fmt.parseInt(usize, val, 10) catch return;
+        cv.global.setPageSize(ps);
+    }
     cv.global.compute(char_store.slice()) catch return;
     regions.bumpShell();
 }

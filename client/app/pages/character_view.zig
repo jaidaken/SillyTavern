@@ -64,6 +64,11 @@ pub const View = struct {
     tags: std.ArrayList([]const u8) = .empty,
     fav_only: bool = false,
     grid: bool = false,
+    /// Pagination (client-side; the backend returns the whole list). page_size == 0 means "show all".
+    page: usize = 0,
+    page_size: usize = 0,
+    /// Total matching characters (before paging), for computing page count. Set by compute.
+    total: usize = 0,
     /// Most recent filter+sort result (owned by this View); null only before the first compute.
     result: ?[]const IndexedChar = null,
     /// Distinct tags across all characters, for rendering the tag-filter chips. Refreshed on compute.
@@ -103,6 +108,40 @@ pub const View = struct {
         self.grid = grid;
     }
 
+    pub fn setPage(self: *View, page: usize) void {
+        if (self.page_size == 0) {
+            self.page = 0;
+            return;
+        }
+        const pc = self.pageCount();
+        if (pc == 0) self.page = 0
+        else if (page >= pc) self.page = pc - 1
+        else self.page = page;
+    }
+
+    pub fn setPageSize(self: *View, page_size: usize) void {
+        self.page_size = page_size;
+        self.page = 0;
+    }
+
+    /// Number of pages given the current total; always at least 1.
+    pub fn pageCount(self: *const View) usize {
+        if (self.page_size == 0) return 1;
+        if (self.total == 0) return 1;
+        return (self.total + self.page_size - 1) / self.page_size;
+    }
+
+    /// 1-based "showing from..to of total" bounds for the current page (0 when empty).
+    pub fn pageFrom(self: *const View) usize {
+        if (self.page_size == 0 or self.total == 0) return if (self.total == 0) 0 else 1;
+        return self.page * self.page_size + 1;
+    }
+
+    pub fn pageTo(self: *const View) usize {
+        if (self.page_size == 0) return self.total;
+        return @min((self.page + 1) * self.page_size, self.total);
+    }
+
     pub fn setQuery(self: *View, query: []const u8) Allocator.Error!void {
         if (self.query_owned) |old| self.allocator.free(old);
         if (query.len == 0) {
@@ -126,10 +165,31 @@ pub const View = struct {
         try self.tags.append(self.allocator, try self.allocator.dupe(u8, tag));
     }
 
-    /// Recompute `result` and `tags_all` from `chars` (filter then sort). Frees previous first.
+    /// Recompute `result` and `tags_all` from `chars` (filter then sort, then page). Frees previous first.
     pub fn compute(self: *View, chars: []const Character) Allocator.Error!void {
         if (self.result) |r| self.allocator.free(r);
-        self.result = try apply(self.allocator, self.*, chars);
+        self.result = null;
+        const full = try apply(self.allocator, self.*, chars);
+        self.total = full.len;
+        // Clamp a stale page (e.g. after a filter narrowed the result) before slicing.
+        if (self.page_size > 0 and self.page >= self.pageCount()) {
+            self.page = if (self.pageCount() == 0) 0 else self.pageCount() - 1;
+        }
+        if (self.page_size > 0 and full.len > self.page_size) {
+            const start = @min(self.page * self.page_size, full.len);
+            const end = @min(start + self.page_size, full.len);
+            if (start < end) {
+                const slice = try self.allocator.alloc(IndexedChar, end - start);
+                for (slice, 0..) |*dst, i| dst.* = full[start + i];
+                self.allocator.free(full);
+                self.result = slice;
+            } else {
+                self.allocator.free(full);
+                self.result = &.{};
+            }
+        } else {
+            self.result = full;
+        }
         for (self.tags_all.items) |t| self.allocator.free(t);
         self.tags_all.clearRetainingCapacity();
         for (chars) |c| {
@@ -396,4 +456,31 @@ test "compute collects distinct tags and reports active state" {
     try testing.expectEqual(true, v.isTagActive("x"));
     try v.toggleTag("x");
     try testing.expectEqual(false, v.isTagActive("x"));
+}
+
+test "pagination slices the full result and clamps stale pages" {
+    const a = testing.allocator;
+    const names = [_][]const u8{ "0", "1", "2", "3", "4" };
+    var chars: [5]Character = undefined;
+    for (&chars, 0..) |*c, i| c.* = char(names[i], false, "", 0, 0, 0, &.{});
+    var v: View = .{ .allocator = a, .page_size = 2 };
+    try v.compute(&chars);
+    defer v.deinit();
+    // 5 chars at size 2 -> 3 pages; page 0 shows 2.
+    try testing.expectEqual(@as(usize, 5), v.total);
+    try testing.expectEqual(@as(usize, 3), v.pageCount());
+    try testing.expectEqual(@as(usize, 2), v.result.?.len);
+    try testing.expectEqualStrings("0", v.result.?[0].char.name);
+    try testing.expectEqual(@as(usize, 1), v.pageFrom());
+    try testing.expectEqual(@as(usize, 2), v.pageTo());
+
+    v.setPage(2);
+    try v.compute(&chars);
+    try testing.expectEqual(@as(usize, 1), v.result.?.len);
+    try testing.expectEqualStrings("4", v.result.?[0].char.name);
+
+    // Stale page past the end is clamped on recompute.
+    v.setPage(99);
+    try v.compute(&chars);
+    try testing.expectEqual(@as(usize, 2), v.page); // clamped to last page
 }

@@ -480,10 +480,12 @@
             const list = await res.json();
             if (!Array.isArray(list)) { console.warn('[st-client] char list response is not an array, got', typeof list); return; }
             initCharacters();
-            for (const c of list) {
+            list.forEach(function (c, i) {
                 jsCharacters.push(c);
                 addCharacterToWasm(c);
-            }
+                const cd = writeBytes(c.create_date || '');
+                wasm.__st_set_character_meta(i, cd.ptr, cd.len, c.date_last_chat || 0, c.chat_size || 0, c.data_size || 0);
+            });
             console.log('[st-client] loaded', list.length, 'characters');
         } catch (err) {
             console.warn('[st-client] char fetch error (is the backend running?)', err);
@@ -617,6 +619,111 @@
             console.warn('[st-client] chat load error', err);
         }
     }
+
+    // --- Character CRUD (client-initiated backend calls) ------------------------------
+    // Each op posts to /api/characters/*, then reloads the wasm character store via fetchCharacters()
+    // (which re-adds and bumps the shell). The Zig UI triggers these through
+    // zx.client.js.global.call(... "__st_char_*" ...). Pure additive; no existing behaviour changed.
+    window.__st_load_character_chat = loadCharacterChat;
+
+    async function charApiPost(url, body) {
+        await ensureCsrfToken();
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: withCsrf({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) { console.warn('[st-client]', url, 'failed', res.status); return null; }
+        return res;
+    }
+
+    window.__st_char_create = async function () {
+        const name = window.prompt('New character name:');
+        if (!name) return;
+        if (await charApiPost('/api/characters/create', { ch_name: name })) await fetchCharacters();
+    };
+
+    window.__st_char_import = async function () {
+        const input = document.getElementById('char-import-input');
+        if (!input || !input.files || !input.files[0]) return;
+        const file = input.files[0];
+        const ext = (file.name.split('.').pop() || '').toLowerCase();
+        const fd = new FormData();
+        fd.append('file', file);
+        fd.append('file_type', ext);
+        await ensureCsrfToken();
+        try {
+            const res = await fetch('/api/characters/import', { method: 'POST', headers: withCsrf({}), body: fd });
+            if (!res.ok) { console.warn('[st-client] import failed', res.status); window.alert('Import failed'); }
+            else await fetchCharacters();
+        } catch (err) { console.warn('[st-client] import error', err); }
+        input.value = '';
+    };
+
+    window.__st_char_rename = async function (index) {
+        const c = jsCharacters[index];
+        if (!c) return;
+        const name = window.prompt('Rename character:', c.name);
+        if (!name || name === c.name) return;
+        if (await charApiPost('/api/characters/rename', { avatar_url: c.avatar, new_name: name })) await fetchCharacters();
+    };
+
+    window.__st_char_duplicate = async function (index) {
+        const c = jsCharacters[index];
+        if (!c) return;
+        if (await charApiPost('/api/characters/duplicate', { avatar_url: c.avatar })) await fetchCharacters();
+    };
+
+    window.__st_char_delete = async function (index) {
+        const c = jsCharacters[index];
+        if (!c) return;
+        if (!window.confirm('Delete "' + c.name + '"? This cannot be undone.')) return;
+        if (await charApiPost('/api/characters/delete', { avatar_url: c.avatar })) await fetchCharacters();
+    };
+
+    window.__st_char_export = async function (index) {
+        const c = jsCharacters[index];
+        if (!c) return;
+        await ensureCsrfToken();
+        try {
+            const res = await fetch('/api/characters/export', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: JSON.stringify({ avatar_url: c.avatar, format: 'png' }) });
+            if (!res.ok) { console.warn('[st-client] export failed', res.status); return; }
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = c.avatar || (c.name + '.png');
+            document.body.appendChild(a); a.click(); a.remove();
+            URL.revokeObjectURL(url);
+        } catch (err) { console.warn('[st-client] export error', err); }
+    };
+
+    window.__st_char_fav = async function (index) {
+        const c = jsCharacters[index];
+        if (!c) return;
+        const newFav = !c.fav;
+        c.fav = newFav; // optimistic; reverted on failure
+        const res = await charApiPost('/api/characters/edit-attribute', { avatar_url: c.avatar, field: 'fav', value: newFav });
+        if (res) await fetchCharacters();
+        else c.fav = !newFav;
+    };
+
+    window.__st_char_avatar = async function (index) {
+        const c = jsCharacters[index];
+        if (!c) return;
+        const input = document.getElementById('char-avatar-input');
+        if (!input || !input.files || !input.files[0]) return;
+        const file = input.files[0];
+        const fd = new FormData();
+        fd.append('file', file);
+        fd.append('avatar_url', c.avatar);
+        await ensureCsrfToken();
+        try {
+            const res = await fetch('/api/characters/edit-avatar', { method: 'POST', headers: withCsrf({}), body: fd });
+            if (!res.ok) { console.warn('[st-client] avatar edit failed', res.status); window.alert('Avatar update failed'); }
+            else await fetchCharacters();
+        } catch (err) { console.warn('[st-client] avatar edit error', err); }
+        input.value = '';
+    };
 
     // Delegate event listeners
     document.addEventListener('click', function (e) {
