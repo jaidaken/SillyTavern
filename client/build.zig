@@ -1,5 +1,6 @@
 const std = @import("std");
 const ziex = @import("ziex");
+const tailwindcss = @import("tailwindcss");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
@@ -37,10 +38,20 @@ pub fn build(b: *std.Build) !void {
         .source_dir = b.path("glue"),
         .install_dir = .prefix,
         .install_subdir = "static/glue",
-        .exclude_extensions = &.{".py"},
+        .exclude_extensions = &.{ ".py", ".css" },
     });
     b.getInstallStep().dependOn(&install_glue.step);
     app_exe.step.dependOn(&install_glue.step);
+
+    // Source globs live in app-input.css: `sources` is left empty because the plugin readFileSyncs
+    // each entry and swallows a directory as EISDIR.
+    const css = tailwindcss.addBuild(b, .{
+        .name = "app",
+        .config = .{ .input = b.path("glue/app-input.css"), .minify = true },
+    });
+    const install_css = b.addInstallFile(css.file, "static/glue/app.css");
+    b.getInstallStep().dependOn(&install_css.step);
+    app_exe.step.dependOn(&install_css.step);
 
     // Tests run Debug: ReleaseSmall strips the safety checks and allocator instrumentation the
     // alloc-failure oracle depends on.

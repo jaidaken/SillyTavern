@@ -28,10 +28,10 @@ else
 fi
 
 # Apply the Zig-source patches (not the door: 03 is the upstream core.ts diff, applied to the
-# compiled door separately in patch-door.sh).
-for p in "$PATCHES"/01-*.patch "$PATCHES"/02-*.patch "$PATCHES"/04-*.patch "$PATCHES"/05-*.patch "$PATCHES"/06-*.patch; do
+# compiled door separately in patch-door.sh). 10 patches the tailwind plugin's class scanner.
+for p in "$PATCHES"/01-*.patch "$PATCHES"/02-*.patch "$PATCHES"/04-*.patch "$PATCHES"/05-*.patch "$PATCHES"/06-*.patch "$PATCHES"/10-*.patch; do
     git -C "$ZIEX_DIR" apply "../$p"
     echo "setup-ziex: applied $(basename "$p")"
 done
 
-echo "setup-ziex: $ZIEX_DIR ready at $ZIEX_REV + 5 zig patches"
+echo "setup-ziex: $ZIEX_DIR ready at $ZIEX_REV + 6 patches"

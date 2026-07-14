@@ -1,0 +1,63 @@
+Use Tailwind's real scanner instead of the plugin's regex extractor.
+
+The plugin extracted class candidates with a single regex whose charset
+(builder.js: [a-zA-Z0-9_\-\/:.!\[\]#%]+) excludes parentheses, & and >. Measured
+against the official CLI on identical markup: text-red-500, gap-3 and
+data-selected:bg-black are emitted by both, but w-[calc(100%-2rem)],
+bg-(--accent) and [&>p]:mt-2 are DROPPED by the plugin and emitted by the CLI.
+The build stays green and the class stays in the HTML with no CSS behind it, so
+the failure is silent. bg-(--token) is v4's idiomatic way to reference a design
+token, so this is the common case rather than an edge.
+
+@tailwindcss/oxide is the scanner the official CLI uses and is already an
+installed dependency. Feeding it the compiler's own discovered @source patterns
+gives byte-equivalent candidate extraction, and it understands arbitrary values,
+arbitrary variants and the v4 paren shorthand.
+
+The regex path, its glob helpers and the config.sources file-reading loop are
+left in place for callers that pass explicit file paths; only the source-pattern
+scan switches to the real scanner.
+
+--- a/pkg/plugin-tailwindcss/src/builder.js
++++ b/pkg/plugin-tailwindcss/src/builder.js
+@@ -1,4 +1,5 @@
+ const { compile, optimize } = require("@tailwindcss/node");
++const { Scanner } = require("@tailwindcss/oxide");
+ const { readFileSync, writeFileSync, mkdirSync, readdirSync } = require("fs");
+ const { dirname, resolve, join, sep } = require("path");
+
+@@ -109,18 +110,18 @@ async function runBuild({ id, name, config }, index) {
+         // Collect candidates from source files
+         const candidates = new Set();
+
+-        // Scan files from compiler-detected sources using Tailwind's own discovered patterns.
+-        for (const source of compiler.sources) {
+-            if (source.negated) continue;
+-            const files = listFilesMatching(source.base, source.pattern);
+-            for (const file of files) {
+-                try {
+-                    const content = readFileSync(file, "utf-8");
+-                    for (const c of extractCandidates(content)) {
+-                        candidates.add(c);
+-                    }
+-                    dependencies.push(file);
+-                } catch {}
+-            }
+-        }
++        // Tailwind's own scanner, fed the compiler's discovered @source patterns. The regex
++        // extractor below cannot see parens, & or >, so it silently drops w-[calc(...)],
++        // bg-(--token) and every arbitrary variant.
++        if (compiler.sources.length > 0) {
++            const scanner = new Scanner({
++                sources: compiler.sources.map((s) => ({
++                    base: s.base,
++                    pattern: s.pattern,
++                    negated: !!s.negated,
++                })),
++            });
++            for (const c of scanner.scan()) candidates.add(c);
++            for (const f of scanner.files) dependencies.push(f);
++        }
+
+         // Scan additional user-specified source paths
+         if (config.sources) {

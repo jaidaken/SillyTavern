@@ -6,6 +6,9 @@
     .dependencies = .{
         // Patched ziex materialized by setup-ziex.sh from patches/. Run build.sh, not `zig build`.
         .ziex = .{ .path = ".ziex" },
+        // ziex's first-party tailwind plugin, carrying patch 10 (its regex class-extractor
+        // silently dropped every paren-bearing utility; the patch swaps in tailwind's own scanner).
+        .tailwindcss = .{ .path = ".ziex/pkg/plugin-tailwindcss" },
     },
     .paths = .{
         "build.zig",
