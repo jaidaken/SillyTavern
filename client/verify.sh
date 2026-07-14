@@ -279,6 +279,20 @@ PY2
 [ $? -eq 0 ] || FAILURES=$((FAILURES + 1))
 
 echo
+echo "== interactions (real input against the served client) =="
+# Self-contained stage: verify-interactions.sh starts its own mock-api server on its own port.
+if [ "${INTERACTIONS:-1}" = "1" ]; then
+    if ./verify-interactions.sh; then
+        echo "  ok    interaction gate"
+    else
+        echo "  FAIL  interaction gate"
+        FAILURES=$((FAILURES + 1))
+    fi
+else
+    echo "  skip  interaction gate (INTERACTIONS=0)"
+fi
+
+echo
 if [ "$FAILURES" -eq 0 ]; then
     echo "verify.sh: all checks passed"
 else

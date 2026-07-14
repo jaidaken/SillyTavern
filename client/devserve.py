@@ -35,9 +35,33 @@ EXTRA_TYPES = {
 }
 
 
+def _mock_characters(favs):
+    chars = []
+    for i in range(60):
+        name = f"Char {i:02d} {'Vex' if i % 3 else 'Moon'}"
+        if i == 41:
+            name = "Rita Recent"
+        avatar = f"char{i:02d}.png"
+        chars.append({
+            "name": name,
+            "avatar": avatar,
+            "description": f"Mock character {i} for the interactions gate.",
+            "chat": f"{name} - 2026-07-14",
+            "first_mes": f"Greetings from {name}.",
+            "fav": favs.get(avatar, i % 7 == 0),
+            "date_last_chat": 1783800000000 if i == 41 else 1700000000000 + i * 1000,
+            "chat_size": 1024 + i,
+            "data_size": 4096 + i,
+            "create_date": "2026-07-01",
+        })
+    return chars
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     backend = "http://127.0.0.1:8000"
     dev = False
+    mock_api = False
+    mock_favs = {}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(Handler.dist), **kwargs)
@@ -133,6 +157,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else None
 
+        if Handler.mock_api:
+            return self.mock(body)
+
         target = urllib.parse.urljoin(self.backend, self.path)
         req = urllib.request.Request(target, data=body, method=self.command)
         for key, value in self.headers.items():
@@ -147,6 +174,52 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.relay(err)
         except urllib.error.URLError as err:
             self.send_error(502, f"backend unreachable: {err.reason}")
+
+    # Canned backend for the interactions gate (verify-interactions.sh): stable data, no real
+    # SillyTavern needed. Only ever active with --mock-api, which the gate passes explicitly.
+    def mock(self, body):
+        try:
+            req = json.loads(body) if body else {}
+        except ValueError:
+            req = {}
+        path = urllib.parse.urlparse(self.path).path
+
+        if path == "/csrf-token":
+            return self.mock_json({"token": "mock-csrf-token"})
+        if path == "/api/characters/all":
+            return self.mock_json(_mock_characters(Handler.mock_favs))
+        if path == "/api/settings/get":
+            settings = {"power_user": {
+                "personas": {"p1.png": "Alice", "p2.png": "Bob"},
+                "persona_descriptions": {"p1.png": "First persona", "p2.png": "Second persona"},
+            }}
+            return self.mock_json({"settings": json.dumps(settings)})
+        if path == "/api/chats/get":
+            name = "Mock"
+            for c in _mock_characters(Handler.mock_favs):
+                if c["avatar"] == req.get("avatar_url"):
+                    name = c["name"]
+            return self.mock_json([
+                {"user_name": "You", "character_name": name, "chat_metadata": {}},
+                {"name": name, "is_user": False, "mes": f"Hello, I am {name}."},
+                {"name": "You", "is_user": True, "mes": "Hi there."},
+                {"name": name, "is_user": False, "mes": "The newest message lands last."},
+            ])
+        if path == "/api/characters/edit-attribute":
+            if req.get("field") == "fav":
+                Handler.mock_favs[req.get("avatar_url")] = bool(req.get("value"))
+            return self.mock_json({})
+        # Every other API POST (create/rename/settings-save/...) acknowledges without state.
+        return self.mock_json({})
+
+    def mock_json(self, payload):
+        data = json.dumps(payload).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(data)
 
     def relay(self, upstream):
         self.send_response(upstream.status)
@@ -175,6 +248,7 @@ def main():
     parser.add_argument("--dist", default="dist")
     parser.add_argument("--backend", default="http://127.0.0.1:8000")
     parser.add_argument("--dev", action="store_true", help="expose /dev/stream and /dev/hold test endpoints")
+    parser.add_argument("--mock-api", action="store_true", help="answer /api/* + /csrf-token from canned data instead of the backend (interactions gate)")
     args = parser.parse_args()
 
     dist = pathlib.Path(args.dist).resolve()
@@ -184,6 +258,7 @@ def main():
     Handler.dist = dist
     Handler.backend = args.backend
     Handler.dev = args.dev
+    Handler.mock_api = args.mock_api
 
     # Loopback only. Never 0.0.0.0.
     with Server(("127.0.0.1", args.port), Handler) as httpd:

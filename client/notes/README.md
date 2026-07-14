@@ -10,6 +10,9 @@ Audit + design notes for the WASM/Zig SillyTavern client rebuild.
 
 ## Consolidated
 
+- [ziex-usage-fix-plan.md](ziex-usage-fix-plan.md) - per-issue plans from the 2026-07-14 ziex-usage audit:
+  dead-handler cluster (currentTarget/jsz traps), reading-prefs lifecycle, glue dedup, README drift,
+  data-layer-to-Zig migration, kv/region/rules decisions. phase order + click-gate design.
 - [bug-register-2026-07-10.md](bug-register-2026-07-10.md) - COMPLETE register of every finding across all
   audits (W05 235 + prior backlog + resolved Phase 0). One line per finding, grouped by subsystem.
 - [ziex-refactor-plan.md](ziex-refactor-plan.md) - deep design for the ziex reactive-model refactor:
