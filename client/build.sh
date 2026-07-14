@@ -29,13 +29,18 @@ for f in dist/glue/vendor/purify.es.mjs dist/glue/vendor/hljs.mjs dist/vendor/zi
     npx --yes esbuild "$f" --minify --format=esm --allow-overwrite --outfile="$f"
     echo "minify $f: $b -> $(wc -c < "$f") bytes"
 done
-# main.js (classic-script IIFE, deps via dynamic import()) + app.css take plain --minify: no
+# custom.js (classic-script IIFE, deps via dynamic import()) takes plain --minify: no
 # --format=esm, so the non-module script contract survives. esbuild picks the loader by extension.
-for f in dist/glue/custom.js dist/glue/app.css; do
-    b=$(wc -c < "$f")
-    npx --yes esbuild "$f" --minify --allow-overwrite --outfile="$f"
-    echo "minify $f: $b -> $(wc -c < "$f") bytes"
-done
+b=$(wc -c < dist/glue/custom.js)
+npx --yes esbuild dist/glue/custom.js --minify --allow-overwrite --outfile=dist/glue/custom.js
+echo "minify dist/glue/custom.js: $b -> $(wc -c < dist/glue/custom.js) bytes"
+
+# Tailwind CSS: process glue/app-input.css through Tailwind v4 CLI. The entry imports app-base.css
+# (existing styles) + app-responsive.css (mobile overrides) + Tailwind's utility layer. The scanner
+# finds class names in .zx/.zig source files; the output overwrites dist/glue/app.css (which was
+# NOT copied by export since we renamed the source to app-base.css). --minify uses Lightning CSS.
+npx --yes @tailwindcss/cli -i glue/app-input.css -o dist/glue/app.css --minify
+echo "tailwind glue/app-input.css -> dist/glue/app.css: $(wc -c < dist/glue/app.css) bytes"
 
 # Private site: keep crawlers out, and give Lighthouse a valid robots.txt to parse instead of the
 # SPA index.html fallback. Written before prune, which keeps it via its allowlist.

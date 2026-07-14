@@ -1,0 +1,53 @@
+@import "tailwindcss";
+@import "./app-base.css";
+@import "./app-responsive.css";
+
+/* ---- Source scanning: ziex .zx + .zig files ---- */
+@source "../app/**/*.zx";
+@source "../app/**/*.zig";
+
+/* ---- Safelist: runtime-computed classes that no static scanner can detect ----
+   ui_state.zig drawerClass() concatenates icon ++ " is-open" at runtime;
+   motionClass() / sideClass() return state-dependent strings. These must
+   always be emitted even if the scanner never sees a complete literal. */
+@source inline("panel-left panel-right motion-on motion-off is-open is-active is-fav seg-btn char-grid char-tag char-panel-stack char-toolbar char-toolbar-row char-search char-tool char-tags char-pager char-page-label char-pagesize char-list char-item char-fav-star char-avatar char-info char-name char-desc char-actions char-actions-bar char-act-btn char-act-danger char-actions-selected char-actions-name char-actions-row char-actions-hint char-import-input i-sliders i-plug i-font i-book i-cog i-image i-cubes i-user i-card i-menu i-send i-stop");
+
+/* ---- Theme: map Scriptorium design tokens into Tailwind's system ----
+   This makes utilities like bg-surface, text-muted, font-serif, p-2, gap-3,
+   rounded-lg available for use in .zx files. Existing app-base.css uses
+   var(--token) directly so this is additive, not breaking. */
+@theme {
+    /* Colors */
+    --color-bg: oklch(0.180 0.012 70);
+    --color-surface: oklch(0.215 0.013 70);
+    --color-surface-2: oklch(0.262 0.014 70);
+    --color-border: oklch(0.320 0.014 70);
+    --color-border-soft: oklch(0.268 0.012 70);
+    --color-control-border: oklch(0.540 0.018 72);
+    --color-text: oklch(0.905 0.010 80);
+    --color-muted: oklch(0.780 0.012 74);
+    --color-faint: oklch(0.680 0.012 74);
+    --color-code-bg: oklch(0.150 0.010 70);
+    --color-accent: oklch(0.770 0.130 72);
+    --color-on-accent: oklch(0.185 0.020 70);
+    --color-st-quote: oklch(0.850 0.088 78);
+    --color-st-em: oklch(0.800 0.014 74);
+
+    /* Typography */
+    --font-serif: "Newsreader", ui-serif, Georgia, Cambria, "Times New Roman", serif;
+    --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+
+    /* Spacing (mapped from existing --s-* tokens) */
+    --spacing-1: 0.25rem;
+    --spacing-2: 0.5rem;
+    --spacing-3: 0.75rem;
+    --spacing-4: 1rem;
+    --spacing-5: 1.5rem;
+    --spacing-6: 2rem;
+
+    /* Radii */
+    --radius-sm: 2px;
+    --radius-md: 3px;
+    --radius-lg: 4px;
+    --radius-full: 9999px;
+}

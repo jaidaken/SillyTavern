@@ -1,0 +1,9 @@
+{
+  "name": "st-client",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "tailwindcss": "^4.1",
+    "@tailwindcss/cli": "^4.1"
+  }
+}

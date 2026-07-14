@@ -1010,6 +1010,31 @@ body {
     outline: 1px solid color-mix(in oklch, var(--accent) 40%, transparent);
 }
 
+.char-fav-star {
+    flex: 0 0 auto;
+    margin-left: auto;
+    padding: 0 var(--s-1);
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: var(--text-lg);
+    line-height: 1;
+    cursor: pointer;
+}
+.char-fav-star:hover {
+    color: var(--accent);
+}
+.char-item.is-fav .char-fav-star {
+    color: var(--accent);
+}
+.char-list.char-grid .char-fav-star {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    margin-left: 0;
+    text-shadow: 0 1px 2px oklch(0 0 0 / 0.6);
+}
+
 .char-avatar {
     flex: 0 0 auto;
     width: 2.4rem;
@@ -1141,6 +1166,21 @@ body {
     outline: 1px solid color-mix(in oklch, var(--accent) 50%, transparent);
 }
 
+/* Pagination row. */
+.char-pager {
+    justify-content: space-between;
+}
+.char-page-label {
+    flex: 1 1 auto;
+    text-align: center;
+    font-size: var(--text-xs);
+    color: var(--muted);
+}
+.char-pagesize {
+    flex: 0 0 auto;
+    max-width: 6rem;
+}
+
 /* Grid view variant. */
 .char-list.char-grid {
     display: grid;
@@ -1152,6 +1192,7 @@ body {
     flex-direction: column;
     align-items: stretch;
     text-align: center;
+    position: relative;
 }
 .char-list.char-grid .char-avatar {
     width: 100%;
