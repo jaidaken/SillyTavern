@@ -79,9 +79,26 @@ body {
     }
 }
 
+/* Compact wordmark: SillyTavern[beta] becomes ST[B] so the drawer row keeps the width it needs. */
 @media (max-width: 480px) {
-    .brand span {
+    .brand-full,
+    .beta-word {
         display: none;
+    }
+
+    .brand-short,
+    .beta-sym {
+        display: inline;
+    }
+
+    .beta-sym {
+        /* The glyph is lowercase by design; uppercasing it would substitute a Latin B. */
+        text-transform: none;
+        letter-spacing: 0;
+    }
+
+    .brand-beta {
+        padding: 0.1rem 0.3rem;
     }
 }
 

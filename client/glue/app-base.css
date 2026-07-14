@@ -12,6 +12,10 @@
 @font-face { font-family: "Newsreader"; font-style: italic; font-weight: 400 700; font-display: swap; font-optical-sizing: auto; src: url("./fonts/Newsreader-latin-italic.woff2") format("woff2"); }
 @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 100 800; font-display: swap; src: url("./fonts/JetBrainsMono-latin.woff2") format("woff2"); }
 @font-face { font-family: "JetBrains Mono"; font-style: italic; font-weight: 100 800; font-display: swap; src: url("./fonts/JetBrainsMono-latin-italic.woff2") format("woff2"); }
+/* The latin subsets carry no Greek: a bare beta would silently fall back to a system face inside the
+   wordmark. This 712-byte cut of JetBrains Mono holds U+03B2 alone, and unicode-range means the browser
+   fetches it only where the compact mark actually renders it (narrow viewports). */
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 100 800; font-display: swap; src: url("./fonts/JetBrainsMono-beta.woff2") format("woff2"); unicode-range: U+03B2; }
 
 /* ---- Tokens (override this block to re-theme) ---- */
 :root {
@@ -189,6 +193,13 @@ body {
     border: 1px solid color-mix(in oklch, var(--accent) 40%, transparent);
     border-radius: var(--r-1);
     padding: 0.1rem 0.34rem;
+}
+
+/* Wordmark has two forms: full on wide viewports, compact (ST + beta glyph) on narrow.
+   Both ship in the markup; the h1's aria-label carries the real name, so the swap is visual only. */
+.brand-short,
+.beta-sym {
+    display: none;
 }
 
 .drawers {
