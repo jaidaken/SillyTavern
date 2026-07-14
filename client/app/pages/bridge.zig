@@ -7,7 +7,9 @@ const character_view = @import("./character_view.zig");
 const persona_store = @import("./persona_store.zig");
 const reading_prefs = @import("./reading_prefs.zig");
 const handlers = @import("./handlers.zig");
+const char_api = @import("./char_api.zig");
 const ui = @import("./ui.zig");
+const zx = @import("zx");
 const regions = @import("./regions.zig");
 const instrument = @import("./instrument.zig");
 
@@ -163,8 +165,19 @@ fn applyReadingPrefs() callconv(.c) void {
 fn bootInit() callconv(.c) void {
     regions.bumpMessageLog();
     handlers.init();
-    const stored = ui.getStoredMotion() orelse "system";
-    ui.__st_set_motion(motionCode(stored));
+    const stored = ui.getStoredMotion();
+    // getStoredMotion's callAlloc string is owned here (D6: it used to leak).
+    defer if (stored) |s| zx.allocator.free(s);
+    ui.__st_set_motion(motionCode(stored orelse "system"));
+    // Zig owns boot data orchestration (Z-BOOT): ?demo fixtures, characters + personas,
+    // auto-open. The glue only calls __st_boot_init.
+    char_api.boot();
+}
+
+/// Reload the character store from the backend. Called by the JS multipart helpers
+/// (import, avatar) after a successful upload; everything else refreshes inside char_api.
+fn refreshCharacters() callconv(.c) void {
+    char_api.fetchCharacters();
 }
 
 // Demo fixtures are opt-in (glue calls this on ?demo or when no backend answers), so a real
@@ -236,6 +249,8 @@ fn composerRenders() callconv(.c) usize {
 
 comptime {
     if (is_wasm) {
+        // Zig owns the data layer (char_api.zig); the append/clear/select/meta exports
+        // below stay ONLY for the interactions gate's injection path + console debugging.
         @export(&appendMessage, .{ .name = "__st_append_message" });
         @export(&clearMessages, .{ .name = "__st_clear_messages" });
         @export(&addCharacter, .{ .name = "__st_add_character" });
@@ -245,6 +260,7 @@ comptime {
         @export(&applyReadingPrefs, .{ .name = "__st_apply_reading_prefs" });
         @export(&bootInit, .{ .name = "__st_boot_init" });
         @export(&seedDemo, .{ .name = "__st_seed_demo" });
+        @export(&refreshCharacters, .{ .name = "__st_refresh_characters" });
         @export(&addPersona, .{ .name = "__st_add_persona" });
         @export(&clearPersonas, .{ .name = "__st_clear_personas" });
         @export(&selectPersona, .{ .name = "__st_select_persona" });

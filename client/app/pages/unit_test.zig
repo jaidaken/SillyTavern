@@ -22,6 +22,7 @@ comptime {
     _ = @import("html.zig");
     _ = @import("completion.zig");
     _ = @import("ui_state.zig");
+    _ = @import("char_data.zig");
 }
 
 const sink_call = "html.sink(";

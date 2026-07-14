@@ -1,14 +1,16 @@
 // Character CRUD action panel.
 //
 // Toolbar-level New + Import, plus a panel for the currently selected character
-// (favourite, rename, duplicate, delete, export). Each action calls a glue function on `window`
-// via zx.client.js.global.call (see glue/custom.js): the glue does the fetch + reloads the wasm
-// character store. One dispatcher reads data-char-action / data-char-index from the event target,
+// (favourite, rename, duplicate, delete, export). Each action calls char_api directly:
+// Zig owns the fetch, the dialogs (prompt/confirm via jsz), and the store reload; only the
+// browser-forced import/avatar/export adapters still hop through window helpers, inside
+// char_api. One dispatcher reads data-char-action / data-char-index from the event target,
 // matching the convention used by character_list.zx's onCharSelect.
 
 const zx = @import("zx");
 const std = @import("std");
 const char_store = @import("../character_store.zig");
+const char_api = @import("../char_api.zig");
 const dom_event = @import("../dom_event.zig");
 
 pub fn CharacterActions(ctx: *zx.ComponentCtx(void)) zx.Component {
@@ -77,18 +79,19 @@ fn onCharAction(e: *zx.client.Event.Stateful) void {
         break :blk std.fmt.parseInt(u32, s, 10) catch null;
     };
 
-    const global = zx.client.js.global;
     if (std.mem.eql(u8, action, "create")) {
-        global.call(void, "__st_char_create", .{}) catch return;
+        char_api.createCharacter();
+        return;
     }
     if (std.mem.eql(u8, action, "import")) {
-        global.call(void, "__st_char_import", .{}) catch return;
+        char_api.importCharacterFile();
+        return;
     }
     const idx = index orelse return;
-    if (std.mem.eql(u8, action, "avatar")) global.call(void, "__st_char_avatar", .{idx}) catch return;
-    if (std.mem.eql(u8, action, "fav")) global.call(void, "__st_char_fav", .{idx}) catch return;
-    if (std.mem.eql(u8, action, "rename")) global.call(void, "__st_char_rename", .{idx}) catch return;
-    if (std.mem.eql(u8, action, "duplicate")) global.call(void, "__st_char_duplicate", .{idx}) catch return;
-    if (std.mem.eql(u8, action, "delete")) global.call(void, "__st_char_delete", .{idx}) catch return;
-    if (std.mem.eql(u8, action, "export")) global.call(void, "__st_char_export", .{idx}) catch return;
+    if (std.mem.eql(u8, action, "avatar")) char_api.replaceAvatarFile(idx);
+    if (std.mem.eql(u8, action, "fav")) char_api.toggleFav(idx);
+    if (std.mem.eql(u8, action, "rename")) char_api.renameCharacter(idx);
+    if (std.mem.eql(u8, action, "duplicate")) char_api.duplicateCharacter(idx);
+    if (std.mem.eql(u8, action, "delete")) char_api.deleteCharacter(idx);
+    if (std.mem.eql(u8, action, "export")) char_api.exportCharacter(idx);
 }

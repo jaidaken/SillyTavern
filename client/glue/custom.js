@@ -1,5 +1,5 @@
-// Custom glue for SillyTavern: message sanitization + SSE streaming + store sync
-// Plain JavaScript, no zieux door pattern
+// Custom glue for SillyTavern: message sanitization + SSE streaming + the browser-forced
+// adapters (multipart upload, blob download). Data/boot/CRUD live in Zig (char_api.zig).
 (function () {
     'use strict';
 
@@ -472,11 +472,8 @@
         }
     }
 
-    // Characters known to JS (parallel to the wasm store)
-    let jsCharacters = [];
-    let personas = [];
-    let selectedPersona = null;
-
+    // Browser-forced adapters: the data layer lives in Zig (net.zig + char_api.zig); only the
+    // multipart uploads + blob download stay here, and this csrf helper serves ONLY those three.
     let csrfToken = null;
 
     async function ensureCsrfToken() {
@@ -494,244 +491,13 @@
         }
     }
 
-    // 403 = stale CSRF token (server restarted under a long-lived tab): refresh + retry once.
-    // NEVER for generation/relay endpoints: the server remaps upstream 401->403 and a blind retry double-submits a paid call.
-    async function apiPost(url, body) {
-        await ensureCsrfToken();
-        const doPost = () => loggedFetch(url, {
-            method: 'POST',
-            headers: withCsrf({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify(body || {}),
-        });
-        let res = await doPost();
-        if (res.status === 403) {
-            log.net.warn(url, 'returned 403 - refreshing csrf token and retrying once');
-            csrfToken = null;
-            await ensureCsrfToken();
-            res = await doPost();
-        }
-        return res;
-    }
-
     function withCsrf(headers) {
         if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
         return headers;
     }
 
-    function initCharacters() {
-        wasm.__st_clear_characters();
-        jsCharacters = [];
-        // Store rebuild invalidates any in-flight chat load: its captured index is now stale.
-        chatLoadSeq++;
-    }
-
-    function addCharacterToWasm(c) {
-        const n = writeBytes(c.name);
-        const a = writeBytes(c.avatar);
-        const d = writeBytes(c.description || '');
-        const ch = writeBytes(c.chat || '');
-        const fm = writeBytes(c.first_mes || '');
-        wasm.__st_add_character(n.ptr, n.len, a.ptr, a.len, d.ptr, d.len, ch.ptr, ch.len, fm.ptr, fm.len, c.fav ? 1 : 0);
-    }
-
-    // Returns 'ok' | 'error' | 'unreachable': only 'unreachable' (network throw, or a dead-proxy
-    // 502/504) may fall back to demo fixtures - a reachable backend's failure must stay visible.
-    async function fetchCharacters() {
-        log.chars.debug('character load start');
-        try {
-            const res = await apiPost('/api/characters/all', {});
-            if (res.status === 502 || res.status === 504) { log.net.warn('char fetch: upstream gone,', res.status); return 'unreachable'; }
-            if (!res.ok) { log.net.warn('char fetch failed:', res.status); return 'error'; }
-            const list = await res.json();
-            if (!Array.isArray(list)) { log.net.warn('char list response is not an array, got', typeof list); return 'error'; }
-            initCharacters();
-            list.forEach(function (c, i) {
-                jsCharacters.push(c);
-                addCharacterToWasm(c);
-                const cd = writeBytes(c.create_date || '');
-                // u64 params cross the wasm boundary as BigInt; Math.trunc guards fractional values.
-                const u64 = v => BigInt(Math.trunc(v) || 0);
-                wasm.__st_set_character_meta(i, cd.ptr, cd.len, u64(c.date_last_chat), u64(c.chat_size), u64(c.data_size));
-            });
-            log.chars.info('loaded', list.length, 'characters');
-            return 'ok';
-        } catch (err) {
-            log.chars.error('character load failed:', err);
-            return 'unreachable';
-        }
-    }
-
-    // Boot lands in the most recently used chat (upstream ST behavior); demo mode keeps fixtures.
-    function autoOpenRecentChat() {
-        if (!jsCharacters.length) { log.chars.debug('auto-open: no characters'); return; }
-        let best = 0;
-        jsCharacters.forEach(function (c, i) {
-            if ((c.date_last_chat || 0) > (jsCharacters[best].date_last_chat || 0)) best = i;
-        });
-        log.chars.info('auto-opening most recent chat:', jsCharacters[best].name);
-        loadCharacterChat(best);
-    }
-
-    async function fetchPersonas() {
-        log.personas.debug('persona load start');
-        try {
-            const res = await apiPost('/api/settings/get', {});
-            if (!res.ok) {
-                log.net.warn('persona settings fetch returned', res.status);
-                return;
-            }
-
-            const data = await res.json();
-            if (!data || typeof data !== 'object') {
-                log.personas.warn('settings response is not an object, got', typeof data);
-                return;
-            }
-
-            if (typeof data.settings !== 'string') {
-                log.personas.warn('settings.settings is not a string, got', typeof data.settings);
-                return;
-            }
-
-            var parsed;
-            try {
-                parsed = JSON.parse(data.settings);
-            } catch (err) {
-                log.personas.warn('settings JSON parse failed:', err);
-                return;
-            }
-
-            if (!parsed || typeof parsed !== 'object') {
-                log.personas.warn('parsed settings is not an object');
-                return;
-            }
-
-            var powerUser = parsed.power_user;
-            if (!powerUser || typeof powerUser !== 'object') {
-                return;
-            }
-
-            var personsDict = powerUser.personas;
-            var descsDict = powerUser.persona_descriptions;
-            if (!personsDict || typeof personsDict !== 'object' || Array.isArray(personsDict)) {
-                return;
-            }
-
-            var personaData = [];
-            var keys = Object.keys(personsDict);
-            for (var i = 0; i < keys.length; i++) {
-                var avatarFile = keys[i];
-                if (typeof avatarFile !== 'string' || avatarFile.length === 0) continue;
-
-                var name = personsDict[avatarFile];
-                if (typeof name !== 'string' || name.length === 0) name = 'Persona';
-
-                var desc = '';
-                if (descsDict && typeof descsDict === 'object' && !Array.isArray(descsDict)) {
-                    var rawDesc = descsDict[avatarFile];
-                    if (typeof rawDesc === 'string') desc = rawDesc;
-                }
-
-                personaData.push({ avatar: avatarFile, name: name, description: desc });
-            }
-
-            personas = personaData;
-            if (personaData.length > 0) {
-                selectedPersona = personaData[0];
-            } else {
-                selectedPersona = null;
-            }
-            wasm.__st_clear_personas();
-            for (i = 0; i < personaData.length; i++) {
-                var n = writeBytes(personaData[i].name);
-                var a = writeBytes(personaData[i].avatar);
-                var d = writeBytes(personaData[i].description || '');
-                wasm.__st_add_persona(n.ptr, n.len, a.ptr, a.len, d.ptr, d.len);
-            }
-        } catch (err) {
-            log.personas.error('persona load failed:', err);
-        }
-    }
-
-    function appendMessageInWasm(name, body, avatar) {
-        const n = writeBytes(name);
-        const b = writeBytes(body);
-        const a = writeBytes(avatar || '');
-        wasm.__st_append_message(n.ptr, n.len, b.ptr, b.len, a.ptr, a.len);
-    }
-
-    let chatLoadSeq = 0;
-
-    async function loadCharacterChat(index) {
-        const c = jsCharacters[index];
-        log.chars.debug('load chat request: index', index, c ? c.name : '(none)');
-        if (!c) { log.chars.warn('load chat: no character at index', index, 'of', jsCharacters.length); return; }
-        // Ticket per load: any await below is a window for a newer click; stale loads abandon
-        // before touching the store so two quick clicks cannot interleave their messages.
-        const seq = ++chatLoadSeq;
-        const chatEl = document.getElementById('chat');
-        if (chatEl) chatEl.setAttribute('aria-busy', 'true');
-        try {
-            const chatName = c.chat || (c.name + ' - ' + new Date().toISOString().slice(0, 10));
-            const res = await apiPost('/api/chats/get', { avatar_url: c.avatar, file_name: chatName });
-            if (seq !== chatLoadSeq) { log.chars.debug('load chat: superseded mid-fetch, abandoning', c.name); return; }
-            // Server contract: 200 [] / 200 {} = no chat yet (fresh chat, seed the greeting below);
-            // any error status = the chat may exist but could not be read - keep the current view.
-            if (!res.ok) { log.chars.error('chat fetch failed:', res.status, '- keeping current chat'); return; }
-            const data = await res.json();
-            if (seq !== chatLoadSeq) { log.chars.debug('load chat: superseded mid-parse, abandoning', c.name); return; }
-            wasm.__st_clear_messages();
-            wasm.__st_select_character(index);
-            var charAvatarUrl = c.avatar ? '../thumbnail?type=avatar&file=' + encodeURIComponent(c.avatar) : '';
-            var personaAvatarUrl = selectedPersona ? '../thumbnail?type=persona&file=' + encodeURIComponent(selectedPersona.avatar) : '';
-            const msgs = Array.isArray(data) && data.length > 1 ? data.slice(1) : [];
-            if (msgs.length) {
-                for (const m of msgs) {
-                    const sender = m.name || (m.is_user ? 'You' : c.name);
-                    const body = m.mes || '';
-                    const avatar = m.is_user ? personaAvatarUrl : charAvatarUrl;
-                    appendMessageInWasm(sender, body, avatar);
-                }
-            } else if (c.first_mes) {
-                const userName = selectedPersona ? selectedPersona.name : 'You';
-                const greeting = c.first_mes.replaceAll('{{char}}', c.name).replaceAll('{{user}}', userName);
-                appendMessageInWasm(c.name, greeting, charAvatarUrl);
-                log.chars.debug('seeded greeting for', c.name);
-            }
-            log.chars.info('opened chat:', c.name, '(' + msgs.length + ' messages)');
-            // Land on the newest message (upstream ST behavior); the wasm render lands on the
-            // next frame, so scroll after two rAFs.
-            requestAnimationFrame(function () {
-                requestAnimationFrame(function () {
-                    // :last-child cannot match here (the resize handle is the container's last child).
-                    const all = document.querySelectorAll('#chat .mes');
-                    if (all.length) all[all.length - 1].scrollIntoView({ block: 'end' });
-                });
-            });
-        } catch (err) {
-            log.chars.error('chat load failed:', err);
-        } finally {
-            if (seq === chatLoadSeq && chatEl) chatEl.removeAttribute('aria-busy');
-        }
-    }
-
-    // --- Character CRUD (client-initiated backend calls) ------------------------------
-    // Each op posts to /api/characters/*, then reloads the wasm character store via fetchCharacters()
-    // (which re-adds and bumps the shell). The Zig UI triggers these through
-    // zx.client.js.global.call(... "__st_char_*" ...). Pure additive; no existing behaviour changed.
-    window.__st_load_character_chat = loadCharacterChat;
-
-    async function charApiPost(url, body) {
-        const res = await apiPost(url, body);
-        if (!res.ok) { log.net.warn(url, 'failed:', res.status); return null; }
-        return res;
-    }
-
-    window.__st_char_create = async function () {
-        const name = window.prompt('New character name:');
-        if (!name) return;
-        if (await charApiPost('/api/characters/create', { ch_name: name })) await fetchCharacters();
-    };
-
+    // Called from Zig (char_api.importCharacterFile); on success Zig reloads its store via
+    // the __st_refresh_characters export.
     window.__st_char_import = async function () {
         const input = document.getElementById('char-import-input');
         if (!input || !input.files || !input.files[0]) return;
@@ -743,71 +509,38 @@
         await ensureCsrfToken();
         try {
             const res = await loggedFetch('/api/characters/import', { method: 'POST', headers: withCsrf({}), body: fd });
-            if (!res.ok) { log.net.warn('import failed:', res.status); window.alert('Import failed'); } else await fetchCharacters();
+            if (!res.ok) { log.net.warn('import failed:', res.status); window.alert('Import failed'); } else wasm.__st_refresh_characters();
         } catch (err) { log.chars.error('import failed:', err); }
         input.value = '';
     };
 
-    window.__st_char_rename = async function (index) {
-        const c = jsCharacters[index];
-        if (!c) return;
-        const name = window.prompt('Rename character:', c.name);
-        if (!name || name === c.name) return;
-        if (await charApiPost('/api/characters/rename', { avatar_url: c.avatar, new_name: name })) await fetchCharacters();
-    };
-
-    window.__st_char_duplicate = async function (index) {
-        const c = jsCharacters[index];
-        if (!c) return;
-        if (await charApiPost('/api/characters/duplicate', { avatar_url: c.avatar })) await fetchCharacters();
-    };
-
-    window.__st_char_delete = async function (index) {
-        const c = jsCharacters[index];
-        if (!c) return;
-        if (!window.confirm('Delete "' + c.name + '"? This cannot be undone.')) return;
-        if (await charApiPost('/api/characters/delete', { avatar_url: c.avatar })) await fetchCharacters();
-    };
-
-    window.__st_char_export = async function (index) {
-        const c = jsCharacters[index];
-        if (!c) return;
+    // Called from Zig (char_api.exportCharacter) with the avatar + display name it owns.
+    window.__st_char_export = async function (avatar, name) {
         await ensureCsrfToken();
         try {
-            const res = await loggedFetch('/api/characters/export', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: JSON.stringify({ avatar_url: c.avatar, format: 'png' }) });
+            const res = await loggedFetch('/api/characters/export', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: JSON.stringify({ avatar_url: avatar, format: 'png' }) });
             if (!res.ok) { log.net.warn('export failed:', res.status); return; }
             const blob = await res.blob();
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.href = url; a.download = c.avatar || (c.name + '.png');
+            a.href = url; a.download = avatar || (name + '.png');
             document.body.appendChild(a); a.click(); a.remove();
             URL.revokeObjectURL(url);
         } catch (err) { log.chars.error('export failed:', err); }
     };
 
-    window.__st_char_fav = async function (index) {
-        const c = jsCharacters[index];
-        if (!c) return;
-        const newFav = !c.fav;
-        c.fav = newFav; // optimistic; reverted on failure
-        const res = await charApiPost('/api/characters/edit-attribute', { avatar_url: c.avatar, field: 'fav', value: newFav });
-        if (res) await fetchCharacters();
-        else c.fav = !newFav;
-    };
-
-    window.__st_char_avatar = async function (index) {
-        const c = jsCharacters[index];
-        if (!c) return;
+    // Called from Zig (char_api.replaceAvatarFile) with the avatar_url it owns.
+    window.__st_char_avatar = async function (avatar) {
         const input = document.getElementById('char-avatar-input');
         if (!input || !input.files || !input.files[0]) return;
         const file = input.files[0];
         const fd = new FormData();
         fd.append('file', file);
-        fd.append('avatar_url', c.avatar);
+        fd.append('avatar_url', avatar);
         await ensureCsrfToken();
         try {
             const res = await loggedFetch('/api/characters/edit-avatar', { method: 'POST', headers: withCsrf({}), body: fd });
-            if (!res.ok) { log.net.warn('avatar edit failed:', res.status); window.alert('Avatar update failed'); } else await fetchCharacters();
+            if (!res.ok) { log.net.warn('avatar edit failed:', res.status); window.alert('Avatar update failed'); } else wasm.__st_refresh_characters();
         } catch (err) { log.chars.error('avatar edit failed:', err); }
         input.value = '';
     };
@@ -987,32 +720,13 @@
                 });
             });
 
-            // Boot
+            // Boot: Zig owns the data orchestration from here (char_api.boot via bootInit):
+            // ?demo fixtures, characters + personas, auto-open, unreachable-backend fallback.
             if (wasm.__st_boot_init) {
                 log.boot.debug('boot_init start');
                 wasm.__st_boot_init();
                 log.boot.debug('boot_init done');
             }
-
-            // Demo fixtures only on explicit ?demo (verify.sh, demos) or when no backend answers;
-            // a real deployment boots into the most recently used chat instead.
-            const demoMode = new URLSearchParams(window.location.search).has('demo');
-            if (demoMode && wasm.__st_seed_demo) {
-                wasm.__st_seed_demo();
-                log.boot.info('demo fixtures seeded (?demo)');
-            }
-            // Personas resolve before the auto-open so the seeded chat bakes the right user avatar.
-            Promise.all([fetchCharacters(), fetchPersonas()]).then(function (results) {
-                if (demoMode) return;
-                const outcome = results[0];
-                if (outcome === 'ok') { autoOpenRecentChat(); return; }
-                if (outcome === 'unreachable' && wasm.__st_seed_demo) {
-                    wasm.__st_seed_demo();
-                    log.boot.info('backend unreachable - demo fixtures seeded');
-                    return;
-                }
-                log.boot.error('character load failed against a reachable backend - see [st:net] above');
-            });
 
             // Dev-mode streaming: the verify.sh gate drives hostile/markdown/streaming
             // bodies through the real pipeline via ?stream=URL&hold=MS query params.

@@ -79,9 +79,8 @@ fn onCharKey(e: *zx.client.Event.Stateful) void {
 }
 
 fn loadCharacterChat(index: u32) void {
-    // Trigger the bridge export to load the character chat
-    const global = zx.client.js.global;
-    global.call(void, "__st_load_character_chat", .{ index }) catch return;
+    // Zig owns the chat load end to end (char_api); no window hop.
+    char_api.loadCharacterChat(index);
 }
 
 fn onItemAction(e: *zx.client.Event.Stateful) void {
@@ -95,12 +94,12 @@ fn onItemAction(e: *zx.client.Event.Stateful) void {
     const idx_str = dom_event.datasetUp(target, "charIndex") orelse return;
     defer zx.allocator.free(idx_str);
     const index = std.fmt.parseInt(u32, idx_str, 10) catch return;
-    const global = zx.client.js.global;
-    if (std.mem.eql(u8, action, "fav")) global.call(void, "__st_char_fav", .{index}) catch return;
+    if (std.mem.eql(u8, action, "fav")) char_api.toggleFav(index);
 }
 
 const zx = @import("zx");
 const std = @import("std");
 const char_store = @import("../character_store.zig");
+const char_api = @import("../char_api.zig");
 const character_view = @import("../character_view.zig");
 const dom_event = @import("../dom_event.zig");

@@ -112,6 +112,112 @@ foundation first, then per-site fixes. one owner per feature: when a zx handler 
 
 - process: F0+B1-B6 = fully-specified small-logic edits -> manager in-main, then fresh-eyes `/sub audit` critic + phase-0 gate green (convergence). commit per feature-complete slice (F0+B1+B2+B6 one commit; B3, B4, B5 one each).
 
+## PHASE S - ZIG-MAXIMAL REWRITE (operator directive 2026-07-14: "everything that can be zig or ziex, should be. JS only when we must." SUPERSEDES the JS-module-split-only plan below and FOLDS IN Q1; the old PHASE S text is kept beneath for the module boundaries it defined, now applied to the shrunken remnant.)
+
+LOCKED PROPERTY: Zig owns everything ownable. the JS door shrinks to browser-forced adapters only.
+
+### WHAT MOVES TO ZIG (with the enabling ziex API, all source-verified)
+
+- Z-DATA (the old Q1): csrf token + 403-retry-once apiPost, characters/all + settings/get(personas) + chats/get fetch+parse, CRUD posts, auto-open-most-recent, selected state. via `zx` client fetch (`fetchAsyncCtx`, runtime/client/fetch.zig:70) + std.json (Z97 lifetime: alloc_always, copy into stores, deinit). `jsCharacters`/`personas`/`selectedPersona`/`csrfToken` in JS DIE. carries: never-retry-generation-relays constraint, ticket-bump on store rebuild, seq/aria-busy semantics, scroll-to-newest (jsz scrollIntoView call), malformed-JSON-200 = honest error not demo-fallback.
+- Z-BOOT: boot orchestration (fetch chars+personas, auto-open vs ?demo vs unreachable-fallback decision) moves into bridge bootInit; ?demo read via ziex `_getLocationHref`. JS boot shrinks to door init + hydrated class + __st_boot_init call.
+- Z-DIALOG: prompt/confirm/alert for CRUD via jsz `js.global.callAlloc` (String w/ optional for cancel) from the zx handlers. window.__st_char_* JS fns DIE except upload/download (below).
+- Z-PREFS (B1/B2/B6): reading controls + tabs + boot apply + debounce (`zx.client.setTimeout`, window.zig:189) + server save through Z-DATA's net layer. env.st_save_reading_prefs + the window-save chain DIE.
+- Z-MOTION (B3) + Z-COMPOSER (B5): zx handlers own; JS delegates DIE.
+- Z-CLICKOUT: click-outside panel close as a zx onclick on the page root (dom_event ancestor walk for panel/drawers membership); document-level JS listener DIES.
+- Z-LOGFILTER: category thresholds parsed + enforced IN log.zig (spec read once at boot via jsz localStorage); below-threshold messages never cross the boundary. JS keeps only the console sink + Error-object capture.
+- Z-RESIZE-STATE (B7): panel width + reading measure state, keyboard resize (zx onkeydown per B8 pattern), aria-valuenow re-render. the pointer GESTURE stays JS (below).
+
+### WHAT STAYS JS, EACH WITH ITS "MUST" (the whole remnant, target <=350 ln)
+
+- bootstrap custom.js (~40): TrustedTypes default policy SYNCHRONOUS before any import (enforcing CSP throws on pre-policy innerHTML - the caught mistake, now pinned here), then dynamic-import of boot.
+- boot.mjs (~60): vendor + ziex-door dynamic imports, env assembly, door.init, hydrated class. the door IS the JS boundary.
+- sanitize.mjs (~150): DOMPurify + hljs ARE JS libraries; config, hooks, highlight cache, env.sanitize string IO (wasm read/write helpers live here or a tiny wasmio.mjs).
+- stream.mjs (~100): SSE ReadableStream pump + rAF coalescing. ziex fetch is buffered whole-response (no streaming callback in 26f5945); rAF has no ziex binding. NOTE: a `_fetchStream` ziex patch is the future path to kill this; out of scope this wave (new framework surface + upstream divergence).
+- adapters.mjs (~100): resize pointer-capture gesture (ZX7: glue drives the gesture, Zig owns the state - ziex's delegated mousemove cannot pointer-capture, cursor leaves vnodes mid-drag); file upload multipart (File/FormData cannot cross the wasm boundary; jsz has no promise/FileReader await); blob download (objectURL + a.click); global error/rejection capture (window listeners need JS callbacks; jsz cannot mint JS closures); click telemetry (DELIBERATE: must observe clicks outside zx vnodes, incl dead ones - it is the debug tool for exactly the silent-handler class).
+
+### SEQUENCE (inverts the old order: Zig migration FIRST so B-fixes land in Zig once)
+
+- S1 design-probe: DONE 2026-07-14, verdict MINOR (m-probe, 9/9 evidence rows, worktree discarded). amendments baked into S2:
+  (a) fetchAsyncCtx is NOT on ziex's public surface (root.zig:104-109 re-exports only Fetch/Io/fetch; core/Fetch.zig:224 keeps client_impl private) -> use public `zx.fetch` + MODULE-GLOBAL request state in net.zig (csrf token, retry flag, chat-load seq are all naturally singleton; the JS did the same). fallback if a true multi-ctx wall appears: 1-line 07-patch re-exporting fetchAsyncCtx.
+  (b) LEAK TRAP: the callback's Response is heap-created (client/fetch.zig:233); res.deinit() frees body+headers only -> net.zig wrapper MUST also allocator.destroy(res) or every fetch leaks.
+  (c) Response.json() already wraps std.json (ignore_unknown_fields + alloc_always, core/Fetch.zig:142-148) - use it, no hand parse.
+  (d) sync bumpShell from inside the fetch callback WORKS (scheduleRender is synchronous, microtask stack clean) - no deferral.
+  (e) url/body/headers are copied synchronously by the door at _fetchAsync - stack buffers fine.
+  (f) jsz prompt/confirm reflection works incl. cancel-as-null.
+  probe blind spots -> S2 verification adds: a big-payload mock row (500 chars, long descriptions) for parse memory/latency; concurrency stays untested (64-slot registry, accept).
+- S2 Z-DATA + Z-BOOT + Z-DIALOG build (member in worktree, VISIBLE tmux teammate per operator pref): net.zig, char_api.zig, bridge/bootInit rewrite, custom.js data layer deleted in the same slice. THE INTERACTION GATE IS THE ACCEPTANCE HARNESS: B1-B9 must rows exercise this entire path against the mock API and must stay green byte-identical.
+- S3 B-wave in Zig: Z-PREFS (flips A3/A4/B10), Z-MOTION (A5a/A5b), Z-COMPOSER (A6 stays green w/ JS delegate deleted), Z-CLICKOUT, Z-RESIZE-STATE + adapters gesture for panels (flips A9), Z-LOGFILTER. gate rows flip pending->must per slice, same-commit.
+- S4 door slim + split into the remnant shape above (move-only of what is LEFT); build.sh minify glob, prune-dist KEEP glob, layout.zx modulepreloads; D5 monkey-patch dies here (boot.mjs is a rewrite anyway).
+- S4b STYLING ARCHITECTURE (operator pick B + "cleanest, most consistent, no monoliths", 2026-07-14). researched, not pattern-matched. rejected alternatives recorded at the end.
+
+  MEASURED STATE: tailwind v4.3.2 fully wired (`@import "tailwindcss"` + `@theme` mapping 14 OKLCH tokens + `@source` scan of app/**/*.zx|zig + a 40-name safelist) but markup uses exactly ONE utility (`hidden`). all styling = 1272 ln app-base.css + 347 ln app-responsive.css. RULE INVENTORY of app-base.css (212 rules): 142 rules / 701 decls = CHROME on elements we author (67%); 43 rules / 146 decls = generated-prose descendants; 17 rules / 48 decls = data-reading/data-tab state; 6 = pseudo-element primitives; 4 = font-face/keyframes/media. DEFECT FOUND: the 14 colour tokens are defined TWICE (`:root` in app-base.css AND `@theme` in app-input.css, same oklch values) - two sources of truth, drift uncaught.
+
+  THE ONE RULE (this is the consistency the old plan lacked): **if the element's class is authored by us, its style is a utility in the markup. if the HTML is generated at runtime, its style lives in the reading stylesheet.** that boundary is architectural (it mirrors zig-owns-state / JS-owns-browser-APIs), not a fatigue line, and it is exactly the case tailwind's own docs point `prose` at.
+
+  ZIG <-> CSS CONTRACT (kills the safelist): Zig emits SEMANTIC state classes + data-attrs ONLY (`is-open`, `is-selected`, `is-fav`, `panel-left`, `motion-off`); markup declares what they LOOK like via `@custom-variant` (`@custom-variant selected (&.is-selected)` -> `selected:bg-surface-2 selected:border-accent`). consequence: the classes Zig computes are no longer tailwind classes at all, they are selector hooks the variants key on -> the 40-name `@source inline(...)` safelist DIES, and scanner-blindness becomes structurally impossible. NEVER compose a utility name at runtime in Zig (`"text-" ++ size` is banned; tailwind cannot see it).
+
+  PRIMITIVES BECOME FIRST-CLASS (the old plan wrongly called these "leftover CSS"): the 13 icon masks -> `@utility i-cog { mask-image: ... }` (real utilities, compose with variants); the candlelight margin-rule signature (WD63) -> `@utility`; motion keyframes + the `--move` reduced-motion scale -> `@theme --animate-*`; fonts -> `@theme --font-*`. a component pattern repeated 3+ times (seg-btn, panel chrome, char-item base) -> a named `@utility`, NOT an `@apply` blob (v4 sanctions @utility; @apply is the escape hatch for HTML you do not control, per tailwind docs).
+
+  FILES AFTER (every one under 300 ln, zero monoliths, one purpose each):
+  - `glue/app-input.css` (~10 ln, entry, name kept so build.sh is untouched): tailwind import + the three below + `@source`.
+  - `glue/theme.css` (~120 ln): `@theme` = THE SINGLE token source (the duplicate `:root` block DIES), fonts, animations; all `@custom-variant` definitions (the Zig state hooks).
+  - `glue/primitives.css` (~130 ln): `@utility` icons + repeated component patterns + the signature.
+  - `glue/reading.css` (~250 ln): the reading surface, ONE domain = the data-reading/data-tab state machine (which sets the reading custom properties on #chat-root) + the generated-prose descendant rules (q/em/blockquote/pre/code/hljs/tables/lists, the RP conventions). the app's soul; "the one X for its domain" per coding-style FILE SIZE.
+  - `app-base.css` DELETED. `app-responsive.css` DELETED (its media queries become `md:`/`lg:` variants inline, next to the markup they modify).
+  - component styling lives in the `.zx` files themselves. NO per-component css files. co-location is total.
+
+  STEPS: S4b.1 rule-by-rule inventory -> MIGRATE / READING / PRIMITIVE / DEAD (counts, in this doc). S4b.2 build theme.css + primitives.css + reading.css; delete the duplicate token block; app.css output byte-diffed for sanity. S4b.3 migrate ONE region per commit (chat frame, shell/topbar, docks+drawer, panels: char list/toolbar/actions/persona/settings, composer), each deleting its app-base block as it lands. S4b.4 fold app-responsive into variants, delete the file. S4b.5 delete app-base.css remnant + the safelist; re-audit `@source`.
+
+  GATES per commit: verify.sh incl. the interaction gate (its selectors key on the SEMANTIC names .char-item/.mes/.seg-btn - those MUST survive; they are the app's API to Zig AND to the gate). VISUAL: CDP screenshot per region before/after (the interactions harness already drives chrome; add a `--shot` mode) - a utility migration that moves a pixel is a BUG, not a restyle. FINAL: the webdesign convergence critic grades the screenshots (WD1-WD25 + the WD69 distinctiveness gate; the candlelight signature must survive intact).
+
+  REJECTED, with reasons (so the space is on record):
+  - ziex `zx.Style` (typed CSS-in-Zig, style/generated.zig): INLINE-ONLY. no pseudo-classes, no media queries, no descendant selectors, no ::before. correct tool for computed VALUES (the panel width already uses a hand-built "width:340px" string; upgrade THAT to typed `zx.Style` for consistency) but it cannot be a styling system.
+  - `@tailwindcss/typography` (`prose`): a dependency whose defaults we would override almost entirely (our RP conventions - warm-amber `<q>`, muted-italic action text, the reading measure - are custom). reading.css is smaller than the override sheet would be.
+  - drop tailwind, co-locate one .css per component: 14+ files, global namespace, and we hand-maintain what the utility scale gives free. also contradicts the operator's B pick.
+  - shadow DOM / scoped styles: already rejected in reading-surface-isolation-model.md (find-in-page + selection breakage in firefox); ziex has no scoped-style feature.
+
+- S5 phase 2 leftovers: README rewrite (now documents the Zig-maximal split + the tailwind adoption), dead-shim sweep (mostly already dead by S4), test-cleanup afterEach nit, D6 leak, region-comment truth (D4). then rules promotion (3b).
+
+### OLD PHASE S TEXT (module boundaries reference; superseded as a standalone phase)
+
+WD29 breach: ~950 ln, one IIFE, 9 unrelated jobs in shared closure scope. split = MOVE-ONLY, zero
+behavior change, reviewed as pure movement; the pending B-item fixes and the phase-2/Q1 deletions
+land ON the new files afterwards. entry contract unchanged: build.zig `jsglue_href` keeps pointing
+at `glue/custom.js`, which becomes a ~40 ln CLASSIC bootstrap: (1) install the TrustedTypes default
+policy synchronously (must precede every innerHTML under the enforcing CSP), (2) dynamic-import
+boot.mjs on DOMContentLoaded (same pattern as the vendored purify/hljs; no bundler, no npm).
+
+### MODULES (glue/mod/*.mjs, each <~150 ln)
+
+- log.mjs: category logger + st_log filter + global error/rejection capture. exports log, logFor.
+- wasmio.mjs: the wasm exports handle (setWasm/getWasm) + readString/writeRaw/writeBytes/writeString/freeRaw. THE shared-state seam: everything imports this instead of closing over `let wasm`.
+- sanitize.mjs: DOMPurify MESSAGE_CONFIG + hooks + isSafeUri, highlight cache, highlightBlocks/highlightSealedBlocks, the streamRender flag (owner) + setStreamRender(). exports installSanitizer(DOMPurify, hljs), sanitizeHtml, highlightSealedBlocks, setStreamRender. NOT the TrustedTypes policy: that stays in the classic custom.js bootstrap, installed SYNCHRONOUSLY before any import resolves - under the live edge's enforcing require-trusted-types-for CSP, any innerHTML that lands before the default policy exists THROWS, so the policy must beat the entire dynamic-import chain, not ride inside it.
+- stream.mjs: startStream pump + stats + devMode. imports wasmio, log, sanitize(setStreamRender+highlightSealedBlocks).
+- api.mjs: csrfToken + ensureCsrfToken + withCsrf + apiPost (403-retry). boundary matches Q1's net.zig so Q1 shrinks/deletes whole files.
+- chars.mjs: jsCharacters/personas/selectedPersona, initCharacters/addCharacterToWasm/fetchCharacters/autoOpenRecentChat/fetchPersonas/appendMessageInWasm/loadCharacterChat, charApiPost + the window.__st_char_* + __st_load_character_chat surface (zx handlers keep calling window.*). Q1 deletes most of this file wholesale.
+- env.mjs: assembles the extern env object (st_log, sanitize, sse_start, st_save_reading_prefs + the dead shims until phase 2 deletes them) from log/wasmio/sanitize/stream. exports makeEnv().
+- delegates.mjs: click telemetry, motion delegate (until B3 deletes it), composer autogrow (until B5), click-outside.
+- resize.mjs: chat-resize drag/keyboard/persist block; B7 adds the panel-resize half here.
+- boot.mjs: init() (vendor + door dynamic imports, instantiate capture until D5, hydrated class, __st_boot_init, demo seeding + Promise.all boot, dev-mode stream params). exports boot().
+
+import graph (acyclic): custom.js -> boot -> {env, chars, stream, delegates, resize}; env -> {log, wasmio, sanitize, stream}; stream -> {log, wasmio, sanitize}; chars -> {log, wasmio, api}; api -> {log}; resize/delegates -> {log, wasmio}.
+
+### STEPS
+
+S1 write the 10 files (move code verbatim; only the seams change: wasmio accessor replaces the closure `wasm`, setStreamRender replaces the shared flag, explicit exports replace scope sharing).
+S2 build.sh: minify loop globs dist/glue/mod/*.mjs (--format=esm) alongside the existing entries.
+S3 prune-dist.sh: KEEP gains a glue/mod/*.mjs glob (fonts-style find, not hand-listed entries).
+S4 layout.zx: modulepreload links for boot.mjs + its static import chain (flattens the dynamic-import waterfall; same rationale as the font preloads).
+S5 verify: build.sh -> verify.sh FULL (render + interaction gates must be byte-identical green: 16 must rows, 6 pending unchanged) -> eslint on glue/ if the repo lint covers it.
+S6 fresh-eyes critique (visible teammate per operator pref), fix, re-verify, commit.
+
+### GUARDS
+
+- move-only discipline: any behavior delta found in review = a defect in the split, not an improvement opportunity. improvements land as their own later commits.
+- boot ORDER preserved: TT policy + env complete before door.init; DOMContentLoaded gate stays in custom.js.
+- devserve /client-prefix strip already serves nested paths; no server change.
+- sillybeta deploy unchanged + NOT auto-deployed (standing memory).
+
 ## PHASE 2 - DRIFT CLEANUP (D1-D5)
 
 - D1 README.md rewrite: door = custom.js via `client.jsglue_href`; env surface = `sanitize`+`st_log` only; region architecture (Shell/MessageLog/Composer CSR + nested-region fallback truth); regenerate layout listing incl. panels/; drop render_code/sse_start/ChatView-singleton text; FIX "No npm, no node" claim - build.sh shells `npx esbuild` + `@tailwindcss/cli` (recheck addition; runs via nix develop). (out of doc-frontmatter scope per rule - README = index register.)
@@ -149,7 +255,7 @@ goal: kill the JS parallel store (`jsCharacters`, `personas`, `selectedPersona`,
 
 ## ORDER + GATES
 
--1 commit pending tree -> 0 confirm+gate -> 1 handlers+resize+keyboard (gate green) -> 2 cleanup (gate green) -> 3 Q1 probe -> Q1 build (gate + browser) -> 3b. deploy to sillybeta ONLY on explicit ask (standing memory). every phase: `zig build` + `zig build test` + `zig build check` + verify.sh both stages.
+-1 commit pending tree [done, other agent] -> 0 confirm+gate [done 941476b19] -> 1a F0+B4+B8 [done 3239961d6] -> S1 probe [done, minor] -> S2 Z-DATA/BOOT/DIALOG [in flight, m-zigdata] -> S3 B-wave in Zig -> S4 door slim+split -> S4b tailwind adoption (operator pick B) -> S5 leftovers -> 3b rules. (zig-maximal directive 2026-07-14 folds the old 1b/2/Q1 into S1-S5.) deploy to sillybeta ONLY on explicit ask (standing memory). every phase: `zig build` + `zig build test` + `zig build check` + verify.sh both stages.
 
 ## RELATED
 

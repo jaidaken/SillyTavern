@@ -286,6 +286,10 @@ async function main() {
         await page.click('#d-characters');
         row('must', await page.waitFor("document.querySelectorAll('#chat-root .char-item').length >= 60", 5000),
             'B2 characters dock lists the 60 mock characters');
+        // S2 Zig-path proof: char_api.zig is the line's ONLY emitter (JS twin deleted, grep-gated).
+        // Chosen over a 500-char injection row; B5/B6 already exercise scale + paging on this path.
+        row('must', page.sawConsole('loaded 60 characters'),
+            'B2b Zig data layer loaded the list ([st:chars] loaded 60 characters)');
 
         consoleLines.length = 0;
         await page.click('.char-item[data-char-select="5"] .char-name');
