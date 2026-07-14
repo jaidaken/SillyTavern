@@ -702,8 +702,9 @@
             // next frame, so scroll after two rAFs.
             requestAnimationFrame(function () {
                 requestAnimationFrame(function () {
-                    const lastMes = document.querySelector('#chat .mes:last-child');
-                    if (lastMes) lastMes.scrollIntoView({ block: 'end' });
+                    // :last-child cannot match here (the resize handle is the container's last child).
+                    const all = document.querySelectorAll('#chat .mes');
+                    if (all.length) all[all.length - 1].scrollIntoView({ block: 'end' });
                 });
             });
         } catch (err) {
