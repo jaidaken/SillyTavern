@@ -9,6 +9,16 @@ const is_wasm = builtin.target.cpu.arch == .wasm32 and builtin.target.os.tag == 
 
 extern "env" fn st_log(level: u32, scope_ptr: [*]const u8, scope_len: usize, msg_ptr: [*]const u8, msg_len: usize) void;
 
+/// Panic messages reach the browser console via st_log before the trap; without this a wasm
+/// panic surfaces as a bare 'RuntimeError: unreachable' with no message.
+pub fn panicHandler(msg: []const u8, first_trace_addr: ?usize) noreturn {
+    if (comptime is_wasm) {
+        st_log(0, "panic", 5, msg.ptr, msg.len);
+        @trap();
+    }
+    std.debug.defaultPanic(msg, first_trace_addr);
+}
+
 pub fn logFn(
     comptime message_level: std.log.Level,
     comptime scope: @EnumLiteral(),

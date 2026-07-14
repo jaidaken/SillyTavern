@@ -13,3 +13,4 @@ pub const std_options: std.Options = .{
     .logFn = @import("pages/log.zig").logFn,
     .log_level = .debug,
 };
+pub const panic = std.debug.FullPanic(@import("pages/log.zig").panicHandler);

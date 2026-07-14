@@ -1,9 +1,8 @@
 // Backgrounds panel body. Top-bar drawer.
 pub fn BackgroundsBody(allocator: zx.Allocator) zx.Component {
-    _ = allocator;
-    return (
-        <PanelEmpty />
-    );
+    // A bare component root transpiles to ziex's failing-allocator context; allocInit mounts it with the real one.
+    var zctx = zx.x.allocInit(allocator);
+    return zctx.cmp(PanelEmpty, .{ .name = "PanelEmpty" }, .{});
 }
 
 const zx = @import("zx");

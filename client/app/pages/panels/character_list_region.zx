@@ -3,9 +3,9 @@
 // its focused search input untouched. The list body itself lives in character_list.zx.
 pub fn CharacterListRegion(ctx: *zx.ComponentCtx(void)) zx.Component {
     regions.character_list = ctx.state(u32, 0);
-    return (
-        <CharacterList />
-    );
+    // A bare component root transpiles to ziex's failing-allocator context; allocInit mounts it with the real one.
+    var zctx = zx.x.allocInit(ctx.allocator);
+    return zctx.cmp(CharacterList, .{ .name = "CharacterList" }, .{});
 }
 
 const zx = @import("zx");
