@@ -19,6 +19,7 @@ const net = @import("./net.zig");
 const data = @import("./char_data.zig");
 const char_store = @import("./character_store.zig");
 const dom_event = @import("./dom_event.zig");
+const appearance = @import("./appearance.zig");
 
 const alloc = char_store.page_gpa;
 const log = std.log.scoped(.panels);
@@ -188,7 +189,9 @@ const save_delay_ms = 3000;
 /// that finds no newer click pending goes on to save.
 var pending_saves: u32 = 0;
 
-fn scheduleSave() void {
+/// Queue the debounced account-settings save. Public so appearance.zig routes its own changes
+/// through this ONE saver: two independent read-modify-write savers would clobber the settings blob.
+pub fn scheduleSave() void {
     pending_saves += 1;
     log.debug("save scheduled, {d} pending", .{pending_saves});
     if (zx.client.setTimeout(onSaveTimeout, save_delay_ms) == null) {
@@ -264,5 +267,15 @@ fn mergedSettings(settings_str: []const u8) ![]u8 {
     if (getItem(a, measure_px_key)) |px| try prefs.put(a, "measurepx", .{ .string = px });
 
     try root.object.put(a, "clientReadingPrefs", .{ .object = prefs });
+
+    // C-COMP appearance: rides the same save (one settings-blob owner, no clobber). Only keys the
+    // user actually set are written, so an untouched appearance stays absent rather than pinned.
+    var appear: std.json.ObjectMap = .empty;
+    inline for (appearance.vars) |v| {
+        if (getItem(a, "st-appearance-" ++ v.name)) |val| try appear.put(a, v.name, .{ .string = val });
+    }
+    if (getItem(a, appearance.css_key)) |css| try appear.put(a, "css", .{ .string = css });
+    try root.object.put(a, "clientAppearance", .{ .object = appear });
+
     return std.json.Stringify.valueAlloc(alloc, root, .{});
 }

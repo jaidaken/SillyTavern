@@ -1,4 +1,4 @@
-// The composer: options menu, the message input, and send/stop. Inert until the send loop is wired.
+// The composer: options menu, the message input, and send/stop.
 // Its own sibling client region, so a Shell panel toggle or a MessageLog token never re-renders it:
 // the textarea's typed value, caret, and auto-grow height survive both. It has no state mutation of
 // its own yet, so it publishes no region handle; it never re-renders after its first mount.
@@ -13,49 +13,55 @@ pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
         <footer
             @allocator={ctx.allocator}
             id="composer"
-            class="relative col-start-2 row-start-3 flex items-end gap-2 border-t border-border bg-surface p-3 pb-[env(safe-area-inset-bottom,0.75rem)] max-[640px]:p-2"
+            class="col-start-2 row-start-3 border-t border-border bg-surface p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] max-[640px]:p-2"
             @rendering={.client}
             onclick={ui.onPageClick}
             onkeydown={ui.onPageKey}
         >
-            <span
-                id="send-status"
-                role="status"
-                aria-live="polite"
-                class="pointer-events-none absolute bottom-full left-3 mb-1 rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted empty:hidden"
-            ></span>
-            <button
-                type="button"
-                class={btn_base ++ " bg-transparent text-muted hover:bg-surface-2 hover:text-text"}
-                data-icon="menu"
-                aria-label="Options"
-                aria-haspopup="dialog"
-                onclick={undo.onOpenSnapshots}
-            ></button>
-            <label for="send_textarea" class="sr-only top-0 left-0">Message</label>
-            <textarea
-                id="send_textarea"
-                name="message"
-                class="composer-input max-h-[40vh] min-h-[2.7rem] flex-1 resize-none rounded-md border border-control-border bg-bg px-[0.85rem] py-[0.6rem] font-serif text-md leading-ui text-text transition-[border-color] duration-120 ease-[ease] placeholder:text-faint placeholder:italic focus:border-accent focus:not-focus-visible:outline-none max-[640px]:max-h-[30vh] max-[640px]:p-2 max-[640px]:text-[16px]"
-                rows="1"
-                placeholder="Type a message..."
-                oninput={ctx.bind(onComposerInput)}
-                onkeydown={onComposerKeydown}
-            ></textarea>
-            <button
-                type="button"
-                class={btn_base ++ " border-accent bg-accent text-on-accent hover:bg-accent hover:text-on-accent hover:brightness-[1.06]"}
-                data-icon="send"
-                aria-label="Send"
-                onclick={onSend}
-            ></button>
-            <button
-                type="button"
-                class={btn_base ++ " bg-surface-2 text-accent"}
-                data-icon="stop"
-                aria-label="Stop"
-                onclick={onStop}
-            ></button>
+            {if (dropdown_demo.enabled()) (
+                <DropdownDemo />
+            )}
+            <div class="relative mx-auto flex w-full max-w-[var(--reading-measure,var(--measure))] items-end gap-2">
+                <span
+                    id="send-status"
+                    role="status"
+                    aria-live="polite"
+                    class="pointer-events-none absolute bottom-full left-0 mb-1 rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted empty:hidden"
+                ></span>
+                <button
+                    type="button"
+                    class={btn_base ++ " bg-transparent text-muted hover:bg-surface-2 hover:text-text"}
+                    data-icon="menu"
+                    aria-label="Chat snapshots"
+                    aria-haspopup="dialog"
+                    onclick={undo.onOpenSnapshots}
+                ></button>
+                <label for="send_textarea" class="sr-only top-0 left-0">Message</label>
+                <textarea
+                    id="send_textarea"
+                    name="message"
+                    autocomplete="off"
+                    class="max-h-[40vh] min-h-[2.7rem] flex-1 resize-none rounded-md border border-control-border bg-bg px-[0.85rem] py-[0.6rem] font-serif text-md leading-ui text-text transition-[border-color] duration-120 ease-[ease] placeholder:text-faint placeholder:italic focus:border-accent focus:not-focus-visible:outline-none max-[640px]:max-h-[30vh] max-[640px]:p-2 max-[640px]:text-[16px]"
+                    rows="1"
+                    placeholder="Type a message..."
+                    oninput={ctx.bind(onComposerInput)}
+                    onkeydown={onComposerKeydown}
+                ></textarea>
+                <button
+                    type="button"
+                    class={btn_base ++ " composer-send border-accent bg-accent text-on-accent hover:bg-accent hover:text-on-accent hover:brightness-[1.06]"}
+                    data-icon="send"
+                    aria-label="Send"
+                    onclick={onSend}
+                ></button>
+                <button
+                    type="button"
+                    class={btn_base ++ " composer-stop bg-surface-2 text-accent"}
+                    data-icon="stop"
+                    aria-label="Stop"
+                    onclick={onStop}
+                ></button>
+            </div>
         </footer>
     );
 }
@@ -109,3 +115,5 @@ const instrument = @import("./instrument.zig");
 const dom_event = @import("./dom_event.zig");
 const char_api = @import("./char_api.zig");
 const std = @import("std");
+const dropdown_demo = @import("./dropdown_demo.zx");
+const DropdownDemo = dropdown_demo.DropdownDemo;

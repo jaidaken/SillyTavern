@@ -792,3 +792,42 @@
     0%, 100% { opacity: 1; }
     50%      { opacity: calc(1 - var(--move) * 0.45); }
 }
+
+/* ===================================================================================
+   C-DROP: the styled dropdown (dropdown.zx). The caret glyph is a data-icon mask like
+   the rest of the chrome (the `icon` utility paints it), sized down from the 1.1rem
+   default so it sits beside text-sm; it flips when the button reports its menu open.
+   The listbox itself is utilities in the markup, elevation is border + bg-surface, no
+   shadow (WD16). Append-only zone.
+   =================================================================================== */
+[data-icon="chevron-down"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>'); }
+
+.dd-caret::before {
+    width: 0.85rem;
+    height: 0.85rem;
+    /* --move scales the transition TIME, not the end state: reduced motion flips instantly (0ms) and
+       still shows the open state, rather than losing it (WD25). */
+    transition: transform calc(var(--move) * 150ms) var(--ease-settle);
+}
+
+/* The open state lives on the button (aria-expanded), so the caret reads it from its own control
+   rather than a class Zig would have to compute. */
+button[aria-expanded="true"] .dd-caret::before {
+    transform: rotate(180deg);
+}
+
+/* ============ C-COMP: composer send/stop toggle + appearance colour pickers ============ */
+
+/* The composer publishes no region handle, so it never re-renders; the send/stop swap is therefore
+   CSS, not a Zig conditional. message.zx sets aria-busy="true" on the streaming .mes, and #chat-root
+   is the common grid ancestor of both the chat log and the composer, so :has() reads the live
+   generation state with no JS marker and no re-render. Idle shows send; while a reply streams, stop.
+   Unlayered, so it wins over the btn_base `grid` utility (Tailwind utilities sit in @layer). */
+.composer-stop { display: none; }
+#chat-root:has(#chat .mes[aria-busy="true"]) .composer-send { display: none; }
+#chat-root:has(#chat .mes[aria-busy="true"]) .composer-stop { display: grid; }
+
+/* Appearance colour pickers: strip the native inset so the swatch fills the rounded control. */
+.theme-color::-webkit-color-swatch-wrapper { padding: 0; }
+.theme-color::-webkit-color-swatch { border: none; border-radius: 4px; }
+.theme-color::-moz-color-swatch { border: none; border-radius: 4px; }

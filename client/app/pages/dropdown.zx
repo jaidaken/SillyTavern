@@ -1,0 +1,311 @@
+// A styled listbox dropdown: the app's replacement for a bare <select>, which the stylesheet only
+// gives a focus ring (glue/app-input.css :206). A <button aria-haspopup="listbox"> face over a
+// fixed-positioned role="listbox" panel of role="option" items, keyboard-driven per the WAI-ARIA
+// listbox pattern.
+//
+// SHAPE (forced by ziex): this is a PLAIN prop-taking child, NOT a @rendering={.client} component.
+// A client component serializes its props across the SSR->hydrate boundary (x.zig cmp -> propsSerializer),
+// which a fn-pointer onchange cannot survive; and per HR6 the options must not carry per-item onclick.
+// So the controls carry data-* only and dispatch is DELEGATED: the consuming region root binds
+// onclick/onkeydown and calls dropdown.onClick(target) / dropdown.onKey(ev), exactly as MessageLog
+// delegates the undo controls to undo.onLogClick. onClick/onKey return true when they handled the
+// event, so the consumer short-circuits its own logic.
+//
+// The panel is position:fixed off the button's viewport rect (captureAnchor, mirrors undo.zig), so it
+// escapes a dock/panel overflow-y:auto clip. A transparent fixed backdrop (data-dd-dismiss) catches an
+// outside click and closes the menu, keeping dismissal in the same delegated path. NOTE: fixed escapes
+// overflow clipping but NOT paint containment (content-visibility / contain:paint) nor a transform/
+// filter ancestor, which reparent a fixed box's containing block; a dropdown used INSIDE a .mes (the
+// message reading surface) must render its panel at the region root like undo does. Config panels have
+// neither, so the common consumer is safe.
+
+pub const Option = nav.Option;
+
+pub const Props = struct {
+    options: []const Option,
+    // The selected value. The consumer owns it (the component is controlled): onchange fires, the
+    // consumer stores the new value, and passes it back here on the next render.
+    value: []const u8,
+    // Baked form identity: the button gets id="dd-btn-<name>" + name, and every data-* key carries it
+    // so one delegated handler tells sibling dropdowns apart. Must be unique per dropdown on the page.
+    name: []const u8,
+    // The accessible name (aria-label on the button and the listbox). A human phrase, not the key.
+    label: []const u8,
+    // Fires with the chosen option value on select. The value is BORROWED for the call only; copy it
+    // to retain (it is freed when the handler returns). The consumer mutates its own state here.
+    onchange: *const fn ([]const u8) void,
+};
+
+const Entry = struct {
+    onchange: *const fn ([]const u8) void,
+    selected: usize,
+    count: usize,
+};
+
+// App-global open state (ZX4): one dropdown open at a time, keyed by name; mutations call
+// zx.client.rerender(). The registry lets the delegated handlers reach a dropdown's onchange/count by
+// name; it is populated on the client render (in-process, so the fn pointer is live and unserialized).
+// The open dropdown's name is COPIED into a fixed buffer, never aliased: the name reaching openFor
+// comes from dom_event.datasetUp, an owned heap string the click branch frees on return, so storing
+// the slice would be a use-after-free (the freed bytes get reused mid-session and the key corrupts).
+var open_buf: [96]u8 = undefined;
+var open_len: usize = 0;
+var active: usize = 0;
+var anchor_top: f32 = 0;
+var anchor_left: f32 = 0;
+var anchor_width: f32 = 0;
+var registry: std.StringHashMapUnmanaged(Entry) = .empty;
+
+const button_cls = "inline-flex min-w-[10rem] max-w-full cursor-pointer items-center justify-between gap-2 rounded-md border border-control-border bg-surface px-3 py-[0.4rem] font-mono text-sm text-text transition-colors duration-120 ease-[ease] hover:border-border aria-expanded:border-accent";
+const list_cls = "dd-list z-40 m-0 flex max-h-[min(16rem,60vh)] list-none flex-col gap-[1px] overflow-y-auto rounded-md border border-border bg-surface p-1 outline-none [scrollbar-width:thin] animate-drawer-in";
+const option_cls = "cursor-pointer rounded-sm px-3 py-[0.35rem] font-mono text-sm text-muted aria-selected:text-accent";
+const option_active_cls = "cursor-pointer rounded-sm bg-surface-2 px-3 py-[0.35rem] font-mono text-sm text-text aria-selected:text-accent";
+
+pub fn Dropdown(allocator: zx.Allocator, props: Props) zx.Component {
+    if (zx.platform.role == .client) {
+        registry.put(zx.allocator, props.name, .{
+            .onchange = props.onchange,
+            .selected = nav.indexOfValue(props.options, props.value) orelse 0,
+            .count = props.options.len,
+        }) catch {};
+    }
+    const open = isOpen(props.name);
+    const face = nav.selectedLabel(props.options, props.value, "Select...");
+    const btn_id = std.fmt.allocPrint(allocator, "dd-btn-{s}", .{props.name}) catch "dd-btn";
+    const list_id = std.fmt.allocPrint(allocator, "dd-list-{s}", .{props.name}) catch "dd-list";
+    return (
+        <div @allocator={allocator} class="relative inline-block">
+            <button
+                type="button"
+                id={btn_id}
+                name={props.name}
+                aria-haspopup="listbox"
+                aria-expanded={boolStr(open)}
+                aria-controls={list_id}
+                aria-label={props.label}
+                aria-activedescendant={activeDesc(allocator, props.name, open)}
+                data-dd-toggle={props.name}
+                class={button_cls}
+            >
+                <span class="truncate">{face}</span>
+                <span class="icon dd-caret shrink-0" data-icon="chevron-down" aria-hidden="true"></span>
+            </button>
+            {if (open) (
+                <div data-dd-dismiss={props.name} aria-hidden="true" class="fixed inset-0 z-30"></div>
+            )}
+            {if (open) (
+                <ul
+                    id={list_id}
+                    role="listbox"
+                    tabindex="-1"
+                    aria-label={props.label}
+                    style={anchorStyle(allocator)}
+                    class={list_cls}
+                >
+                    {for (props.options, 0..) |opt, i| (
+                        <li
+                            id={optId(allocator, props.name, i)}
+                            role="option"
+                            data-dd-value={opt.value}
+                            data-dd-name={props.name}
+                            aria-selected={boolStr(std.mem.eql(u8, opt.value, props.value))}
+                            class={if (i == active) option_active_cls else option_cls}
+                        >{opt.label}</li>
+                    )}
+                </ul>
+            )}
+        </div>
+    );
+}
+
+// ---- delegated dispatch (called by the consuming region root) ---------------------------------
+
+/// Handle a click that landed on a dropdown control (toggle, option, or the dismiss backdrop).
+/// Returns true when it consumed the click so the caller stops its own handling.
+pub fn onClick(target: js.Object) bool {
+    if (zx.platform.role != .client) return false;
+    if (dom_event.datasetUp(target, "ddValue")) |val| {
+        defer zx.allocator.free(val);
+        const name = dom_event.datasetUp(target, "ddName") orelse return true;
+        defer zx.allocator.free(name);
+        commit(name, val);
+        return true;
+    }
+    if (dom_event.datasetUp(target, "ddToggle")) |name| {
+        defer zx.allocator.free(name);
+        if (isOpen(name)) closeAndRefocus(name) else openFor(name);
+        return true;
+    }
+    if (dom_event.datasetUp(target, "ddDismiss")) |name| {
+        zx.allocator.free(name);
+        closeMenu();
+        zx.client.rerender();
+        return true;
+    }
+    return false;
+}
+
+/// Handle a keydown for the open menu (Arrow/Home/End move, Enter/Space select, Escape close) or the
+/// closed toggle button (Enter/Space/Arrow opens). Returns true when it consumed the key.
+pub fn onKey(ev: zx.client.Event) bool {
+    if (zx.platform.role != .client) return false;
+    const key = ev.key() orelse return false;
+    defer zx.allocator.free(key);
+
+    if (openName()) |name| {
+        if (eqlKey(key, "Escape")) {
+            ev.preventDefault();
+            closeAndRefocus(name);
+            return true;
+        }
+        if (eqlKey(key, "Tab")) {
+            closeMenu();
+            zx.client.rerender();
+            return false;
+        }
+        if (eqlKey(key, "Enter") or eqlKey(key, " ")) {
+            ev.preventDefault();
+            commitActive(name);
+            return true;
+        }
+        if (navFor(key)) |dir| {
+            ev.preventDefault();
+            active = nav.move(active, countFor(name), dir);
+            zx.client.rerender();
+            focusButton(name);
+            return true;
+        }
+        return false;
+    }
+
+    const target = dom_event.plainTarget(ev) orelse return false;
+    if (dom_event.datasetUp(target, "ddToggle")) |name| {
+        defer zx.allocator.free(name);
+        if (eqlKey(key, "Enter") or eqlKey(key, " ") or eqlKey(key, "ArrowDown") or eqlKey(key, "ArrowUp")) {
+            ev.preventDefault();
+            openFor(name);
+            return true;
+        }
+    }
+    return false;
+}
+
+// ---- internals --------------------------------------------------------------------------------
+
+fn openName() ?[]const u8 {
+    return if (open_len == 0) null else open_buf[0..open_len];
+}
+
+fn isOpen(name: []const u8) bool {
+    return open_len > 0 and std.mem.eql(u8, open_buf[0..open_len], name);
+}
+
+fn boolStr(b: bool) []const u8 {
+    return if (b) "true" else "false";
+}
+
+fn eqlKey(k: []const u8, want: []const u8) bool {
+    return std.mem.eql(u8, k, want);
+}
+
+fn navFor(key: []const u8) ?nav.Nav {
+    if (eqlKey(key, "ArrowDown")) return .down;
+    if (eqlKey(key, "ArrowUp")) return .up;
+    if (eqlKey(key, "Home")) return .home;
+    if (eqlKey(key, "End")) return .end;
+    return null;
+}
+
+fn countFor(name: []const u8) usize {
+    return if (registry.get(name)) |e| e.count else 0;
+}
+
+fn closeMenu() void {
+    open_len = 0;
+}
+
+fn openFor(name: []const u8) void {
+    active = if (registry.get(name)) |e| e.selected else 0;
+    captureAnchor(name);
+    const n = @min(name.len, open_buf.len);
+    @memcpy(open_buf[0..n], name[0..n]);
+    open_len = n;
+    zx.client.rerender();
+    focusButton(name);
+}
+
+fn closeAndRefocus(name: []const u8) void {
+    closeMenu();
+    zx.client.rerender();
+    focusButton(name);
+}
+
+fn commit(name: []const u8, val: []const u8) void {
+    if (registry.get(name)) |e| e.onchange(val);
+    closeMenu();
+    zx.client.rerender();
+    focusButton(name);
+}
+
+/// Read the keyboard-active option's value straight from the DOM and commit it, so no options slice
+/// has to outlive the render that built it.
+fn commitActive(name: []const u8) void {
+    if (zx.platform.role != .client) return;
+    var buf: [96]u8 = undefined;
+    const id = std.fmt.bufPrint(&buf, "dd-opt-{s}-{d}", .{ name, active }) catch return;
+    const el = dom_event.elementById(zx.allocator, id) orelse return;
+    defer el.deinit();
+    const val = dom_event.datasetUp(el.ref, "ddValue") orelse return;
+    defer zx.allocator.free(val);
+    commit(name, val);
+}
+
+/// Place the panel just under the button, viewport-anchored (undo.captureAnchor pattern), because a
+/// fixed panel positioned from the button's rect escapes the dock's overflow clip.
+fn captureAnchor(name: []const u8) void {
+    if (zx.platform.role != .client) return;
+    var buf: [72]u8 = undefined;
+    const id = std.fmt.bufPrint(&buf, "dd-btn-{s}", .{name}) catch return;
+    const el = dom_event.elementById(zx.allocator, id) orelse return;
+    defer el.deinit();
+    const rect = el.ref.call(js.Object, "getBoundingClientRect", .{}) catch return;
+    defer rect.deinit();
+    const bottom = rect.get(f64, "bottom") catch return;
+    const left = rect.get(f64, "left") catch return;
+    const width = rect.get(f64, "width") catch return;
+    anchor_top = @floatCast(bottom + 4);
+    anchor_left = @floatCast(left);
+    anchor_width = @floatCast(width);
+}
+
+fn focusButton(name: []const u8) void {
+    if (zx.platform.role != .client) return;
+    var buf: [72]u8 = undefined;
+    const id = std.fmt.bufPrint(&buf, "dd-btn-{s}", .{name}) catch return;
+    const el = dom_event.elementById(zx.allocator, id) orelse return;
+    defer el.deinit();
+    el.ref.call(void, "focus", .{}) catch {};
+}
+
+fn activeDesc(allocator: std.mem.Allocator, name: []const u8, open: bool) []const u8 {
+    if (!open) return "";
+    return optId(allocator, name, active);
+}
+
+fn optId(allocator: std.mem.Allocator, name: []const u8, i: usize) []const u8 {
+    return std.fmt.allocPrint(allocator, "dd-opt-{s}-{d}", .{ name, i }) catch "dd-opt";
+}
+
+fn anchorStyle(allocator: std.mem.Allocator) []const u8 {
+    return std.fmt.allocPrint(allocator, "position:fixed;top:{d}px;left:{d}px;min-width:{d}px", .{
+        @as(i32, @intFromFloat(anchor_top)),
+        @as(i32, @intFromFloat(anchor_left)),
+        @as(i32, @intFromFloat(anchor_width)),
+    }) catch "position:fixed;top:0px;left:0px";
+}
+
+const zx = @import("zx");
+const std = @import("std");
+const js = zx.client.js;
+const nav = @import("./dropdown_nav.zig");
+const dom_event = @import("./dom_event.zig");

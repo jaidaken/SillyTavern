@@ -276,6 +276,10 @@ async function main() {
         row('must', await page.waitFor(`document.getElementById('send_textarea').clientHeight > ${h0}`, 2500),
             'A6 composer auto-grows on input');
 
+        // Close the settings drawer before the resize drag: the appearance tab's custom-CSS textarea
+        // (C-COMP) overlays the chat area and would otherwise intercept the drag on the reading-width handle.
+        await page.click('#d-settings');
+        await page.waitFor("!document.querySelector('.settings-body')", 2500);
         await page.drag('.chat-resize', 80);
         row('must', await page.waitFor("document.getElementById('chat-root').style.getPropertyValue('--reading-measure') !== ''", 2500),
             'A7 reading-width handle drags (8198ddf22 regression row)');
@@ -410,7 +414,9 @@ async function main() {
             'SL-Enter sends; Shift+Enter does not', `shift+enter=${afterShift} enter=${beforeEnter}->${enterSent}`);
 
         // PERSIST: send, let the reply seal (user append on send + assistant append on seal), then
-        // reload and prove both turns survive (the mock /get echoes the appended messages).
+        // reload and prove both turns survive (the mock /get echoes the appended messages). Wait for
+        // the ENTER-probe stream to seal first: Send is hidden while a reply streams (C-COMP toggle).
+        await page.waitFor(`${idle}`, 8000);
         const beforePersist = await page.eval("document.querySelectorAll('#chat .mes').length");
         await page.focus('#send_textarea');
         await page.insertText('PERSIST PROBE');
@@ -627,8 +633,9 @@ async function main() {
         row('must', restored, 'UNDO-4 restoring message 1 changes only its text ("flares"), twin at 3 unchanged');
         row('must', stU1.get_count > stU0.get_count, 'UNDO-5 the reader resynced after the restore', `get_count ${stU0.get_count}->${stU1.get_count}`);
 
-        // The whole-chat snapshot overlay, surfaced from the composer Options button.
-        await page.click('#composer button[aria-label="Options"]');
+        // The whole-chat snapshot overlay, surfaced from the composer snapshots button (relabelled
+        // from "Options" to match what it opens; C-COMP).
+        await page.click('#composer button[aria-label="Chat snapshots"]');
         const snapListed = await page.waitFor(
             "document.querySelector('#undo-surface [data-undo-restore][data-undo-kind=\\'snapshot\\']')", 6000);
         row('must', snapListed, 'UNDO-6 composer Options opens the snapshot overlay with a save point');
@@ -692,6 +699,127 @@ async function main() {
             return false;
         })();
         row('must', resumed, 'HOME-4 the resume-last action opens the most recent chat');
+
+        // ===== C-DROP (append-only) =====
+        // The styled dropdown proven in isolation via its dev harness (?dropdemo=1 mounts a fixed island
+        // whose region root delegates to dropdown.onClick/onKey). Asserts the onchange callback fired
+        // (the readout changed) and the fixed panel is not clipped by the viewport.
+        console.log('== dropdown: styled listbox component (dev harness) ==');
+        await page.navigate(`${args.base}/?dropdemo=1`);
+        await page.waitFor(`${hydrated} && document.getElementById('dropdown-demo')`, 15000);
+        row('must', (await page.eval("document.getElementById('dd-demo-value').textContent")) === 'chatml',
+            'C-DROP-1 demo island hydrates with the initial value');
+
+        await page.click('#dd-btn-demo');
+        const ddOpen = await page.waitFor(
+            "document.querySelector('#dd-list-demo[role=\\'listbox\\']') && document.getElementById('dd-btn-demo').getAttribute('aria-expanded')==='true'", 4000);
+        row('must', ddOpen, 'C-DROP-2 clicking the button opens the listbox (delegated onClick)');
+
+        const ddClip = await page.eval(`(function(){
+            var el = document.getElementById('dd-list-demo');
+            if (!el) return null;
+            var r = el.getBoundingClientRect();
+            return { inView: r.left >= 0 && r.top >= 0 && r.right <= window.innerWidth && r.bottom <= window.innerHeight, w: r.width, h: r.height };
+        })()`);
+        row('must', !!ddClip && ddClip.inView && ddClip.w > 0 && ddClip.h > 0,
+            'C-DROP-3 the fixed panel is fully in the viewport (not clipped)', JSON.stringify(ddClip));
+
+        // Keyboard: focus the button (open() already did), Down twice to the third option, Enter to pick.
+        await page.eval("document.getElementById('dd-btn-demo').focus()");
+        const press = async (key, code, vk) => {
+            await page.cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key, code, windowsVirtualKeyCode: vk }, page.sessionId);
+            await page.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: vk }, page.sessionId);
+        };
+        await press('ArrowDown', 'ArrowDown', 40);
+        await press('ArrowDown', 'ArrowDown', 40);
+        await press('Enter', 'Enter', 13);
+        const ddPicked = await page.waitFor("document.getElementById('dd-demo-value').textContent === 'mistral'", 4000);
+        const ddClosed = await page.eval("document.getElementById('dd-list-demo') === null");
+        const ddRefocus = await page.eval("document.activeElement === document.getElementById('dd-btn-demo')");
+        row('must', ddPicked && ddClosed && ddRefocus,
+            'C-DROP-4 keyboard select fires onchange, closes the menu, refocuses the button',
+            `picked=${ddPicked} closed=${ddClosed} refocus=${ddRefocus}`);
+
+        // ==================== C-COMP: composer polish + appearance ====================
+        // Demo mode carries .mes_text bodies and the settings drawer, so the pad/width/invariant-6
+        // rows run here; the toggle needs a real stream, so it navigates to the mock backend after.
+        console.log('== C-COMP: composer polish + appearance (2d) ==');
+        await page.navigate(`${args.base}/?demo=1`);
+        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=12`, 15000);
+
+        // Bottom-pad: max(0.75rem, env(...)) resolves to 12px on desktop where the old env(..,0.75rem)
+        // fallback resolved to 0 (the env var is defined as 0, so the fallback never applied).
+        const padBottom = await page.eval("parseFloat(getComputedStyle(document.getElementById('composer')).paddingBottom)");
+        row('must', padBottom >= 11.5, 'C-COMP composer bottom-pad nonzero on desktop', `${padBottom}px`);
+
+        // Width: the composer inner tracks .chat-inner's reading column. At a bound measure both
+        // border-boxes equal the measure, so their rendered widths match within a pixel.
+        let widthOk = true;
+        const widthDetail = [];
+        for (const w of [400, 600, 800]) {
+            await page.eval(`document.getElementById('chat-root').style.setProperty('--reading-measure','${w}px')`);
+            await sleep(60);
+            const m = await page.eval(`(function(){
+                const c = document.querySelector('#composer > div').getBoundingClientRect().width;
+                const i = document.querySelector('.chat-inner').getBoundingClientRect().width;
+                return { c, i };
+            })()`);
+            if (!(Math.abs(m.c - m.i) < 1.5 && Math.abs(m.c - w) < 1.5)) widthOk = false;
+            widthDetail.push(`${w}:c${m.c.toFixed(0)}/i${m.i.toFixed(0)}`);
+        }
+        await page.eval("document.getElementById('chat-root').style.removeProperty('--reading-measure')");
+        row('must', widthOk, 'C-COMP composer tracks .chat-inner at 3 widths', widthDetail.join(' '));
+
+        // Invariant 6: a custom rule targeting a chrome id AND the message body. The @scope wrap makes
+        // .mes_text (the scope limit) unmatchable, so only the chrome outline lands. outline does not
+        // inherit, so this is a clean subject-match test, not an inheritance artefact.
+        await page.click('#d-settings');
+        await page.waitFor("document.querySelector('.settings-body')", 5000);
+        await page.click('.settings-tab[data-reading-val="appearance"]');
+        await page.waitFor("document.getElementById('custom-css')", 3000);
+        await page.focus('#custom-css');
+        await page.insertText('#composer{outline:3px solid rgb(1,2,3)} .mes_text{outline:3px solid rgb(4,5,6)}');
+        await sleep(250);
+        const inv = await page.eval(`(function(){
+            const comp = getComputedStyle(document.getElementById('composer')).outlineColor;
+            const mt = document.querySelector('.mes_text');
+            return { comp, body: mt ? getComputedStyle(mt).outlineColor : 'none', hasMt: !!mt };
+        })()`);
+        row('must', inv.hasMt && inv.comp === 'rgb(1, 2, 3)' && inv.body !== 'rgb(4, 5, 6)',
+            'C-COMP invariant 6: custom CSS styles chrome, never the message body',
+            `chrome=${inv.comp} body=${inv.body}`);
+        // Clear the box through real input so its localStorage copy does not re-inject on the next nav.
+        await page.eval("(function(){var t=document.getElementById('custom-css'); if(t){t.value=''; t.dispatchEvent(new Event('input',{bubbles:true}));}})()");
+        await sleep(150);
+
+        // Send/Stop toggle across a live generation: idle shows send, a streaming .mes (aria-busy)
+        // flips the :has() rule to show stop. The mock textgen backend lives at base /; the home
+        // landing no longer auto-opens (C-HOME), so open a recent chat before sending.
+        await page.navigate(`${args.base}/`);
+        await openRecentChat();
+        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+        await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000);
+        await page.waitFor(`${idle}`, 5000);
+        const disp = (sel) => page.eval(`getComputedStyle(document.querySelector(${JSON.stringify(sel)})).display`);
+        const idleSend = await disp('#composer .composer-send');
+        const idleStop = await disp('#composer .composer-stop');
+        await page.focus('#send_textarea');
+        await page.insertText('TOGGLE PROBE');
+        await page.click('#composer button[aria-label="Send"]');
+        // Read the toggle atomically WHILE a .mes is aria-busy: the mock stream can seal between two
+        // separate reads, so poll a single tick that requires streaming AND send-hidden AND stop-shown.
+        const streamToggled = await page.waitFor(`(function(){
+            if (!document.querySelector('#chat .mes[aria-busy=\\'true\\']')) return false;
+            const send = getComputedStyle(document.querySelector('#composer .composer-send')).display;
+            const stop = getComputedStyle(document.querySelector('#composer .composer-stop')).display;
+            return send === 'none' && stop !== 'none';
+        })()`, 8000);
+        row('must',
+            streamToggled && idleStop === 'none' && idleSend !== 'none',
+            'C-COMP send/stop toggles on generation state',
+            `idle send=${idleSend}/stop=${idleStop} streamToggled=${streamToggled}`);
+        // Let the reply seal so teardown is clean.
+        await page.waitFor("!document.querySelector('#chat .mes[aria-busy=\\'true\\']')", 8000);
     } finally {
         clearTimeout(watchdog);
         cleanup();

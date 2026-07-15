@@ -110,6 +110,39 @@ pub fn SettingsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     </div>
                 </div>
                 <p class="setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]" id="motion-note">System follows your OS reduced-motion preference.</p>
+
+                {for (appearance.vars_slice) |v| (
+                    <div class="setting-row flex items-center justify-between gap-4 max-[768px]:flex-wrap max-[768px]:gap-2">
+                        <span class="setting-label text-base font-medium max-[768px]:text-[0.88rem]">{v.label}</span>
+                        <input
+                            class="theme-color size-8 flex-none cursor-pointer rounded-md border border-control-border bg-transparent p-[2px]"
+                            type="color"
+                            name={v.name}
+                            data-appearance-var={v.name}
+                            aria-label={v.label}
+                            value={appearance.pickerValue(ctx.allocator, v.name)}
+                            oninput={ctx.bind(onVarInput)}
+                        />
+                    </div>
+                )}
+                <div class="setting-row flex items-center justify-between gap-4">
+                    <span class="setting-label text-base font-medium max-[768px]:text-[0.88rem]">Reset colours</span>
+                    <button class="cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text" type="button" onclick={onResetColours}>Reset</button>
+                </div>
+                <div class="setting-col flex flex-col gap-2">
+                    <label class="setting-label text-base font-medium max-[768px]:text-[0.88rem]" for="custom-css">Custom CSS</label>
+                    <textarea
+                        id="custom-css"
+                        name="custom-css"
+                        class="min-h-[7rem] w-full resize-y rounded-md border border-control-border bg-bg px-3 py-2 font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] placeholder:text-faint focus:border-accent focus:not-focus-visible:outline-none"
+                        rows="6"
+                        spellcheck="false"
+                        autocomplete="off"
+                        placeholder="/* Chrome CSS. Message bodies are out of reach. */"
+                        oninput={ctx.bind(onCssInput)}
+                    >{appearance.storedCss(ctx.allocator)}</textarea>
+                    <p class="setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]">These colours and CSS restyle the app chrome; the message body stays out of reach.</p>
+                </div>
             </div>
         </div>
     );
@@ -154,11 +187,45 @@ fn motionChecked(which: ui_state.MotionPref) []const u8 {
     return if (ui.motionPref() == which) "true" else "false";
 }
 
+// A colour picker changed: read which token (data-appearance-var) and its value, then persist and
+// apply. Same target-walk as the reading controls (T1). reading_prefs owns the one debounced save.
+fn onVarInput(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const name = dom_event.datasetUp(target, "appearanceVar") orelse {
+        log.warn("appearance input: control has no data-appearance-var", .{});
+        return;
+    };
+    defer zx.allocator.free(name);
+    const value = target.getAlloc(js.String, zx.allocator, "value") catch return;
+    defer zx.allocator.free(value);
+    appearance.setVar(name, value);
+    reading_prefs.scheduleSave();
+}
+
+fn onCssInput(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const value = target.getAlloc(js.String, zx.allocator, "value") catch return;
+    defer zx.allocator.free(value);
+    appearance.setCustomCss(value);
+    reading_prefs.scheduleSave();
+}
+
+fn onResetColours(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    _ = ev;
+    appearance.resetVars();
+    reading_prefs.scheduleSave();
+}
+
 const zx = @import("zx");
 const std = @import("std");
+const js = zx.client.js;
 const ui = @import("../ui.zig");
 const ui_state = @import("../ui_state.zig");
 const dom_event = @import("../dom_event.zig");
 const reading_prefs = @import("../reading_prefs.zig");
+const appearance = @import("../appearance.zig");
 
 const log = std.log.scoped(.panels);
