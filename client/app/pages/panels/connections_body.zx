@@ -15,7 +15,7 @@ pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         id="llama-url"
                         name="llama_url"
                         type="url"
-                        value="http://127.0.0.1:8080"
+                        value={connection.activeServerUrl()}
                         placeholder="http://127.0.0.1:8080"
                         class={input_cls}
                     />

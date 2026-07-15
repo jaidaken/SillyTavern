@@ -30,6 +30,12 @@ pub fn active() ?generate.Connection {
     return conn;
 }
 
+/// The configured server URL, for prefilling the connections panel input so it shows what send
+/// actually uses (mined from the settings blob), not a hardcoded default. Empty when none is set.
+pub fn activeServerUrl() []const u8 {
+    return if (conn) |c| c.api_server else "";
+}
+
 // ---- from the settings blob (boot) ---------------------------------------------------------
 
 /// Mines the connection out of the settings blob and reflects it into the composer status. Called on
