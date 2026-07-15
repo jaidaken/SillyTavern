@@ -446,22 +446,14 @@
 
 /* Speech on its own line: blockquote / stage / vn share the mechanism. quotes.zig tags a quote that
    opens a speech turn (class custom-q-turn; its delimiters wrapped in custom-qd), so each turn becomes
-   a block and the run-together message unpacks onto lines. Narration recedes to muted italic and
-   speech stays upright over it. A quoted word mid-sentence is not a turn, so it keeps its inline flow. */
+   a block and the run-together message unpacks onto lines. Section colours match every other mode:
+   speech amber, *action* emphasis grey, plain narration in the text colour; the layout does the
+   distinguishing, not a recolour. A quoted word mid-sentence is not a turn, so it stays inline. */
 #chat-root[data-reading-indent="blockquote"] .mes_text p,
 #chat-root[data-reading-indent="stage"] .mes_text p,
 #chat-root[data-reading-indent="vn"] .mes_text p {
-    /* st-em (not muted): the sepia and paper reading themes remap st-em to a dark ink but leave muted
-       at its dark-theme value, which would sink narration into a light ground. */
-    color: var(--color-st-em);
-    font-style: italic;
     text-indent: 0;
     margin-block: 0 0.6em;
-}
-#chat-root[data-reading-indent="blockquote"] .mes_text q,
-#chat-root[data-reading-indent="stage"] .mes_text q,
-#chat-root[data-reading-indent="vn"] .mes_text q {
-    font-style: normal;
 }
 #chat-root[data-reading-indent="blockquote"] .mes_text q.custom-q-turn,
 #chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn,
@@ -473,6 +465,11 @@
 /* Blockquote keeps the quote marks; the speech insets from the flush narration like a set-apart quote. */
 #chat-root[data-reading-indent="blockquote"] .mes_text q.custom-q-turn {
     padding-left: 1.6em;
+}
+
+/* Stage directions align into the dialogue column too, so the left gutter is the name column alone. */
+#chat-root[data-reading-indent="stage"] .mes_text p {
+    padding-left: 5.5em;
 }
 
 /* Stage: the caps character name opens each turn in a fixed-width column, so dialogue aligns and
