@@ -471,10 +471,12 @@
    indented block. This is the inverse of blockquote, which insets the speech and leaves narration
    flush. The name prints inline before the speech (no column), quote marks hidden. */
 #chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn {
-    /* The turn nests inside the 4.5em-indented paragraph; pull it back so the spoken line is flush at
-       the margin while the surrounding narration stays indented. */
-    margin-left: -4.5em;
+    /* The turn nests inside the 6em-indented paragraph; pull it back so the spoken line is flush at the
+       margin while the surrounding narration stays indented. Block margin sets the dialogue apart from
+       the directions above and below. */
+    margin-left: -6em;
     text-indent: 0;
+    margin-block: 0.5em;
 }
 #chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn .custom-qd {
     display: none;
@@ -487,7 +489,7 @@
     color: var(--color-text);
 }
 #chat-root[data-reading-indent="stage"] .mes_text p {
-    padding-left: 4.5em;
+    padding-left: 6em;
 }
 
 /* Visual novel: a colon-tagged name per turn in the same aligned column, quote marks hidden. The face
