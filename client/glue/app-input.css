@@ -429,19 +429,77 @@
     -webkit-hyphens: none;
 }
 
-/* Novel paragraphs: first-line indent, a tiny inter-paragraph gap so the reader can always see the
-   break. The default ("chat") keeps block spacing with no indent, the standard web convention. Every
-   <p> gets the indent and a sliver of margin, so the break shows whatever sits between them. */
+/* Paragraph styles. "chat" is block paragraphs with a blank-line gap, the web default. "novel" is the
+   print convention: a first-line indent with no inter-paragraph gap, and the opening paragraph set
+   flush. The indent alone carries the break, so the gap would be redundant. */
+#chat-root[data-reading-indent="chat"] .mes_text p {
+    margin-block: 0 0.75em;
+    text-indent: 0;
+}
 #chat-root[data-reading-indent="novel"] .mes_text p {
-    margin-block-end: 0.35em;
-    text-indent: 1.2em;
+    margin-block: 0;
+    text-indent: 1.5em;
 }
 #chat-root[data-reading-indent="novel"] .mes_text p:first-of-type {
-    text-indent: 1.2em;
-}
-#chat-root[data-reading-indent="chat"] .mes_text p {
-    margin-block: 0 0.5em;
     text-indent: 0;
+}
+
+/* Speech on its own line: blockquote / stage / vn share the mechanism. quotes.zig tags a quote that
+   opens a speech turn (class custom-q-turn; its delimiters wrapped in custom-qd), so each turn becomes
+   a block and the run-together message unpacks onto lines. Narration recedes to muted italic and
+   speech stays upright over it. A quoted word mid-sentence is not a turn, so it keeps its inline flow. */
+#chat-root[data-reading-indent="blockquote"] .mes_text p,
+#chat-root[data-reading-indent="stage"] .mes_text p,
+#chat-root[data-reading-indent="vn"] .mes_text p {
+    /* st-em (not muted): the sepia and paper reading themes remap st-em to a dark ink but leave muted
+       at its dark-theme value, which would sink narration into a light ground. */
+    color: var(--color-st-em);
+    font-style: italic;
+    text-indent: 0;
+    margin-block: 0 0.6em;
+}
+#chat-root[data-reading-indent="blockquote"] .mes_text q,
+#chat-root[data-reading-indent="stage"] .mes_text q,
+#chat-root[data-reading-indent="vn"] .mes_text q {
+    font-style: normal;
+}
+#chat-root[data-reading-indent="blockquote"] .mes_text q.custom-q-turn,
+#chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn,
+#chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn {
+    display: block;
+    margin-block: 0.2em 0;
+}
+
+/* Blockquote keeps the quote marks; the line break is the whole change. */
+
+/* Stage: the character name in caps opens each turn line, a hanging indent clears the wrapped lines,
+   the quote marks give way to the name as the speech cue, and narration reads as a stage direction. */
+#chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn {
+    padding-left: 4.5em;
+    text-indent: -4.5em;
+}
+#chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn .custom-qd {
+    display: none;
+}
+#chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn::before {
+    content: var(--speaker, "") ". ";
+    text-transform: uppercase;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    color: var(--color-text);
+}
+
+/* Visual novel: a colon-tagged name per turn and a sans face for the chat-log feel, quote marks hidden. */
+#chat-root[data-reading-indent="vn"] .mes_text {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+}
+#chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn .custom-qd {
+    display: none;
+}
+#chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn::before {
+    content: var(--speaker, "") ": ";
+    font-weight: 700;
+    color: var(--color-text);
 }
 
 /* Reading themes recolour the message area only (scoped to #chat); the accent darkens so links and
@@ -561,6 +619,9 @@
 #chat-root[data-reading-justify="off"] .seg-btn[data-reading-set="justify"][data-reading-val="off"],
 #chat-root[data-reading-indent="novel"] .seg-btn[data-reading-set="indent"][data-reading-val="novel"],
 #chat-root[data-reading-indent="chat"] .seg-btn[data-reading-set="indent"][data-reading-val="chat"],
+#chat-root[data-reading-indent="blockquote"] .seg-btn[data-reading-set="indent"][data-reading-val="blockquote"],
+#chat-root[data-reading-indent="stage"] .seg-btn[data-reading-set="indent"][data-reading-val="stage"],
+#chat-root[data-reading-indent="vn"] .seg-btn[data-reading-set="indent"][data-reading-val="vn"],
 #chat-root[data-reading-theme="dark"] .seg-btn[data-reading-set="theme"][data-reading-val="dark"],
 #chat-root[data-reading-theme="sepia"] .seg-btn[data-reading-set="theme"][data-reading-val="sepia"],
 #chat-root[data-reading-theme="paper"] .seg-btn[data-reading-set="theme"][data-reading-val="paper"],

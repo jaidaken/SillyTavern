@@ -31,11 +31,33 @@ pub fn MessageView(allocator: zx.Allocator, props: MessageProps) zx.Component {
                 <img class="mes_avatar row-span-full mt-[0.15em] size-[1.8rem] flex-none cursor-pointer rounded-[4px] object-cover hover:brightness-110 max-[640px]:size-[1.5rem]" src={props.msg.avatar} alt={props.msg.name} loading="lazy" />
             ) }
             <div class="mes_name">{props.msg.name}</div>
-            <div class={text_class} @escaping={.none}>{html.sink(body)}</div>
+            <div class={text_class} style={speakerVar(allocator, props.msg.name)} @escaping={.none}>{html.sink(body)}</div>
         </div>
     );
 }
 
+/// The character name as a `--speaker` custom property the stage / visual-novel reading modes print
+/// before each speech turn. Held in a single-quoted CSS string with the name CSS-escaped (a `"`
+/// becomes `\22 `), so the value never carries a raw quote into the style attribute whatever the
+/// framework's attribute escaping does. An empty result drops the attribute rather than risk a broken
+/// declaration.
+fn speakerVar(allocator: zx.Allocator, name: []const u8) []const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    out.appendSlice(allocator, "--speaker:'") catch return "";
+    for (name) |ch| {
+        switch (ch) {
+            '\\' => out.appendSlice(allocator, "\\\\") catch return "",
+            '\'' => out.appendSlice(allocator, "\\'") catch return "",
+            '"' => out.appendSlice(allocator, "\\22 ") catch return "",
+            '\n', '\r', '\t' => out.append(allocator, ' ') catch return "",
+            else => out.append(allocator, ch) catch return "",
+        }
+    }
+    out.appendSlice(allocator, "'") catch return "";
+    return out.toOwnedSlice(allocator) catch "";
+}
+
+const std = @import("std");
 const zx = @import("zx");
 const store = @import("./store.zig");
 const html = @import("./html.zig");

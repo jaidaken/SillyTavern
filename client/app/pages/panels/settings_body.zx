@@ -55,8 +55,11 @@ pub fn SettingsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                 <div class="setting-row flex items-center justify-between gap-4 max-[768px]:flex-wrap max-[768px]:gap-2">
                     <span class="setting-label text-base font-medium max-[768px]:text-[0.88rem]">Paragraphs</span>
                     <div class="seg inline-flex rounded-md border border-control-border bg-bg p-[2px]" role="group" aria-label="Paragraph style">
-                        <button class={seg_btn} data-reading-set="indent" data-reading-val="novel" type="button" onclick={onReadingClick}>Novel</button>
                         <button class={seg_btn} data-reading-set="indent" data-reading-val="chat" type="button" onclick={onReadingClick}>Chat</button>
+                        <button class={seg_btn} data-reading-set="indent" data-reading-val="novel" type="button" onclick={onReadingClick}>Novel</button>
+                        <button class={seg_btn} data-reading-set="indent" data-reading-val="blockquote" type="button" onclick={onReadingClick}>Quoted</button>
+                        <button class={seg_btn} data-reading-set="indent" data-reading-val="stage" type="button" onclick={onReadingClick}>Stage</button>
+                        <button class={seg_btn} data-reading-set="indent" data-reading-val="vn" type="button" onclick={onReadingClick}>VN</button>
                     </div>
                 </div>
                 <div class="setting-row flex items-center justify-between gap-4 max-[768px]:flex-wrap max-[768px]:gap-2">

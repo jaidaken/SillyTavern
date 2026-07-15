@@ -153,9 +153,10 @@ check "messages rendered" "$(count 'class="mes"' "$DOM")" 12
 check "shell region present" "$(count 'id="shell"' "$DOM")" 1
 check "messagelog region present" "$(count 'id="chat"' "$DOM")" 1
 check "composer region present" "$(count 'id="composer"' "$DOM")" 1
-# The three roleplay fixtures carry real quotes, a blockquote, emphasis, and a hard break.
-check   "quotes open and close balance" "$(count '<q>' "$DOM")" "$(count '</q>' "$DOM")"
-check   "quotes wrapped" "$(count '<q>' "$DOM")" 26
+# `<q` counts both quote forms, bare `<q>` and `<q class="q-turn">` (a broken-out speech turn); it
+# never matches the `</q>` close.
+check   "quotes open and close balance" "$(count '<q' "$DOM")" "$(count '</q>' "$DOM")"
+check   "quotes wrapped" "$(count '<q' "$DOM")" 26
 atleast "blockquotes" "$(count '<blockquote>' "$DOM")" 1
 atleast "hard line breaks" "$(count '<br' "$DOM")" 1
 atleast "emphasis" "$(count '<em>' "$DOM")" 1
@@ -191,7 +192,7 @@ check   "language classes not namespaced" "$(count 'custom-language-' "$MD_DOM")
 python3 - "$MD_DOM" <<'PY'
 import re, sys
 h = open(sys.argv[1], encoding="utf-8", errors="replace").read()
-leak = any("<q>" in m.group(1) for m in re.finditer(r"<(?:code|pre)[^>]*>(.*?)</(?:code|pre)>", h, re.S))
+leak = any("<q" in m.group(1) for m in re.finditer(r"<(?:code|pre)[^>]*>(.*?)</(?:code|pre)>", h, re.S))
 print(f"  {'FAIL ' if leak else 'ok   '} {'q inside code or pre':<52} {'LEAK' if leak else 'none'}")
 sys.exit(1 if leak else 0)
 PY

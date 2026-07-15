@@ -230,6 +230,30 @@ fn rawTagEnd(src: []const u8, at: usize, pc: *ParaCache) ?usize {
     return null;
 }
 
+/// True when the quote at `at` opens a speech turn rather than a quoted word inside prose: it begins
+/// its line, or the text before it on the line ends a sentence. The reading modes that put speech on
+/// its own line break only turns, so a quoted word mid-narration stays inline.
+fn opensTurn(src: []const u8, at: usize) bool {
+    var ls = at;
+    while (ls > 0 and src[ls - 1] != '\n') ls -= 1;
+    // Skip trailing whitespace and markdown emphasis markers, so an action beat wrapped in * or _
+    // (the dominant roleplay form, `*she turns.*  "speech"`) still reads as a sentence end.
+    var e = at;
+    while (e > ls) : (e -= 1) {
+        switch (src[e - 1]) {
+            ' ', '\t', '*', '_' => {},
+            else => break,
+        }
+    }
+    if (e == ls) return true;
+    const before = src[ls..e];
+    switch (before[before.len - 1]) {
+        '.', '!', '?', ':', ';' => return true,
+        else => {},
+    }
+    return std.mem.endsWith(u8, before, "\u{2026}");
+}
+
 /// Scans one line, wrapping its quotes. Returns the next index, which passes `line_end` when a
 /// code span or raw element carried the scan onto a later line.
 fn wrapInline(
@@ -279,10 +303,23 @@ fn wrapInline(
             const close_at = std.mem.indexOfPos(u8, src[0..line_end], body, p.close) orelse break;
             if (close_at == body) break;
 
-            try out.appendSlice(allocator, "<q>");
-            try out.appendSlice(allocator, src[j .. close_at + p.close.len]);
-            try out.appendSlice(allocator, "</q>");
-            j = close_at + p.close.len;
+            const close_end = close_at + p.close.len;
+            if (opensTurn(src, j)) {
+                // A turn wraps its delimiters in <span class="qd"> so a reading mode can hide the
+                // marks; the class-prefixing sanitiser renames these to custom-q-turn / custom-qd.
+                try out.appendSlice(allocator, "<q class=\"q-turn\"><span class=\"qd\">");
+                try out.appendSlice(allocator, src[j..body]);
+                try out.appendSlice(allocator, "</span>");
+                try out.appendSlice(allocator, src[body..close_at]);
+                try out.appendSlice(allocator, "<span class=\"qd\">");
+                try out.appendSlice(allocator, src[close_at..close_end]);
+                try out.appendSlice(allocator, "</span></q>");
+            } else {
+                try out.appendSlice(allocator, "<q>");
+                try out.appendSlice(allocator, src[j..close_end]);
+                try out.appendSlice(allocator, "</q>");
+            }
+            j = close_end;
             continue :outer;
         }
 
@@ -356,13 +393,63 @@ fn expectWrap(src: []const u8, want: []const u8) !void {
     try testing.expectEqualStrings(want, got);
 }
 
+/// A single turn quote at line start, delimiters wrapped for the reading modes that hide them.
+fn expectTurn(open: []const u8, body: []const u8, close: []const u8) !void {
+    const src = try std.fmt.allocPrint(testing.allocator, "{s}{s}{s}", .{ open, body, close });
+    defer testing.allocator.free(src);
+    const want = try std.fmt.allocPrint(
+        testing.allocator,
+        "<q class=\"q-turn\"><span class=\"qd\">{s}</span>{s}<span class=\"qd\">{s}</span></q>",
+        .{ open, body, close },
+    );
+    defer testing.allocator.free(want);
+    const got = try wrap(testing.allocator, src);
+    defer testing.allocator.free(got);
+    try testing.expectEqualStrings(want, got);
+}
+
 test "wrap_recognises_all_six_quote_forms" {
-    try expectWrap("\"a\"", "<q>\"a\"</q>");
-    try expectWrap("\u{201C}a\u{201D}", "<q>\u{201C}a\u{201D}</q>");
-    try expectWrap("\u{00AB}a\u{00BB}", "<q>\u{00AB}a\u{00BB}</q>");
-    try expectWrap("\u{300C}a\u{300D}", "<q>\u{300C}a\u{300D}</q>");
-    try expectWrap("\u{300E}a\u{300F}", "<q>\u{300E}a\u{300F}</q>");
-    try expectWrap("\u{FF02}a\u{FF02}", "<q>\u{FF02}a\u{FF02}</q>");
+    try expectTurn("\"", "a", "\"");
+    try expectTurn("\u{201C}", "a", "\u{201D}");
+    try expectTurn("\u{00AB}", "a", "\u{00BB}");
+    try expectTurn("\u{300C}", "a", "\u{300D}");
+    try expectTurn("\u{300E}", "a", "\u{300F}");
+    try expectTurn("\u{FF02}", "a", "\u{FF02}");
+}
+
+test "wrap_classifies_a_line_leading_quote_as_a_turn" {
+    try expectWrap(
+        "\"Go home.\"",
+        "<q class=\"q-turn\"><span class=\"qd\">\"</span>Go home.<span class=\"qd\">\"</span></q>",
+    );
+}
+
+test "wrap_classifies_a_quote_after_sentence_punctuation_as_a_turn" {
+    try expectWrap(
+        "He stopped. \"Wait.\"",
+        "He stopped. <q class=\"q-turn\"><span class=\"qd\">\"</span>Wait.<span class=\"qd\">\"</span></q>",
+    );
+}
+
+test "wrap_leaves_a_mid_sentence_quoted_word_inline" {
+    try expectWrap("the band is called \"Fucking Hate\" now", "the band is called <q>\"Fucking Hate\"</q> now");
+    try expectWrap("She said \"go\" firmly.", "She said <q>\"go\"</q> firmly.");
+}
+
+test "wrap_treats_a_quote_after_an_ellipsis_as_a_turn" {
+    try expectWrap(
+        "well\u{2026} \"fine\"",
+        "well\u{2026} <q class=\"q-turn\"><span class=\"qd\">\"</span>fine<span class=\"qd\">\"</span></q>",
+    );
+}
+
+test "wrap_treats_a_quote_after_an_emphasised_action_beat_as_a_turn" {
+    try expectWrap(
+        "*she turns.* \"Leave.\"",
+        "*she turns.* <q class=\"q-turn\"><span class=\"qd\">\"</span>Leave.<span class=\"qd\">\"</span></q>",
+    );
+    // A lone asterisk that is not closing a sentence must not manufacture a turn.
+    try expectWrap("a * \"b\"", "a * <q>\"b\"</q>");
 }
 
 test "wrap_skips_quotes_inside_inline_code" {
@@ -393,7 +480,10 @@ test "wrap_ignores_an_empty_quote" {
 }
 
 test "wrap_marks_each_quote_on_a_shared_line" {
-    try expectWrap("\"a\" and \"b\"", "<q>\"a\"</q> and <q>\"b\"</q>");
+    try expectWrap(
+        "\"a\" and \"b\"",
+        "<q class=\"q-turn\"><span class=\"qd\">\"</span>a<span class=\"qd\">\"</span></q> and <q>\"b\"</q>",
+    );
 }
 
 test "wrap_preserves_surrounding_prose" {
@@ -439,7 +529,10 @@ test "wrap_treats_an_unclosed_fence_as_code_to_the_end" {
 }
 
 test "wrap_closes_a_fence_only_on_a_run_of_at_least_its_length" {
-    try expectWrap("````\n``\n\"a\"\n````\n\"b\"", "````\n``\n\"a\"\n````\n<q>\"b\"</q>");
+    try expectWrap(
+        "````\n``\n\"a\"\n````\n\"b\"",
+        "````\n``\n\"a\"\n````\n<q class=\"q-turn\"><span class=\"qd\">\"</span>b<span class=\"qd\">\"</span></q>",
+    );
 }
 
 test "wrap_does_not_treat_a_styled_tag_as_a_style_block" {
@@ -480,16 +573,17 @@ fn expectStripsBackToSource(out: []const u8, src: []const u8) !void {
     var stripped: std.ArrayList(u8) = .empty;
     defer stripped.deinit(testing.allocator);
 
+    const inserted = [_][]const u8{ "<q class=\"q-turn\">", "<q>", "</q>", "<span class=\"qd\">", "</span>" };
     var k: usize = 0;
-    while (k < out.len) {
-        if (std.mem.startsWith(u8, out[k..], "<q>")) {
-            k += "<q>".len;
-        } else if (std.mem.startsWith(u8, out[k..], "</q>")) {
-            k += "</q>".len;
-        } else {
-            try stripped.append(testing.allocator, out[k]);
-            k += 1;
+    outer: while (k < out.len) {
+        for (inserted) |tag| {
+            if (std.mem.startsWith(u8, out[k..], tag)) {
+                k += tag.len;
+                continue :outer;
+            }
         }
+        try stripped.append(testing.allocator, out[k]);
+        k += 1;
     }
     try testing.expectEqualStrings(src, stripped.items);
 }
