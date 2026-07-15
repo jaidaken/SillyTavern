@@ -429,19 +429,15 @@
     -webkit-hyphens: none;
 }
 
-/* Paragraph styles. "chat" is block paragraphs with a blank-line gap, the web default. "novel" is the
-   print convention: a first-line indent with no inter-paragraph gap, and the opening paragraph set
-   flush. The indent alone carries the break, so the gap would be redundant. */
+/* Paragraph styles differ only in the first-line indent. The gap between paragraphs is the base
+   margin, left untouched, so switching style never shifts the vertical rhythm that line-height owns.
+   chat is flush; novel indents every paragraph, including the first, so the indent shows even on a
+   single-paragraph message. */
 #chat-root[data-reading-indent="chat"] .mes_text p {
-    margin-block: 0 0.75em;
     text-indent: 0;
 }
 #chat-root[data-reading-indent="novel"] .mes_text p {
-    margin-block: 0;
-    text-indent: 1.5em;
-}
-#chat-root[data-reading-indent="novel"] .mes_text p:first-of-type {
-    text-indent: 0;
+    text-indent: 2em;
 }
 
 /* Speech on its own line: blockquote / stage / vn share the mechanism. quotes.zig tags a quote that
@@ -453,7 +449,6 @@
 #chat-root[data-reading-indent="stage"] .mes_text p,
 #chat-root[data-reading-indent="vn"] .mes_text p {
     text-indent: 0;
-    margin-block: 0 0.6em;
 }
 #chat-root[data-reading-indent="blockquote"] .mes_text q.custom-q-turn,
 #chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn,

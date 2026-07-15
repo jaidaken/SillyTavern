@@ -30,14 +30,6 @@ pub fn SettingsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     </div>
                 </div>
                 <div class="setting-row flex items-center justify-between gap-4 max-[768px]:flex-wrap max-[768px]:gap-2">
-                    <span class="setting-label text-base font-medium max-[768px]:text-[0.88rem]">Line width</span>
-                    <div class="seg inline-flex rounded-md border border-control-border bg-bg p-[2px]" role="group" aria-label="Line width">
-                        <button class={seg_btn} data-reading-set="measure" data-reading-val="narrow" type="button" onclick={onReadingClick}>Narrow</button>
-                        <button class={seg_btn} data-reading-set="measure" data-reading-val="normal" type="button" onclick={onReadingClick}>Normal</button>
-                        <button class={seg_btn} data-reading-set="measure" data-reading-val="wide" type="button" onclick={onReadingClick}>Wide</button>
-                    </div>
-                </div>
-                <div class="setting-row flex items-center justify-between gap-4 max-[768px]:flex-wrap max-[768px]:gap-2">
                     <span class="setting-label text-base font-medium max-[768px]:text-[0.88rem]">Line height</span>
                     <div class="seg inline-flex rounded-md border border-control-border bg-bg p-[2px]" role="group" aria-label="Line height">
                         <button class={seg_btn} data-reading-set="lh" data-reading-val="tight" type="button" onclick={onReadingClick}>Tight</button>
