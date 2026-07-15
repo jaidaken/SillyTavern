@@ -24,6 +24,15 @@ import {
 } from '../util.js';
 import { log } from '../log.js';
 import { bustCharacterListCacheForCharacter } from './characters.js';
+import {
+    backupBaseName,
+    chatIdentity,
+    identityBasis,
+    discoverChatBackups,
+    versionInBackup,
+    restoreDeletedMessages,
+    diffSummary,
+} from '../chat-undo.js';
 
 const isBackupEnabled = !!getConfigValue('backups.chat.enabled', true, 'boolean');
 const maxTotalChatBackups = Number(getConfigValue('backups.chat.maxTotalBackups', -1, 'number'));
@@ -1576,5 +1585,301 @@ router.post('/recent', async function (request, response) {
     } catch (error) {
         log.chat.error(error);
         return response.sendStatus(500);
+    }
+});
+
+const UNDO_BACKUP_TS_RE = /^[0-9]{8}-[0-9]{6}$/;
+
+// Per-file write serialization: the change-token gate leaves a read-to-write window a concurrent
+// save can slip through, so every undo write runs under this chain and re-checks the token before writing.
+/** @type {Map<string, Promise<any>>} */
+const undoWriteLocks = new Map();
+
+/**
+ * Runs task after any in-flight write on the same file settles, so two undo writes never interleave.
+ * @param {string} filePath The chat file being written.
+ * @param {() => Promise<any>} task The read-check-write body.
+ * @returns {Promise<any>}
+ */
+function withFileLock(filePath, task) {
+    const prev = undoWriteLocks.get(filePath) || Promise.resolve();
+    const run = prev.catch(() => {}).then(task);
+    const guard = run.catch(() => {});
+    undoWriteLocks.set(filePath, guard);
+    guard.then(() => {
+        if (undoWriteLocks.get(filePath) === guard) {
+            undoWriteLocks.delete(filePath);
+        }
+    });
+    return run;
+}
+
+/**
+ * Full-file change token, matching the tail token the spine issues for a whole read.
+ * @param {string} headerRaw Raw header line.
+ * @param {Array<{raw: string}>} messages Parsed message entries.
+ * @returns {string}
+ */
+function computeFullToken(headerRaw, messages) {
+    return buildToken(messages.length, prefixHash(headerRaw, messages, messages.length - 1));
+}
+
+/**
+ * Resolves the target chat file and its backup base name for a solo or group undo request.
+ * @param {any} request The Express request.
+ * @returns {{ref: ChatRef, cardName: string}|null} Null when the ref escapes its root or params are missing.
+ */
+function resolveUndoRef(request) {
+    if (request.body.group_id) {
+        const ref = ChatRef.group(request.user, request.body.group_id);
+        return ref ? { ref, cardName: String(request.body.group_id) } : null;
+    }
+    if (!request.body.avatar_url || !request.body.file_name) {
+        return null;
+    }
+    const ref = ChatRef.solo(request.user, request.body.avatar_url, request.body.file_name);
+    return ref ? { ref, cardName: String(request.body.avatar_url).replace('.png', '') } : null;
+}
+
+/**
+ * Resolves a target message index from a cf_id or an absolute message index.
+ * @param {any} body The request body.
+ * @param {Array} currentObjs Current message objects (header excluded).
+ * @returns {number} The index, or -1 when the target cannot be resolved.
+ */
+function resolveTargetIndex(body, currentObjs) {
+    if (typeof body.cf_id === 'string' && body.cf_id.length > 0) {
+        return currentObjs.findIndex(m => m.cf_id === body.cf_id);
+    }
+    if (Number.isInteger(body.index) && body.index >= 0 && body.index < currentObjs.length) {
+        return body.index;
+    }
+    return -1;
+}
+
+/**
+ * Reads the current chat and finds one discovered backup by its validated timestamp.
+ * @param {ChatRef} ref The chat ref.
+ * @param {string} cardName The card name or group id.
+ * @param {string} backupsDir The user's backups directory.
+ * @param {string} backupTs The requested backup timestamp.
+ * @returns {Promise<{ok: false, status: number, error: string}|{ok: true, backup: any}>}
+ */
+async function findRequestedBackup(ref, cardName, backupsDir, backupTs) {
+    if (typeof backupTs !== 'string' || !UNDO_BACKUP_TS_RE.test(backupTs)) {
+        return { ok: false, status: 400, error: 'bad_backup_ts' };
+    }
+    const { header } = await readChatFile(ref.filePath);
+    const identity = chatIdentity(header);
+    const { backups } = await discoverChatBackups(backupsDir, backupBaseName(cardName), identity);
+    const backup = backups.find(b => b.ts === backupTs);
+    if (!backup || !isPathUnderParent(backupsDir, backup.filePath)) {
+        return { ok: false, status: 404, error: 'no_such_backup' };
+    }
+    return { ok: true, backup };
+}
+
+router.post('/backups/message-versions', async function (request, response) {
+    try {
+        const resolved = resolveUndoRef(request);
+        if (!resolved) {
+            return response.sendStatus(400);
+        }
+        const backupsDir = request.user.directories.backups;
+        const { header, headerRaw, messages } = await readChatFile(resolved.ref.filePath);
+        const currentObjs = messages.map(m => m.obj);
+        const identity = chatIdentity(header);
+        const targetIndex = resolveTargetIndex(request.body, currentObjs);
+        if (targetIndex < 0) {
+            return response.status(400).send({ error: 'target_not_found' });
+        }
+
+        const { backups, truncated, attributable } = await discoverChatBackups(backupsDir, backupBaseName(resolved.cardName), identity);
+        const versions = [];
+        let prevText = currentObjs[targetIndex].mes || '';
+        for (const backup of backups) {
+            const version = versionInBackup(currentObjs, targetIndex, backup.messages);
+            if (version === null) {
+                break;
+            }
+            if (version.text !== prevText) {
+                versions.push({ mes: version.text, backup_ts: backup.ts, matched: version.matched });
+                prevText = version.text;
+            }
+        }
+
+        // The token a restore call passes back so a save that lands first is caught, not clobbered.
+        return response.send({ versions, depth: backups.length, truncated, basis: identityBasis(identity), attributable, change_token: computeFullToken(headerRaw, messages) });
+    } catch (error) {
+        log.chat.error(error);
+        return response.sendStatus(500);
+    }
+});
+
+router.post('/backups/restore-message', async function (request, response) {
+    try {
+        const resolved = resolveUndoRef(request);
+        if (!resolved) {
+            return response.sendStatus(400);
+        }
+        const handle = request.user.profile.handle;
+        const backupsDir = request.user.directories.backups;
+
+        await withFileLock(resolved.ref.filePath, async () => {
+            const entry = await readChatFile(resolved.ref.filePath);
+            const currentObjs = entry.messages.map(m => m.obj);
+            const entryToken = computeFullToken(entry.headerRaw, entry.messages);
+            if (typeof request.body.change_token === 'string' && request.body.change_token !== entryToken) {
+                return response.status(409).send({ error: 'stale', change_token: entryToken });
+            }
+            const targetIndex = resolveTargetIndex(request.body, currentObjs);
+            if (targetIndex < 0) {
+                return response.status(400).send({ error: 'target_not_found' });
+            }
+
+            const found = await findRequestedBackup(resolved.ref, resolved.cardName, backupsDir, request.body.backup_ts);
+            if (!found.ok) {
+                return response.status(found.status).send({ error: found.error });
+            }
+            const version = versionInBackup(currentObjs, targetIndex, found.backup.messages);
+            if (version === null) {
+                return response.status(404).send({ error: 'message_absent_in_backup' });
+            }
+
+            const target = currentObjs[targetIndex];
+            target.mes = version.text;
+            if (Array.isArray(target.swipes)) {
+                const swipeId = Number.isInteger(request.body.swipe_id) ? request.body.swipe_id
+                    : (Number.isInteger(target.swipe_id) ? target.swipe_id : 0);
+                if (swipeId >= 0 && swipeId < target.swipes.length) {
+                    target.swipes[swipeId] = version.text;
+                }
+            }
+
+            const recheck = await readChatFile(resolved.ref.filePath);
+            if (computeFullToken(recheck.headerRaw, recheck.messages) !== entryToken) {
+                return response.status(409).send({ error: 'stale', change_token: computeFullToken(recheck.headerRaw, recheck.messages) });
+            }
+
+            const fullArray = entry.header ? [entry.header, ...currentObjs] : currentObjs;
+            await trySaveChat(fullArray, resolved.ref.filePath, true, handle, resolved.cardName, backupsDir);
+            const after = await readChatFile(resolved.ref.filePath);
+            return response.send({ ok: true, change_token: computeFullToken(after.headerRaw, after.messages), restored: { index: targetIndex, matched: version.matched, backup_ts: found.backup.ts } });
+        });
+    } catch (error) {
+        log.chat.error(error);
+        if (!response.headersSent) {
+            return response.sendStatus(500);
+        }
+    }
+});
+
+router.post('/backups/restore-deleted', async function (request, response) {
+    try {
+        const resolved = resolveUndoRef(request);
+        if (!resolved) {
+            return response.sendStatus(400);
+        }
+        const handle = request.user.profile.handle;
+        const backupsDir = request.user.directories.backups;
+
+        await withFileLock(resolved.ref.filePath, async () => {
+            const entry = await readChatFile(resolved.ref.filePath);
+            const currentObjs = entry.messages.map(m => m.obj);
+            const entryToken = computeFullToken(entry.headerRaw, entry.messages);
+            if (typeof request.body.change_token === 'string' && request.body.change_token !== entryToken) {
+                return response.status(409).send({ error: 'stale', change_token: entryToken });
+            }
+
+            const found = await findRequestedBackup(resolved.ref, resolved.cardName, backupsDir, request.body.backup_ts);
+            if (!found.ok) {
+                return response.status(found.status).send({ error: found.error });
+            }
+
+            const { messages: merged, restored, tooLarge } = restoreDeletedMessages(currentObjs, found.backup.messages);
+            if (tooLarge) {
+                return response.status(413).send({ error: 'too_large' });
+            }
+            if (restored === 0) {
+                return response.send({ ok: true, restored: 0, change_token: entryToken });
+            }
+
+            const recheck = await readChatFile(resolved.ref.filePath);
+            if (computeFullToken(recheck.headerRaw, recheck.messages) !== entryToken) {
+                return response.status(409).send({ error: 'stale', change_token: computeFullToken(recheck.headerRaw, recheck.messages) });
+            }
+
+            const fullArray = entry.header ? [entry.header, ...merged] : merged;
+            await trySaveChat(fullArray, resolved.ref.filePath, true, handle, resolved.cardName, backupsDir);
+            const after = await readChatFile(resolved.ref.filePath);
+            return response.send({ ok: true, restored, change_token: computeFullToken(after.headerRaw, after.messages) });
+        });
+    } catch (error) {
+        log.chat.error(error);
+        if (!response.headersSent) {
+            return response.sendStatus(500);
+        }
+    }
+});
+
+router.post('/backups/snapshots', async function (request, response) {
+    try {
+        const resolved = resolveUndoRef(request);
+        if (!resolved) {
+            return response.sendStatus(400);
+        }
+        const backupsDir = request.user.directories.backups;
+
+        if (request.body.mode === 'restore') {
+            const handle = request.user.profile.handle;
+            await withFileLock(resolved.ref.filePath, async () => {
+                const entry = await readChatFile(resolved.ref.filePath);
+                const entryToken = computeFullToken(entry.headerRaw, entry.messages);
+                if (typeof request.body.change_token === 'string' && request.body.change_token !== entryToken) {
+                    return response.status(409).send({ error: 'stale', change_token: entryToken });
+                }
+                const found = await findRequestedBackup(resolved.ref, resolved.cardName, backupsDir, request.body.backup_ts);
+                if (!found.ok) {
+                    return response.status(found.status).send({ error: found.error });
+                }
+
+                const recheck = await readChatFile(resolved.ref.filePath);
+                if (computeFullToken(recheck.headerRaw, recheck.messages) !== entryToken) {
+                    return response.status(409).send({ error: 'stale', change_token: computeFullToken(recheck.headerRaw, recheck.messages) });
+                }
+
+                // Keep the current header so the file stays the same chat (identity preserved); take the snapshot's messages.
+                const fullArray = entry.header ? [entry.header, ...found.backup.messages] : found.backup.messages;
+                await trySaveChat(fullArray, resolved.ref.filePath, true, handle, resolved.cardName, backupsDir);
+                const after = await readChatFile(resolved.ref.filePath);
+                return response.send({ ok: true, restored: found.backup.messages.length, change_token: computeFullToken(after.headerRaw, after.messages) });
+            });
+            return;
+        }
+
+        const { header, headerRaw, messages } = await readChatFile(resolved.ref.filePath);
+        const currentObjs = messages.map(m => m.obj);
+        const identity = chatIdentity(header);
+        const { backups, truncated, attributable } = await discoverChatBackups(backupsDir, backupBaseName(resolved.cardName), identity);
+        const snapshots = backups.map((backup) => {
+            const summary = diffSummary(backup.messages, currentObjs);
+            const last = backup.messages[backup.messages.length - 1];
+            return {
+                backup_ts: backup.ts,
+                message_count: backup.messages.length,
+                last_mes_preview: getPreviewMessage(last?.mes),
+                added: summary.added,
+                removed: summary.removed,
+                edited: summary.edited,
+                basis: summary.basis,
+                too_large: summary.tooLarge,
+            };
+        });
+        return response.send({ snapshots, depth: backups.length, truncated, basis: identityBasis(identity), attributable, change_token: computeFullToken(headerRaw, messages) });
+    } catch (error) {
+        log.chat.error(error);
+        if (!response.headersSent) {
+            return response.sendStatus(500);
+        }
     }
 });
