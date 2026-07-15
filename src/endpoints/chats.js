@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
+import crypto from 'node:crypto';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
@@ -22,11 +23,15 @@ import {
     isPathUnderParent,
 } from '../util.js';
 import { log } from '../log.js';
+import { bustCharacterListCacheForCharacter } from './characters.js';
 
 const isBackupEnabled = !!getConfigValue('backups.chat.enabled', true, 'boolean');
 const maxTotalChatBackups = Number(getConfigValue('backups.chat.maxTotalBackups', -1, 'number'));
 const throttleInterval = Number(getConfigValue('backups.chat.throttleInterval', 10_000, 'number'));
 const checkIntegrity = !!getConfigValue('backups.chat.checkIntegrity', true, 'boolean');
+
+// Ships dark: off unless the operator sets chat.cfId.enabled (or SILLYTAVERN_CHAT_CFID_ENABLED).
+const cfIdEnabled = !!getConfigValue('chat.cfId.enabled', false, 'boolean');
 
 export const CHAT_BACKUPS_PREFIX = 'chat_';
 
@@ -441,6 +446,88 @@ export async function getChatInfo(pathToFile, additionalData = {}, withMetadata 
     });
 }
 
+const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+/**
+ * Encodes a millisecond timestamp as the 10-character time component of a ULID.
+ * @param {number} time Milliseconds since the epoch.
+ * @returns {string} Ten Crockford base32 characters, most significant first.
+ */
+export function encodeUlidTime(time) {
+    let value = Math.max(0, Math.floor(time));
+    let out = '';
+    for (let i = 0; i < 10; i++) {
+        const mod = value % 32;
+        out = CROCKFORD[mod] + out;
+        value = (value - mod) / 32;
+    }
+    return out;
+}
+
+/**
+ * Mints a ULID: a 48-bit time component plus 80 bits of CSPRNG randomness.
+ * @param {number} time Milliseconds used for the time component.
+ * @returns {string} A 26-character Crockford base32 identifier.
+ */
+export function mintUlid(time) {
+    const bytes = crypto.randomBytes(16);
+    let rand = '';
+    for (let i = 0; i < 16; i++) {
+        rand += CROCKFORD[bytes[i] & 0x1f];
+    }
+    return encodeUlidTime(time) + rand;
+}
+
+/**
+ * Assigns a top-level cf_id to every message that lacks one, mutating in place.
+ * The line-0 metadata header is skipped and existing ids are preserved. Times stay
+ * non-decreasing by array position so ids remain ordered when imports reuse a send_date.
+ * @param {Array} chatData The full chat array (header first, then messages).
+ * @returns {Array} The same array, mutated.
+ */
+export function mintChatIds(chatData) {
+    if (!Array.isArray(chatData)) {
+        return chatData;
+    }
+    let prevTime = 0;
+    for (const entry of chatData) {
+        if (!entry || typeof entry !== 'object') {
+            continue;
+        }
+        const isMessage = entry.is_user !== undefined || entry.mes !== undefined;
+        if (!isMessage) {
+            continue;
+        }
+        const numeric = Number(entry.send_date);
+        const parsed = Number.isFinite(numeric) ? numeric : Date.parse(String(entry.send_date));
+        let time = Number.isFinite(parsed) ? parsed : Date.now();
+        if (time <= prevTime) {
+            time = prevTime + 1;
+        }
+        prevTime = time;
+        if (typeof entry.cf_id !== 'string' || entry.cf_id.length === 0) {
+            entry.cf_id = mintUlid(time);
+        }
+    }
+    return chatData;
+}
+
+/**
+ * FNV-1a 64-bit hash of a string, used for cheap change detection (not cryptographic).
+ * @param {string} input The string to hash.
+ * @returns {string} A 16-character zero-padded hex digest.
+ */
+export function fnv1a64(input) {
+    const mask = 0xffffffffffffffffn;
+    const prime = 0x100000001b3n;
+    let hash = 0xcbf29ce484222325n;
+    for (let i = 0; i < input.length; i++) {
+        hash ^= BigInt(input.charCodeAt(i));
+        hash = (hash * prime) & mask;
+    }
+    return hash.toString(16).padStart(16, '0');
+}
+
 export const router = express.Router();
 
 // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error
@@ -466,6 +553,9 @@ class IntegrityMismatchError extends Error {
  * @param {string} backupDirectory Passed to backupChat.
  */
 export async function trySaveChat(chatData, filePath, skipIntegrityCheck = false, handle, cardName, backupDirectory) {
+    if (cfIdEnabled) {
+        mintChatIds(chatData);
+    }
     const jsonlData = chatData?.map(m => JSON.stringify(m)).join('\n');
 
     const doIntegrityCheck = (checkIntegrity && !skipIntegrityCheck);
@@ -476,6 +566,7 @@ export async function trySaveChat(chatData, filePath, skipIntegrityCheck = false
     }
     await tryWriteFile(filePath, jsonlData);
     getBackupFunction(handle)(backupDirectory, cardName, jsonlData);
+    bustCharacterListCacheForCharacter(handle, cardName);
 }
 
 router.post('/save', validateAvatarUrlMiddleware, async function (request, response) {
@@ -525,8 +616,271 @@ export async function getChatData(chatFilePath) {
     return chatData;
 }
 
+const DEFAULT_PAGE_LIMIT = 100;
+// Anti-abuse ceiling only; far above any real chat, never a display cap (invariant 2).
+const MAX_PAGE_LIMIT = 100000;
+
+/**
+ * Resolves which chat file a request targets, unifying the solo and group families.
+ */
+class ChatRef {
+    /** @param {string} filePath Resolved chat file path. */
+    constructor(filePath) {
+        this.filePath = filePath;
+    }
+
+    /**
+     * Resolves a solo character chat, guarding against path traversal.
+     * @param {any} user The request user with resolved directories.
+     * @param {string} avatarUrl The character avatar url.
+     * @param {string} fileName The chat file name without extension.
+     * @returns {ChatRef|null} The ref, or null if the path escapes the chats root.
+     */
+    static solo(user, avatarUrl, fileName) {
+        const dirName = String(avatarUrl).replace('.png', '');
+        const directoryPath = path.join(user.directories.chats, dirName);
+        if (!isPathUnderParent(user.directories.chats, directoryPath)) {
+            return null;
+        }
+        const filePath = path.join(directoryPath, sanitize(`${String(fileName)}.jsonl`));
+        if (!isPathUnderParent(user.directories.chats, filePath)) {
+            return null;
+        }
+        return new ChatRef(filePath);
+    }
+
+    /**
+     * Resolves a group chat, adding the path-traversal guard the stock route lacks.
+     * @param {any} user The request user with resolved directories.
+     * @param {string} id The group chat id.
+     * @returns {ChatRef|null} The ref, or null if the path escapes the group root.
+     */
+    static group(user, id) {
+        const filePath = path.join(user.directories.groupChats, sanitize(`${String(id)}.jsonl`));
+        if (!isPathUnderParent(user.directories.groupChats, filePath)) {
+            return null;
+        }
+        return new ChatRef(filePath);
+    }
+}
+
+/**
+ * @typedef {Object} ParsedChat
+ * @property {object|null} header The line-0 metadata header, if present.
+ * @property {string} headerRaw Raw text of the header line.
+ * @property {Array<{raw: string, obj: any}>} messages Parsed message entries in file order.
+ */
+
+/**
+ * Reads and parses a chat file once, keeping each surviving line's raw text so the
+ * change-token hash and the slice indices derive from the same parse.
+ * @param {string} filePath Path to the chat file.
+ * @returns {Promise<ParsedChat>}
+ */
+export async function readChatFile(filePath) {
+    const content = await tryReadFile(filePath) ?? '';
+    /** @type {object|null} */
+    let header = null;
+    let headerRaw = '';
+    /** @type {Array<{raw: string, obj: any}>} */
+    const messages = [];
+    if (content.length === 0) {
+        return { header, headerRaw, messages };
+    }
+    for (const raw of content.split('\n')) {
+        const obj = tryParse(raw);
+        if (!obj) {
+            continue;
+        }
+        const looksLikeHeader = (obj.user_name !== undefined || obj.chat_metadata !== undefined) && obj.is_user === undefined;
+        if (header === null && looksLikeHeader) {
+            header = obj;
+            headerRaw = raw;
+            continue;
+        }
+        messages.push({ raw, obj });
+    }
+    return { header, headerRaw, messages };
+}
+
+/**
+ * Hashes the file prefix from the header through the message at anchorIndex inclusive.
+ * @param {string} headerRaw Raw header line.
+ * @param {Array<{raw: string}>} messages Parsed message entries.
+ * @param {number} anchorIndex Inclusive upper bound into messages; -1 hashes the header alone.
+ * @returns {string} FNV-1a 64-bit hex digest.
+ */
+export function prefixHash(headerRaw, messages, anchorIndex) {
+    const parts = [headerRaw];
+    for (let i = 0; i <= anchorIndex && i < messages.length; i++) {
+        parts.push(messages[i].raw);
+    }
+    return fnv1a64(parts.join('\n'));
+}
+
+/**
+ * Clamps a caller-supplied page size to a sane range.
+ * @param {*} value The requested limit.
+ * @returns {number} A limit in [1, MAX_PAGE_LIMIT].
+ */
+function clampLimit(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) {
+        return DEFAULT_PAGE_LIMIT;
+    }
+    return Math.min(MAX_PAGE_LIMIT, Math.max(1, Math.floor(n)));
+}
+
+/**
+ * @param {number} count Total message count.
+ * @param {string} hash Prefix hash.
+ * @returns {string} A change token string.
+ */
+function buildToken(count, hash) {
+    return `v1.${count}.${hash}`;
+}
+
+/**
+ * @param {string} token A change token.
+ * @returns {string|null} The hash component, or null when malformed.
+ */
+function parseTokenHash(token) {
+    const parts = String(token).split('.');
+    return parts.length === 3 ? parts[2] : null;
+}
+
+/**
+ * Normalizes the paging options a request body carries.
+ * @param {any} body The request body.
+ * @returns {any} Paging options with a computed `paged` flag.
+ */
+export function readPageOpts(body) {
+    const opts = {
+        limit: body.limit,
+        before_id: typeof body.before_id === 'string' ? body.before_id : undefined,
+        around_id: typeof body.around_id === 'string' ? body.around_id : undefined,
+        before_index: Number.isInteger(body.before_index) ? body.before_index : undefined,
+        around_index: Number.isInteger(body.around_index) ? body.around_index : undefined,
+        change_token: typeof body.change_token === 'string' ? body.change_token : undefined,
+    };
+    opts.paged = body.paged === true
+        || opts.before_id !== undefined || opts.around_id !== undefined
+        || opts.before_index !== undefined || opts.around_index !== undefined;
+    return opts;
+}
+
+/**
+ * The paged envelope for a chat that is absent or empty.
+ * @returns {object} An empty page envelope.
+ */
+export function emptyChatPage() {
+    return {
+        messages: [],
+        header: null,
+        change_token: buildToken(0, fnv1a64('')),
+        has_more_before: false,
+        has_more_after: false,
+        total_items: 0,
+        anchor_index: null,
+        anchor_found: false,
+    };
+}
+
+/**
+ * Builds a paged slice of a chat for the reader. Anchors by index (works with the
+ * cf_id flag off) or by cf_id (exact match when the flag is on). Returns a 409
+ * descriptor when a client-supplied change token no longer matches the prefix it
+ * anchored on, so an edit or delete above the window forces a re-sync while a plain
+ * append does not.
+ * @param {string} filePath Path to the chat file.
+ * @param {any} opts Normalized paging options.
+ * @returns {Promise<{status: number, body: object}>}
+ */
+export async function buildChatPage(filePath, opts) {
+    const { header, headerRaw, messages } = await readChatFile(filePath);
+    const total = messages.length;
+    const limit = clampLimit(opts.limit);
+
+    const mode = (opts.before_id !== undefined || opts.before_index !== undefined) ? 'before'
+        : (opts.around_id !== undefined || opts.around_index !== undefined) ? 'around'
+            : 'tail';
+
+    let anchorIndex = -1;
+    let anchorFound = true;
+    if (opts.before_id !== undefined) {
+        anchorIndex = messages.findIndex(m => m.obj.cf_id === opts.before_id);
+        anchorFound = anchorIndex >= 0;
+    } else if (opts.around_id !== undefined) {
+        anchorIndex = messages.findIndex(m => m.obj.cf_id === opts.around_id);
+        anchorFound = anchorIndex >= 0;
+    } else if (opts.before_index !== undefined) {
+        anchorIndex = opts.before_index;
+        anchorFound = anchorIndex >= 0 && anchorIndex <= total;
+    } else if (opts.around_index !== undefined) {
+        anchorIndex = opts.around_index;
+        anchorFound = anchorIndex >= 0 && anchorIndex < total;
+    }
+
+    if (mode !== 'tail' && !anchorFound) {
+        return {
+            status: 200,
+            body: {
+                messages: [],
+                header,
+                change_token: buildToken(total, prefixHash(headerRaw, messages, total - 1)),
+                has_more_before: false,
+                has_more_after: false,
+                total_items: total,
+                anchor_index: null,
+                anchor_found: false,
+            },
+        };
+    }
+
+    if (opts.change_token !== undefined && mode !== 'tail') {
+        const boundary = Math.min(anchorIndex, total - 1);
+        const currentHash = prefixHash(headerRaw, messages, boundary);
+        const priorHash = parseTokenHash(opts.change_token);
+        if (priorHash !== null && priorHash !== currentHash) {
+            return { status: 409, body: { error: 'stale', change_token: buildToken(total, currentHash) } };
+        }
+    }
+
+    let start;
+    let end;
+    if (mode === 'before') {
+        end = Math.min(anchorIndex, total);
+        start = Math.max(0, end - limit);
+    } else if (mode === 'around') {
+        const before = Math.floor(limit / 2);
+        const after = limit - before;
+        start = Math.max(0, anchorIndex - before);
+        end = Math.min(total, anchorIndex + after + 1);
+    } else {
+        end = total;
+        start = Math.max(0, total - limit);
+    }
+
+    const slice = messages.slice(start, end).map(m => m.obj);
+    const tokenBoundary = total === 0 ? -1 : start;
+    return {
+        status: 200,
+        body: {
+            messages: slice,
+            header,
+            change_token: buildToken(total, prefixHash(headerRaw, messages, tokenBoundary)),
+            has_more_before: start > 0,
+            has_more_after: end < total,
+            total_items: total,
+            anchor_index: mode === 'tail' ? null : anchorIndex,
+            anchor_found: anchorFound,
+        },
+    };
+}
+
 router.post('/get', validateAvatarUrlMiddleware, async function (request, response) {
     try {
+        const opts = readPageOpts(request.body);
         const dirName = String(request.body.avatar_url).replace('.png', '');
         const directoryPath = path.join(request.user.directories.chats, dirName);
         if (!isPathUnderParent(request.user.directories.chats, directoryPath)) {
@@ -536,24 +890,33 @@ router.post('/get', validateAvatarUrlMiddleware, async function (request, respon
 
         //if no chat dir for the character is found, make one with the character name
         if (!chatDirStat) {
+            if (opts.paged) {
+                return response.send(emptyChatPage());
+            }
             await fs.promises.mkdir(directoryPath);
             return response.send({});
         }
 
         if (!request.body.file_name) {
-            return response.send({});
+            return response.send(opts.paged ? emptyChatPage() : {});
         }
 
-        const chatFileName = `${String(request.body.file_name)}.jsonl`;
-        const chatFilePath = path.join(directoryPath, sanitize(chatFileName));
+        const ref = ChatRef.solo(request.user, request.body.avatar_url, request.body.file_name);
+        if (!ref) {
+            return response.sendStatus(400);
+        }
 
         // Absent file = fresh chat (200 empty); existing-but-unreadable = 500, so the client never
         // seeds a greeting over real history it merely failed to read.
-        const fileStat = await fs.promises.stat(chatFilePath).catch(() => null);
+        const fileStat = await fs.promises.stat(ref.filePath).catch(() => null);
         if (!fileStat) {
-            return response.send({});
+            return response.send(opts.paged ? emptyChatPage() : {});
         }
-        const chatData = await getChatData(chatFilePath);
+        if (opts.paged) {
+            const page = await buildChatPage(ref.filePath, opts);
+            return response.status(page.status).send(page.body);
+        }
+        const chatData = await getChatData(ref.filePath);
         if (fileStat.size > 0 && chatData.length === 0) {
             return response.status(500).send({ error: true });
         }
@@ -821,14 +1184,31 @@ router.post('/import', validateAvatarUrlMiddleware, async function (request, res
 });
 
 router.post('/group/get', async (request, response) => {
-    if (!request.body || !request.body.id) {
-        return response.sendStatus(400);
+    try {
+        if (!request.body || !request.body.id) {
+            return response.sendStatus(400);
+        }
+
+        const ref = ChatRef.group(request.user, request.body.id);
+        if (!ref) {
+            return response.sendStatus(400);
+        }
+
+        const opts = readPageOpts(request.body);
+        if (opts.paged) {
+            const fileStat = await fs.promises.stat(ref.filePath).catch(() => null);
+            if (!fileStat) {
+                return response.send(emptyChatPage());
+            }
+            const page = await buildChatPage(ref.filePath, opts);
+            return response.status(page.status).send(page.body);
+        }
+
+        return response.send(await getChatData(ref.filePath));
+    } catch (error) {
+        log.chat.error(error);
+        return response.sendStatus(500);
     }
-
-    const id = request.body.id;
-    const chatFilePath = path.join(request.user.directories.groupChats, sanitize(`${id}.jsonl`));
-
-    return response.send(await getChatData(chatFilePath));
 });
 
 router.post('/group/info', async (request, response) => {
