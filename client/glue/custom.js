@@ -248,6 +248,9 @@
     async function startStream(url, name, avatar) {
         if (streamActive) throw new Error('stream already running');
         streamActive = true;
+        // A reply follows the bottom only if you were already there; scrolled up, it stays put and the
+        // chip appears. Your own send re-pins first (the composer calls scroll_bottom on send).
+        streamPinned = readerNearBottom();
 
         let pending = [];
         let pendingLen = 0;
@@ -286,6 +289,7 @@
                 } finally {
                     streamRender = false;
                 }
+                readerStreamTick();
 
                 if (wasm.__st_stream_done && wasm.__st_stream_done()) {
                     ended = true;
@@ -332,6 +336,7 @@
             streamActive = false;
             if (begun) {
                 wasm.__st_stream_end();
+                if (streamPinned) window.__st_reader_scroll_bottom();
                 const chat = document.getElementById('chat');
                 const mes = chat ? chat.querySelectorAll('.mes') : null;
                 if (mes && mes.length) highlightSealedBlocks(mes[mes.length - 1]);
@@ -558,6 +563,153 @@
         document.addEventListener('pointercancel', endPanelDrag);
     })();
 
+    // Reverse-lazy reader (ZX16 pump): scroll watcher + older-page fetch here, Zig owns window+parse+prepend.
+    // Prepend holds position by ELEMENT-ANCHORED correction (2px), not scrollHeight-delta (~8px under content-visibility).
+    const READER_PREFETCH_MARGIN = 600;
+    const READER_BOTTOM_SLOP = 80;
+    let readerChat = null;
+    let readerChip = null;
+    let readerPumping = false;
+    let readerScheduled = false;
+    let streamPinned = false;
+
+    // Scroll the container to its full height across two frames: content-visibility lays out late
+    // rows after the first frame, so a single-frame scroll lands short. Called from Zig on open.
+    window.__st_reader_scroll_bottom = function () {
+        const chat = document.getElementById('chat');
+        if (!chat) return;
+        requestAnimationFrame(function () {
+            requestAnimationFrame(function () { chat.scrollTop = chat.scrollHeight; });
+        });
+    };
+
+    function readerNearBottom() {
+        if (!readerChat) return true;
+        return (readerChat.scrollHeight - readerChat.scrollTop - readerChat.clientHeight) < READER_BOTTOM_SLOP;
+    }
+
+    function readerSetState(state) {
+        const root = document.getElementById('chat-root');
+        if (!root) return;
+        if (state) root.setAttribute('data-reader-state', state);
+        else root.removeAttribute('data-reader-state');
+    }
+
+    function readerEnsureChip() {
+        if (readerChip) return readerChip;
+        readerChip = document.createElement('button');
+        readerChip.type = 'button';
+        readerChip.className = 'chat-newmsg-chip';
+        readerChip.textContent = 'New message';
+        readerChip.addEventListener('click', function () {
+            streamPinned = true;
+            readerHideChip();
+            window.__st_reader_scroll_bottom();
+        });
+        (document.getElementById('chat-root') || document.body).appendChild(readerChip);
+        return readerChip;
+    }
+    function readerShowChip() { readerEnsureChip().classList.add('is-visible'); }
+    function readerHideChip() { if (readerChip) readerChip.classList.remove('is-visible'); }
+
+    // A streamed reply follows the bottom only if you were already there; scrolled up, it stays put
+    // and raises the chip. Called on every stream flush and once on seal.
+    function readerStreamTick() {
+        if (!readerChat) return;
+        if (streamPinned) readerChat.scrollTop = readerChat.scrollHeight;
+        else readerShowChip();
+    }
+
+    // The first message whose bottom is below the scroller's top edge: the on-screen anchor whose
+    // viewport position a prepend must preserve.
+    function readerAnchorMes() {
+        if (!readerChat) return null;
+        const mes = readerChat.querySelectorAll('.mes');
+        const top = readerChat.getBoundingClientRect().top;
+        for (let i = 0; i < mes.length; i++) {
+            if (mes[i].getBoundingClientRect().bottom > top + 1) return mes[i];
+        }
+        return mes.length ? mes[mes.length - 1] : null;
+    }
+
+    async function readerPrefetch() {
+        if (readerPumping || !wasm || !readerChat) return;
+        if (!wasm.__st_reader_can_prepend || !wasm.__st_reader_can_prepend()) return;
+        const packed = wasm.__st_reader_next_body();
+        if (packed === 0n) return;
+        readerPumping = true;
+        readerSetState('loading');
+        const body = readString(Number(packed >> 32n), Number(packed & 0xffffffffn));
+        try {
+            await ensureCsrfToken();
+            const res = await loggedFetch('/api/chats/get', {
+                method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: body,
+            });
+            if (res.status === 409) {
+                log.net.warn('history page stale (409) - re-syncing to the tail');
+                if (wasm.__st_reader_abort) wasm.__st_reader_abort();
+                readerSetState(null);
+                readerPumping = false;
+                if (wasm.__st_reader_resync) wasm.__st_reader_resync();
+                return;
+            }
+            if (!res.ok) {
+                log.net.warn('history page fetch failed:', res.status);
+                if (wasm.__st_reader_abort) wasm.__st_reader_abort();
+                readerSetState('error');
+                readerPumping = false;
+                return;
+            }
+            const text = await res.text();
+            const ref = readerAnchorMes();
+            const refBefore = ref ? ref.getBoundingClientRect().top : null;
+            const beforeCount = readerChat.querySelectorAll('.mes').length;
+            const buf = writeBytes(text);
+            try { wasm.__st_reader_apply_page(buf.ptr, buf.len); } finally { freeRaw(buf); }
+            readerSetState(null);
+            requestAnimationFrame(function () {
+                requestAnimationFrame(function () {
+                    // Force the prepended rows to real height WHILE correcting, then revert: content-
+                    // visibility sizes them at the 5rem estimate otherwise, so the anchor measures wrong.
+                    const hist = readerChat.querySelectorAll('.chat-history .mes');
+                    const added = readerChat.querySelectorAll('.mes').length - beforeCount;
+                    for (let i = 0; i < added && i < hist.length; i++) hist[i].style.contentVisibility = 'visible';
+                    void readerChat.offsetHeight;
+                    if (ref && refBefore !== null && readerChat.contains(ref)) {
+                        readerChat.scrollTop += (ref.getBoundingClientRect().top - refBefore);
+                    }
+                    for (let i = 0; i < added && i < hist.length; i++) hist[i].style.contentVisibility = '';
+                    readerPumping = false;
+                    if (readerChat.scrollTop < READER_PREFETCH_MARGIN) readerSchedulePrefetch();
+                });
+            });
+        } catch (err) {
+            log.net.error('history prefetch failed:', err);
+            if (wasm.__st_reader_abort) wasm.__st_reader_abort();
+            readerSetState('error');
+            readerPumping = false;
+        }
+    }
+
+    function readerSchedulePrefetch() {
+        if (readerScheduled) return;
+        readerScheduled = true;
+        requestAnimationFrame(function () {
+            readerScheduled = false;
+            if (readerChat && readerChat.scrollTop < READER_PREFETCH_MARGIN) readerPrefetch();
+        });
+    }
+
+    function initReaderPaging() {
+        readerChat = document.getElementById('chat');
+        if (!readerChat) return;
+        readerChat.addEventListener('scroll', function () {
+            if (readerChat.scrollTop < READER_PREFETCH_MARGIN) readerSchedulePrefetch();
+            if (streamActive && streamPinned && !readerNearBottom()) streamPinned = false;
+            if (readerNearBottom()) readerHideChip();
+        }, { passive: true });
+    }
+
     // Initialize: load deps, then init wasm
     async function init() {
         log.boot.info('init start');
@@ -604,6 +756,9 @@
                 wasm.__st_boot_init();
                 log.boot.debug('boot_init done');
             }
+
+            // #chat exists after the first boot render; bind the reader scroll pump to it.
+            initReaderPaging();
 
             // Dev-mode streaming: the verify.sh gate drives hostile/markdown/streaming
             // bodies through the real pipeline via ?stream=URL&hold=MS query params.

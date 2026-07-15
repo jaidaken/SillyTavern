@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const store = @import("./store.zig");
+const pager = @import("./pager.zig");
 const stream_mod = @import("./stream.zig");
 const char_store = @import("./character_store.zig");
 const character_view = @import("./character_view.zig");
@@ -41,7 +42,29 @@ fn appendMessage(name_ptr: usize, name_len: usize, body_ptr: usize, body_len: us
 
 fn clearMessages() callconv(.c) void {
     store.global.clear();
+    pager.reset();
     regions.bumpMessageLog();
+}
+
+fn readerNextBody() callconv(.c) u64 {
+    return pager.nextBody();
+}
+
+fn readerApplyPage(ptr: usize, len: usize) callconv(.c) u32 {
+    return pager.applyPage(doorBuf(ptr, len));
+}
+
+fn readerCanPrepend() callconv(.c) u32 {
+    return @intFromBool(pager.canPrepend());
+}
+
+fn readerResync() callconv(.c) void {
+    pager.beginResync();
+    char_api.reloadCurrentChat();
+}
+
+fn readerAbort() callconv(.c) void {
+    pager.abort();
 }
 
 fn addCharacter(
@@ -254,6 +277,11 @@ comptime {
         @export(&streamEnd, .{ .name = "__st_stream_end" });
         @export(&streamTokens, .{ .name = "__st_stream_tokens" });
         @export(&streamDone, .{ .name = "__st_stream_done" });
+        @export(&readerNextBody, .{ .name = "__st_reader_next_body" });
+        @export(&readerApplyPage, .{ .name = "__st_reader_apply_page" });
+        @export(&readerCanPrepend, .{ .name = "__st_reader_can_prepend" });
+        @export(&readerResync, .{ .name = "__st_reader_resync" });
+        @export(&readerAbort, .{ .name = "__st_reader_abort" });
         if (instrument.enabled) {
             @export(&messageViewRenders, .{ .name = "__st_mv_renders" });
             @export(&shellRenders, .{ .name = "__st_shell_renders" });

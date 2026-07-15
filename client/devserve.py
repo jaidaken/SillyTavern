@@ -35,6 +35,45 @@ EXTRA_TYPES = {
 }
 
 
+MOCK_CHAT_TOTAL = 300
+
+
+def _mock_chat_page(req):
+    """A synthetic paged chat for the reader gate: MOCK_CHAT_TOTAL messages, index-anchored.
+    Honors before_index/limit; never 409s (happy-path gate). The client always sends paged."""
+    total = MOCK_CHAT_TOTAL
+    try:
+        limit = int(req.get("limit") or 100)
+    except (TypeError, ValueError):
+        limit = 100
+    limit = max(1, min(limit, total))
+    before = req.get("before_index")
+    if isinstance(before, int):
+        end = max(0, min(before, total))
+        start = max(0, end - limit)
+    else:
+        end = total
+        start = max(0, total - limit)
+    messages = []
+    for i in range(start, end):
+        is_user = (i % 2 == 1)
+        messages.append({
+            "name": "You" if is_user else "Rita Recent",
+            "is_user": is_user,
+            "mes": f"History message {i} in the reverse-lazy reader chat.",
+        })
+    return {
+        "messages": messages,
+        "header": {"user_name": "You", "chat_metadata": {}},
+        "change_token": f"v1.{total}.mock",
+        "has_more_before": start > 0,
+        "has_more_after": end < total,
+        "total_items": total,
+        "anchor_index": None if before is None else before,
+        "anchor_found": True,
+    }
+
+
 def _mock_characters(favs):
     chars = []
     for i in range(60):
@@ -195,16 +234,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             }}
             return self.mock_json({"settings": json.dumps(settings)})
         if path == "/api/chats/get":
-            name = "Mock"
-            for c in _mock_characters(Handler.mock_favs):
-                if c["avatar"] == req.get("avatar_url"):
-                    name = c["name"]
-            return self.mock_json([
-                {"user_name": "You", "character_name": name, "chat_metadata": {}},
-                {"name": name, "is_user": False, "mes": f"Hello, I am {name}."},
-                {"name": "You", "is_user": True, "mes": "Hi there."},
-                {"name": name, "is_user": False, "mes": "The newest message lands last."},
-            ])
+            # The client always sends paged:true (reader tail window + scroll-up prepend).
+            return self.mock_json(_mock_chat_page(req))
         if path == "/api/characters/edit-attribute":
             if req.get("field") == "fav":
                 Handler.mock_favs[req.get("avatar_url")] = bool(req.get("value"))

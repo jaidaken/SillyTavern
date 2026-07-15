@@ -623,6 +623,83 @@
 }
 
 /* ===================================================================================
+   READER. Scroll-up history paging surfaces, kept in one marked block for the merge:
+   the top marker row (prefetch spinner + retry text, shown off #chat-root's
+   data-reader-state) and the "new message" chip the glue reveals when a reply lands
+   while you are scrolled up. The chip is glue-created chrome, so it wears no utilities.
+   =================================================================================== */
+/* reader */
+/* Absolutely positioned so its show/hide never reflows the message list: a height change in the
+   scroll flow here would shift every message during the prepend and drift the reading anchor. */
+.chat-top {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline: 0;
+    height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    pointer-events: none;
+    color: var(--color-muted);
+    font-size: 0.8125rem;
+}
+#chat-root[data-reader-state="loading"] .chat-top,
+#chat-root[data-reader-state="error"] .chat-top {
+    height: 2.25rem;
+}
+#chat-root[data-reader-state="loading"] .chat-top::after {
+    content: "Loading earlier messages\2026";
+}
+#chat-root[data-reader-state="error"] .chat-top::after {
+    content: "Could not load earlier messages. Scroll up to retry.";
+    color: var(--color-danger-hover);
+}
+
+/* Restore the divider under the last history message once live messages follow it, since
+   .mes:last-child otherwise drops it at the boundary between the two lists. */
+.chat-history:has(+ .chat-live:not(:empty)) .mes:last-child {
+    border-bottom: 1px solid var(--color-border-soft);
+}
+
+.chat-newmsg-chip {
+    position: fixed;
+    left: 50%;
+    bottom: 5.5rem;
+    z-index: 40;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding-block: 0.4rem;
+    padding-inline: 0.9rem;
+    border: 0;
+    border-radius: var(--radius-full);
+    background: var(--color-accent);
+    color: var(--color-on-accent);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 16px oklch(0 0 0 / 0.28);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-50%) translateY(calc(var(--move) * 8px));
+    transition: opacity 200ms var(--ease-settle), transform 200ms var(--ease-settle);
+}
+.chat-newmsg-chip.is-visible {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(-50%) translateY(0);
+}
+.chat-newmsg-chip::before {
+    content: "\2193";
+    font-weight: 700;
+}
+.chat-newmsg-chip:focus-visible {
+    outline: 2px solid var(--color-on-accent);
+    outline-offset: 2px;
+}
+
+/* ===================================================================================
    GENERATED-STATE RULES. Deliberately UNLAYERED, so they beat any utility: the element
    they light up is not the element whose state decides it. Which reading control is lit
    is a property of #chat-root's data-reading-*, which the Shell region does not

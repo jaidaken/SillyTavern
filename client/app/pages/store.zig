@@ -36,6 +36,13 @@ pub const Store = struct {
     /// Index of the message currently receiving tokens. An index, not a pointer: `messages` moves
     /// when it grows, and a message may be appended behind the streaming one.
     stream_index: ?usize = null,
+    /// Absolute index of `messages[0]` in the full chat. The reader shows a tail window, so the
+    /// on-screen store is a suffix of the file; `window_offset + storeIndex` is the stable render
+    /// key, so a prepend that shifts every message down leaves each one's key unchanged.
+    window_offset: usize = 0,
+    /// Store index of the first message appended THIS session (a send or a streamed reply). Messages
+    /// below it are file-loaded history (silent to a screen reader); at or above it are live.
+    session_start: usize = 0,
 
     pub fn init(allocator: Allocator) Store {
         return .{ .allocator = allocator };
@@ -62,6 +69,8 @@ pub const Store = struct {
         self.tail.deinit(self.allocator);
         self.tail = .empty;
         self.stream_index = null;
+        self.window_offset = 0;
+        self.session_start = 0;
     }
 
     pub fn slice(self: *const Store) []const Message {
@@ -143,6 +152,52 @@ pub const Store = struct {
             msg.body_owned = full;
         }
     }
+
+    /// Marks every message currently in the log as file-loaded history, so a screen reader stays
+    /// silent on them. Called once a chat-open finishes seeding the window.
+    pub fn markAllHistory(self: *Store) void {
+        self.session_start = self.messages.items.len;
+    }
+
+    /// Copies an older batch to the head of the log in one insert, preserving every existing
+    /// message's address and its `window_offset + index` key. `session_start` and any live stream
+    /// index shift down by the batch length; `window_offset` shifts up by it. On failure nothing
+    /// is inserted and the caller's items are untouched.
+    pub fn prependSealed(self: *Store, items: []const Incoming) Allocator.Error!void {
+        if (items.len == 0) return;
+        const batch = try self.allocator.alloc(Message, items.len);
+        var filled: usize = 0;
+        errdefer {
+            for (batch[0..filled]) |m| {
+                if (m.name_owned) |b| self.allocator.free(b);
+                if (m.body_owned) |b| self.allocator.free(b);
+                if (m.avatar_owned) |b| self.allocator.free(b);
+            }
+            self.allocator.free(batch);
+        }
+        for (items, 0..) |it, k| {
+            const n = try self.allocator.dupe(u8, it.name);
+            errdefer self.allocator.free(n);
+            const b = try self.allocator.dupe(u8, it.body);
+            errdefer self.allocator.free(b);
+            const a = try self.allocator.dupe(u8, it.avatar);
+            errdefer self.allocator.free(a);
+            batch[k] = .{ .name = n, .body = b, .avatar = a, .name_owned = n, .body_owned = b, .avatar_owned = a };
+            filled = k + 1;
+        }
+        try self.messages.insertSlice(self.allocator, 0, batch);
+        self.allocator.free(batch);
+        if (self.stream_index) |*si| si.* += items.len;
+        self.session_start += items.len;
+        self.window_offset -= items.len;
+    }
+};
+
+/// A borrowed message to prepend; `prependSealed` copies each field into store-owned memory.
+pub const Incoming = struct {
+    name: []const u8,
+    body: []const u8,
+    avatar: []const u8,
 };
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
@@ -190,6 +245,16 @@ pub fn clearStore() void {
 
 pub fn appendCopy(name: []const u8, body: []const u8, avatar: []const u8) Allocator.Error!void {
     return global.appendCopy(name, body, avatar);
+}
+
+/// Absolute index of the first message in the window; the render key is this plus the loop index.
+pub fn windowOffset() usize {
+    return global.window_offset;
+}
+
+/// Store index of the first live (this-session) message; messages below it are silent history.
+pub fn sessionStart() usize {
+    return global.session_start;
 }
 
 const testing = std.testing;
@@ -551,4 +616,83 @@ test "store_leaves_no_leak_under_a_debug_allocator" {
     s.deinit();
 
     try testing.expectEqual(std.heap.Check.ok, debug.deinit());
+}
+
+test "mark_all_history_moves_the_session_boundary_to_the_current_length" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+    try s.appendCopy("a", "1", "");
+    try s.appendCopy("b", "2", "");
+    try testing.expectEqual(@as(usize, 0), s.session_start);
+    s.markAllHistory();
+    try testing.expectEqual(@as(usize, 2), s.session_start);
+}
+
+test "prepend_preserves_addresses_and_shifts_offset_session_and_stream" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+
+    // A loaded window of two history messages whose first is absolute index 1000.
+    s.window_offset = 1000;
+    try s.appendCopy("Rita", "history one", "");
+    try s.appendCopy("You", "history two", "");
+    s.markAllHistory();
+    // A sealed reply, then a live stream running during the prepend (the mid-stream case).
+    try s.beginStream(try testing.allocator.dupe(u8, "Rita"), try testing.allocator.dupe(u8, ""));
+    try s.appendTail("sealed reply");
+    s.endStream();
+    try s.beginStream(try testing.allocator.dupe(u8, "Rita"), try testing.allocator.dupe(u8, ""));
+    try s.appendTail("streaming");
+
+    const kept_body = s.slice()[0].body.ptr;
+    const abs_key_before = s.window_offset + 0;
+    const stream_before = s.stream_index.?;
+
+    const batch = [_]Incoming{
+        .{ .name = "Old", .body = "older a", .avatar = "" },
+        .{ .name = "Old", .body = "older b", .avatar = "" },
+        .{ .name = "Old", .body = "older c", .avatar = "" },
+    };
+    try s.prependSealed(&batch);
+
+    try testing.expectEqual(@as(usize, 997), s.window_offset);
+    try testing.expectEqual(@as(usize, 5), s.session_start);
+    try testing.expectEqual(stream_before + 3, s.stream_index.?);
+    // The kept message moved down by 3 but keeps its byte address AND its absolute key.
+    try testing.expectEqual(kept_body, s.slice()[3].body.ptr);
+    try testing.expectEqualStrings("history one", s.slice()[3].body);
+    try testing.expectEqual(abs_key_before, s.window_offset + 3);
+    try testing.expectEqualStrings("older a", s.slice()[0].body);
+    try testing.expectEqualStrings("streaming", s.slice()[s.slice().len - 1].body);
+}
+
+test "prepend_of_an_empty_batch_leaves_the_store_unchanged" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+    s.window_offset = 10;
+    try s.appendCopy("You", "only", "");
+    s.markAllHistory();
+    try s.prependSealed(&.{});
+    try testing.expectEqual(@as(usize, 1), s.slice().len);
+    try testing.expectEqual(@as(usize, 10), s.window_offset);
+    try testing.expectEqual(@as(usize, 1), s.session_start);
+}
+
+fn prependScenario(gpa: Allocator) !void {
+    var s = Store.init(gpa);
+    defer s.deinit();
+    s.window_offset = 100;
+    try s.appendCopy("You", "seed", "");
+    s.markAllHistory();
+    const batch = [_]Incoming{
+        .{ .name = "A", .body = "older a", .avatar = "av" },
+        .{ .name = "B", .body = "older b", .avatar = "av" },
+    };
+    try s.prependSealed(&batch);
+    try testing.expectEqual(@as(usize, 3), s.slice().len);
+    try testing.expectEqual(@as(usize, 98), s.window_offset);
+}
+
+test "prepend_releases_everything_on_any_allocation_failure" {
+    try testing.checkAllAllocationFailures(testing.allocator, prependScenario, .{});
 }

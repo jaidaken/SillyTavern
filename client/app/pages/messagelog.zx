@@ -4,34 +4,40 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
     sanitized.renderTick();
 
     const msgs = store.slice();
+    const wo = store.windowOffset();
+    const sstart = @min(store.sessionStart(), msgs.len);
 
     // The centre column of the app grid, scrolling on its own. While a chat load is in flight the
-    // client sets aria-busy here, and the log dims off that (group-aria-busy) so the click visibly
-    // took: the state is announced to assistive tech and drives the styling from the same attribute.
+    // client sets aria-busy here, and the log dims off that (group-aria-busy) so the click visibly took.
     //
-    // The keyed message list lives in its own .chat-list wrapper so the reading-width handle stays
-    // out of it: the handle is then a fixed-position sibling in .chat-inner, not the unkeyed last
-    // child of the message list, so appending a message no longer rebuilds it and drops a drag.
-    //
-    // The reading-width handle is a thin bar at the content edge. Its hit area is always 12px, but
-    // the amber line only appears on hover or focus, and goes solid while dragged (the glue adds
-    // is-dragging for the duration of the drag).
+    // The list is split so loaded history is silent to a screen reader (.chat-history, no live
+    // region) and only this session's sends and replies are announced (.chat-live, role=log
+    // aria-live). Every message keys by its ABSOLUTE index (window_offset + i) across both lists, so
+    // a scroll-up prepend reuses the existing message nodes instead of rebuilding them. .chat-top is
+    // the reader's marker row: the prefetch spinner and retry surface, shown off #chat-root state.
+    // overflow-anchor stays default (auto): native anchoring holds the viewport as content-visibility
+    // renders the prepended off-screen rows, and the glue's element-anchored correction (measuring
+    // residual displacement) self-calibrates to ~0 when native already held, so no double-correction.
     return (
         <main
             @allocator={ctx.allocator}
             id="chat"
-            class="group/chat col-start-2 row-start-2 min-h-0 min-w-0 overflow-y-auto [scrollbar-color:var(--color-border)_transparent] [scrollbar-width:thin]"
+            class="group/chat col-start-2 row-start-2 min-h-0 min-w-0 overflow-y-auto [overscroll-behavior:contain] [scrollbar-color:var(--color-border)_transparent] [scrollbar-width:thin]"
             onclick={ui.onPageClick}
             onkeydown={ui.onPageKey}
         >
             <div
                 class="chat-inner relative mx-auto max-w-[var(--reading-measure,var(--measure))] px-4 pt-6 pb-8 group-aria-busy/chat:opacity-55 max-[640px]:px-2 max-[640px]:pt-3 max-[640px]:pb-4"
-                role="log"
-                aria-live="polite"
             >
-                <div class="chat-list">
-                    {for (msgs, 0..) |m, i| (
-                        <MessageView msg={m} key={i} memo={store.signalFor(i, m)} streaming={msgs.len > 0 and store.isStreaming(i)} />
+                <div class="chat-top" aria-hidden="true"></div>
+                <div class="chat-history">
+                    {for (msgs[0..sstart], 0..) |m, i| (
+                        <MessageView msg={m} key={wo + i} memo={store.signalFor(i, m)} streaming={store.isStreaming(i)} />
+                    )}
+                </div>
+                <div class="chat-live" role="log" aria-live="polite">
+                    {for (msgs[sstart..], 0..) |m, j| (
+                        <MessageView msg={m} key={wo + sstart + j} memo={store.signalFor(sstart + j, m)} streaming={store.isStreaming(sstart + j)} />
                     )}
                 </div>
                 <div

@@ -18,6 +18,7 @@ const char_store = @import("./character_store.zig");
 const character_view = @import("./character_view.zig");
 const persona_store = @import("./persona_store.zig");
 const store = @import("./store.zig");
+const pager = @import("./pager.zig");
 const regions = @import("./regions.zig");
 const dom_event = @import("./dom_event.zig");
 const fixtures = @import("./fixtures.zig");
@@ -297,9 +298,13 @@ pub fn loadCharacterChat(index: usize) void {
     chat_load_seq +%= 1;
     const file_name = chatFileName(c) orelse return;
     defer alloc.free(file_name);
+    // Paged tail window (invariant 2 + 4): the reader loads the newest slice, not the whole chat,
+    // and grows upward from there. Index-anchored, cf_id flag dark.
     const body = std.json.Stringify.valueAlloc(alloc, .{
         .avatar_url = c.avatar,
         .file_name = file_name,
+        .paged = true,
+        .limit = pager.TAIL_LIMIT,
     }, .{}) catch return;
     defer alloc.free(body);
     // Busy only once the request actually dispatches, so an alloc-failure return above
@@ -334,6 +339,9 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         chars_log.debug("load chat: superseded mid-fetch, abandoning", .{});
         return;
     }
+    // This completion is current, so any 409 re-sync it may be servicing is now resolved; clear the
+    // guard whether the load below succeeds or keeps the current view on error.
+    pager.clearResync();
     defer setChatBusy(false);
     const chars = char_store.slice();
     if (index >= chars.len) {
@@ -356,13 +364,14 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         return;
     };
     defer parsed.deinit();
-    const msgs = data.chatMessages(alloc, parsed.value) catch |err| {
-        chars_log.err("chat load failed: {s} - keeping current chat", .{@errorName(err)});
+    const page = data.parseChatPage(alloc, parsed.value) catch {
+        chars_log.err("chat load failed: out of memory - keeping current chat", .{});
         return;
     };
-    defer data.freeChatMessages(alloc, msgs);
+    defer data.freeChatPage(alloc, page);
 
     store.global.clear();
+    pager.reset();
     char_store.global.select(index);
 
     const char_avatar: ?[]u8 = if (c.avatar.len > 0) data.thumbUrl(alloc, "avatar", c.avatar) catch null else null;
@@ -374,8 +383,8 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         null;
     defer if (persona_avatar) |u| alloc.free(u);
 
-    if (msgs.len > 0) {
-        for (msgs) |m| {
+    if (page.messages.len > 0) {
+        for (page.messages) |m| {
             const sender = if (m.name.len > 0) m.name else if (m.is_user) "You" else c.name;
             const avatar = if (m.is_user) (persona_avatar orelse "") else (char_avatar orelse "");
             store.global.appendCopy(sender, m.mes, avatar) catch |err| {
@@ -394,12 +403,35 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
             chars_log.err("greeting render failed: {s}", .{@errorName(err)});
         }
     }
+    // window_offset = absolute index of the window's first message. Saturating: total_items vs slice
+    // length is an untrusted server relation and must not underflow to a huge usize (silent in ReleaseSmall).
+    store.global.markAllHistory();
+    store.global.window_offset = page.total_items -| page.messages.len;
+    if (chatFileName(c)) |fname| {
+        defer alloc.free(fname);
+        pager.open(c.avatar, fname, c.name, char_avatar orelse "", persona_avatar orelse "", page.total_items, page.has_more_before, page.change_token);
+    }
     regions.bumpMessageLog();
     regions.bumpShell();
-    chars_log.info("opened chat: {s} ({d} messages)", .{ c.name, msgs.len });
-    // The bumps above re-rendered synchronously (S1 probe finding d), so the newest message
-    // is in the DOM; land on it (upstream ST behavior).
+    chars_log.info("opened chat: {s} ({d} of {d} messages)", .{ c.name, page.messages.len, page.total_items });
+    // The bumps above re-rendered synchronously (S1 probe finding d), so the whole window is in
+    // the DOM; land on the newest by scrolling the container to its full height.
     scrollChatToNewest();
+}
+
+/// Reloads the currently open chat's tail window. The scroll-up pump calls this (via the
+/// __st_reader_resync door export) when a prepend returns 409: the file changed above the window,
+/// so history state is dropped and the reader re-syncs to the newest slice.
+pub fn reloadCurrentChat() void {
+    const idx = char_store.global.selected_index orelse {
+        // No open chat: nothing to reload, so release the re-sync guard the caller set.
+        pager.clearResync();
+        return;
+    };
+    chars_log.info("reader re-sync: reloading current chat after a stale prepend", .{});
+    // TODO(reader-polish): on 409 preserve a scrolled-up reader's position via around_index + scroll
+    // restore. Deferred: new load path, and the tail jump matches the plan's documented 409 behaviour.
+    loadCharacterChat(idx);
 }
 
 fn setChatBusy(busy: bool) void {
@@ -410,18 +442,9 @@ fn setChatBusy(busy: bool) void {
 
 fn scrollChatToNewest() void {
     if (zx.platform.role != .client) return;
-    const doc = js.global.get(js.Object, "document") catch return;
-    defer doc.deinit();
-    // :last-child cannot match here (the resize handle is the chat container's last child),
-    // so take the last of the .mes NodeList.
-    const list = doc.call(js.Object, "querySelectorAll", .{js.string("#chat .mes")}) catch return;
-    defer list.deinit();
-    const len = list.get(u32, "length") catch return;
-    if (len == 0) return;
-    const el = list.call(js.Object, "item", .{len - 1}) catch return;
-    defer el.deinit();
-    // scrollIntoView(false) aligns the bottom edge: the boolean form of {block:'end'}.
-    el.call(void, "scrollIntoView", .{false}) catch return;
+    // Scroll the container across a double rAF (glue-owned): content-visibility lays out late rows
+    // after the first frame, so a single-frame scrollIntoView on the last message lands short.
+    js.global.call(void, "__st_reader_scroll_bottom", .{}) catch return;
 }
 
 // ---- character CRUD ------------------------------------------------------------------------

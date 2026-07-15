@@ -214,6 +214,91 @@ pub fn freeChatMessages(alloc: Allocator, list: []ChatMsg) void {
     alloc.free(list);
 }
 
+/// A page of the paged /api/chats/get envelope. `messages` is the window slice (already
+/// header-stripped by the server), oldest first. `change_token` is the opaque token to send
+/// back on the next `before_index` request; `total_items` and `has_more_before` drive the
+/// window bookkeeping. Owned result; free with freeChatPage.
+pub const ChatPage = struct {
+    messages: []ChatMsg,
+    total_items: usize,
+    has_more_before: bool,
+    change_token: []u8,
+};
+
+fn valueMessages(alloc: Allocator, v: std.json.Value) Allocator.Error![]ChatMsg {
+    const arr = switch (v) {
+        .array => |a| a,
+        else => return alloc.alloc(ChatMsg, 0),
+    };
+    var out: std.ArrayList(ChatMsg) = .empty;
+    errdefer {
+        for (out.items) |m| {
+            alloc.free(m.name);
+            alloc.free(m.mes);
+        }
+        out.deinit(alloc);
+    }
+    for (arr.items) |item| {
+        var name_src: []const u8 = "";
+        var mes_src: []const u8 = "";
+        var is_user = false;
+        switch (item) {
+            .object => |o| {
+                if (o.get("name")) |x| switch (x) {
+                    .string => |s| name_src = s,
+                    else => {},
+                };
+                if (o.get("mes")) |x| switch (x) {
+                    .string => |s| mes_src = s,
+                    else => {},
+                };
+                if (o.get("is_user")) |x| is_user = favTruthy(x);
+            },
+            else => {},
+        }
+        const name = try alloc.dupe(u8, name_src);
+        errdefer alloc.free(name);
+        const mes = try alloc.dupe(u8, mes_src);
+        errdefer alloc.free(mes);
+        try out.append(alloc, .{ .name = name, .mes = mes, .is_user = is_user });
+    }
+    return try out.toOwnedSlice(alloc);
+}
+
+/// Parses the paged envelope. A non-object root, or a missing/mistyped field, degrades to an
+/// empty window with an empty token rather than erroring, so a malformed page is treated as
+/// "nothing to add" and the caller keeps its current state.
+pub fn parseChatPage(alloc: Allocator, root: std.json.Value) Allocator.Error!ChatPage {
+    const obj = switch (root) {
+        .object => |o| o,
+        else => return .{ .messages = try alloc.alloc(ChatMsg, 0), .total_items = 0, .has_more_before = false, .change_token = try alloc.dupe(u8, "") },
+    };
+    const messages = try valueMessages(alloc, obj.get("messages") orelse .null);
+    errdefer freeChatMessages(alloc, messages);
+
+    var total: usize = messages.len;
+    if (obj.get("total_items")) |v| switch (v) {
+        .integer => |i| total = if (i >= 0) @intCast(i) else 0,
+        else => {},
+    };
+    var has_more = false;
+    if (obj.get("has_more_before")) |v| switch (v) {
+        .bool => |b| has_more = b,
+        else => {},
+    };
+    const token_src: []const u8 = if (obj.get("change_token")) |v| switch (v) {
+        .string => |s| s,
+        else => "",
+    } else "";
+    const change_token = try alloc.dupe(u8, token_src);
+    return .{ .messages = messages, .total_items = total, .has_more_before = has_more, .change_token = change_token };
+}
+
+pub fn freeChatPage(alloc: Allocator, page: ChatPage) void {
+    freeChatMessages(alloc, page.messages);
+    alloc.free(page.change_token);
+}
+
 /// First-message greeting with the {{char}}/{{user}} macros substituted (both, every
 /// occurrence), as the old glue's replaceAll pair did. Owned result.
 pub fn renderGreeting(alloc: Allocator, first_mes: []const u8, char_name: []const u8, user_name: []const u8) Allocator.Error![]u8 {
@@ -411,6 +496,55 @@ test "chatMessages cleans up on every allocation failure" {
         fn run(alloc: Allocator, v: std.json.Value) !void {
             const msgs = try chatMessages(alloc, v);
             freeChatMessages(alloc, msgs);
+        }
+    }.run, .{parsed.value});
+}
+
+test "parseChatPage reads the window, total, has_more, and token" {
+    const body =
+        \\{"messages":[{"name":"Rita","is_user":false,"mes":"Older one."},
+        \\ {"name":"You","is_user":true,"mes":"Older two."}],
+        \\ "header":{"user_name":"You"},"change_token":"v1.42.abc",
+        \\ "has_more_before":true,"has_more_after":false,"total_items":42}
+    ;
+    const parsed = try parseJson(std.json.Value, testing.allocator, body);
+    defer parsed.deinit();
+    const page = try parseChatPage(testing.allocator, parsed.value);
+    defer freeChatPage(testing.allocator, page);
+    try testing.expectEqual(@as(usize, 2), page.messages.len);
+    try testing.expectEqualStrings("Rita", page.messages[0].name);
+    try testing.expectEqualStrings("Older two.", page.messages[1].mes);
+    try testing.expect(page.messages[1].is_user);
+    try testing.expectEqual(@as(usize, 42), page.total_items);
+    try testing.expect(page.has_more_before);
+    try testing.expectEqualStrings("v1.42.abc", page.change_token);
+}
+
+test "parseChatPage degrades a non-object or empty envelope to nothing to add" {
+    const empty = try parseJson(std.json.Value, testing.allocator, "{\"messages\":[],\"total_items\":0,\"change_token\":\"v1.0.0\"}");
+    defer empty.deinit();
+    const p0 = try parseChatPage(testing.allocator, empty.value);
+    defer freeChatPage(testing.allocator, p0);
+    try testing.expectEqual(@as(usize, 0), p0.messages.len);
+    try testing.expect(!p0.has_more_before);
+
+    const bad = try parseJson(std.json.Value, testing.allocator, "42");
+    defer bad.deinit();
+    const p1 = try parseChatPage(testing.allocator, bad.value);
+    defer freeChatPage(testing.allocator, p1);
+    try testing.expectEqual(@as(usize, 0), p1.messages.len);
+    try testing.expectEqualStrings("", p1.change_token);
+}
+
+test "parseChatPage cleans up on every allocation failure" {
+    const parsed = try parseJson(std.json.Value, testing.allocator,
+        \\{"messages":[{"name":"A","mes":"m"},{"name":"B","mes":"n"}],"change_token":"v1.2.z","total_items":2,"has_more_before":true}
+    );
+    defer parsed.deinit();
+    try std.testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn run(alloc: Allocator, v: std.json.Value) !void {
+            const page = try parseChatPage(alloc, v);
+            freeChatPage(alloc, page);
         }
     }.run, .{parsed.value});
 }

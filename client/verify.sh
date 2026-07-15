@@ -15,15 +15,18 @@ DOM=$(mktemp)
 SAN_DOM=$(mktemp)
 MD_DOM=$(mktemp)
 STREAM_DOM=$(mktemp)
+HIST_JSON=$(mktemp)
 PROFILE=$(mktemp -d)
 SRV=""
 NODEV=""
+HISTSRV=""
 cleanup() {
     # setsid makes each server its own process-group leader, so a group kill reaps the timeout
     # wrapper, python, and its handler threads together; a bare kill would orphan them.
     [ -n "$SRV" ] && kill -TERM -- -"$SRV" 2>/dev/null
     [ -n "$NODEV" ] && kill -TERM -- -"$NODEV" 2>/dev/null
-    rm -rf "$DOM" "$SAN_DOM" "$MD_DOM" "$STREAM_DOM" "$PROFILE"
+    [ -n "$HISTSRV" ] && kill -TERM -- -"$HISTSRV" 2>/dev/null
+    rm -rf "$DOM" "$SAN_DOM" "$MD_DOM" "$STREAM_DOM" "$HIST_JSON" "$PROFILE"
 }
 trap cleanup EXIT
 
@@ -326,6 +329,48 @@ sys.exit(1 if fail else 0)
 PY
 [ $? -eq 0 ] || FAILURES=$((FAILURES + 1))
 rm -f "$MOBILE_JSON" "$DESKTOP_JSON"
+echo
+
+echo "== reader history paging (mock 300-message chat) =="
+# Mock 300-message chat: open lands at the bottom, then scroll to the top and prove the prepend keeps
+# every existing .mes and holds the anchor within 2px (element-anchored correction, not scrollHeight-delta).
+HIST_PORT=$((PORT + 2))
+setsid timeout 90 python3 devserve.py --port "$HIST_PORT" --dist dist --mock-api >"$PROFILE/hist.log" 2>&1 &
+HISTSRV=$!
+hist_ready=no
+for _ in $(seq 1 100); do
+    if curl -sS --max-time 2 -o /dev/null "http://127.0.0.1:$HIST_PORT/" 2>/dev/null; then hist_ready=yes; break; fi
+    if ! kill -0 "$HISTSRV" 2>/dev/null; then break; fi
+    sleep 0.2
+done
+if [ "$hist_ready" != yes ]; then
+    echo "  FAIL  reader history server never became ready"; FAILURES=$((FAILURES + 1))
+else
+    node history-gate.mjs "http://127.0.0.1:$HIST_PORT/" >"$HIST_JSON" 2>>"$PROFILE/render.err"
+    python3 - "$HIST_JSON" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception as e:
+    print(f"  FAIL  history-gate produced no JSON ({e})")
+    sys.exit(1)
+post = d.get("post", {})
+fail = 0
+def check(label, ok, detail):
+    global fail
+    print(f"  {'ok   ' if ok else 'FAIL '} {label:<52} {detail}")
+    if not ok:
+        fail += 1
+check("open lands at the bottom", d.get("openAtBottom") is True, d.get("openAtBottom"))
+check("a scroll-up prepend landed", post.get("finalCount", 0) > post.get("tagged", 0), f"{post.get('tagged')} -> {post.get('finalCount')}")
+check("every existing message survived the prepend", post.get("survived") == post.get("tagged"), f"{post.get('survived')} of {post.get('tagged')}")
+check("reading anchor held within 2px", isinstance(post.get("anchorDrift"), (int, float)) and post["anchorDrift"] < 2.0, f"{post.get('anchorDrift')}px")
+sys.exit(1 if fail else 0)
+PY
+    [ $? -eq 0 ] || FAILURES=$((FAILURES + 1))
+fi
+kill -TERM -- -"$HISTSRV" 2>/dev/null
+HISTSRV=""
 
 echo
 echo "== interactions (real input against the served client) =="
