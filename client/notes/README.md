@@ -10,6 +10,12 @@ Audit + design notes for the WASM/Zig SillyTavern client rebuild.
 
 ## Consolidated
 
+- **THE FORWARD PLAN moved to `../../notes/master-plan-2026-07-15.md`** - the client cleanup + send
+  loop are now sequenced there against the chat system, backend perf, and hardening, with the
+  parallel-member waves. start there.
+- [next-plan-2026-07-14.md](next-plan-2026-07-14.md) - [superseded by the master plan] the client
+  detail: Part A drift-cleanup tail (A1-A6, mechanical), Part B the send loop scoped with its
+  dependencies (backend choice, connection settings, prompt construction) + the design-probe gate.
 - [ziex-usage-fix-plan.md](ziex-usage-fix-plan.md) - per-issue plans from the 2026-07-14 ziex-usage audit:
   dead-handler cluster (currentTarget/jsz traps), reading-prefs lifecycle, glue dedup, README drift,
   data-layer-to-Zig migration, kv/region/rules decisions. phase order + click-gate design.
