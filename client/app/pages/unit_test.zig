@@ -23,6 +23,7 @@ comptime {
     _ = @import("completion.zig");
     _ = @import("ui_state.zig");
     _ = @import("char_data.zig");
+    _ = @import("generate.zig");
     _ = @import("log_spec.zig");
 }
 

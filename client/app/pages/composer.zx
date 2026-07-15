@@ -13,11 +13,17 @@ pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
         <footer
             @allocator={ctx.allocator}
             id="composer"
-            class="col-start-2 row-start-3 flex items-end gap-2 border-t border-border bg-surface p-3 pb-[env(safe-area-inset-bottom,0.75rem)] max-[640px]:p-2"
+            class="relative col-start-2 row-start-3 flex items-end gap-2 border-t border-border bg-surface p-3 pb-[env(safe-area-inset-bottom,0.75rem)] max-[640px]:p-2"
             @rendering={.client}
             onclick={ui.onPageClick}
             onkeydown={ui.onPageKey}
         >
+            <span
+                id="send-status"
+                role="status"
+                aria-live="polite"
+                class="pointer-events-none absolute bottom-full left-3 mb-1 rounded bg-surface-2 px-1.5 py-0.5 text-xs text-muted empty:hidden"
+            ></span>
             <button
                 type="button"
                 class={btn_base ++ " bg-transparent text-muted hover:bg-surface-2 hover:text-text"}
@@ -32,18 +38,21 @@ pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
                 rows="1"
                 placeholder="Type a message..."
                 oninput={ctx.bind(onComposerInput)}
+                onkeydown={onComposerKeydown}
             ></textarea>
             <button
                 type="button"
                 class={btn_base ++ " border-accent bg-accent text-on-accent hover:bg-accent hover:text-on-accent hover:brightness-[1.06]"}
                 data-icon="send"
                 aria-label="Send"
+                onclick={onSend}
             ></button>
             <button
                 type="button"
                 class={btn_base ++ " bg-surface-2 text-accent"}
                 data-icon="stop"
                 aria-label="Stop"
+                onclick={onStop}
             ></button>
         </footer>
     );
@@ -68,9 +77,32 @@ fn onComposerInput(e: *zx.client.Event.Stateful) void {
     style.set("height", js.string(height)) catch return;
 }
 
+// Send on click, stop on click, Enter to send (Shift+Enter inserts a newline). char_api owns the
+// send/stop behaviour; these are only the bindings. onSend/onStop never touch the raw event, so they
+// need no platform guard; the keydown handler reads the event, so it opens with the comptime guard.
+fn onSend(_: zx.client.Event) void {
+    char_api.sendMessage();
+}
+
+fn onStop(_: zx.client.Event) void {
+    char_api.stopStream();
+}
+
+fn onComposerKeydown(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const key = ev.key() orelse return;
+    defer zx.allocator.free(key);
+    if (!std.mem.eql(u8, key, "Enter")) return;
+    const shift = ev.getEvent().ref.get(bool, "shiftKey") catch false;
+    if (shift) return;
+    ev.preventDefault();
+    char_api.sendMessage();
+}
+
 const zx = @import("zx");
 const js = zx.client.js;
 const ui = @import("./ui.zig");
 const instrument = @import("./instrument.zig");
 const dom_event = @import("./dom_event.zig");
+const char_api = @import("./char_api.zig");
 const std = @import("std");

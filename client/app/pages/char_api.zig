@@ -14,6 +14,8 @@ const js = zx.client.js;
 
 const net = @import("./net.zig");
 const data = @import("./char_data.zig");
+const generate = @import("./generate.zig");
+const conn_mod = @import("./connection.zig");
 const char_store = @import("./character_store.zig");
 const character_view = @import("./character_view.zig");
 const persona_store = @import("./persona_store.zig");
@@ -35,6 +37,33 @@ const net_log = std.log.scoped(.net);
 /// any in-flight load's captured index stale. Both bump the ticket; a completion whose tag
 /// no longer matches abandons before touching the store (module-global per S1 probe a).
 var chat_load_seq: u32 = 0;
+
+// ---- send-loop state ------------------------------------------------------------------
+
+// The active backend connection lives in connection.zig; the send loop reads it via conn_mod.active().
+
+/// The selected card's deep fields (personality/scenario/mesExamples), which the shallow
+/// /api/characters/all form does not carry. Fetched once per card on open via /api/characters/get,
+/// keyed by `deep_avatar`; the prompt reuses them for every send with no per-send refetch.
+var deep_avatar: []u8 = &.{};
+var deep_pending: []u8 = &.{};
+var deep_personality: []u8 = &.{};
+var deep_scenario: []u8 = &.{};
+var deep_mes_example: []u8 = &.{};
+var deep_in_flight: bool = false;
+
+/// Captured at send so the seal-time assistant append targets the chat the send opened against, even
+/// if the selection changed during the seconds-long generation.
+var send_avatar: []u8 = &.{};
+var send_file: []u8 = &.{};
+/// The chat-load ticket at send time. A resync (a 409 append, or the user opening another chat) bumps
+/// it mid-generation, so the seal-time assistant append checks it and skips a now-stale target.
+var send_seq: u32 = 0;
+
+fn setOwned(dst: *[]u8, src: []const u8) void {
+    if (dst.len > 0) alloc.free(dst.*);
+    dst.* = alloc.dupe(u8, src) catch &.{};
+}
 
 // ---- boot orchestration ---------------------------------------------------------------
 
@@ -251,6 +280,8 @@ fn loadPersonas(status: u16, res: ?*zx.Fetch.Response) void {
             personas_log.err("add persona: {s}, persona dropped", .{@errorName(err)});
         };
     }
+    // The connection lives in the same settings blob; mine it here so send knows the backend.
+    conn_mod.setFrom(settings_str);
     regions.bumpShell();
 }
 
@@ -373,6 +404,9 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     store.global.clear();
     pager.reset();
     char_store.global.select(index);
+    // Deep-load the card's personality/scenario/mesExamples once, so the send prompt is not the
+    // degraded shallow form. Reused for every send against this card.
+    fetchDeepCard(c.avatar);
 
     const char_avatar: ?[]u8 = if (c.avatar.len > 0) data.thumbUrl(alloc, "avatar", c.avatar) catch null else null;
     defer if (char_avatar) |u| alloc.free(u);
@@ -602,4 +636,233 @@ fn charAt(index: usize) ?char_store.Character {
     const chars = char_store.slice();
     if (index >= chars.len) return null;
     return chars[index];
+}
+
+// ---- send loop -----------------------------------------------------------------------------
+
+/// The card fields the shallow /api/characters/all form omits. Response.json ignores the ~30 other
+/// fields the endpoint returns; only these three fill the prompt macros.
+const DeepCard = struct {
+    personality: []const u8 = "",
+    scenario: []const u8 = "",
+    mes_example: []const u8 = "",
+};
+
+fn fetchDeepCard(avatar: []const u8) void {
+    if (zx.platform.role != .client) return;
+    if (avatar.len == 0 or deep_in_flight) return;
+    if (std.mem.eql(u8, avatar, deep_avatar)) return;
+    const body = std.json.Stringify.valueAlloc(alloc, .{ .avatar_url = avatar }, .{}) catch return;
+    defer alloc.free(body);
+    setOwned(&deep_pending, avatar);
+    deep_in_flight = true;
+    net.request("/api/characters/get", body, 0, onDeepCardDone, .{});
+}
+
+fn onDeepCardDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
+    _ = tag;
+    deep_in_flight = false;
+    if (res == null or status < 200 or status >= 300) {
+        chars_log.warn("deep card fetch failed: {d} - prompt uses the shallow form", .{status});
+        return;
+    }
+    const parsed = res.?.json(DeepCard) catch {
+        chars_log.warn("deep card body unparseable - prompt uses the shallow form", .{});
+        return;
+    };
+    defer parsed.deinit();
+    setOwned(&deep_avatar, deep_pending);
+    setOwned(&deep_personality, parsed.value.personality);
+    setOwned(&deep_scenario, parsed.value.scenario);
+    setOwned(&deep_mes_example, parsed.value.mes_example);
+    chars_log.debug("deep card loaded: personality {d}b scenario {d}b examples {d}b", .{ deep_personality.len, deep_scenario.len, deep_mes_example.len });
+}
+
+fn deepField(c: char_store.Character, shallow: []const u8, deep: []const u8) []const u8 {
+    if (deep_avatar.len > 0 and std.mem.eql(u8, deep_avatar, c.avatar)) return deep;
+    return shallow;
+}
+
+/// Send the composer's text: append the user turn, build the prompt from the on-screen history plus
+/// the card and persona, and open the streaming generate request through the JS pump (ZX16). The
+/// history source is the windowed store this phase; buildPrompt takes it as a parameter so the
+/// token-budgeted full-history source (J1) can replace it without coupling the prompt to the display
+/// window (invariant 2).
+pub fn sendMessage() void {
+    if (zx.platform.role != .client) return;
+    const conn = conn_mod.active() orelse {
+        net_log.warn("send: no backend configured (textgen only this phase)", .{});
+        return;
+    };
+    if (conn.api_server.len == 0) {
+        net_log.warn("send: backend has no server URL", .{});
+        return;
+    }
+    const c = char_store.selected() orelse {
+        net_log.warn("send: no character selected", .{});
+        return;
+    };
+    const text = readComposer() orelse return;
+    defer alloc.free(text);
+    clearComposer();
+
+    const persona = activePersona();
+    const user_name = if (persona) |p| p.name else "You";
+    const persona_avatar: ?[]u8 = if (persona) |p|
+        (if (p.avatar.len > 0) data.thumbUrl(alloc, "persona", p.avatar) catch null else null)
+    else
+        null;
+    defer if (persona_avatar) |u| alloc.free(u);
+    const char_avatar: ?[]u8 = if (c.avatar.len > 0) data.thumbUrl(alloc, "avatar", c.avatar) catch null else null;
+    defer if (char_avatar) |u| alloc.free(u);
+
+    store.global.appendCopy(user_name, text, persona_avatar orelse "") catch |err| {
+        chars_log.err("send: append user turn failed: {s}", .{@errorName(err)});
+        return;
+    };
+    regions.bumpMessageLog();
+    scrollChatToNewest();
+
+    // Capture the append context, then persist the user turn now so a failed generation still keeps
+    // it. The assistant turn persists on stream seal (persistNewTurns via the __st_persist_turns hook).
+    setOwned(&send_avatar, c.avatar);
+    if (chatFileName(c)) |fname| {
+        setOwned(&send_file, fname);
+        alloc.free(fname);
+    }
+    send_seq = chat_load_seq;
+    appendTurn(user_name, text, true);
+
+    const body = buildBody(conn, c, persona) catch |err| {
+        chars_log.err("send: prompt/body build failed: {s}", .{@errorName(err)});
+        return;
+    };
+    defer alloc.free(body);
+
+    js.global.call(void, "__st_send_stream", .{
+        js.string("/api/backends/text-completions/generate"),
+        js.string(c.name),
+        js.string(char_avatar orelse ""),
+        js.string(body),
+    }) catch {
+        net_log.warn("send: __st_send_stream helper missing", .{});
+    };
+}
+
+/// Called by the JS pump on stream seal (via the __st_persist_turns export): persist the assistant
+/// reply. It is the last message, since a single stream runs between send and seal, and this only
+/// fires when the stream actually began (startStream rejects before .then otherwise).
+pub fn persistNewTurns() void {
+    if (zx.platform.role != .client) return;
+    if (send_file.len == 0) return;
+    // A resync (a 409 append, or the user opening another chat) replaced the store mid-generation, so
+    // the last message is no longer this send's reply. Skip rather than append a stale message.
+    if (chat_load_seq != send_seq) {
+        chars_log.debug("assistant append skipped: chat re-synced mid-generation", .{});
+        return;
+    }
+    const msgs = store.slice();
+    if (msgs.len == 0) return;
+    const last = msgs[msgs.len - 1];
+    appendTurn(last.name, last.body, false);
+}
+
+/// Persist one turn to the open chat via the server append route, never a whole-file save, so history
+/// above the display window is preserved (invariant 2). The user turn goes on send, the assistant
+/// turn on seal. The change token is the reader's, shared for optimistic concurrency.
+fn appendTurn(name: []const u8, mes: []const u8, is_user: bool) void {
+    if (zx.platform.role != .client) return;
+    if (send_file.len == 0 or send_avatar.len == 0) return;
+    const send_date: i64 = @intFromFloat(nowMs());
+    const body = std.json.Stringify.valueAlloc(alloc, .{
+        .avatar_url = send_avatar,
+        .file_name = send_file,
+        .limit = pager.TAIL_LIMIT,
+        .change_token = pager.currentToken(),
+        .messages = .{
+            .{
+                .name = name,
+                .is_user = is_user,
+                .is_system = false,
+                .send_date = send_date,
+                .mes = mes,
+                .extra = .{},
+            },
+        },
+    }, .{}) catch return;
+    defer alloc.free(body);
+    net.request("/api/chats/append", body, @intFromBool(is_user), onAppendDone, .{});
+}
+
+fn onAppendDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
+    const which: []const u8 = if (tag != 0) "user" else "assistant";
+    if (status == 409) {
+        // A concurrent whole-file save changed the file under us. Re-sync to the tail via the reader's
+        // 409 path; the just-added turn drops from view and the user re-sends. Accepted rare edge: a
+        // save landing mid-generation means the streamed reply also needs a re-send to persist.
+        chars_log.info("chat append ({s}): file changed (409), re-syncing to the tail", .{which});
+        pager.beginResync();
+        reloadCurrentChat();
+        return;
+    }
+    if (status < 200 or status >= 300) {
+        net_log.warn("chat append ({s}) failed: {d} - turn not persisted", .{ which, status });
+        return;
+    }
+    if (res) |r| {
+        if (r.json(struct { ok: ?bool = null, appended: ?i64 = null, change_token: []const u8 = "" })) |parsed| {
+            defer parsed.deinit();
+            if (parsed.value.change_token.len > 0) pager.adoptToken(parsed.value.change_token);
+        } else |_| {}
+    }
+    chars_log.debug("chat append ({s}) persisted", .{which});
+}
+
+/// Abort the in-flight reply and seal what arrived. The JS pump cancels the SSE reader, which runs
+/// the stream to its seal (bridge.streamEnd) in the fetch finally.
+pub fn stopStream() void {
+    if (zx.platform.role != .client) return;
+    js.global.call(void, "__st_send_stop", .{}) catch {
+        net_log.warn("send: __st_send_stop helper missing", .{});
+    };
+}
+
+fn buildBody(conn: generate.Connection, c: char_store.Character, persona: ?persona_store.Persona) ![]u8 {
+    const ctx = generate.Ctx{
+        .char = c.name,
+        .user = if (persona) |p| p.name else "You",
+        .persona = if (persona) |p| p.description else "",
+        .description = c.description,
+        .personality = deepField(c, c.personality, deep_personality),
+        .scenario = deepField(c, c.scenario, deep_scenario),
+        .mes_example = deepField(c, c.mes_example, deep_mes_example),
+    };
+    const msgs = store.slice();
+    const history = try alloc.alloc(generate.PromptMsg, msgs.len);
+    defer alloc.free(history);
+    for (msgs, 0..) |m, i| history[i] = .{ .name = m.name, .mes = m.body };
+    const prompt = try generate.buildPrompt(alloc, ctx, history);
+    defer alloc.free(prompt);
+    return generate.buildRequestBody(alloc, conn, prompt);
+}
+
+fn readComposer() ?[]u8 {
+    if (zx.platform.role != .client) return null;
+    const el = dom_event.elementById(alloc, "send_textarea") orelse return null;
+    defer el.deinit();
+    const raw = el.ref.getAlloc(js.String, alloc, "value") catch return null;
+    defer alloc.free(raw);
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len == 0) return null;
+    return alloc.dupe(u8, trimmed) catch null;
+}
+
+fn clearComposer() void {
+    if (zx.platform.role != .client) return;
+    const el = dom_event.elementById(alloc, "send_textarea") orelse return;
+    defer el.deinit();
+    el.ref.set("value", js.string("")) catch {};
+    const style = el.ref.get(js.Object, "style") catch return;
+    defer style.deinit();
+    style.set("height", js.string("auto")) catch {};
 }

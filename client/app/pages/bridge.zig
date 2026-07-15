@@ -236,6 +236,12 @@ fn streamTokens() callconv(.c) usize {
     return live.tokens;
 }
 
+/// Called by the JS pump after a send's stream seals: persist the assistant reply (char_api owns the
+/// append). The user turn is persisted synchronously on send, so this handles the reply half only.
+fn persistTurns() callconv(.c) void {
+    char_api.persistNewTurns();
+}
+
 fn streamDone() callconv(.c) u32 {
     return @intFromBool(live.state == .done);
 }
@@ -277,6 +283,7 @@ comptime {
         @export(&streamEnd, .{ .name = "__st_stream_end" });
         @export(&streamTokens, .{ .name = "__st_stream_tokens" });
         @export(&streamDone, .{ .name = "__st_stream_done" });
+        @export(&persistTurns, .{ .name = "__st_persist_turns" });
         @export(&readerNextBody, .{ .name = "__st_reader_next_body" });
         @export(&readerApplyPage, .{ .name = "__st_reader_apply_page" });
         @export(&readerCanPrepend, .{ .name = "__st_reader_can_prepend" });

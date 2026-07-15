@@ -353,6 +353,133 @@ async function main() {
         await page.waitFor(hydrated, 15000);
         row('must', await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-size')==='s'", 2500),
             'B10 persisted reading prefs re-apply at boot');
+
+        // --- send-loop ---
+        // Fresh boot loads the mock textgen connection and opens Rita Recent; the mock reply SSE runs
+        // 24 tokens ("lantern" first, "FIN" only on completion) so a stop can land mid-stream.
+        console.log('== send loop (mock textgen backend) ==');
+        const idle = "!document.querySelector('#chat .mes[aria-busy=\\'true\\']')";
+        await page.navigate(`${args.base}/`);
+        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+        row('must', await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000),
+            'SL-status shows the configured backend connected');
+
+        const beforeSend = await page.eval("document.querySelectorAll('#chat .mes').length");
+        await page.focus('#send_textarea');
+        await page.insertText('SEND GATE PROBE');
+        await page.click('#composer button[aria-label="Send"]');
+        row('must', await page.waitFor("document.body.textContent.includes('SEND GATE PROBE')", 4000),
+            'SL-user turn appears in the log on send');
+        row('must', await page.waitFor(`document.querySelectorAll('#chat .mes').length >= ${beforeSend} + 2 && document.body.textContent.includes('lantern')`, 8000),
+            'SL-assistant reply streams into a new message');
+        // Let the first reply finish so the stream is idle before the next send.
+        await page.waitFor(`document.body.textContent.includes('FIN') && ${idle}`, 8000);
+
+        // STOP: send, wait for a few tokens, stop, assert the reply sealed PARTIAL (no FIN) and idle.
+        await page.focus('#send_textarea');
+        await page.insertText('STOP PROBE');
+        await page.click('#composer button[aria-label="Send"]');
+        await page.waitFor("(function(){var m=document.querySelectorAll('#chat .mes');return m.length && m[m.length-1].textContent.includes('w2')})()", 8000);
+        await page.click('#composer button[aria-label="Stop"]');
+        const stopped = await page.waitFor(`${idle} && (function(){var m=document.querySelectorAll('#chat .mes');var t=m[m.length-1].textContent;return t.includes('w2') && !t.includes('FIN')})()`, 5000);
+        row('must', stopped, 'SL-stop seals the reply partial (no FIN) and returns to idle');
+
+        // ENTER: Shift+Enter must NOT send (returns to insert a newline); a bare Enter sends.
+        const beforeEnter = await page.eval("document.querySelectorAll('#chat .mes').length");
+        await page.focus('#send_textarea');
+        await page.insertText('ENTER PROBE');
+        await page.cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: 8 }, page.sessionId);
+        await page.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: 8 }, page.sessionId);
+        await sleep(500);
+        const afterShift = await page.eval("document.querySelectorAll('#chat .mes').length");
+        await page.cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: 0 }, page.sessionId);
+        await page.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: 0 }, page.sessionId);
+        const enterSent = await page.waitFor(`document.body.textContent.includes('ENTER PROBE') && document.querySelectorAll('#chat .mes').length >= ${beforeEnter} + 2`, 8000);
+        row('must', enterSent && afterShift === beforeEnter,
+            'SL-Enter sends; Shift+Enter does not', `shift+enter=${afterShift} enter=${beforeEnter}->${enterSent}`);
+
+        // PERSIST: send, let the reply seal (user append on send + assistant append on seal), then
+        // reload and prove both turns survive (the mock /get echoes the appended messages).
+        const beforePersist = await page.eval("document.querySelectorAll('#chat .mes').length");
+        await page.focus('#send_textarea');
+        await page.insertText('PERSIST PROBE');
+        await page.click('#composer button[aria-label="Send"]');
+        await page.waitFor(`${idle} && document.querySelectorAll('#chat .mes').length >= ${beforePersist} + 2`, 8000);
+        let appends = { appended: [] };
+        for (let i = 0; i < 40; i++) {
+            appends = await (await fetch(`${args.base}/dev/state`)).json();
+            const u = (appends.appended || []).some(m => m.is_user && m.mes === 'PERSIST PROBE');
+            const a = (appends.appended || []).some(m => !m.is_user && m.mes.includes('lantern'));
+            if (u && a) break;
+            await sleep(150);
+        }
+        const gotUser = (appends.appended || []).some(m => m.is_user && m.mes === 'PERSIST PROBE');
+        const gotAsst = (appends.appended || []).some(m => !m.is_user && m.mes.includes('lantern'));
+        await page.navigate(`${args.base}/`);
+        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+        const survived = await page.waitFor("document.body.textContent.includes('PERSIST PROBE')", 6000);
+        row('must', gotUser && gotAsst && survived,
+            'SL-send persists across a reload (user + assistant appended)', `user=${gotUser} asst=${gotAsst} reload=${survived}`);
+
+        // --- connection ---
+        // /dev/state is the mock's node-side readback of what the client persisted and last generated with.
+        console.log('== connection setup (server-persisted) ==');
+        const connUrl = 'http://127.0.0.1:9099';
+        await page.navigate(`${args.base}/`);
+        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+        await page.click('#d-connections');
+        await page.waitFor("document.getElementById('llama-url')", 4000);
+        await page.eval("document.getElementById('llama-url').value=''");
+        await page.focus('#llama-url');
+        await page.insertText(connUrl);
+        await page.click('.conn-connect');
+        row('must', await page.waitFor("document.getElementById('conn-status').textContent.includes('Connected')", 6000),
+            'CONN-connect probes and shows Connected + model');
+        const persisted = await (await fetch(`${args.base}/dev/state`)).json();
+        row('must', !!(persisted.recorded_connection && persisted.recorded_connection.api_server === connUrl && persisted.recorded_connection.api_type === 'llamacpp'),
+            'CONN-persisted via set-connection merge', JSON.stringify(persisted.recorded_connection));
+        // Close the drawer (click the composer, outside the panel), then send.
+        await page.click('#send_textarea');
+        await page.waitFor("!document.querySelector('#panel-view')", 3000);
+        await page.focus('#send_textarea');
+        await page.insertText('CONN SEND');
+        await page.click('#composer button[aria-label="Send"]');
+        // Poll for the generate to land: persisted history already shows "lantern", so a DOM check
+        // would pass before this send's request reaches the mock.
+        let used = { last_generate_server: null };
+        for (let i = 0; i < 40; i++) {
+            used = await (await fetch(`${args.base}/dev/state`)).json();
+            if (used.last_generate_server === connUrl) break;
+            await sleep(150);
+        }
+        row('must', used.last_generate_server === connUrl,
+            'CONN-send uses the persisted server in the generate body', used.last_generate_server);
+
+        // --- append-409 ---
+        // A "409:" message makes the mock append 409; asserted via observable state (mock counters +
+        // store reset), not console lines, which are fragile after many prior sends.
+        console.log('== append 409 resync ==');
+        await page.navigate(`${args.base}/`);
+        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+        // Wait for the connection to load, else the send is a no-op (conn null) and never appends.
+        await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000);
+        const st0 = await (await fetch(`${args.base}/dev/state`)).json();
+        await page.focus('#send_textarea');
+        await page.insertText('409: force a resync');
+        await page.click('#composer button[aria-label="Send"]');
+        // Resync is observable: the mock returned a 409 (append_409_count up), the reader re-fetched the
+        // tail (get_count up), and the un-persisted "409:" turn was dropped from the store.
+        const resynced = await (async () => {
+            const deadline = Date.now() + 12000;
+            while (Date.now() < deadline) {
+                const st = await (await fetch(`${args.base}/dev/state`)).json();
+                const dropped = !(await page.eval("document.body.textContent.includes('409: force a resync')"));
+                if (st.append_409_count > st0.append_409_count && st.get_count > st0.get_count && dropped) return true;
+                await sleep(150);
+            }
+            return false;
+        })();
+        row('must', resynced, 'SL-append 409 re-syncs the reader to the tail', `resync=${resynced}`);
     } finally {
         clearTimeout(watchdog);
         cleanup();

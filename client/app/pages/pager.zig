@@ -85,6 +85,18 @@ pub fn clearResync() void {
     resyncing = false;
 }
 
+/// The open chat's current file-version token. The reader (prepend) and the append path (char_api)
+/// share it: both send it for optimistic concurrency and adopt the token the server returns.
+pub fn currentToken() []const u8 {
+    return change_token;
+}
+
+/// Adopt a new file-version token after an append changed the file, so the next scroll-up prepend
+/// carries the fresh token instead of a stale one that would 409.
+pub fn adoptToken(new_token: []const u8) void {
+    setOwned(&change_token, new_token);
+}
+
 /// Builds the JSON body for the next older page, or returns 0 when there is nothing to fetch or a
 /// page is already in flight. On success sets the in-flight guard and returns `ptr << 32 | len`
 /// into a reused static buffer the JS pump reads synchronously before its next call.

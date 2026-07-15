@@ -1,9 +1,38 @@
-// API Connections panel body. Top-bar drawer.
-pub fn ConnectionsBody(allocator: zx.Allocator) zx.Component {
-    // A bare component root transpiles to ziex's failing-allocator context; allocInit mounts it with the real one.
-    var zctx = zx.x.allocInit(allocator);
-    return zctx.cmp(PanelEmpty, .{ .name = "PanelEmpty" }, .{});
+// API Connections panel: the llama.cpp server URL, a Connect button that probes the backend and
+// persists the connection into SillyTavern settings (shared with the classic client), and a live
+// status line. connection.zig owns the fetch, the persist and the status reflection; this file only
+// renders the controls and hands the click over.
+const input_cls = "flex-1 rounded-md border border-control-border bg-bg px-[0.7rem] py-[0.45rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
+const btn_cls = "conn-connect cursor-pointer rounded-md border border-accent bg-accent px-[0.9rem] py-[0.45rem] font-mono text-sm text-on-accent transition-[background,filter] duration-120 ease-[ease] hover:brightness-[1.06]";
+
+pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
+    return (
+        <div @allocator={ctx.allocator} class="settings-body flex flex-col gap-3" @rendering={.client}>
+            <div class="flex flex-col gap-3">
+                <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                    <label for="llama-url" class="setting-label text-base font-medium max-[768px]:text-[0.88rem]">llama.cpp server</label>
+                    <input
+                        id="llama-url"
+                        name="llama_url"
+                        type="url"
+                        value="http://127.0.0.1:8080"
+                        placeholder="http://127.0.0.1:8080"
+                        class={input_cls}
+                    />
+                </div>
+                <div class="setting-row flex items-center gap-3">
+                    <button type="button" class={btn_cls} onclick={onConnect}>Connect</button>
+                    <span id="conn-status" role="status" aria-live="polite" class="text-sm text-muted empty:hidden"></span>
+                </div>
+                <p class="setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]">Saved to your SillyTavern settings and shared with the classic client.</p>
+            </div>
+        </div>
+    );
+}
+
+fn onConnect(_: zx.client.Event) void {
+    connection.connectLlama();
 }
 
 const zx = @import("zx");
-const PanelEmpty = @import("../panelchrome.zx").PanelEmpty;
+const connection = @import("../connection.zig");

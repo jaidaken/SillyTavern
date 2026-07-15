@@ -244,8 +244,14 @@
 
     let streamActive = false;
     let devMode = false;
+    let currentReader = null;
 
-    async function startStream(url, name, avatar) {
+    function setSendStatus(text) {
+        const el = document.getElementById('send-status');
+        if (el) el.textContent = text;
+    }
+
+    async function startStream(url, name, avatar, opts) {
         if (streamActive) throw new Error('stream already running');
         streamActive = true;
         // A reply follows the bottom only if you were already there; scrolled up, it stays put and the
@@ -317,10 +323,20 @@
             }
             begun = true;
 
-            const response = await loggedFetch(url, { headers: { Accept: 'text/event-stream' } });
+            let init;
+            if (opts && opts.method === 'POST') {
+                await ensureCsrfToken();
+                init = { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json', Accept: 'text/event-stream' }), body: opts.body };
+            } else {
+                init = { headers: { Accept: 'text/event-stream' } };
+            }
+            const response = await loggedFetch(url, init);
+            // A spun-down .43 behind Pocket-ID answers 502/504 at the edge before ST is reached.
+            if (response.status === 502 || response.status === 504) setSendStatus('Backend asleep - unlock at silly');
             if (!response.ok || !response.body) throw new Error('stream failed: ' + response.status);
 
             reader = response.body.getReader();
+            currentReader = reader;
             for (;;) {
                 const step = await reader.read();
                 if (step.done) break;
@@ -334,6 +350,7 @@
             cancelScheduled();
             ended = true;
             streamActive = false;
+            currentReader = null;
             if (begun) {
                 wasm.__st_stream_end();
                 if (streamPinned) window.__st_reader_scroll_bottom();
@@ -349,6 +366,22 @@
             }
         }
     }
+
+    // Zig (char_api.sendMessage) builds the request; the SSE pump stays in JS (ZX16). POST + csrf,
+    // driving the same __st_stream_* machinery the display half uses.
+    window.__st_send_stream = function (url, name, avatar, body) {
+        startStream(url, name, avatar, { method: 'POST', body: body }).then(function () {
+            // SL4 seam: persist the new turns on seal. Dormant until bridge exports __st_persist_turns.
+            if (wasm.__st_persist_turns) wasm.__st_persist_turns();
+        }).catch(function (err) {
+            log.stream.error('send stream failed:', err);
+        });
+    };
+
+    // Stop: cancel the reader so the fetch loop ends and the finally seals what already arrived.
+    window.__st_send_stop = function () {
+        if (currentReader) currentReader.cancel().catch(function (err) { log.stream.debug('send stop cancel failed:', err); });
+    };
 
     // Browser-forced adapters: the data layer lives in Zig (net.zig + char_api.zig); only the
     // multipart uploads + blob download stay here, and this csrf helper serves ONLY those three.
