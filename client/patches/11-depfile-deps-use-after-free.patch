@@ -1,0 +1,13 @@
+diff --git i/pkg/plugin-tailwindcss/src/main.zig w/pkg/plugin-tailwindcss/src/main.zig
+index 8a32e848..03e2e1dd 100644
+--- i/pkg/plugin-tailwindcss/src/main.zig
++++ w/pkg/plugin-tailwindcss/src/main.zig
+@@ -136,7 +136,7 @@ pub fn main(init: std.process.Init) !void {
+                     if (ev.success == false) failed += 1;
+                     // Collect discovered dependencies for dep file
+                     for (ev.dependencies) |dep| {
+-                        try all_deps.append(allocator, try arena.dupe(u8, dep));
++                        try all_deps.append(allocator, try allocator.dupe(u8, dep));
+                     }
+                 },
+                 .@"error" => {
