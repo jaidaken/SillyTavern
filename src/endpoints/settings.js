@@ -210,71 +210,106 @@ async function getLatestBackup(handle) {
     return path.join(userDirectories.backups, latestBackup);
 }
 
-export const router = express.Router();
+/**
+ * Cached non-user portion of the /settings/get payload, keyed by user handle.
+ * settings.json (the user settings) is never cached; only the composed presets,
+ * themes, worlds and preset-family directories.
+ * @type {Map<string, {mtimes: Record<string, number>, payload: object}>}
+ */
+const SETTINGS_PAYLOAD_CACHE = new Map();
 
-router.post('/save', async function (request, response) {
-    try {
-        const pathToSettings = path.join(request.user.directories.root, SETTINGS_FILE);
-        await writeFileAtomic(pathToSettings, JSON.stringify(request.body, null, 4), 'utf8');
-        triggerAutoSave(request.user.profile.handle);
-        response.send({ result: 'ok' });
-    } catch (err) {
-        log.settings.error(err);
-        response.send(err);
+/**
+ * Directories whose contents compose the non-user settings payload.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @returns {string[]} Directory paths
+ */
+function getComposedSettingsDirs(directories) {
+    return [
+        directories.novelAI_Settings,
+        directories.openAI_Settings,
+        directories.textGen_Settings,
+        directories.koboldAI_Settings,
+        directories.worlds,
+        directories.themes,
+        directories.movingUI,
+        directories.quickreplies,
+        directories.instruct,
+        directories.context,
+        directories.sysprompt,
+        directories.reasoning,
+    ];
+}
+
+/**
+ * Reads directory mtimes for the composed settings dirs.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @returns {Promise<Record<string, number>>} Map of dir path to mtimeMs (-1 when missing)
+ */
+async function probeSettingsDirMtimes(directories) {
+    const dirs = getComposedSettingsDirs(directories);
+    const entries = await Promise.all(dirs.map(async (dir) => {
+        const stat = await fs.promises.stat(dir).catch(() => null);
+        return [dir, stat ? stat.mtimeMs : -1];
+    }));
+    return Object.fromEntries(entries);
+}
+
+/**
+ * Returns true when two directory mtime maps are identical.
+ * @param {Record<string, number>} a First map
+ * @param {Record<string, number>} b Second map
+ * @returns {boolean}
+ */
+function settingsDirMtimesMatch(a, b) {
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) {
+        return false;
     }
-});
+    return keys.every(key => a[key] === b[key]);
+}
 
-// Wintermute's code
-router.post('/get', async (request, response) => {
-    let settings;
-    try {
-        const pathToSettings = path.join(request.user.directories.root, SETTINGS_FILE);
-        settings = await fs.promises.readFile(pathToSettings, 'utf8');
-    } catch (e) {
-        return response.sendStatus(500);
-    }
-
-    // NovelAI Settings
+/**
+ * Composes the non-user portion of the settings payload from disk.
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @returns {Promise<object>} The composed payload (without the user settings blob)
+ */
+async function composeSettingsPayload(directories) {
     const { fileContents: novelai_settings, fileNames: novelai_setting_names }
-        = await readPresetsFromDirectory(request.user.directories.novelAI_Settings, {
-            sortFunction: sortByName(request.user.directories.novelAI_Settings),
+        = await readPresetsFromDirectory(directories.novelAI_Settings, {
+            sortFunction: sortByName(directories.novelAI_Settings),
             removeFileExtension: true,
         });
 
-    // OpenAI Settings
     const { fileContents: openai_settings, fileNames: openai_setting_names }
-        = await readPresetsFromDirectory(request.user.directories.openAI_Settings, {
-            sortFunction: sortByName(request.user.directories.openAI_Settings), removeFileExtension: true,
+        = await readPresetsFromDirectory(directories.openAI_Settings, {
+            sortFunction: sortByName(directories.openAI_Settings), removeFileExtension: true,
         });
 
-    // TextGenerationWebUI Settings
     const { fileContents: textgenerationwebui_presets, fileNames: textgenerationwebui_preset_names }
-        = await readPresetsFromDirectory(request.user.directories.textGen_Settings, {
-            sortFunction: sortByName(request.user.directories.textGen_Settings), removeFileExtension: true,
+        = await readPresetsFromDirectory(directories.textGen_Settings, {
+            sortFunction: sortByName(directories.textGen_Settings), removeFileExtension: true,
         });
 
-    //Kobold
     const { fileContents: koboldai_settings, fileNames: koboldai_setting_names }
-        = await readPresetsFromDirectory(request.user.directories.koboldAI_Settings, {
-            sortFunction: sortByName(request.user.directories.koboldAI_Settings), removeFileExtension: true,
+        = await readPresetsFromDirectory(directories.koboldAI_Settings, {
+            sortFunction: sortByName(directories.koboldAI_Settings), removeFileExtension: true,
         });
 
-    const worldFiles = (await fs.promises.readdir(request.user.directories.worlds))
+    const worldFiles = (await fs.promises.readdir(directories.worlds))
         .filter(file => path.extname(file).toLowerCase() === '.json')
         .sort((a, b) => a.localeCompare(b));
     const world_names = worldFiles.map(item => path.parse(item).name);
 
-    const themes = await readAndParseFromDirectory(request.user.directories.themes);
-    const movingUIPresets = await readAndParseFromDirectory(request.user.directories.movingUI);
-    const quickReplyPresets = await readAndParseFromDirectory(request.user.directories.quickreplies);
+    const themes = await readAndParseFromDirectory(directories.themes);
+    const movingUIPresets = await readAndParseFromDirectory(directories.movingUI);
+    const quickReplyPresets = await readAndParseFromDirectory(directories.quickreplies);
 
-    const instruct = await readAndParseFromDirectory(request.user.directories.instruct);
-    const context = await readAndParseFromDirectory(request.user.directories.context);
-    const sysprompt = await readAndParseFromDirectory(request.user.directories.sysprompt);
-    const reasoning = await readAndParseFromDirectory(request.user.directories.reasoning);
+    const instruct = await readAndParseFromDirectory(directories.instruct);
+    const context = await readAndParseFromDirectory(directories.context);
+    const sysprompt = await readAndParseFromDirectory(directories.sysprompt);
+    const reasoning = await readAndParseFromDirectory(directories.reasoning);
 
-    response.send({
-        settings,
+    return {
         koboldai_settings,
         koboldai_setting_names,
         world_names,
@@ -300,7 +335,56 @@ router.post('/get', async (request, response) => {
             maxPayloadSize: REQUEST_COMPRESSION_MAX || 0,
             timeout: REQUEST_COMPRESSION_TIMEOUT || 0,
         },
-    });
+    };
+}
+
+/**
+ * Busts the composed settings cache for a user. Call from write endpoints that
+ * mutate presets, themes, worlds, moving-UI or quick-reply files.
+ * @param {string} handle User handle
+ * @returns {void}
+ */
+export function bustSettingsCache(handle) {
+    SETTINGS_PAYLOAD_CACHE.delete(handle);
+}
+
+export const router = express.Router();
+
+router.post('/save', async function (request, response) {
+    try {
+        const pathToSettings = path.join(request.user.directories.root, SETTINGS_FILE);
+        await writeFileAtomic(pathToSettings, JSON.stringify(request.body, null, 4), 'utf8');
+        triggerAutoSave(request.user.profile.handle);
+        response.send({ result: 'ok' });
+    } catch (err) {
+        log.settings.error(err);
+        response.send(err);
+    }
+});
+
+// Wintermute's code
+router.post('/get', async (request, response) => {
+    let settings;
+    try {
+        const pathToSettings = path.join(request.user.directories.root, SETTINGS_FILE);
+        settings = await fs.promises.readFile(pathToSettings, 'utf8');
+    } catch (e) {
+        return response.sendStatus(500);
+    }
+
+    const handle = request.user.profile.handle;
+    const directories = request.user.directories;
+
+    // Probe before composing so a write landing mid-compose invalidates the stored snapshot.
+    const mtimes = await probeSettingsDirMtimes(directories);
+    const cached = SETTINGS_PAYLOAD_CACHE.get(handle);
+    if (cached && settingsDirMtimesMatch(cached.mtimes, mtimes)) {
+        return response.send({ settings, ...cached.payload });
+    }
+
+    const payload = await composeSettingsPayload(directories);
+    SETTINGS_PAYLOAD_CACHE.set(handle, { mtimes, payload });
+    response.send({ settings, ...payload });
 });
 
 router.post('/get-snapshots', async (request, response) => {
