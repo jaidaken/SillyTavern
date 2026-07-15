@@ -25,7 +25,7 @@ const log = std.log.scoped(.panels);
 
 /// The controls carry these as data-reading-set. "tab" is one of them: the settings tabs are
 /// reading state too (which sub-panel shows), keyed by CSS off the same attribute.
-pub const keys = [_][]const u8{ "size", "measure", "lh", "justify", "indent", "theme", "tab", "avatars" };
+pub const keys = [_][]const u8{ "size", "measure", "lh", "justify", "indent", "font", "theme", "tab", "avatars" };
 
 /// The pixel width the reading-width drag persists (the gesture stays in the glue per ZX7). A
 /// measure PRESET click drops it, inline custom property and stored pixels together, so the preset
@@ -38,6 +38,7 @@ fn defaultFor(comptime key: []const u8) []const u8 {
     if (std.mem.eql(u8, key, "lh")) return "normal";
     if (std.mem.eql(u8, key, "justify")) return "on";
     if (std.mem.eql(u8, key, "indent")) return "chat";
+    if (std.mem.eql(u8, key, "font")) return "serif";
     if (std.mem.eql(u8, key, "theme")) return "dark";
     if (std.mem.eql(u8, key, "tab")) return "reading";
     if (std.mem.eql(u8, key, "avatars")) return "on";

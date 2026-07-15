@@ -470,36 +470,57 @@
     margin-block: 0.2em 0;
 }
 
-/* Blockquote keeps the quote marks; the line break is the whole change. */
+/* Blockquote keeps the quote marks; the speech insets from the flush narration like a set-apart quote. */
+#chat-root[data-reading-indent="blockquote"] .mes_text q.custom-q-turn {
+    padding-left: 1.6em;
+}
 
-/* Stage: the character name in caps opens each turn line, a hanging indent clears the wrapped lines,
-   the quote marks give way to the name as the speech cue, and narration reads as a stage direction. */
+/* Stage: the caps character name opens each turn in a fixed-width column, so dialogue aligns and
+   wrapped lines hang under the speech (not the name); the quote marks give way to the name. */
 #chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn {
-    padding-left: 4.5em;
-    text-indent: -4.5em;
+    padding-left: 5.5em;
+    text-indent: -5.5em;
 }
 #chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn .custom-qd {
     display: none;
 }
 #chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn::before {
-    content: var(--speaker, "") ". ";
+    content: var(--speaker, "") ".";
+    display: inline-block;
+    min-width: 5em;
+    padding-right: 0.5em;
+    text-indent: 0;
     text-transform: uppercase;
     font-weight: 600;
     letter-spacing: 0.03em;
     color: var(--color-text);
 }
 
-/* Visual novel: a colon-tagged name per turn and a sans face for the chat-log feel, quote marks hidden. */
-#chat-root[data-reading-indent="vn"] .mes_text {
-    font-family: ui-sans-serif, system-ui, sans-serif;
+/* Visual novel: a colon-tagged name per turn in the same aligned column, quote marks hidden. The face
+   is the separate Font control, not this mode. */
+#chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn {
+    padding-left: 5.5em;
+    text-indent: -5.5em;
 }
 #chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn .custom-qd {
     display: none;
 }
 #chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn::before {
-    content: var(--speaker, "") ": ";
+    content: var(--speaker, "") ":";
+    display: inline-block;
+    min-width: 5em;
+    padding-right: 0.5em;
+    text-indent: 0;
     font-weight: 700;
     color: var(--color-text);
+}
+
+/* Reading font: an axis of its own, orthogonal to the paragraph style. Default serif is the base. */
+#chat-root[data-reading-font="serif"] .mes_text {
+    font-family: var(--font-serif);
+}
+#chat-root[data-reading-font="sans"] .mes_text {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
 /* Reading themes recolour the message area only (scoped to #chat); the accent darkens so links and
@@ -622,6 +643,8 @@
 #chat-root[data-reading-indent="blockquote"] .seg-btn[data-reading-set="indent"][data-reading-val="blockquote"],
 #chat-root[data-reading-indent="stage"] .seg-btn[data-reading-set="indent"][data-reading-val="stage"],
 #chat-root[data-reading-indent="vn"] .seg-btn[data-reading-set="indent"][data-reading-val="vn"],
+#chat-root[data-reading-font="serif"] .seg-btn[data-reading-set="font"][data-reading-val="serif"],
+#chat-root[data-reading-font="sans"] .seg-btn[data-reading-set="font"][data-reading-val="sans"],
 #chat-root[data-reading-theme="dark"] .seg-btn[data-reading-set="theme"][data-reading-val="dark"],
 #chat-root[data-reading-theme="sepia"] .seg-btn[data-reading-set="theme"][data-reading-val="sepia"],
 #chat-root[data-reading-theme="paper"] .seg-btn[data-reading-set="theme"][data-reading-val="paper"],

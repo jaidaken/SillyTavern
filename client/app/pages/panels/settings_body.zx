@@ -63,6 +63,13 @@ pub fn SettingsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     </div>
                 </div>
                 <div class="setting-row flex items-center justify-between gap-4 max-[768px]:flex-wrap max-[768px]:gap-2">
+                    <span class="setting-label text-base font-medium max-[768px]:text-[0.88rem]">Font</span>
+                    <div class="seg inline-flex rounded-md border border-control-border bg-bg p-[2px]" role="group" aria-label="Reading font">
+                        <button class={seg_btn} data-reading-set="font" data-reading-val="serif" type="button" onclick={onReadingClick}>Serif</button>
+                        <button class={seg_btn} data-reading-set="font" data-reading-val="sans" type="button" onclick={onReadingClick}>Sans</button>
+                    </div>
+                </div>
+                <div class="setting-row flex items-center justify-between gap-4 max-[768px]:flex-wrap max-[768px]:gap-2">
                     <span class="setting-label text-base font-medium max-[768px]:text-[0.88rem]">Theme</span>
                     <div class="seg inline-flex rounded-md border border-control-border bg-bg p-[2px]" role="group" aria-label="Reading theme">
                         <button class={seg_btn} data-reading-set="theme" data-reading-val="dark" type="button" onclick={onReadingClick}>Dark</button>
