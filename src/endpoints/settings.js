@@ -362,6 +362,47 @@ router.post('/save', async function (request, response) {
     }
 });
 
+/**
+ * Merges only the connection fields into the user's settings, preserving every other key.
+ * Lets a windowed client point at a backend without shipping the whole settings blob back.
+ */
+router.post('/set-connection', async function (request, response) {
+    try {
+        const apiType = request.body.api_type;
+        const apiServer = request.body.api_server;
+        const isNonEmptyString = value => typeof value === 'string' && value.length > 0;
+        if (!isNonEmptyString(apiType) || !isNonEmptyString(apiServer)) {
+            return response.status(400).send({ error: 'api_type and api_server must be non-empty strings' });
+        }
+        if (apiType === '__proto__' || apiType === 'constructor' || apiType === 'prototype') {
+            return response.status(400).send({ error: 'invalid api_type' });
+        }
+
+        const pathToSettings = path.join(request.user.directories.root, SETTINGS_FILE);
+        const settings = JSON.parse(await fs.promises.readFile(pathToSettings, 'utf8'));
+        if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) {
+            return response.status(500).send({ error: 'settings file is not an object' });
+        }
+
+        settings.main_api = 'textgenerationwebui';
+        if (typeof settings.textgenerationwebui_settings !== 'object' || settings.textgenerationwebui_settings === null) {
+            settings.textgenerationwebui_settings = {};
+        }
+        settings.textgenerationwebui_settings.type = apiType;
+        if (typeof settings.textgenerationwebui_settings.server_urls !== 'object' || settings.textgenerationwebui_settings.server_urls === null) {
+            settings.textgenerationwebui_settings.server_urls = {};
+        }
+        settings.textgenerationwebui_settings.server_urls[apiType] = apiServer;
+
+        await writeFileAtomic(pathToSettings, JSON.stringify(settings, null, 4), 'utf8');
+        triggerAutoSave(request.user.profile.handle);
+        return response.send({ ok: true, connection: { api_type: apiType, api_server: apiServer } });
+    } catch (error) {
+        log.settings.error(error);
+        return response.status(500).send({ error: true });
+    }
+});
+
 // Wintermute's code
 router.post('/get', async (request, response) => {
     let settings;

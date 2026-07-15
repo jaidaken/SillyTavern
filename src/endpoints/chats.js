@@ -773,7 +773,16 @@ class ChatRef {
  * @returns {Promise<ParsedChat>}
  */
 export async function readChatFile(filePath) {
-    const content = await tryReadFile(filePath) ?? '';
+    return parseChatContent(await tryReadFile(filePath) ?? '');
+}
+
+/**
+ * Parses raw jsonl chat text into a ParsedChat, so the append path can parse an in-memory
+ * raw buffer with the exact header detection the spine reads with.
+ * @param {string} content Raw chat file text.
+ * @returns {ParsedChat}
+ */
+export function parseChatContent(content) {
     /** @type {object|null} */
     let header = null;
     let headerRaw = '';
@@ -1876,6 +1885,76 @@ router.post('/backups/snapshots', async function (request, response) {
             };
         });
         return response.send({ snapshots, depth: backups.length, truncated, basis: identityBasis(identity), attributable, change_token: computeFullToken(headerRaw, messages) });
+    } catch (error) {
+        log.chat.error(error);
+        if (!response.headersSent) {
+            return response.sendStatus(500);
+        }
+    }
+});
+
+/**
+ * Tail change token for a parsed chat. Mirrors buildChatPage's tail branch so an append's
+ * returned token equals what a later /get tail computes for the same file and limit.
+ * @param {string} headerRaw Raw header line.
+ * @param {Array<{raw: string}>} messages Parsed message entries.
+ * @param {*} limit The caller's window size.
+ * @returns {string}
+ */
+function tailToken(headerRaw, messages, limit) {
+    const total = messages.length;
+    const start = Math.max(0, total - clampLimit(limit));
+    const boundary = total === 0 ? -1 : start;
+    return buildToken(total, prefixHash(headerRaw, messages, boundary));
+}
+
+/**
+ * Appends messages to an existing chat without reading or overwriting the whole file, so a
+ * windowed client that holds only a tail can persist new turns. Existing bytes are copied
+ * forward verbatim: the header and every prior line stay byte-identical, history never truncates.
+ */
+router.post('/append', async function (request, response) {
+    try {
+        const resolved = resolveUndoRef(request);
+        if (!resolved) {
+            return response.sendStatus(400);
+        }
+        const messages = request.body.messages;
+        const isMessageObject = m => m !== null && typeof m === 'object' && !Array.isArray(m);
+        if (!Array.isArray(messages) || messages.length === 0 || !messages.every(isMessageObject)) {
+            return response.status(400).send({ error: 'messages must be a non-empty array of objects' });
+        }
+        const handle = request.user.profile.handle;
+        const backupsDir = request.user.directories.backups;
+
+        const fileStat = await fs.promises.stat(resolved.ref.filePath).catch(() => null);
+        if (!fileStat || fileStat.size === 0) {
+            return response.status(404).send({ error: 'not_found' });
+        }
+
+        await withFileLock(resolved.ref.filePath, async () => {
+            const raw = await tryReadFile(resolved.ref.filePath);
+            if (raw === null || raw.length === 0) {
+                return response.status(404).send({ error: 'not_found' });
+            }
+            const parsed = parseChatContent(raw);
+            const currentToken = tailToken(parsed.headerRaw, parsed.messages, request.body.limit);
+            if (typeof request.body.change_token === 'string' && request.body.change_token !== currentToken) {
+                return response.status(409).send({ error: 'version_mismatch', change_token: currentToken });
+            }
+            if (cfIdEnabled) {
+                mintChatIds(messages);
+            }
+            const appendedRaw = messages.map(m => JSON.stringify(m)).join('\n');
+            const base = raw.endsWith('\n') ? raw.slice(0, -1) : raw;
+            await tryWriteFile(resolved.ref.filePath, `${base}\n${appendedRaw}`);
+            chatInfoCache.delete(resolved.ref.filePath);
+            getBackupFunction(handle)(backupsDir, resolved.cardName, `${base}\n${appendedRaw}`);
+            bustCharacterListCacheForCharacter(handle, resolved.cardName);
+            const after = await readChatFile(resolved.ref.filePath);
+            const changeToken = tailToken(after.headerRaw, after.messages, request.body.limit);
+            return response.send({ ok: true, appended: messages.length, change_token: changeToken });
+        });
     } catch (error) {
         log.chat.error(error);
         if (!response.headersSent) {
