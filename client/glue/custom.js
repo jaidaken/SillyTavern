@@ -575,12 +575,24 @@
 
     // Scroll the container to its full height across two frames: content-visibility lays out late
     // rows after the first frame, so a single-frame scroll lands short. Called from Zig on open.
+    let scrollSettleRaf = 0;
+    // A single snap lands short on a cold open (fonts/markdown/content-visibility settle late, so
+    // scrollHeight underestimates). Keep snapping until it stops growing; a stream call restarts it.
     window.__st_reader_scroll_bottom = function () {
         const chat = document.getElementById('chat');
         if (!chat) return;
-        requestAnimationFrame(function () {
-            requestAnimationFrame(function () { chat.scrollTop = chat.scrollHeight; });
-        });
+        if (scrollSettleRaf) cancelAnimationFrame(scrollSettleRaf);
+        let last = -1;
+        let stable = 0;
+        let iters = 0;
+        function settle() {
+            chat.scrollTop = chat.scrollHeight;
+            const h = chat.scrollHeight;
+            if (h === last) { stable += 1; } else { stable = 0; last = h; }
+            iters += 1;
+            scrollSettleRaf = (stable < 3 && iters < 40) ? requestAnimationFrame(settle) : 0;
+        }
+        scrollSettleRaf = requestAnimationFrame(settle);
     };
 
     function readerNearBottom() {
