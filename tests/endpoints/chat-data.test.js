@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { describe, test, expect, beforeAll, afterAll } from '@jest/globals';
+import { describe, test, expect, beforeAll, afterAll, afterEach } from '@jest/globals';
 
 import { SillyTavernServer, DEFAULT_HANDLE } from '../util/st-server.js';
 import { SillyTavernClient } from '../util/st-client.js';
@@ -145,6 +145,13 @@ describe('SillyTavern chat and character data endpoints', () => {
         const fileName = 'p8-chat-file';
         const messages = chatMessages('P8CreateChar');
 
+        // Files a test seeds on disk. Cleaned after each test even when an assertion throws first, so a
+        // corrupt fixture cannot survive a failure and poison later cases.
+        const tempFiles = [];
+        afterEach(() => {
+            while (tempFiles.length) fs.rmSync(tempFiles.pop(), { force: true });
+        });
+
         test('chat_save_persists_messages_and_returns_ok', async () => {
             const response = await client.postJson('/api/chats/save', {
                 avatar_url: avatarUrl,
@@ -207,12 +214,11 @@ describe('SillyTavern chat and character data endpoints', () => {
             // real unparseable file instead - non-empty bytes that yield zero parseable lines.
             const corruptName = 'CorruptChat';
             const corruptPath = path.join(server.userDirectory(), 'chats', 'P8CreateChar', `${corruptName}.jsonl`);
+            tempFiles.push(corruptPath);
             fs.writeFileSync(corruptPath, '{not json at all\n ');
 
             const response = await client.postJson('/api/chats/get', { avatar_url: avatarUrl, file_name: corruptName });
             expect(response.status).toBe(500);
-
-            fs.rmSync(corruptPath, { force: true });
         }, CASE_TIMEOUT_MS);
 
         test('chat_delete_removes_the_chat_file_from_disk', async () => {

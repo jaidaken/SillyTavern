@@ -6,7 +6,6 @@ const char_store = @import("./character_store.zig");
 const character_view = @import("./character_view.zig");
 const persona_store = @import("./persona_store.zig");
 const reading_prefs = @import("./reading_prefs.zig");
-const handlers = @import("./handlers.zig");
 const char_api = @import("./char_api.zig");
 const ui = @import("./ui.zig");
 const zx = @import("zx");
@@ -159,7 +158,6 @@ fn selectPersona(index: u32) callconv(.c) void {
 
 fn bootInit() callconv(.c) void {
     regions.bumpMessageLog();
-    handlers.init();
     ui.setMotion(ui.storedMotion());
     // Persisted reading prefs land on #chat-root before the first paint of the chat.
     reading_prefs.applyAll();

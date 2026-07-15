@@ -13,10 +13,6 @@
     let DOMPurify = null;
     let hljs = null;
 
-    // Handle map for Zig DOM traversal
-    let _nextHandle = 1;
-    let _handleMap = new Map();
-
     // Logger, mirrors src/log.js: toggle via localStorage st_log = 'cat:level,cat:level' (same
     // spec as server ST_LOG), read once at load, reload to apply. Default info.
     const LOG_LEVELS = { TRACE: -1, DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3, SILENT: 100 };
@@ -241,102 +237,6 @@
             startStream(readString(ptr, len), 'Seraphina').catch(function (err) {
                 log.stream.error('stream failed:', err);
             });
-        },
-        // DOM bridge functions (Zig imports these via extern "env")
-        st_elem_set_attr: function (idPtr, idLen, namePtr, nameLen, valPtr, valLen) {
-            var el = document.getElementById(idLen === 0 ? '' : decoder.decode(new Uint8Array(wasm.memory.buffer, idPtr, idLen)));
-            if (!el) return;
-            el.setAttribute(decoder.decode(new Uint8Array(wasm.memory.buffer, namePtr, nameLen)),
-                decoder.decode(new Uint8Array(wasm.memory.buffer, valPtr, valLen)));
-        },
-        st_elem_remove_attr: function (idPtr, idLen, namePtr, nameLen) {
-            var el = document.getElementById(idLen === 0 ? '' : decoder.decode(new Uint8Array(wasm.memory.buffer, idPtr, idLen)));
-            if (!el) return;
-            el.removeAttribute(decoder.decode(new Uint8Array(wasm.memory.buffer, namePtr, nameLen)));
-        },
-        st_elem_get_attr: function (idPtr, idLen, namePtr, nameLen) {
-            var el = document.getElementById(idLen === 0 ? '' : decoder.decode(new Uint8Array(wasm.memory.buffer, idPtr, idLen)));
-            if (!el) return 0n;
-            var val = el.getAttribute(decoder.decode(new Uint8Array(wasm.memory.buffer, namePtr, nameLen)));
-            if (val === null) return 0n;
-            var bytes = encoder.encode(val);
-            var ptr = wasm.__zx_alloc(bytes.length);
-            if (ptr === 0) return 0n;
-            new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
-            return (BigInt(ptr) << 32n) | BigInt(bytes.length);
-        },
-        st_local_storage_get: function (keyPtr, keyLen) {
-            try {
-                var val = localStorage.getItem(keyLen === 0 ? '' : decoder.decode(new Uint8Array(wasm.memory.buffer, keyPtr, keyLen)));
-                if (val === null) return 0n;
-                var bytes = encoder.encode(val);
-                var ptr = wasm.__zx_alloc(bytes.length);
-                if (ptr === 0) return 0n;
-                new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
-                return (BigInt(ptr) << 32n) | BigInt(bytes.length);
-            } catch (err) { log.wasm.debug('localStorage get failed:', err); return 0n; }
-        },
-        st_local_storage_set: function (keyPtr, keyLen, valPtr, valLen) {
-            try {
-                localStorage.setItem(keyLen === 0 ? '' : decoder.decode(new Uint8Array(wasm.memory.buffer, keyPtr, keyLen)),
-                    valLen === 0 ? '' : decoder.decode(new Uint8Array(wasm.memory.buffer, valPtr, valLen)));
-            } catch (err) { log.wasm.debug('localStorage set failed:', err); }
-        },
-        st_local_storage_remove: function (keyPtr, keyLen) {
-            try { localStorage.removeItem(keyLen === 0 ? '' : decoder.decode(new Uint8Array(wasm.memory.buffer, keyPtr, keyLen))); } catch (err) { log.wasm.debug('localStorage remove failed:', err); }
-        },
-        st_style_remove_property: function (idPtr, idLen, namePtr, nameLen) {
-            var el = document.getElementById(idLen === 0 ? '' : decoder.decode(new Uint8Array(wasm.memory.buffer, idPtr, idLen)));
-            if (!el) return;
-            el.style.removeProperty(decoder.decode(new Uint8Array(wasm.memory.buffer, namePtr, nameLen)));
-        },
-        st_node_by_id: function (idPtr, idLen) {
-            var el = document.getElementById(idLen === 0 ? '' : decoder.decode(new Uint8Array(wasm.memory.buffer, idPtr, idLen)));
-            if (!el) return 0;
-            var h = _nextHandle++;
-            _handleMap.set(h, el);
-            return h;
-        },
-        st_qsa: function (parentHandle, selPtr, selLen) {
-            var parent = _handleMap.get(parentHandle);
-            if (!parent) return 0;
-            var nodes = parent.querySelectorAll(selLen === 0 ? '' : decoder.decode(new Uint8Array(wasm.memory.buffer, selPtr, selLen)));
-            var h = _nextHandle++;
-            _handleMap.set(h, nodes);
-            return h;
-        },
-        st_node_list_len: function (handle) {
-            var v = _handleMap.get(handle);
-            return (v && v.length !== undefined) ? v.length : 0;
-        },
-        st_node_list_item: function (listHandle, index) {
-            var list = _handleMap.get(listHandle);
-            if (!list || list.length === undefined || index >= list.length) return 0;
-            var el = list[index];
-            if (!el) return 0;
-            var h = _nextHandle++;
-            _handleMap.set(h, el);
-            return h;
-        },
-        st_node_get_attr: function (nodeHandle, namePtr, nameLen) {
-            var el = _handleMap.get(nodeHandle);
-            if (!el) return 0n;
-            var val = el.getAttribute(nameLen === 0 ? '' : decoder.decode(new Uint8Array(wasm.memory.buffer, namePtr, nameLen)));
-            if (val === null) return 0n;
-            var bytes = encoder.encode(val);
-            var ptr = wasm.__zx_alloc(bytes.length);
-            if (ptr === 0) return 0n;
-            new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
-            return (BigInt(ptr) << 32n) | BigInt(bytes.length);
-        },
-        st_node_set_attr: function (nodeHandle, namePtr, nameLen, valPtr, valLen) {
-            var el = _handleMap.get(nodeHandle);
-            if (!el) return;
-            el.setAttribute(nameLen === 0 ? '' : decoder.decode(new Uint8Array(wasm.memory.buffer, namePtr, nameLen)),
-                valLen === 0 ? '' : decoder.decode(new Uint8Array(wasm.memory.buffer, valPtr, valLen)));
-        },
-        st_release_handle: function (handle) {
-            _handleMap.delete(handle);
         },
     };
 
@@ -669,32 +569,10 @@
 
             var ZIEX_DOOR = '/client/vendor/ziex/wasm/index.js';
 
-            // Capture WASM exports by wrapping instantiate
-            const originalInstantiate = WebAssembly.instantiate;
-            const originalInstantiateStreaming = WebAssembly.instantiateStreaming;
+            const door = await import(ZIEX_DOOR);
+            const started = await door.init({ importObject: { env: env } });
 
-            function capture(result) {
-                if (result && result.instance) wasm = result.instance.exports;
-                return result;
-            }
-
-            WebAssembly.instantiate = async function (source, imports) {
-                return capture(await originalInstantiate(source, imports));
-            };
-            WebAssembly.instantiateStreaming = async function (source, imports) {
-                return capture(await originalInstantiateStreaming(source, imports));
-            };
-
-            let started;
-            try {
-                const door = await import(ZIEX_DOOR);
-                started = await door.init({ importObject: { env: env } });
-            } finally {
-                WebAssembly.instantiateStreaming = originalInstantiateStreaming;
-                WebAssembly.instantiate = originalInstantiate;
-            }
-
-            // The door's own instance is authoritative
+            // The door's own instance is authoritative.
             if (started && started.source && started.source.instance) wasm = started.source.instance.exports;
             if (!wasm || typeof wasm.__zx_alloc !== 'function') {
                 throw new Error('door.init exposed no wasm exports: __zx_alloc unreachable');
@@ -702,12 +580,20 @@
 
             log.boot.debug('wasm loaded, exports:', Object.keys(wasm).slice(0, 20));
 
-            // door.init filled real bodies into the invisible SSR frames; add .hydrated past the next
-            // paint so the CSS staggers the settle on complete messages, not the empty pre-hydrate frames.
+            // .hydrated (past the next paint) settles complete messages, not the empty pre-hydrate
+            // frames. .revealing gates the stagger to the first settle, dropped on the mes-rise lull so
+            // a later arrival (a prepended history page) rises in at once instead of being delay-hidden.
             requestAnimationFrame(function () {
                 requestAnimationFrame(function () {
                     const root = document.getElementById('chat-root');
-                    if (root) root.classList.add('hydrated');
+                    if (!root) return;
+                    root.classList.add('hydrated', 'revealing');
+                    let settleTimer = 0;
+                    root.addEventListener('animationend', function (e) {
+                        if (e.animationName !== 'mes-rise') return;
+                        if (settleTimer) clearTimeout(settleTimer);
+                        settleTimer = setTimeout(function () { root.classList.remove('revealing'); }, 120);
+                    });
                 });
             });
 

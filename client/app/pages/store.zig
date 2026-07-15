@@ -173,6 +173,17 @@ pub fn signal(m: Message) u64 {
     return h | 1;
 }
 
+/// Memo signal for the message at `index`, folding in whether it is still streaming. A message can
+/// seal without its body pointer or length moving (an in-place `remap` in `endStream`), so the
+/// content signal alone can miss the streaming-to-done transition and leave `aria-busy` stuck on.
+/// Perturbing the hash while streaming makes the signal change the moment the stream ends, so the
+/// reconciler re-renders the message and drops its busy flag. Never 0, same as `signal`.
+pub fn signalFor(index: usize, m: Message) u64 {
+    const base = signal(m);
+    if (!global.isStreaming(index)) return base;
+    return (base ^ 0x9e3779b97f4a7c15) | 1;
+}
+
 pub fn clearStore() void {
     return global.clear();
 }

@@ -1,6 +1,8 @@
-// Region wrapper for the character list: registers the character_list render region so a search
-// keystroke re-renders only this subtree (via regions.bumpCharacterList), leaving the toolbar and
-// its focused search input untouched. The list body itself lives in character_list.zx.
+// Region wrapper for the character list. A search keystroke bumps regions.character_list, but that
+// state lives on this nested ComponentCtx, so ziex falls back to a full-page re-render
+// (reactivity.scheduleRender), not a scoped subtree render. The focused search input survives the
+// re-render through the vdom diff keeping stable element identity, not through scoped rendering.
+// The list body lives in character_list.zx; bumpCharacterList stays (correct intent).
 pub fn CharacterListRegion(ctx: *zx.ComponentCtx(void)) zx.Component {
     regions.character_list = ctx.state(u32, 0);
     // A bare component root transpiles to ziex's failing-allocator context; allocInit mounts it with the real one.

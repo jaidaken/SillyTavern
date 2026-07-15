@@ -579,21 +579,23 @@
     animation-delay: calc(var(--md, 0ms) + 80ms);
 }
 
-/* Stagger the initial reveal top-to-bottom; a live message past this list settles with no delay. */
-.chat-inner .mes:nth-child(1) { --md: 0ms; }
-.chat-inner .mes:nth-child(2) { --md: 100ms; }
-.chat-inner .mes:nth-child(3) { --md: 200ms; }
-.chat-inner .mes:nth-child(4) { --md: 300ms; }
-.chat-inner .mes:nth-child(5) { --md: 400ms; }
-.chat-inner .mes:nth-child(6) { --md: 500ms; }
-.chat-inner .mes:nth-child(7) { --md: 600ms; }
-.chat-inner .mes:nth-child(8) { --md: 700ms; }
-.chat-inner .mes:nth-child(9) { --md: 800ms; }
-.chat-inner .mes:nth-child(10) { --md: 900ms; }
-.chat-inner .mes:nth-child(11) { --md: 1000ms; }
-.chat-inner .mes:nth-child(12) { --md: 1100ms; }
-.chat-inner .mes:nth-child(13) { --md: 1200ms; }
-.chat-inner .mes:nth-child(14) { --md: 1300ms; }
+/* Stagger the initial reveal top-to-bottom. Gated on .revealing, which the client holds only for the
+   first settle then drops, so a later arrival (a prepended history page) keeps --md at its 0ms
+   default and rises in at once instead of inheriting a position delay that would hide it (BUG-3). */
+#chat-root.revealing .chat-inner .mes:nth-child(1) { --md: 0ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(2) { --md: 100ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(3) { --md: 200ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(4) { --md: 300ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(5) { --md: 400ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(6) { --md: 500ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(7) { --md: 600ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(8) { --md: 700ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(9) { --md: 800ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(10) { --md: 900ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(11) { --md: 1000ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(12) { --md: 1100ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(13) { --md: 1200ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(14) { --md: 1300ms; }
 
 @keyframes mes-rise {
     from { opacity: 0; transform: translateY(calc(var(--move) * 8px)); }

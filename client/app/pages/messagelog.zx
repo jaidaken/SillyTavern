@@ -9,6 +9,10 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
     // client sets aria-busy here, and the log dims off that (group-aria-busy) so the click visibly
     // took: the state is announced to assistive tech and drives the styling from the same attribute.
     //
+    // The keyed message list lives in its own .chat-list wrapper so the reading-width handle stays
+    // out of it: the handle is then a fixed-position sibling in .chat-inner, not the unkeyed last
+    // child of the message list, so appending a message no longer rebuilds it and drops a drag.
+    //
     // The reading-width handle is a thin bar at the content edge. Its hit area is always 12px, but
     // the amber line only appears on hover or focus, and goes solid while dragged (the glue adds
     // is-dragging for the duration of the drag).
@@ -25,9 +29,11 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
                 role="log"
                 aria-live="polite"
             >
-                {for (msgs, 0..) |m, i| (
-                    <MessageView msg={m} key={i} memo={store.signal(m)} streaming={msgs.len > 0 and store.isStreaming(i)} />
-                )}
+                <div class="chat-list">
+                    {for (msgs, 0..) |m, i| (
+                        <MessageView msg={m} key={i} memo={store.signalFor(i, m)} streaming={msgs.len > 0 and store.isStreaming(i)} />
+                    )}
+                </div>
                 <div
                     class="chat-resize absolute top-0 -right-[6px] bottom-0 z-10 w-[12px] cursor-col-resize touch-none select-none before:absolute before:top-[8px] before:right-[5px] before:bottom-[8px] before:w-[2px] before:rounded-[2px] before:bg-accent before:opacity-0 before:transition-opacity before:duration-150 before:ease-[ease] hover:before:opacity-70 focus-visible:before:opacity-70 dragging:before:opacity-100"
                     role="separator"
