@@ -882,6 +882,7 @@ export function emptyChatPage() {
         messages: [],
         header: null,
         change_token: buildToken(0, fnv1a64('')),
+        full_token: buildToken(0, fnv1a64('')),
         has_more_before: false,
         has_more_after: false,
         total_items: 0,
@@ -932,6 +933,7 @@ export async function buildChatPage(filePath, opts) {
                 messages: [],
                 header,
                 change_token: buildToken(total, prefixHash(headerRaw, messages, total - 1)),
+                full_token: computeFullToken(headerRaw, messages),
                 has_more_before: false,
                 has_more_after: false,
                 total_items: total,
@@ -973,6 +975,7 @@ export async function buildChatPage(filePath, opts) {
             messages: slice,
             header,
             change_token: buildToken(total, prefixHash(headerRaw, messages, tokenBoundary)),
+            full_token: computeFullToken(headerRaw, messages),
             has_more_before: start > 0,
             has_more_after: end < total,
             total_items: total,
@@ -1955,6 +1958,299 @@ router.post('/append', async function (request, response) {
             const changeToken = tailToken(after.headerRaw, after.messages, request.body.limit);
             return response.send({ ok: true, appended: messages.length, change_token: changeToken });
         });
+    } catch (error) {
+        log.chat.error(error);
+        if (!response.headersSent) {
+            return response.sendStatus(500);
+        }
+    }
+});
+
+/**
+ * Shared read-modify-write body for the windowed mutation family. Resolves the solo/group ref,
+ * takes the per-file lock, gates on the FULL token with the restore-message double-read recheck,
+ * runs an in-place mutation on the message objects, saves the whole array, and returns the
+ * descriptor response the windowed reader needs. The client sends only a descriptor; the whole
+ * file is read and rewritten here, so history above the reader's window cannot truncate.
+ * @param {any} request Express request.
+ * @param {any} response Express response.
+ * @param {(objs: Array, body: any, entry: any) => ({index: number, obj: any}|{status: number, error: string})} mutate
+ *   In-place mutation returning the touched index plus the affected message object, or an error descriptor.
+ * @returns {Promise<void>}
+ */
+async function runMutation(request, response, mutate) {
+    const resolved = resolveUndoRef(request);
+    if (!resolved) {
+        return response.sendStatus(400);
+    }
+    const handle = request.user.profile.handle;
+    const backupsDir = request.user.directories.backups;
+
+    await withFileLock(resolved.ref.filePath, async () => {
+        const entry = await readChatFile(resolved.ref.filePath);
+        const currentObjs = entry.messages.map(m => m.obj);
+        const entryToken = computeFullToken(entry.headerRaw, entry.messages);
+        if (typeof request.body.change_token === 'string' && request.body.change_token !== entryToken) {
+            return response.status(409).send({ error: 'stale', change_token: entryToken });
+        }
+
+        const result = mutate(currentObjs, request.body, entry);
+        if (result && 'status' in result) {
+            return response.status(result.status).send({ error: result.error });
+        }
+
+        const recheck = await readChatFile(resolved.ref.filePath);
+        if (computeFullToken(recheck.headerRaw, recheck.messages) !== entryToken) {
+            return response.status(409).send({ error: 'stale', change_token: computeFullToken(recheck.headerRaw, recheck.messages) });
+        }
+
+        const fullArray = entry.header ? [entry.header, ...currentObjs] : currentObjs;
+        await trySaveChat(fullArray, resolved.ref.filePath, true, handle, resolved.cardName, backupsDir);
+        const after = await readChatFile(resolved.ref.filePath);
+        // trySaveChat mints cf_ids in place on the saved objects, so the affected object's id is
+        // read AFTER the save; delete holds a removed object that keeps its pre-save id (or none).
+        const affectedCfId = result.obj && typeof result.obj.cf_id === 'string' ? result.obj.cf_id : null;
+        // change_token IS the full token here (the mutation gate), so no separate full_token field;
+        // tail_token refreshes the reader's window path in the same response.
+        return response.send({
+            ok: true,
+            change_token: computeFullToken(after.headerRaw, after.messages),
+            tail_token: tailToken(after.headerRaw, after.messages, request.body.limit),
+            affected_cf_id: affectedCfId,
+            index: result.index,
+            total_items: after.messages.length,
+        });
+    });
+}
+
+router.post('/message/edit', async function (request, response) {
+    try {
+        await runMutation(request, response, (objs, body) => {
+            if (typeof body.text !== 'string') {
+                return { status: 400, error: 'text must be a string' };
+            }
+            const i = resolveTargetIndex(body, objs);
+            if (i < 0) {
+                return { status: 400, error: 'target_not_found' };
+            }
+            const target = objs[i];
+            target.mes = body.text;
+            if (Array.isArray(target.swipes)) {
+                const swipeId = Number.isInteger(body.swipe_id) ? body.swipe_id
+                    : (Number.isInteger(target.swipe_id) ? target.swipe_id : 0);
+                if (swipeId >= 0 && swipeId < target.swipes.length) {
+                    target.swipes[swipeId] = body.text;
+                }
+            }
+            return { index: i, obj: target };
+        });
+    } catch (error) {
+        log.chat.error(error);
+        if (!response.headersSent) {
+            return response.sendStatus(500);
+        }
+    }
+});
+
+router.post('/message/delete', async function (request, response) {
+    try {
+        await runMutation(request, response, (objs, body) => {
+            const i = resolveTargetIndex(body, objs);
+            if (i < 0) {
+                return { status: 400, error: 'target_not_found' };
+            }
+            const removed = objs[i];
+            objs.splice(i, 1);
+            return { index: i, obj: removed };
+        });
+    } catch (error) {
+        log.chat.error(error);
+        if (!response.headersSent) {
+            return response.sendStatus(500);
+        }
+    }
+});
+
+router.post('/message/move', async function (request, response) {
+    try {
+        await runMutation(request, response, (objs, body) => {
+            const i = resolveTargetIndex(body, objs);
+            if (i < 0) {
+                return { status: 400, error: 'target_not_found' };
+            }
+            const j = body.direction === 'up' ? i - 1 : body.direction === 'down' ? i + 1 : -1;
+            if (j < 0 || j >= objs.length) {
+                return { status: 400, error: 'out_of_range' };
+            }
+            const swap = objs[i];
+            objs[i] = objs[j];
+            objs[j] = swap;
+            return { index: j, obj: objs[j] };
+        });
+    } catch (error) {
+        log.chat.error(error);
+        if (!response.headersSent) {
+            return response.sendStatus(500);
+        }
+    }
+});
+
+router.post('/message/hide', async function (request, response) {
+    try {
+        await runMutation(request, response, (objs, body) => {
+            if (typeof body.hidden !== 'boolean') {
+                return { status: 400, error: 'hidden must be a boolean' };
+            }
+            const i = resolveTargetIndex(body, objs);
+            if (i < 0) {
+                return { status: 400, error: 'target_not_found' };
+            }
+            objs[i].is_system = body.hidden;
+            return { index: i, obj: objs[i] };
+        });
+    } catch (error) {
+        log.chat.error(error);
+        if (!response.headersSent) {
+            return response.sendStatus(500);
+        }
+    }
+});
+
+router.post('/message/swipe-select', async function (request, response) {
+    try {
+        await runMutation(request, response, (objs, body) => {
+            const i = resolveTargetIndex(body, objs);
+            if (i < 0) {
+                return { status: 400, error: 'target_not_found' };
+            }
+            const target = objs[i];
+            if (!Array.isArray(target.swipes) || target.swipes.length === 0) {
+                return { status: 400, error: 'no_swipes' };
+            }
+            if (!Number.isInteger(body.swipe_id) || body.swipe_id < 0 || body.swipe_id >= target.swipes.length) {
+                return { status: 400, error: 'swipe_out_of_range' };
+            }
+            target.swipe_id = body.swipe_id;
+            target.mes = target.swipes[body.swipe_id];
+            return { index: i, obj: target };
+        });
+    } catch (error) {
+        log.chat.error(error);
+        if (!response.headersSent) {
+            return response.sendStatus(500);
+        }
+    }
+});
+
+router.post('/message/checkpoint', async function (request, response) {
+    try {
+        await runMutation(request, response, (objs, body, entry) => {
+            const i = resolveTargetIndex(body, objs);
+            if (i < 0) {
+                return { status: 400, error: 'target_not_found' };
+            }
+            if (!entry.header) {
+                return { status: 400, error: 'no_header' };
+            }
+            const meta = entry.header.chat_metadata = (entry.header.chat_metadata && typeof entry.header.chat_metadata === 'object') ? entry.header.chat_metadata : {};
+            const marks = Array.isArray(meta.cf_checkpoints) ? meta.cf_checkpoints : (meta.cf_checkpoints = []);
+            const cfId = objs[i].cf_id;
+            marks.push({
+                index: i,
+                cf_id: typeof cfId === 'string' ? cfId : undefined,
+                name: typeof body.name === 'string' ? body.name : undefined,
+                created: Date.now(),
+            });
+            return { index: i, obj: objs[i] };
+        });
+    } catch (error) {
+        log.chat.error(error);
+        if (!response.headersSent) {
+            return response.sendStatus(500);
+        }
+    }
+});
+
+/**
+ * Resolves the destination ref for a duplicate/branch: a new solo file name in the same character
+ * directory, or a new group id. Path traversal is guarded by ChatRef, same as the source.
+ * @param {any} request The Express request.
+ * @returns {ChatRef|null} The destination ref, or null when params are missing or escape the root.
+ */
+function resolveDestRef(request) {
+    if (request.body.group_id) {
+        return typeof request.body.new_id === 'string' && request.body.new_id.length > 0
+            ? ChatRef.group(request.user, request.body.new_id) : null;
+    }
+    if (!request.body.avatar_url || typeof request.body.new_file_name !== 'string' || request.body.new_file_name.length === 0) {
+        return null;
+    }
+    return ChatRef.solo(request.user, request.body.avatar_url, request.body.new_file_name);
+}
+
+router.post('/duplicate', async function (request, response) {
+    try {
+        const source = resolveUndoRef(request);
+        const dest = resolveDestRef(request);
+        if (!source || !dest) {
+            return response.sendStatus(400);
+        }
+        const sourceStat = await fs.promises.stat(source.ref.filePath).catch(() => null);
+        if (!sourceStat) {
+            return response.status(404).send({ error: 'not_found' });
+        }
+        await fs.promises.mkdir(path.dirname(dest.filePath), { recursive: true });
+        try {
+            // COPYFILE_EXCL fails atomically if the destination exists, so a duplicate never clobbers a sibling.
+            await fs.promises.copyFile(source.ref.filePath, dest.filePath, fs.constants.COPYFILE_EXCL);
+        } catch (copyError) {
+            if (typeof copyError === 'object' && copyError !== null && 'code' in copyError && copyError.code === 'EEXIST') {
+                return response.status(409).send({ error: 'exists' });
+            }
+            throw copyError;
+        }
+        return response.send({ ok: true });
+    } catch (error) {
+        log.chat.error(error);
+        if (!response.headersSent) {
+            return response.sendStatus(500);
+        }
+    }
+});
+
+router.post('/branch', async function (request, response) {
+    try {
+        const source = resolveUndoRef(request);
+        const dest = resolveDestRef(request);
+        if (!source || !dest) {
+            return response.sendStatus(400);
+        }
+        const { header, headerRaw, messages } = await readChatFile(source.ref.filePath);
+        const currentObjs = messages.map(m => m.obj);
+        const targetIndex = resolveTargetIndex(request.body, currentObjs);
+        if (targetIndex < 0) {
+            return response.status(400).send({ error: 'target_not_found' });
+        }
+        // Copy the source prefix VERBATIM (raw lines, not re-serialized), so the branch's first
+        // lines are byte-identical to the source and the source file is never touched.
+        const lines = [];
+        if (header) {
+            lines.push(headerRaw);
+        }
+        for (let i = 0; i <= targetIndex; i++) {
+            lines.push(messages[i].raw);
+        }
+        await fs.promises.mkdir(path.dirname(dest.filePath), { recursive: true });
+        try {
+            await fs.promises.writeFile(dest.filePath, lines.join('\n'), { encoding: 'utf8', flag: 'wx' });
+        } catch (writeError) {
+            if (typeof writeError === 'object' && writeError !== null && 'code' in writeError && writeError.code === 'EEXIST') {
+                return response.status(409).send({ error: 'exists' });
+            }
+            throw writeError;
+        }
+        const after = await readChatFile(dest.filePath);
+        return response.send({ ok: true, total_items: after.messages.length });
     } catch (error) {
         log.chat.error(error);
         if (!response.headersSent) {
