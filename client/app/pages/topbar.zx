@@ -13,7 +13,7 @@ pub fn TopBar(allocator: zx.Allocator) zx.Component {
         <header
             @allocator={allocator}
             id="topbar"
-            class="relative z-20 col-span-full row-start-1 flex h-[var(--topbar-h)] items-center justify-between border-b border-border bg-surface pt-[env(safe-area-inset-top,0px)] pr-2 pb-0 pl-4 max-[768px]:[--topbar-h:2.6rem] max-[768px]:min-w-0 max-[768px]:gap-2 max-[768px]:pl-3"
+            class="relative z-20 col-span-full row-start-1 flex h-[var(--topbar-h)] items-center justify-between border-b border-border bg-surface pt-[env(safe-area-inset-top,0px)] pr-2 pb-0 pl-4 max-[768px]:min-w-0 max-[768px]:gap-2 max-[768px]:pl-3"
         >
             <h1
                 class="m-0 flex items-baseline gap-2 font-serif text-[1.1rem] font-semibold tracking-[0.01em] max-[768px]:min-w-0 max-[768px]:shrink max-[768px]:gap-0 max-[768px]:overflow-hidden max-[768px]:text-[0.95rem] max-[768px]:text-ellipsis max-[768px]:whitespace-nowrap"

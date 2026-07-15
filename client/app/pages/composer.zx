@@ -5,7 +5,7 @@
 // You write prose here, so the input reads in the prose face. Each button carries only the hover it
 // owns: send brightens its amber, stop keeps the active-control look, and only the plain options
 // button takes the ordinary surface hover, so no two rules chase the same property.
-const btn_base = "icon grid size-[2.7rem] flex-none cursor-pointer place-items-center rounded-md border border-control-border transition-[background,color,filter,transform] duration-120 ease-[ease] active:[transform:translateY(calc(var(--move)*1px))_scale(calc(1_-_var(--move)*0.03))] max-[640px]:size-[2.2rem] max-[640px]:before:size-4";
+const btn_base = "icon grid size-[2.7rem] flex-none cursor-pointer place-items-center rounded-md border border-control-border transition-[background,color,filter,transform] duration-120 ease-[ease] active:[transform:translateY(calc(var(--move)*1px))_scale(calc(1_-_var(--move)*0.03))] max-[640px]:size-11 max-[640px]:before:size-4";
 
 pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
     instrument.bumpComposer();

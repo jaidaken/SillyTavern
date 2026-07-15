@@ -131,6 +131,16 @@
 :root:has(#shell.motion-on) { --move: 1; }
 :root:has(#shell.motion-off) { --move: 0; }
 
+/* mobile
+   Sub-768px overrides that must reach elements OUTSIDE the top-bar subtree. The compact bar height is
+   a :root token here, not a header-scoped utility: the docks and the top drawer position against
+   var(--topbar-h) from outside the header, so a header-local value would leave them reading the 3rem
+   desktop height and floating a sliver of chat above a bar that is only 2.6rem tall. The breakpoint
+   is width < 768px to match tailwind's max-[768px] variant (the point the docks go full-screen). */
+@media (width < 768px) {
+    :root { --topbar-h: 2.6rem; }
+}
+
 /* ---- State hooks: Zig publishes the STATE, the markup declares what it LOOKS like ----
    Zig emits a data attribute, or a class where the interaction gate already pins the name; the
    variant turns that state into an appearance the markup asks for (selected:bg-selected). No

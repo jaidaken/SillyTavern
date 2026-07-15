@@ -25,7 +25,7 @@ pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
             style={ui.widthStyle(allocator, p.side)}
         >
             <PanelHead title={p.title} />
-            <div class="flex-1 overflow-y-auto p-4 [scrollbar-width:thin] max-[768px]:p-3 max-[768px]:[-webkit-overflow-scrolling:touch]">
+            <div class="flex-1 overflow-y-auto p-4 [scrollbar-width:thin] max-[768px]:px-3 max-[768px]:pt-3 max-[768px]:pb-[calc(0.75rem_+_env(safe-area-inset-bottom,0px))] max-[768px]:[-webkit-overflow-scrolling:touch]">
                 {if (p.id == .ai_config) (
                     <AiConfigBody />
                 ) else if (p.id == .persona) (

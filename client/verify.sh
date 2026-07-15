@@ -280,6 +280,54 @@ PY2
 [ $? -eq 0 ] || FAILURES=$((FAILURES + 1))
 
 echo
+echo "== mobile layout (390x844) + desktop console guard =="
+# --- mobile ---
+# mobile-audit.mjs drives its own headless Chrome against the server already on $PORT and checks the
+# phone-layout invariants a desktop render cannot see: every panel fills the width and scrolls, the
+# topbar taps are reachable, no real console error or missing dist asset. A backend-route 404 is
+# reported, not failed (this static gate has no Express backend). Second run guards the desktop console.
+MOBILE_JSON=$(mktemp)
+DESKTOP_JSON=$(mktemp)
+node mobile-audit.mjs --url "http://127.0.0.1:$PORT/?demo=1" --mode mobile  2>>"$PROFILE/render.err" > "$MOBILE_JSON"
+node mobile-audit.mjs --url "http://127.0.0.1:$PORT/?demo=1" --mode desktop 2>>"$PROFILE/render.err" > "$DESKTOP_JSON"
+python3 - "$MOBILE_JSON" "$DESKTOP_JSON" <<'PY'
+import json, sys
+def load(p):
+    try:
+        return json.load(open(p, encoding="utf-8"))
+    except Exception as e:
+        return {"__load_error": str(e)}
+mob = load(sys.argv[1]); desk = load(sys.argv[2])
+fail = 0
+def check(label, ok, detail=""):
+    global fail
+    print(f"  {'ok   ' if ok else 'FAIL '} {label:<52} {detail}")
+    if not ok:
+        fail += 1
+def has(rep, *ids):
+    return any(v.get("id") in ids for v in rep.get("violations", []))
+if "__load_error" in mob:
+    check("mobile audit ran", False, mob["__load_error"])
+    sys.exit(1)
+panels = mob.get("panels", [])
+tb = mob.get("topbar", {})
+check("mobile: no horizontal overflow", not mob.get("overflowX", True))
+check("mobile: topbar 9 taps >=44px reachable", tb.get("count") == 9 and not has(mob, "topbar-count", "topbar-tap", "topbar-reachable", "topbar-scroll"))
+check("mobile: 9 panels open >=80% wide in view", len(panels) == 9 and all(p.get("open") for p in panels) and not has(mob, "panel-open", "panel-width", "panel-inviewport"), f"{len(panels)} panels")
+check("mobile: panels scrollable on overflow", not has(mob, "panel-scroll"))
+check("mobile: reachability sweep 0 clipped", not has(mob, "panel-reachable"), f"{sum(p.get('clippedControls', 0) for p in panels)} clipped")
+check("mobile: 0 console errors", not has(mob, "console-errors"), f"{len(mob.get('consoleErrors', []))} err")
+check("mobile: 0 missing dist assets", not has(mob, "missing-asset"), f"{len(mob.get('missingAssets', []))} missing, {len(mob.get('harnessBackend404', []))} backend-404 exempt")
+if "__load_error" in desk:
+    check("desktop audit ran", False, desk["__load_error"])
+else:
+    check("desktop: 0 console errors, no overflow", not desk.get("violations"), f"{len(desk.get('consoleErrors', []))} err")
+sys.exit(1 if fail else 0)
+PY
+[ $? -eq 0 ] || FAILURES=$((FAILURES + 1))
+rm -f "$MOBILE_JSON" "$DESKTOP_JSON"
+
+echo
 echo "== interactions (real input against the served client) =="
 # Self-contained stage: verify-interactions.sh starts its own mock-api server on its own port.
 if [ "${INTERACTIONS:-1}" = "1" ]; then
