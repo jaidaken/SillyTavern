@@ -467,36 +467,27 @@
     padding-left: 1.6em;
 }
 
-/* Stage directions sit apart from the dialogue: flush at the margin in italic, so only the spoken
-   lines occupy the name-plus-column, and a direction never lines up with the speech. The spoken turns
-   nest inside those paragraphs, so reset them to roman or they would inherit the italic. */
-#chat-root[data-reading-indent="stage"] .mes_text p {
-    padding-left: 0;
-    font-style: italic;
-}
-#chat-root[data-reading-indent="stage"] .mes_text q {
-    font-style: normal;
-}
-
-/* Stage: the caps character name opens each turn in a fixed-width column, so dialogue aligns and
-   wrapped lines hang under the speech (not the name); the quote marks give way to the name. */
+/* Stage: the NAME. and the spoken line sit flush at the left margin; the direction beneath is the
+   indented block. This is the inverse of blockquote, which insets the speech and leaves narration
+   flush. The name prints inline before the speech (no column), quote marks hidden. */
 #chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn {
-    padding-left: 5.5em;
-    text-indent: -5.5em;
+    /* The turn nests inside the 4.5em-indented paragraph; pull it back so the spoken line is flush at
+       the margin while the surrounding narration stays indented. */
+    margin-left: -4.5em;
+    text-indent: 0;
 }
 #chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn .custom-qd {
     display: none;
 }
 #chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn::before {
-    content: var(--speaker, "") ".";
-    display: inline-block;
-    min-width: 5em;
-    padding-right: 0.5em;
-    text-indent: 0;
+    content: var(--speaker, "") ". ";
     text-transform: uppercase;
     font-weight: 600;
     letter-spacing: 0.03em;
     color: var(--color-text);
+}
+#chat-root[data-reading-indent="stage"] .mes_text p {
+    padding-left: 4.5em;
 }
 
 /* Visual novel: a colon-tagged name per turn in the same aligned column, quote marks hidden. The face
