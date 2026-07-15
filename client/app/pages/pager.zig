@@ -27,6 +27,9 @@ var char_name: []u8 = &.{};
 var char_avatar: []u8 = &.{};
 var persona_avatar: []u8 = &.{};
 var change_token: []u8 = &.{};
+/// Whole-file version token from /get, distinct from `change_token` (the tail token). A message
+/// mutation must present THIS; the tail token 409s by design. Set on every chat open/resync.
+var full_token: []u8 = &.{};
 var total_items: usize = 0;
 var has_more_before: bool = false;
 var in_flight: bool = false;
@@ -68,7 +71,7 @@ pub fn open(
 /// Drops all paging state (chat closed or store cleared), so a stray late completion no longer
 /// prepends into the wrong chat.
 pub fn reset() void {
-    inline for (.{ &avatar_url, &file_name, &char_name, &char_avatar, &persona_avatar, &change_token }) |field| {
+    inline for (.{ &avatar_url, &file_name, &char_name, &char_avatar, &persona_avatar, &change_token, &full_token }) |field| {
         if (field.len > 0) alloc.free(field.*);
         field.* = &.{};
     }
@@ -99,6 +102,18 @@ pub fn currentToken() []const u8 {
 /// carries the fresh token instead of a stale one that would 409.
 pub fn adoptToken(new_token: []const u8) void {
     setOwned(&change_token, new_token);
+}
+
+/// The whole-file token a message mutation must present (never `currentToken`, which is the tail
+/// token and 409s). Empty until the first /get sets it.
+pub fn fullToken() []const u8 {
+    return full_token;
+}
+
+/// Record the whole-file token from a /get response (char_api on open/resync) or adopt the fresh one
+/// a successful mutation returns, so the next mutation carries a current token instead of a 409.
+pub fn setFullToken(new_token: []const u8) void {
+    setOwned(&full_token, new_token);
 }
 
 /// Builds the JSON body for the next older page, or returns 0 when there is nothing to fetch or a

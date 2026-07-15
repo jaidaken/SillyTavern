@@ -831,3 +831,18 @@ button[aria-expanded="true"] .dd-caret::before {
 .theme-color::-webkit-color-swatch-wrapper { padding: 0; }
 .theme-color::-webkit-color-swatch { border: none; border-radius: 4px; }
 .theme-color::-moz-color-swatch { border: none; border-radius: 4px; }
+
+/* ===== C-MSG: message action menu (append-only zone) =====
+   The trigger is opacity-0 chrome revealed on message hover/focus, gated to hover-capable pointers
+   (WD25) so touch keeps it shown (the .zx sets max-[640px]:opacity-60); it stays lit while its menu
+   is open. The vertical-ellipsis glyph is the conventional "more actions" affordance. */
+[data-icon="dots"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="black" stroke="none"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>'); }
+
+/* Keyboard reveal is universal (a Tab into the message shows the trigger); pointer-hover reveal is
+   gated to hover-capable pointers (WD25) so touch never depends on it (the .zx shows it at narrow). */
+.msg-menu-trigger[aria-expanded="true"],
+.mes:focus-within .msg-menu-trigger { opacity: 1; }
+
+@media (hover: hover) and (pointer: fine) {
+    .mes:hover .msg-menu-trigger { opacity: 1; }
+}

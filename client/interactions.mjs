@@ -607,12 +607,15 @@ async function main() {
             + "return t[1].textContent.includes('gutters') && t[3].textContent.includes('gutters');})()");
         row('must', twinsBefore, 'UNDO-2 message 1 and its twin at 3 both read "gutters" before restore');
 
-        // Close the character dock so the message controls are unobstructed, then open message 1 history.
+        // Close the character dock so the message controls are unobstructed, then open message 1's
+        // action menu and pick Earlier versions (the history control now lives inside that menu).
         await page.click('#d-characters');
-        await page.click('[data-undo-history="1"]');
+        await page.click('[data-msg-menu="1"]');
+        await page.waitFor("document.querySelector('#msg-menu [data-undo-history=\\'1\\']')", 4000);
+        await page.click("#msg-menu [data-undo-history='1']");
         const popover = await page.waitFor(
             "document.querySelector('#undo-surface [data-undo-restore][data-undo-kind=\\'version\\']')", 6000);
-        row('must', popover, 'UNDO-3 the per-message history control opens the version popover');
+        row('must', popover, 'UNDO-3 the message menu Earlier-versions action opens the version popover');
 
         const stU0 = await (await fetch(`${args.base}/dev/state`)).json();
         await page.click("#undo-surface [data-undo-restore][data-undo-kind='version']");
@@ -653,6 +656,177 @@ async function main() {
             return false;
         })();
         row('must', snapRestored, 'UNDO-7 restoring a snapshot closes the overlay and resyncs the reader');
+
+        // ===== C-MSG message action menu (append-only) =====
+        console.log('== message actions: hover menu, copy, relocated history ==');
+        const pressEscape = async () => {
+            const k = { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 };
+            await page.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...k }, page.sessionId);
+            await page.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...k }, page.sessionId);
+        };
+        // Close via Escape on a focused trigger (both inside #chat, so the region keydown delegate
+        // fires): clicking a background element is a moving target the fixed popup can cover.
+        const closeMenu = async () => {
+            if (await page.eval("!!document.querySelector('#msg-menu')")) {
+                await page.focus('#chat .mes .msg-menu-trigger');
+                await pressEscape();
+                await page.waitFor("!document.querySelector('#msg-menu')", 3000);
+            }
+        };
+        // Open deterministically: ensure closed first (a trigger click TOGGLES, so an already-open menu
+        // would close on click), then click and confirm the popped list rendered.
+        const openMenu = async (abs) => {
+            await closeMenu();
+            // Retry: a click on an opacity-0 trigger can miss, or toggle a residual menu shut. Ensure
+            // closed and re-click until the popped list renders.
+            for (let attempt = 0; attempt < 3; attempt++) {
+                await page.click(`[data-msg-menu="${abs}"]`);
+                if (await page.waitFor("document.querySelector('#msg-menu [role=\\'menuitem\\']')", 2500)) return true;
+                await closeMenu();
+            }
+            return false;
+        };
+        // A mutation re-syncs the reader (one fresh /get, so get_count advances), and only then has the
+        // client adopted the new full token. The NEXT mutation must wait for that or it 409s on a stale one.
+        const waitResync = async (before) => {
+            const deadline = Date.now() + 10000;
+            while (Date.now() < deadline) {
+                const s = await (await fetch(`${args.base}/dev/state`)).json();
+                if (s.get_count > before) return true;
+                await sleep(100);
+            }
+            return false;
+        };
+        // Highest-abs base-file message (abs<300) in the loaded window, scrolled into view so its
+        // content-visibility:auto trigger actually paints (an off-screen trigger is not, so a click misses).
+        const pickBaseAbs = async () => {
+            const abs = await page.eval(
+                "(function(){const a=[...document.querySelectorAll('#chat .mes[data-abs-index]')]"
+                + ".map(e=>parseInt(e.getAttribute('data-abs-index'),10)).filter(x=>x<300);"
+                + "return a.length?Math.max(...a):-1;})()");
+            if (abs >= 0) {
+                await page.eval(`document.querySelector('[data-abs-index="${abs}"]').scrollIntoView({block:'center'})`);
+                await sleep(400);
+            }
+            return abs;
+        };
+
+        // The trigger is chrome OUTSIDE the sanitized body (invariant 6) and hidden by default.
+        const triggerChrome = await page.eval(
+            "(function(){const t=[...document.querySelectorAll('#chat .mes .msg-menu-trigger')];"
+            + "return t.length>=4 && t.every(el=>el.closest('.mes_text')===null)"
+            + " && getComputedStyle(t[0]).opacity==='0';})()");
+        row('must', triggerChrome, 'C-MSG trigger is hidden chrome outside the message body');
+
+        // The trigger reveals when the message takes focus (the keyboard affordance; pointer hover
+        // uses the same CSS reveal, gated to hover-capable pointers). waitFor polls past the 120ms fade.
+        const hiddenByDefault = await page.eval(
+            "getComputedStyle(document.querySelector('#chat .mes .msg-menu-trigger')).opacity==='0'");
+        await page.focus('[data-msg-menu="0"]');
+        const focusRevealed = await page.waitFor(
+            "getComputedStyle(document.querySelector('[data-msg-menu=\\'0\\']')).opacity==='1'", 3000);
+        row('must', hiddenByDefault && focusRevealed, 'C-MSG trigger hidden by default, revealed on message focus',
+            `hidden=${hiddenByDefault} revealed=${focusRevealed}`);
+
+        // Click the trigger: the popped list renders at the region root (escaping the .mes paint
+        // containment that would clip it), sized, inside the reader region, and horizontally in view.
+        const menuOpened = await openMenu(0);
+        const menuUnclipped = menuOpened && await page.eval(
+            "(function(){const m=document.querySelector('#msg-menu');if(!m)return false;"
+            + "const r=m.getBoundingClientRect();"
+            + "return m.closest('.mes')===null && !!m.closest('#chat') && r.width>0 && r.height>0"
+            + " && r.left>=0 && r.right<=window.innerWidth;})()");
+        row('must', menuUnclipped, 'C-MSG menu opens at the region root, unclipped and in view');
+
+        // Narrow viewport keeps the trigger shown at the top-right (touch has no hover).
+        await closeMenu();
+        await page.cdp.send('Emulation.setDeviceMetricsOverride',
+            { width: 600, height: 900, deviceScaleFactor: 1, mobile: false }, page.sessionId);
+        const narrowShown = await page.waitFor(
+            "(function(){const t=document.querySelector('#chat .mes .msg-menu-trigger');if(!t)return false;"
+            + "const o=getComputedStyle(t).opacity;const mr=t.closest('.mes').getBoundingClientRect();"
+            + "const r=t.getBoundingClientRect();return o!=='0' && r.right<=mr.right+2 && r.top<=mr.top+40;})()", 3000);
+        await page.cdp.send('Emulation.clearDeviceMetricsOverride', {}, page.sessionId);
+        row('must', narrowShown, 'C-MSG narrow viewport keeps the trigger inside the top-right');
+
+        // Copy writes the message's own text to the clipboard (no endpoint, no history write).
+        await page.eval("(function(){window.__copied=null;const s=(t)=>{window.__copied=t;return Promise.resolve();};"
+            + "try{navigator.clipboard.writeText=s;}catch(e){Object.defineProperty(navigator,'clipboard',{value:{writeText:s},configurable:true});}})()");
+        const msg0text = await page.eval("document.querySelectorAll('#chat .mes_text')[0].textContent.trim()");
+        const copyMenuOpen = await openMenu(0);
+        if (copyMenuOpen) await page.click("#msg-menu [data-msg-action='copy']");
+        const copied = await (async () => {
+            const deadline = Date.now() + 3000;
+            while (Date.now() < deadline) {
+                const c = await page.eval("window.__copied");
+                if (c != null) return c;
+                await sleep(100);
+            }
+            return null;
+        })();
+        const copyOk = copyMenuOpen && copied != null && copied.trim().length > 0 && msg0text.length > 0
+            && (copied.includes(msg0text.slice(0, 10)) || msg0text.includes(copied.trim().slice(0, 10)));
+        row('must', copyOk, 'C-MSG copy writes the message text to the clipboard', `copied=${JSON.stringify((copied || '').slice(0, 24))} msg0=${JSON.stringify(msg0text.slice(0, 16))}`);
+
+        // The relocated history control: Earlier versions opens the version UI (undo.openVersionsFor).
+        const verMenuOpen = await openMenu(1);
+        if (verMenuOpen) await page.click("#msg-menu [data-undo-history='1']");
+        const versionsOpened = verMenuOpen && await page.waitFor("document.querySelector('#undo-surface')", 6000);
+        row('must', versionsOpened, 'C-MSG Earlier versions opens the version UI via undo.openVersionsFor');
+
+        // ===== C-MSG-T0 mutation dangerous property (edit/delete while window_offset>0) =====
+        // Rita is a 300-msg file shown as a ~50-msg tail: a store-relative index would hit + corrupt an above-window message.
+        console.log('== message mutations (T0): edit/delete never touch above-window history ==');
+        await page.navigate(`${args.base}/`);
+        await openRecentChat();
+        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=40`, 15000);
+        await page.waitFor("document.querySelector('#chat .mes[data-abs-index]')", 6000);
+        const mst0 = await (await fetch(`${args.base}/dev/state`)).json();
+        const firstAbs = await pickBaseAbs();
+        row('must', mst0.reader_total === 300 && firstAbs >= 200 && firstAbs < 300,
+            'C-MSG-T0 reader opens windowed (tail of a 300-message file, window_offset>0)',
+            `firstAbs=${firstAbs} readerTotal=${mst0.reader_total}`);
+
+        // EDIT the topmost visible message. The edit must land at firstAbs (server-probed by the exact
+        // absolute index) and leave index 0 untouched. A store-relative index would miss firstAbs entirely.
+        await page.eval("window.prompt = function(){ return 'EDITED-BY-GATE-T0'; };");
+        const stubOk = await page.eval("window.prompt() === 'EDITED-BY-GATE-T0'");
+        const editMenuOpen = await openMenu(firstAbs);
+        const getBeforeEdit = (await (await fetch(`${args.base}/dev/state`)).json()).get_count;
+        if (editMenuOpen) await page.click("#msg-menu [data-msg-action='edit']");
+        const editLanded = editMenuOpen && await (async () => {
+            const deadline = Date.now() + 12000;
+            while (Date.now() < deadline) {
+                const r = await (await fetch(`${args.base}/dev/reader-at?i=${firstAbs}`)).json();
+                if (r.mes === 'EDITED-BY-GATE-T0') return true;
+                await sleep(150);
+            }
+            return false;
+        })();
+        // Let the reader adopt the post-edit full token before the delete presents one.
+        await waitResync(getBeforeEdit);
+        const mst1 = await (await fetch(`${args.base}/dev/state`)).json();
+        row('must', editLanded && mst1.reader_total === 300 && mst1.reader_above_probe === mst0.reader_above_probe,
+            'C-MSG-T0 edit hits the absolute index; above-window history untouched',
+            `landed=${editLanded} stub=${stubOk} menu=${editMenuOpen} ft=${mst0.full_token}->${mst1.full_token} readerTotal=${mst1.reader_total}`);
+
+        // DELETE the topmost visible message. reader base drops by one; index 0 must stay put.
+        await page.eval("window.confirm = () => true;");
+        const delAbs = await pickBaseAbs();
+        const delMenuOpen = await openMenu(delAbs);
+        if (delMenuOpen) await page.click("#msg-menu [data-msg-action='delete']");
+        const mst2 = delMenuOpen ? await (async () => {
+            const deadline = Date.now() + 10000;
+            while (Date.now() < deadline) {
+                const st = await (await fetch(`${args.base}/dev/state`)).json();
+                if (st.reader_total === 299) return st;
+                await sleep(150);
+            }
+            return null;
+        })() : null;
+        row('must', mst2 != null && mst2.reader_above_probe === mst0.reader_above_probe,
+            'C-MSG-T0 delete hits the absolute index; above-window history untouched',
+            mst2 ? `readerTotal=${mst2.reader_total} aboveIntact=${mst2.reader_above_probe === mst0.reader_above_probe}` : 'reader base never dropped to 299');
 
         // ===== C-HOME (append-only): recent-chats home landing (list-first) =====
         console.log('== home: recent-chats landing ==');

@@ -23,8 +23,8 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
             @allocator={ctx.allocator}
             id="chat"
             class="group/chat col-start-2 row-start-2 min-h-0 min-w-0 overflow-y-auto [overscroll-behavior:contain] [scrollbar-color:var(--color-border)_transparent] [scrollbar-width:thin]"
-            onclick={undo.onLogClick}
-            onkeydown={undo.onLogKey}
+            onclick={message_actions.onLogClick}
+            onkeydown={message_actions.onLogKey}
         >
             <div
                 class="chat-inner relative mx-auto max-w-[var(--reading-measure,var(--measure))] px-4 pt-6 pb-8 group-aria-busy/chat:opacity-55 max-[640px]:px-2 max-[640px]:pt-3 max-[640px]:pb-4"
@@ -53,12 +53,15 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
             ) else if (store.undo.mode == .snapshots) (
                 <UndoSnapshots />
             )}
+            { if (store.menu.open_index != null) (
+                <MessageMenu />
+            )}
         </main>
     );
 }
 
 const zx = @import("zx");
-const undo = @import("./undo.zig");
+const message_actions = @import("./message_actions.zig");
 const sanitized = @import("./sanitized.zig");
 const store = @import("./store.zig");
 const regions = @import("./regions.zig");
@@ -66,6 +69,7 @@ const instrument = @import("./instrument.zig");
 pub const MessageView = @import("./message.zx").MessageView;
 const UndoVersions = @import("./panels/undo_body.zx").UndoVersions;
 const UndoSnapshots = @import("./panels/undo_body.zx").UndoSnapshots;
+const MessageMenu = @import("./message_menu.zx").MessageMenu;
 
 comptime {
     _ = @import("./bridge.zig");

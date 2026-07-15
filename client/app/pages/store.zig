@@ -27,6 +27,12 @@ pub const Message = struct {
     name_owned: ?[]u8 = null,
     body_owned: ?[]u8 = null,
     avatar_owned: ?[]u8 = null,
+    /// A system turn (a narrator note, a hide marker) rather than a character or user turn. Defaults
+    /// false so every construction path carries a value; the chat loader and the hide action set it.
+    is_system: bool = false,
+    /// Earlier generations of this turn, newest last. Empty until the swipe action lands; borrowed,
+    /// never owned by the store this phase (no construction path allocates it yet).
+    swipes: []const []const u8 = &.{},
 };
 
 pub const Store = struct {
@@ -191,6 +197,57 @@ pub const Store = struct {
         self.session_start += items.len;
         self.window_offset -= items.len;
     }
+
+    /// Replace the body of the sealed message at store index `i` with an owned copy of `text`, freeing
+    /// the prior body. A no-op on a bad index or on the streaming message (its body aliases the tail
+    /// buffer, which the next token would overwrite). The new body has a fresh address, so its render
+    /// signal changes and the reconciler re-renders it. On OOM the old body is kept.
+    pub fn editBody(self: *Store, i: usize, text: []const u8) Allocator.Error!void {
+        if (i >= self.messages.items.len) return;
+        if (self.stream_index) |si| if (si == i) return;
+        const copy = try self.allocator.dupe(u8, text);
+        const m = &self.messages.items[i];
+        if (m.body_owned) |b| self.allocator.free(b);
+        m.body = copy;
+        m.body_owned = copy;
+    }
+
+    /// Delete the message at store index `i`, preserving order. `session_start` drops by one when a
+    /// history message went; `stream_index` follows its message (cleared if that message was the one
+    /// removed). `window_offset` is untouched: the first visible message keeps its absolute slot under
+    /// a file delete (a removed message's successor inherits its index), so every surviving render key
+    /// stays equal to its absolute file index. A no-op on a bad index.
+    pub fn removeAt(self: *Store, i: usize) void {
+        if (i >= self.messages.items.len) return;
+        const m = self.messages.items[i];
+        if (m.name_owned) |b| self.allocator.free(b);
+        if (m.body_owned) |b| self.allocator.free(b);
+        if (m.avatar_owned) |b| self.allocator.free(b);
+        _ = self.messages.orderedRemove(i);
+        if (i < self.session_start) self.session_start -= 1;
+        if (self.stream_index) |si| {
+            if (i == si) {
+                self.stream_index = null;
+            } else if (i < si) {
+                self.stream_index = si - 1;
+            }
+        }
+    }
+
+    /// Exchange the messages at store indices `i` and `j`, moving each to the other's absolute slot.
+    /// `stream_index` moves with its message. `window_offset` and `session_start` are unchanged (the
+    /// count and the window start hold). A no-op on a bad index.
+    pub fn swap(self: *Store, i: usize, j: usize) void {
+        if (i == j or i >= self.messages.items.len or j >= self.messages.items.len) return;
+        std.mem.swap(Message, &self.messages.items[i], &self.messages.items[j]);
+        if (self.stream_index) |si| {
+            if (si == i) {
+                self.stream_index = j;
+            } else if (si == j) {
+                self.stream_index = i;
+            }
+        }
+    }
 };
 
 /// A borrowed message to prepend; `prependSealed` copies each field into store-owned memory.
@@ -239,6 +296,9 @@ pub fn signalFor(index: usize, m: Message) u64 {
     // The version popover opens on ONE message. Fold the undo epoch in for that message so opening,
     // filling, or closing it re-renders it even though its sealed body never moves (memo would skip).
     if (undo.isVersionsOpenFor(global.window_offset + index)) base = ((base ^ 0x517cc1b727220a95) *% (undo.epoch | 1)) | 1;
+    // The action menu opens on ONE message. Fold its epoch for that message so its trigger's
+    // aria-expanded flips even though the sealed body never moves (memo would otherwise skip it).
+    if (menu.isOpenFor(global.window_offset + index)) base = ((base ^ 0x2545f4914f6cdd1d) *% (menu.epoch | 1)) | 1;
     return base;
 }
 
@@ -435,6 +495,53 @@ pub const UndoState = struct {
 
 /// The one undo state the surfaces render. `undo.zig` drives it; `message.zx`/`messagelog.zx` read it.
 pub var undo: UndoState = .{ .allocator = page_gpa };
+
+// ---- message action-menu state (C-MSG) ----------------------------------------------------
+// Pure Zig, no owned memory. `message_actions.zig` drives it; `message.zx`/`message_menu.zx` read it.
+
+pub const MenuState = struct {
+    /// Absolute index of the message whose action menu is open, or null when none is.
+    open_index: ?usize = null,
+    /// Viewport anchor for the popped list (px): its top edge and its gap from the viewport right.
+    anchor_top: f32 = 0,
+    anchor_right: f32 = 0,
+    /// Bumped on every open/close so `signalFor` re-renders the open message's trigger; see signalFor.
+    epoch: u64 = 0,
+
+    /// Open the menu for the message at absolute index `abs`, or close it if that one is already open.
+    pub fn toggle(self: *MenuState, abs: usize) void {
+        if (self.open_index) |cur| {
+            if (cur == abs) {
+                self.close();
+                return;
+            }
+        }
+        self.open_index = abs;
+        self.epoch +%= 1;
+    }
+
+    pub fn close(self: *MenuState) void {
+        self.open_index = null;
+        self.epoch +%= 1;
+    }
+
+    pub fn setAnchor(self: *MenuState, top: f32, right: f32) void {
+        self.anchor_top = top;
+        self.anchor_right = right;
+    }
+
+    pub fn isOpenFor(self: *const MenuState, abs: usize) bool {
+        return self.open_index != null and self.open_index.? == abs;
+    }
+};
+
+/// The one action-menu state the message chrome renders.
+pub var menu: MenuState = .{};
+
+/// True when the action menu is open for the message at absolute index `abs`.
+pub fn menuOpenFor(abs: usize) bool {
+    return menu.isOpenFor(abs);
+}
 
 const testing = std.testing;
 
@@ -982,4 +1089,162 @@ test "undo_state_leaves_no_leak_under_a_debug_allocator" {
     u.deinit();
 
     try testing.expectEqual(std.heap.Check.ok, debug.deinit());
+}
+
+test "message defaults to not-system with no swipes" {
+    const m: Message = .{ .name = "You", .body = "hi" };
+    try testing.expect(!m.is_system);
+    try testing.expectEqual(@as(usize, 0), m.swipes.len);
+}
+
+test "edit_body_replaces_the_text_and_changes_the_signal" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+    try s.appendCopy("You", "the lantern gutters", "");
+    const before = signal(s.slice()[0]);
+    try s.editBody(0, "the lantern flares");
+    try testing.expectEqualStrings("the lantern flares", s.slice()[0].body);
+    try testing.expect(signal(s.slice()[0]) != before);
+}
+
+test "edit_body_is_a_noop_on_a_bad_index_or_the_streaming_message" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+    try s.appendCopy("You", "sealed", "");
+    try s.beginStream(try testing.allocator.dupe(u8, "Seraphina"), try testing.allocator.dupe(u8, ""));
+    try s.appendTail("streaming body");
+    try s.editBody(9, "ignored");
+    try s.editBody(1, "must not touch the tail");
+    try testing.expectEqualStrings("sealed", s.slice()[0].body);
+    try testing.expectEqualStrings("streaming body", s.slice()[1].body);
+    s.endStream();
+}
+
+test "edit_body_leaves_no_leak_under_a_debug_allocator" {
+    var debug: std.heap.DebugAllocator(.{}) = .init;
+    const gpa = debug.allocator();
+    var s = Store.init(gpa);
+    try s.appendCopy("You", "first text", "");
+    for (0..16) |i| {
+        var buf: [16]u8 = undefined;
+        try s.editBody(0, try std.fmt.bufPrint(&buf, "revision {d}", .{i}));
+    }
+    try testing.expectEqualStrings("revision 15", s.slice()[0].body);
+    s.deinit();
+    try testing.expectEqual(std.heap.Check.ok, debug.deinit());
+}
+
+test "remove_at_deletes_the_message_and_holds_the_window_offset" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+    s.window_offset = 100;
+    try s.appendCopy("a", "one", "");
+    try s.appendCopy("b", "two", "");
+    try s.appendCopy("c", "three", "");
+    s.markAllHistory();
+    // A live turn on top of three history messages.
+    try s.appendCopy("d", "four", "");
+    try testing.expectEqual(@as(usize, 3), s.session_start);
+
+    // Remove a history message: session_start drops, window_offset holds, the survivor after it keeps
+    // its absolute file index (window_offset + new store index).
+    s.removeAt(1);
+    try testing.expectEqual(@as(usize, 3), s.slice().len);
+    try testing.expectEqual(@as(usize, 100), s.window_offset);
+    try testing.expectEqual(@as(usize, 2), s.session_start);
+    try testing.expectEqualStrings("one", s.slice()[0].body);
+    try testing.expectEqualStrings("three", s.slice()[1].body);
+    try testing.expectEqualStrings("four", s.slice()[2].body);
+}
+
+test "remove_at_follows_and_clears_the_stream_index" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+    try s.appendCopy("a", "one", "");
+    try s.beginStream(try testing.allocator.dupe(u8, "Seraphina"), try testing.allocator.dupe(u8, ""));
+    try s.appendTail("streaming");
+    try testing.expectEqual(@as(usize, 1), s.stream_index.?);
+    // Removing a message before the stream shifts the stream index down.
+    s.removeAt(0);
+    try testing.expectEqual(@as(usize, 0), s.stream_index.?);
+    // Removing the streaming message itself clears the index.
+    s.removeAt(0);
+    try testing.expectEqual(@as(?usize, null), s.stream_index);
+    s.endStream();
+}
+
+test "remove_at_is_a_noop_on_a_bad_index" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+    try s.appendCopy("a", "one", "");
+    s.removeAt(5);
+    try testing.expectEqual(@as(usize, 1), s.slice().len);
+}
+
+test "swap_exchanges_two_messages_and_moves_the_stream_index" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+    s.window_offset = 10;
+    try s.appendCopy("a", "one", "");
+    try s.appendCopy("b", "two", "");
+    s.markAllHistory();
+    try s.beginStream(try testing.allocator.dupe(u8, "c"), try testing.allocator.dupe(u8, ""));
+    try s.appendTail("three");
+    try testing.expectEqual(@as(usize, 2), s.stream_index.?);
+    s.swap(0, 2);
+    try testing.expectEqualStrings("three", s.slice()[0].body);
+    try testing.expectEqualStrings("one", s.slice()[2].body);
+    try testing.expectEqual(@as(usize, 0), s.stream_index.?);
+    // Window start and session boundary are unchanged by a swap.
+    try testing.expectEqual(@as(usize, 10), s.window_offset);
+    try testing.expectEqual(@as(usize, 2), s.session_start);
+    s.endStream();
+}
+
+test "swap_is_a_noop_on_equal_or_bad_indices" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+    try s.appendCopy("a", "one", "");
+    try s.appendCopy("b", "two", "");
+    s.swap(0, 0);
+    s.swap(0, 9);
+    try testing.expectEqualStrings("one", s.slice()[0].body);
+    try testing.expectEqualStrings("two", s.slice()[1].body);
+}
+
+test "menu_toggles_open_and_closed_for_one_target" {
+    var m = MenuState{};
+    try testing.expect(!m.isOpenFor(3));
+    m.toggle(3);
+    try testing.expect(m.isOpenFor(3));
+    try testing.expect(!m.isOpenFor(4));
+    // Toggling a different target moves the open one, never opens two.
+    m.toggle(4);
+    try testing.expect(m.isOpenFor(4));
+    try testing.expect(!m.isOpenFor(3));
+    // Toggling the open target closes it.
+    m.toggle(4);
+    try testing.expect(!m.isOpenFor(4));
+    try testing.expectEqual(@as(?usize, null), m.open_index);
+}
+
+test "menu_epoch_advances_on_open_and_close" {
+    var m = MenuState{};
+    const e0 = m.epoch;
+    m.toggle(1);
+    try testing.expect(m.epoch != e0);
+    const e1 = m.epoch;
+    m.close();
+    try testing.expect(m.epoch != e1);
+}
+
+test "signalFor perturbs only the message whose action menu is open" {
+    defer menu.close();
+    const m0: Message = .{ .name = "You", .body = "one" };
+    const m1: Message = .{ .name = "You", .body = "two" };
+    const base0 = signalFor(0, m0);
+    const base1 = signalFor(1, m1);
+    menu.toggle(0);
+    try testing.expect(signalFor(0, m0) != base0);
+    try testing.expectEqual(base1, signalFor(1, m1));
 }

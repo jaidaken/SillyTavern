@@ -41,9 +41,10 @@ MOCK_CHAT_TOTAL = 300
 def _mock_chat_page(req):
     """A synthetic paged chat for the reader gate: MOCK_CHAT_TOTAL messages, index-anchored.
     Honors before_index/limit; never 409s (happy-path gate). The client always sends paged."""
-    # Synthetic history, then the turns the client appended (the newest), so a reload shows a send.
-    extra = Handler.appended_messages
-    total = MOCK_CHAT_TOTAL + len(extra)
+    # The mutable base file, then the turns the client appended (the newest), so a reload shows a send
+    # and a message mutation (edit/delete/move by absolute index) shows through.
+    all_msgs = Handler.reader_current() + Handler.appended_messages
+    total = len(all_msgs)
     try:
         limit = int(req.get("limit") or 100)
     except (TypeError, ValueError):
@@ -56,21 +57,12 @@ def _mock_chat_page(req):
     else:
         end = total
         start = max(0, total - limit)
-    messages = []
-    for i in range(start, end):
-        if i < MOCK_CHAT_TOTAL:
-            is_user = (i % 2 == 1)
-            messages.append({
-                "name": "You" if is_user else "Rita Recent",
-                "is_user": is_user,
-                "mes": f"History message {i} in the reverse-lazy reader chat.",
-            })
-        else:
-            messages.append(extra[i - MOCK_CHAT_TOTAL])
+    messages = [dict(m) for m in all_msgs[start:end]]
     return {
         "messages": messages,
         "header": {"user_name": "You", "chat_metadata": {}},
         "change_token": Handler.append_token or f"v1.{total}.mock",
+        "full_token": Handler.full_token,
         "has_more_before": start > 0,
         "has_more_after": end < total,
         "total_items": total,
@@ -170,6 +162,7 @@ def _undo_chat_page():
         "messages": msgs,
         "header": {"user_name": "You", "chat_metadata": {}},
         "change_token": f"undo-spine-{Handler.undo_token}",
+        "full_token": f"undo-full-{Handler.undo_token}",
         "has_more_before": False,
         "has_more_after": False,
         "total_items": len(msgs),
@@ -225,6 +218,33 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         cls.undo_token = f"utok-{n}"
         return cls.undo_token
 
+    # Reader-chat mutation state (T0): a concrete mutable 300-message file so edit/delete/move by
+    # ABSOLUTE index prove the client never corrupts above-window history. full_token = whole-file version.
+    reader_msgs = None
+    full_token = "full-v0"
+    full_ver = 0
+
+    @classmethod
+    def reader_current(cls):
+        if cls.reader_msgs is None:
+            cls.reader_msgs = []
+            for i in range(MOCK_CHAT_TOTAL):
+                is_user = (i % 2 == 1)
+                cls.reader_msgs.append({
+                    "name": "You" if is_user else "Rita Recent",
+                    "is_user": is_user,
+                    "is_system": False,
+                    "mes": f"History message {i} in the reverse-lazy reader chat.",
+                })
+        return cls.reader_msgs
+
+    @classmethod
+    def bump_full_token(cls):
+        cls.full_ver += 1
+        cls.full_token = f"full-v{cls.full_ver}"
+        cls.append_token = f"v1.{len(cls.reader_current()) + len(cls.appended_messages)}.mut{cls.full_ver}"
+        return cls.full_token
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(Handler.dist), **kwargs)
 
@@ -257,6 +277,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "get_count": Handler.get_count,
                     "get_409_count": Handler.get_409_count,
                     "persona_settings": Handler.persona_settings,  # C-PERS
+                    "full_token": Handler.full_token,
+                    "reader_total": len(Handler.reader_current()),
+                    "reader_above_probe": Handler.reader_current()[0]["mes"],
                 })
             if self.path.startswith("/dev/arm-get-409"):
                 Handler.arm_get_409 = True
@@ -264,6 +287,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if self.path.startswith("/dev/arm-recent-empty"):
                 Handler.recent_empty = True
                 return self.mock_json({"armed": True})
+            if self.path.startswith("/dev/reader-at"):
+                params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                i = int(params.get("i", ["-1"])[0])
+                reader = Handler.reader_current()
+                return self.mock_json({"mes": reader[i]["mes"] if 0 <= i < len(reader) else None, "total": len(reader)})
             self.send_error(404, "not found")
             return
         if self.is_proxied():
@@ -450,8 +478,43 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if req.get("field") == "fav":
                 Handler.mock_favs[req.get("avatar_url")] = bool(req.get("value"))
             return self.mock_json({})
+        if path.startswith("/api/chats/message/"):
+            return self._mock_message_mutation(path.rsplit("/", 1)[-1], req)
         # Every other API POST (create/rename/settings-save/...) acknowledges without state.
         return self.mock_json({})
+
+    def _mock_message_mutation(self, op, req):
+        """Message mutation on the reader file by ABSOLUTE index. Presenting anything but the whole-file
+        token 409s (proves the client sends full_token, not the tail token). Applying at the absolute
+        index and re-serving proves the client targets the right message, never one above the window."""
+        reader = Handler.reader_current()
+        token = req.get("change_token")
+        if not isinstance(token, str) or token != Handler.full_token:
+            return self.mock_status(409, {"error": "version_mismatch", "change_token": Handler.full_token})
+        idx = req.get("index")
+        if not (isinstance(idx, int) and 0 <= idx < len(reader)):
+            return self.mock_status(400, {"error": "target_not_found"})
+        if op == "edit":
+            reader[idx]["mes"] = req.get("mes", reader[idx]["mes"])
+        elif op == "delete":
+            reader.pop(idx)
+        elif op == "hide":
+            reader[idx]["is_system"] = not reader[idx].get("is_system", False)
+        elif op == "move":
+            j = idx - 1 if req.get("direction") == "up" else idx + 1
+            if 0 <= j < len(reader):
+                reader[idx], reader[j] = reader[j], reader[idx]
+        else:
+            return self.mock_status(404, {"error": "unknown_op"})
+        Handler.bump_full_token()
+        return self.mock_json({
+            "ok": True,
+            "change_token": Handler.full_token,
+            "tail_token": Handler.append_token,
+            "affected_cf_id": f"cf-{idx}",
+            "index": idx,
+            "total_items": len(reader) + len(Handler.appended_messages),
+        })
 
     def _undo_versions(self, req):
         idx = req.get("index")

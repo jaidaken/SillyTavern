@@ -510,6 +510,15 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         defer alloc.free(fname);
         pager.open(c.avatar, fname, c.name, char_avatar orelse "", persona_avatar orelse "", page.total_items, page.has_more_before, page.change_token);
     }
+    // The whole-file token rides alongside the tail token; a message mutation must present it (the tail
+    // token 409s by design). Set here on every open/resync so the next mutation carries a current one.
+    switch (parsed.value) {
+        .object => |root_obj| if (root_obj.get("full_token")) |ft| switch (ft) {
+            .string => |s| pager.setFullToken(s),
+            else => {},
+        },
+        else => {},
+    }
     regions.bumpMessageLog();
     regions.bumpShell();
     chars_log.info("opened chat: {s} ({d} of {d} messages)", .{ c.name, page.messages.len, page.total_items });
