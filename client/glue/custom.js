@@ -605,6 +605,10 @@
     let readerPumping = false;
     let readerScheduled = false;
     let streamPinned = false;
+    // The scrolled-up anchor a 409 re-sync must restore: its absolute chat index and its pixel offset
+    // from the scroller top. -1 = no anchor (reader was near the bottom, so the re-sync tail-jumps).
+    let resyncAnchorIndex = -1;
+    let resyncAnchorPixel = 0;
 
     // Scroll the container to its full height across two frames: content-visibility lays out late
     // rows after the first frame, so a single-frame scroll lands short. Called from Zig on open.
@@ -676,6 +680,41 @@
         }
         return mes.length ? mes[mes.length - 1] : null;
     }
+
+    // Snapshot the on-screen anchor before a 409 re-sync reload rebuilds the window (Zig calls this
+    // from reloadCurrentChat). A near-bottom reader captures nothing, so the re-sync tail-jumps.
+    window.__st_reader_capture_anchor = function () {
+        if (!readerChat || readerNearBottom()) { resyncAnchorIndex = -1; return; }
+        const a = readerAnchorMes();
+        const idx = a ? parseInt(a.getAttribute('data-abs-index'), 10) : NaN;
+        if (a && Number.isFinite(idx)) {
+            resyncAnchorIndex = idx;
+            resyncAnchorPixel = a.getBoundingClientRect().top - readerChat.getBoundingClientRect().top;
+        } else {
+            resyncAnchorIndex = -1;
+        }
+    };
+
+    // Restore the reader after a 409 re-sync reload (Zig calls this from onChatDone). No anchor ->
+    // tail-jump; else force history rows to real height (content-visibility estimates them) + scroll back.
+    window.__st_reader_after_resync = function () {
+        if (resyncAnchorIndex < 0) { window.__st_reader_scroll_bottom(); return; }
+        requestAnimationFrame(function () {
+            requestAnimationFrame(function () {
+                const hist = readerChat.querySelectorAll('.chat-history .mes');
+                for (let i = 0; i < hist.length; i++) hist[i].style.contentVisibility = 'visible';
+                void readerChat.offsetHeight;
+                const el = readerChat.querySelector('[data-abs-index="' + resyncAnchorIndex + '"]');
+                if (el) {
+                    readerChat.scrollTop += (el.getBoundingClientRect().top - readerChat.getBoundingClientRect().top) - resyncAnchorPixel;
+                } else {
+                    window.__st_reader_scroll_bottom();
+                }
+                for (let i = 0; i < hist.length; i++) hist[i].style.contentVisibility = '';
+                resyncAnchorIndex = -1;
+            });
+        });
+    };
 
     async function readerPrefetch() {
         if (readerPumping || !wasm || !readerChat) return;

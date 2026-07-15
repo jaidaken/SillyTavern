@@ -29,7 +29,7 @@ pub fn MessageView(allocator: zx.Allocator, props: MessageProps) zx.Component {
     // candlelight margin rule and the arrival settle with it, stays in the stylesheet. The avatar is
     // plain authored chrome, so it wears utilities.
     return (
-        <div @allocator={allocator} class="mes" aria-busy={if (props.streaming) "true" else "false"}>
+        <div @allocator={allocator} class="mes" data-abs-index={props.abs_index} aria-busy={if (props.streaming) "true" else "false"}>
             { if (props.msg.avatar.len > 0) (
                 <img class="mes_avatar row-span-full mt-[0.15em] size-[1.8rem] flex-none cursor-pointer rounded-[4px] object-cover hover:brightness-110 max-[640px]:size-[1.5rem]" src={props.msg.avatar} alt={props.msg.name} loading="lazy" />
             ) }

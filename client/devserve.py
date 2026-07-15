@@ -155,6 +155,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # Counters the 409 gate reads back as observable state (a returned 409, and the resync's refetch).
     append_409_count = 0
     get_count = 0
+    # History-prefetch 409: armed once via /dev/arm-get-409, fires on the next prepend GET only, so the
+    # scroll-preservation gate can drive the real resync path the mock append 409 cannot reach.
+    arm_get_409 = False
+    get_409_count = 0
     # Undo fixture state (C4): the mutable current chat and its optimistic-concurrency token.
     undo_chat = None
     undo_token = "utok-0"
@@ -201,7 +205,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "appended": Handler.appended_messages,
                     "append_409_count": Handler.append_409_count,
                     "get_count": Handler.get_count,
+                    "get_409_count": Handler.get_409_count,
                 })
+            if self.path.startswith("/dev/arm-get-409"):
+                Handler.arm_get_409 = True
+                return self.mock_json({"armed": True})
             self.send_error(404, "not found")
             return
         if self.is_proxied():
@@ -367,6 +375,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/chats/get":
             # The client always sends paged:true (reader tail window + scroll-up prepend).
             Handler.get_count += 1
+            # Fire an armed history-prefetch 409 on a prepend GET only (before_index set); the resync's
+            # own tail reload carries no before_index, so it refetches cleanly after the stale page.
+            if Handler.arm_get_409 and isinstance(req.get("before_index"), int):
+                Handler.arm_get_409 = False
+                Handler.get_409_count += 1
+                return self.mock_status(409, {"error": "stale", "change_token": Handler.append_token or f"v1.{MOCK_CHAT_TOTAL}.mock"})
             if req.get("avatar_url") == UNDO_AVATAR:
                 return self.mock_json(_undo_chat_page())
             return self.mock_json(_mock_chat_page(req))

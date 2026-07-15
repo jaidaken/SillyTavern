@@ -38,6 +38,11 @@ const net_log = std.log.scoped(.net);
 /// no longer matches abandons before touching the store (module-global per S1 probe a).
 var chat_load_seq: u32 = 0;
 
+/// The seq of the in-flight re-sync reload, so ONLY its completion restores the reader's anchor. A bare
+/// bool leaks across an interleaved normal open (it cannot tell which load is the re-sync); keying to the
+/// seq means a normal open never inherits the marker and a second re-sync overwrites it.
+var resync_seq: ?u32 = null;
+
 // ---- send-loop state ------------------------------------------------------------------
 
 // The active backend connection lives in connection.zig; the send loop reads it via conn_mod.active().
@@ -365,10 +370,16 @@ fn activePersona() ?persona_store.Persona {
 
 // ---- chat load ---------------------------------------------------------------------------
 
-/// Open the chat for the character at `index` (store order). Sequenced by the chat-load
-/// ticket; sets aria-busy on #chat for the duration; an error status keeps the current view;
-/// the greeting is seeded only on a true 200-empty response.
+/// Open the chat for the character at `index` (store order) using the default tail window.
 pub fn loadCharacterChat(index: usize) void {
+    loadCharacterChatWindow(index, pager.TAIL_LIMIT, false);
+}
+
+/// Open the chat for the character at `index` (store order) with an explicit tail-window `limit`.
+/// Sequenced by the chat-load ticket; sets aria-busy on #chat for the duration; an error status keeps
+/// the current view; the greeting is seeded only on a true 200-empty response. The 409 re-sync passes a
+/// limit sized to keep the on-screen window plus the newest tail.
+fn loadCharacterChatWindow(index: usize, limit: usize, is_resync: bool) void {
     if (zx.platform.role != .client) return;
     const chars = char_store.slice();
     if (index >= chars.len) {
@@ -378,6 +389,9 @@ pub fn loadCharacterChat(index: usize) void {
     const c = chars[index];
     chars_log.debug("load chat request: index {d} {s}", .{ index, c.name });
     chat_load_seq +%= 1;
+    // Mark this load as the re-sync (or clear any pending re-sync intent on a normal open), keyed to the
+    // freshly-bumped seq so only this exact completion restores the anchor.
+    resync_seq = if (is_resync) chat_load_seq else null;
     const file_name = chatFileName(c) orelse return;
     defer alloc.free(file_name);
     // Paged tail window (invariant 2 + 4): the reader loads the newest slice, not the whole chat,
@@ -386,7 +400,7 @@ pub fn loadCharacterChat(index: usize) void {
         .avatar_url = c.avatar,
         .file_name = file_name,
         .paged = true,
-        .limit = pager.TAIL_LIMIT,
+        .limit = limit,
     }, .{}) catch return;
     defer alloc.free(body);
     // Busy only once the request actually dispatches, so an alloc-failure return above
@@ -416,6 +430,10 @@ fn nowMs() f64 {
 fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     const seq: u32 = @truncate(tag);
     const index: usize = @intCast(tag >> 32);
+    // Clear the re-sync marker on the matching seq whether this load is current OR superseded, so a later
+    // normal open can never inherit it; a second back-to-back re-sync already overwrote resync_seq.
+    const was_resync = resync_seq == seq;
+    if (was_resync) resync_seq = null;
     if (seq != chat_load_seq) {
         // A newer load (or a store rebuild) owns the ticket and the aria-busy flag now.
         chars_log.debug("load chat: superseded mid-fetch, abandoning", .{});
@@ -499,9 +517,13 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     regions.bumpMessageLog();
     regions.bumpShell();
     chars_log.info("opened chat: {s} ({d} of {d} messages)", .{ c.name, page.messages.len, page.total_items });
-    // The bumps above re-rendered synchronously (S1 probe finding d), so the whole window is in
-    // the DOM; land on the newest by scrolling the container to its full height.
-    scrollChatToNewest();
+    // The bumps above re-rendered synchronously (S1 probe finding d), so the whole window is in the
+    // DOM. A re-sync restores the prior anchor (near-bottom tail-jumps); a normal open lands newest.
+    if (was_resync) {
+        js.global.call(void, "__st_reader_after_resync", .{}) catch {};
+    } else {
+        scrollChatToNewest();
+    }
 }
 
 /// Reloads the currently open chat's tail window. The scroll-up pump calls this (via the
@@ -514,9 +536,14 @@ pub fn reloadCurrentChat() void {
         return;
     };
     chars_log.info("reader re-sync: reloading current chat after a stale prepend", .{});
-    // TODO(reader-polish): on 409 preserve a scrolled-up reader's position via around_index + scroll
-    // restore. Deferred: new load path, and the tail jump matches the plan's documented 409 behaviour.
-    loadCharacterChat(idx);
+    // Snapshot the scrolled-up anchor from the still-current DOM before the reload seeds a new window,
+    // so onChatDone can restore the reader's place; near-bottom captures nothing and tail-jumps.
+    js.global.call(void, "__st_reader_capture_anchor", .{}) catch {};
+    // Size the tail reload to keep the whole on-screen window plus the newest tail: a centered load
+    // would drop the tail, and the reader has no forward-paging pump to get back down.
+    const loaded = store.global.slice().len;
+    const resync_limit = loaded + pager.BATCH;
+    loadCharacterChatWindow(idx, resync_limit, true);
 }
 
 fn setChatBusy(busy: bool) void {

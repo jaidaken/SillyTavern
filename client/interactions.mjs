@@ -481,6 +481,48 @@ async function main() {
         })();
         row('must', resynced, 'SL-append 409 re-syncs the reader to the tail', `resync=${resynced}`);
 
+        // A history-prefetch 409 (external write above the window) must PRESERVE a scrolled-up reader's
+        // place, not tail-jump. Arm the mock to 409 the next prepend GET, scroll up to fire it, then assert.
+        console.log('== prefetch 409 preserves scroll ==');
+        await page.navigate(`${args.base}/`);
+        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+        await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000);
+        const pf0 = await (await fetch(`${args.base}/dev/state`)).json();
+        await fetch(`${args.base}/dev/arm-get-409`);
+        // Scroll to the top (fires the armed prepend GET) and capture the top-most on-screen anchor's
+        // abs index (mirrors readerAnchorMes), so the assertion proves THAT specific row survives.
+        const capturedIdx = await page.eval(`(function(){
+            var c = document.getElementById('chat');
+            c.scrollTop = 0;
+            var mes = c.querySelectorAll('.mes[data-abs-index]');
+            var top = c.getBoundingClientRect().top;
+            for (var i = 0; i < mes.length; i++) { if (mes[i].getBoundingClientRect().bottom > top + 1) return parseInt(mes[i].getAttribute('data-abs-index'), 10); }
+            return mes.length ? parseInt(mes[mes.length - 1].getAttribute('data-abs-index'), 10) : -1;
+        })()`);
+        // Preserved shows as: armed 409 fired (get_409_count up), resync reload landed (get_count +2), and
+        // the reader settled scrolled up (not top, not bottom) with the CAPTURED anchor row still present.
+        const preserved = await (async () => {
+            const notBottom = "(function(){var c=document.getElementById('chat');return c.scrollTop + c.clientHeight < c.scrollHeight - 80;})()";
+            const notTop = "document.getElementById('chat').scrollTop > 200";
+            const anchorSurvived = `!!document.querySelector('#chat .mes[data-abs-index="${capturedIdx}"]')`;
+            const deadline = Date.now() + 12000;
+            while (Date.now() < deadline) {
+                const st = await (await fetch(`${args.base}/dev/state`)).json();
+                if (st.get_409_count === pf0.get_409_count) {
+                    // The prepend has not fired yet (reader tail still settling); nudge the scroll again.
+                    await page.eval("document.getElementById('chat').scrollTop = 0");
+                    await sleep(150);
+                    continue;
+                }
+                if (st.get_count > pf0.get_count + 1 &&
+                    await page.eval(notBottom) && await page.eval(notTop) && await page.eval(anchorSurvived)) return true;
+                await sleep(150);
+            }
+            return false;
+        })();
+        row('must', capturedIdx >= 0 && preserved, "SL-prefetch 409 preserves a scrolled-up reader's position",
+            `anchor=${capturedIdx} preserved=${preserved}`);
+
         // ================= J1: generation window (invariant 2) + connection prefill =================
         // PREFILL: a fresh boot re-mines the mock settings blob (server 5001); the connections panel
         // input must show that configured server, not the placeholder default.
