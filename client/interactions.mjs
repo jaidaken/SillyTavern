@@ -516,6 +516,83 @@ async function main() {
         row('must', promptHas150 && promptHasProbe && displayHas150 === false,
             'J1 prompt window spans history beyond the display tail',
             `promptHas150=${promptHas150} displayHas150=${displayHas150} probe=${promptHasProbe}`);
+
+        // ===== UNDO C4 (append-only) =====
+        // Dangerous property: index 1 and its twin at 3 both read "gutters"; restoring 1 changes only 1.
+        console.log('== undo: per-message version history + snapshot overlay ==');
+        await page.navigate(`${args.base}/`);
+        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+
+        // Open the undo fixture chat by search (kept oldest so it never auto-opens).
+        await page.click('#d-characters');
+        await page.waitFor("document.querySelectorAll('#chat-root .char-item').length >= 60", 5000);
+        await page.focus('.char-search');
+        await page.insertText('Char 00');
+        await page.waitFor("document.querySelectorAll('#chat-root .char-item').length === 1", 4000);
+        consoleLines.length = 0;
+        await page.click('#chat-root .char-item .char-name');
+        const undoOpened = await (async () => {
+            const deadline = Date.now() + 8000;
+            while (Date.now() < deadline) {
+                if (page.sawConsole('opened chat: Char 00 Moon')
+                    && await page.eval("document.querySelectorAll('#chat .mes_text').length === 4")) return true;
+                await sleep(100);
+            }
+            return false;
+        })();
+        row('must', undoOpened, 'UNDO-1 undo fixture chat opens with its four messages');
+
+        // The two identical twins start identical.
+        const twinsBefore = await page.eval(
+            "(function(){const t=document.querySelectorAll('#chat .mes_text');"
+            + "return t[1].textContent.includes('gutters') && t[3].textContent.includes('gutters');})()");
+        row('must', twinsBefore, 'UNDO-2 message 1 and its twin at 3 both read "gutters" before restore');
+
+        // Close the character dock so the message controls are unobstructed, then open message 1 history.
+        await page.click('#d-characters');
+        await page.click('[data-undo-history="1"]');
+        const popover = await page.waitFor(
+            "document.querySelector('#undo-surface [data-undo-restore][data-undo-kind=\\'version\\']')", 6000);
+        row('must', popover, 'UNDO-3 the per-message history control opens the version popover');
+
+        const stU0 = await (await fetch(`${args.base}/dev/state`)).json();
+        await page.click("#undo-surface [data-undo-restore][data-undo-kind='version']");
+        // The restore mutates only index 1; the reader resyncs and the DOM reflects it. Index 3 (the
+        // identical twin) must be unchanged: this is the dangerous-property assertion.
+        const restored = await (async () => {
+            const deadline = Date.now() + 10000;
+            while (Date.now() < deadline) {
+                const ok = await page.eval(
+                    "(function(){const t=document.querySelectorAll('#chat .mes_text');"
+                    + "return t.length===4 && t[1].textContent.includes('flares') && t[3].textContent.includes('gutters');})()");
+                if (ok) return true;
+                await sleep(150);
+            }
+            return false;
+        })();
+        const stU1 = await (await fetch(`${args.base}/dev/state`)).json();
+        row('must', restored, 'UNDO-4 restoring message 1 changes only its text ("flares"), twin at 3 unchanged');
+        row('must', stU1.get_count > stU0.get_count, 'UNDO-5 the reader resynced after the restore', `get_count ${stU0.get_count}->${stU1.get_count}`);
+
+        // The whole-chat snapshot overlay, surfaced from the composer Options button.
+        await page.click('#composer button[aria-label="Options"]');
+        const snapListed = await page.waitFor(
+            "document.querySelector('#undo-surface [data-undo-restore][data-undo-kind=\\'snapshot\\']')", 6000);
+        row('must', snapListed, 'UNDO-6 composer Options opens the snapshot overlay with a save point');
+
+        const stU2 = await (await fetch(`${args.base}/dev/state`)).json();
+        await page.click("#undo-surface [data-undo-restore][data-undo-kind='snapshot']");
+        const snapRestored = await (async () => {
+            const deadline = Date.now() + 10000;
+            while (Date.now() < deadline) {
+                const closed = await page.eval("document.querySelector('#undo-surface') === null");
+                const st = await (await fetch(`${args.base}/dev/state`)).json();
+                if (closed && st.get_count > stU2.get_count) return true;
+                await sleep(150);
+            }
+            return false;
+        })();
+        row('must', snapRestored, 'UNDO-7 restoring a snapshot closes the overlay and resyncs the reader');
     } finally {
         clearTimeout(watchdog);
         cleanup();

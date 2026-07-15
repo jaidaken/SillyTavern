@@ -101,6 +101,43 @@ def _mock_characters(favs):
     return chars
 
 
+# ---- undo fixture (C4): char00's chat is repurposed as a two-identical-message chat + one older
+# backup, so the 60-character count the B2b gate pins stays intact (no extra fixture character). ----
+UNDO_AVATAR = "char00.png"
+UNDO_TS = "20260714-120000"
+
+
+def _fresh_undo_chat():
+    return [
+        {"name": "You", "is_user": True, "mes": "Where does the path lead?"},
+        {"name": "Guide", "is_user": False, "mes": "The lantern gutters."},
+        {"name": "You", "is_user": True, "mes": "And to the east?"},
+        {"name": "Guide", "is_user": False, "mes": "The lantern gutters."},
+    ]
+
+
+def _undo_backup_messages():
+    # The older save: message index 1 read differently before an edit; index 3 is its identical twin
+    # and must be left untouched by a restore of index 1 (the dangerous-property test).
+    m = _fresh_undo_chat()
+    m[1] = {"name": "Guide", "is_user": False, "mes": "The lantern flares."}
+    return m
+
+
+def _undo_chat_page():
+    msgs = [dict(m) for m in Handler.undo_current()]
+    return {
+        "messages": msgs,
+        "header": {"user_name": "You", "chat_metadata": {}},
+        "change_token": f"undo-spine-{Handler.undo_token}",
+        "has_more_before": False,
+        "has_more_after": False,
+        "total_items": len(msgs),
+        "anchor_index": None,
+        "anchor_found": True,
+    }
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     backend = "http://127.0.0.1:8000"
     dev = False
@@ -118,6 +155,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # Counters the 409 gate reads back as observable state (a returned 409, and the resync's refetch).
     append_409_count = 0
     get_count = 0
+    # Undo fixture state (C4): the mutable current chat and its optimistic-concurrency token.
+    undo_chat = None
+    undo_token = "utok-0"
+
+    @classmethod
+    def undo_current(cls):
+        if cls.undo_chat is None:
+            cls.undo_chat = _fresh_undo_chat()
+        return cls.undo_chat
+
+    @classmethod
+    def bump_undo_token(cls):
+        n = int(cls.undo_token.split("-")[1]) + 1
+        cls.undo_token = f"utok-{n}"
+        return cls.undo_token
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(Handler.dist), **kwargs)
@@ -315,13 +367,92 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/chats/get":
             # The client always sends paged:true (reader tail window + scroll-up prepend).
             Handler.get_count += 1
+            if req.get("avatar_url") == UNDO_AVATAR:
+                return self.mock_json(_undo_chat_page())
             return self.mock_json(_mock_chat_page(req))
+        if path == "/api/chats/backups/message-versions":
+            return self.mock_json(self._undo_versions(req))
+        if path == "/api/chats/backups/restore-message":
+            return self._undo_restore_message(req)
+        if path == "/api/chats/backups/snapshots":
+            return self._undo_snapshots(req)
+        if path == "/api/chats/backups/restore-deleted":
+            return self._undo_restore_deleted(req)
         if path == "/api/characters/edit-attribute":
             if req.get("field") == "fav":
                 Handler.mock_favs[req.get("avatar_url")] = bool(req.get("value"))
             return self.mock_json({})
         # Every other API POST (create/rename/settings-save/...) acknowledges without state.
         return self.mock_json({})
+
+    def _undo_versions(self, req):
+        idx = req.get("index")
+        cur = Handler.undo_current()
+        versions = []
+        if isinstance(idx, int) and 0 <= idx < len(cur):
+            older = _undo_backup_messages()[idx]["mes"]
+            # Dedup: only surface a version whose text differs from the message as it stands now.
+            if older != cur[idx]["mes"]:
+                versions.append({"mes": older, "backup_ts": UNDO_TS, "matched": True})
+        return {
+            "versions": versions, "depth": 1, "truncated": False,
+            "basis": "identity", "attributable": True, "change_token": Handler.undo_token,
+        }
+
+    def _undo_restore_message(self, req):
+        cur = Handler.undo_current()
+        token = req.get("change_token")
+        if isinstance(token, str) and token != Handler.undo_token:
+            return self.mock_status(409, {"error": "stale", "change_token": Handler.undo_token})
+        idx = req.get("index")
+        if not (isinstance(idx, int) and 0 <= idx < len(cur)):
+            return self.mock_status(400, {"error": "target_not_found"})
+        if req.get("backup_ts") != UNDO_TS:
+            return self.mock_status(404, {"error": "no_such_backup"})
+        # Change ONLY the targeted index; its identical twin at another index must stay put.
+        cur[idx]["mes"] = _undo_backup_messages()[idx]["mes"]
+        Handler.bump_undo_token()
+        return self.mock_json({
+            "ok": True, "change_token": Handler.undo_token,
+            "restored": {"index": idx, "matched": True, "backup_ts": UNDO_TS},
+        })
+
+    def _undo_snapshots(self, req):
+        cur = Handler.undo_current()
+        if req.get("mode") == "restore":
+            token = req.get("change_token")
+            if isinstance(token, str) and token != Handler.undo_token:
+                return self.mock_status(409, {"error": "stale", "change_token": Handler.undo_token})
+            if req.get("backup_ts") != UNDO_TS:
+                return self.mock_status(404, {"error": "no_such_backup"})
+            Handler.undo_chat = _undo_backup_messages()
+            Handler.bump_undo_token()
+            return self.mock_json({"ok": True, "restored": len(Handler.undo_chat), "change_token": Handler.undo_token})
+        backup = _undo_backup_messages()
+        edited = sum(1 for a, b in zip(backup, cur) if a["mes"] != b["mes"])
+        snap = {
+            "backup_ts": UNDO_TS,
+            "message_count": len(backup),
+            "last_mes_preview": backup[-1]["mes"] if backup else "",
+            "added": max(0, len(cur) - len(backup)),
+            "removed": max(0, len(backup) - len(cur)),
+            "edited": edited,
+            "basis": "identity",
+            "too_large": False,
+        }
+        return self.mock_json({
+            "snapshots": [snap], "depth": 1, "truncated": False,
+            "basis": "identity", "attributable": True, "change_token": Handler.undo_token,
+        })
+
+    def _undo_restore_deleted(self, req):
+        token = req.get("change_token")
+        if isinstance(token, str) and token != Handler.undo_token:
+            return self.mock_status(409, {"error": "stale", "change_token": Handler.undo_token})
+        if req.get("backup_ts") != UNDO_TS:
+            return self.mock_status(404, {"error": "no_such_backup"})
+        # The fixture backup has no messages missing from the current chat, so nothing is restored.
+        return self.mock_json({"ok": True, "restored": 0, "change_token": Handler.undo_token})
 
     def mock_json(self, payload):
         return self.mock_status(200, payload)

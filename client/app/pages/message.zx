@@ -8,6 +8,9 @@ pub const MessageProps = struct {
     // the stable sequence index for reconcile matching, memo is the content signal for the memo skip.
     key: usize = 0,
     memo: u64 = 0,
+    // The message's absolute index in the chat file (window_offset + store index), the target the undo
+    // endpoints address; same value as key. Drives the per-message version-history control.
+    abs_index: usize = 0,
 };
 
 // Plain component, not @rendering={.client}: a client component needs a <!--$id--> marker
@@ -32,6 +35,17 @@ pub fn MessageView(allocator: zx.Allocator, props: MessageProps) zx.Component {
             ) }
             <div class="mes_name">{props.msg.name}</div>
             <div class={text_class} style={speakerVar(allocator, props.msg.name)} @escaping={.none}>{html.sink(body)}</div>
+            { if (char_store.selectedIndex() != null) (
+                <button
+                    type="button"
+                    class="icon absolute top-2 right-2 z-10 grid size-7 place-items-center rounded-md border-0 bg-transparent text-muted opacity-35 transition-[opacity,color,background] duration-120 ease-[ease] hover:bg-surface-2 hover:text-text hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent max-[640px]:size-9 max-[640px]:min-h-11 max-[640px]:min-w-11 max-[640px]:opacity-60"
+                    data-icon="history"
+                    data-undo-history={props.abs_index}
+                    aria-label="Message history"
+                    aria-haspopup="dialog"
+                    aria-expanded={if (store.undo.isVersionsOpenFor(props.abs_index)) "true" else "false"}
+                ></button>
+            )}
         </div>
     );
 }
@@ -60,6 +74,7 @@ fn speakerVar(allocator: zx.Allocator, name: []const u8) []const u8 {
 const std = @import("std");
 const zx = @import("zx");
 const store = @import("./store.zig");
+const char_store = @import("./character_store.zig");
 const html = @import("./html.zig");
 const sanitized = @import("./sanitized.zig");
 const instrument = @import("./instrument.zig");

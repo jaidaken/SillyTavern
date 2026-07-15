@@ -29,6 +29,8 @@ pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
                 class={btn_base ++ " bg-transparent text-muted hover:bg-surface-2 hover:text-text"}
                 data-icon="menu"
                 aria-label="Options"
+                aria-haspopup="dialog"
+                onclick={undo.onOpenSnapshots}
             ></button>
             <label for="send_textarea" class="sr-only top-0 left-0">Message</label>
             <textarea
@@ -102,6 +104,7 @@ fn onComposerKeydown(ev: zx.client.Event) void {
 const zx = @import("zx");
 const js = zx.client.js;
 const ui = @import("./ui.zig");
+const undo = @import("./undo.zig");
 const instrument = @import("./instrument.zig");
 const dom_event = @import("./dom_event.zig");
 const char_api = @import("./char_api.zig");

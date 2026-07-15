@@ -23,8 +23,8 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
             @allocator={ctx.allocator}
             id="chat"
             class="group/chat col-start-2 row-start-2 min-h-0 min-w-0 overflow-y-auto [overscroll-behavior:contain] [scrollbar-color:var(--color-border)_transparent] [scrollbar-width:thin]"
-            onclick={ui.onPageClick}
-            onkeydown={ui.onPageKey}
+            onclick={undo.onLogClick}
+            onkeydown={undo.onLogKey}
         >
             <div
                 class="chat-inner relative mx-auto max-w-[var(--reading-measure,var(--measure))] px-4 pt-6 pb-8 group-aria-busy/chat:opacity-55 max-[640px]:px-2 max-[640px]:pt-3 max-[640px]:pb-4"
@@ -32,12 +32,12 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
                 <div class="chat-top" aria-hidden="true"></div>
                 <div class="chat-history">
                     {for (msgs[0..sstart], 0..) |m, i| (
-                        <MessageView msg={m} key={wo + i} memo={store.signalFor(i, m)} streaming={store.isStreaming(i)} />
+                        <MessageView msg={m} key={wo + i} memo={store.signalFor(i, m)} streaming={store.isStreaming(i)} abs_index={wo + i} />
                     )}
                 </div>
                 <div class="chat-live" role="log" aria-live="polite">
                     {for (msgs[sstart..], 0..) |m, j| (
-                        <MessageView msg={m} key={wo + sstart + j} memo={store.signalFor(sstart + j, m)} streaming={store.isStreaming(sstart + j)} />
+                        <MessageView msg={m} key={wo + sstart + j} memo={store.signalFor(sstart + j, m)} streaming={store.isStreaming(sstart + j)} abs_index={wo + sstart + j} />
                     )}
                 </div>
                 <div
@@ -48,17 +48,24 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
                     aria-orientation="vertical"
                 ></div>
             </div>
+            { if (store.undo.mode == .versions) (
+                <UndoVersions />
+            ) else if (store.undo.mode == .snapshots) (
+                <UndoSnapshots />
+            )}
         </main>
     );
 }
 
 const zx = @import("zx");
-const ui = @import("./ui.zig");
+const undo = @import("./undo.zig");
 const sanitized = @import("./sanitized.zig");
 const store = @import("./store.zig");
 const regions = @import("./regions.zig");
 const instrument = @import("./instrument.zig");
 pub const MessageView = @import("./message.zx").MessageView;
+const UndoVersions = @import("./panels/undo_body.zx").UndoVersions;
+const UndoSnapshots = @import("./panels/undo_body.zx").UndoSnapshots;
 
 comptime {
     _ = @import("./bridge.zig");

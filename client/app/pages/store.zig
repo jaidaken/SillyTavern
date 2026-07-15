@@ -234,9 +234,12 @@ pub fn signal(m: Message) u64 {
 /// Perturbing the hash while streaming makes the signal change the moment the stream ends, so the
 /// reconciler re-renders the message and drops its busy flag. Never 0, same as `signal`.
 pub fn signalFor(index: usize, m: Message) u64 {
-    const base = signal(m);
-    if (!global.isStreaming(index)) return base;
-    return (base ^ 0x9e3779b97f4a7c15) | 1;
+    var base = signal(m);
+    if (global.isStreaming(index)) base = (base ^ 0x9e3779b97f4a7c15) | 1;
+    // The version popover opens on ONE message. Fold the undo epoch in for that message so opening,
+    // filling, or closing it re-renders it even though its sealed body never moves (memo would skip).
+    if (undo.isVersionsOpenFor(global.window_offset + index)) base = ((base ^ 0x517cc1b727220a95) *% (undo.epoch | 1)) | 1;
+    return base;
 }
 
 pub fn clearStore() void {
@@ -256,6 +259,182 @@ pub fn windowOffset() usize {
 pub fn sessionStart() usize {
     return global.session_start;
 }
+
+// ---- undo UI state (C4) -------------------------------------------------------------------
+// Pure Zig so it unit-tests here; a fetched entry is dropped on OOM (the surface shows fewer).
+
+pub const UndoMode = enum { closed, versions, snapshots };
+
+/// One earlier text of a single message, newest-first, from the backup-diff endpoint.
+pub const Version = struct {
+    mes: []const u8,
+    backup_ts: []const u8,
+    matched: bool,
+};
+
+/// One whole-chat save point from the snapshot endpoint.
+pub const Snapshot = struct {
+    backup_ts: []const u8,
+    message_count: usize,
+    last_mes_preview: []const u8,
+    added: usize,
+    removed: usize,
+    edited: usize,
+    too_large: bool,
+};
+
+pub const UndoState = struct {
+    allocator: Allocator,
+    mode: UndoMode = .closed,
+    /// Absolute index of the message whose version popover is open (only meaningful in `.versions`).
+    target_index: usize = 0,
+    versions: std.ArrayList(Version) = .empty,
+    snapshots: std.ArrayList(Snapshot) = .empty,
+    /// The undo change-token from the last versions/snapshots response, threaded into a restore. This
+    /// is NOT the reader's spine version; never restore with `pager.currentToken()`.
+    change_token: []u8 = &.{},
+    /// A one-line status shown in the surface (a stale-retry note, or an empty-state line).
+    note: []u8 = &.{},
+    busy: bool = false,
+    /// Bumped on every mutation so `signalFor` re-renders the open target message; see signalFor.
+    epoch: u64 = 0,
+    /// Viewport anchor for the version popover (px): its top edge and its gap from the viewport right.
+    /// The popover renders fixed at the MessageLog root, not inside the message, because `.mes` carries
+    /// content-visibility paint containment that would clip an in-message popover.
+    anchor_top: f32 = 0,
+    anchor_right: f32 = 0,
+
+    fn freeVersions(self: *UndoState) void {
+        for (self.versions.items) |v| {
+            self.allocator.free(v.mes);
+            self.allocator.free(v.backup_ts);
+        }
+        self.versions.clearRetainingCapacity();
+    }
+
+    fn freeSnapshots(self: *UndoState) void {
+        for (self.snapshots.items) |s| {
+            self.allocator.free(s.backup_ts);
+            self.allocator.free(s.last_mes_preview);
+        }
+        self.snapshots.clearRetainingCapacity();
+    }
+
+    pub fn deinit(self: *UndoState) void {
+        self.freeVersions();
+        self.versions.deinit(self.allocator);
+        self.freeSnapshots();
+        self.snapshots.deinit(self.allocator);
+        if (self.change_token.len > 0) self.allocator.free(self.change_token);
+        if (self.note.len > 0) self.allocator.free(self.note);
+        self.* = undefined;
+    }
+
+    fn touch(self: *UndoState) void {
+        self.epoch +%= 1;
+    }
+
+    /// Open the version popover for the message at absolute index `abs`, cleared and marked busy for
+    /// the fetch the caller then dispatches.
+    pub fn openVersions(self: *UndoState, abs: usize) void {
+        self.freeVersions();
+        self.freeSnapshots();
+        self.setNoteRaw("");
+        self.mode = .versions;
+        self.target_index = abs;
+        self.busy = true;
+        self.touch();
+    }
+
+    /// Open the whole-chat snapshot overlay, cleared and marked busy for the fetch the caller dispatches.
+    pub fn openSnapshots(self: *UndoState) void {
+        self.freeVersions();
+        self.freeSnapshots();
+        self.setNoteRaw("");
+        self.mode = .snapshots;
+        self.busy = true;
+        self.touch();
+    }
+
+    pub fn close(self: *UndoState) void {
+        self.mode = .closed;
+        self.busy = false;
+        self.freeVersions();
+        self.freeSnapshots();
+        self.setNoteRaw("");
+        self.touch();
+    }
+
+    pub fn setBusy(self: *UndoState, b: bool) void {
+        self.busy = b;
+        self.touch();
+    }
+
+    pub fn setAnchor(self: *UndoState, top: f32, right: f32) void {
+        self.anchor_top = top;
+        self.anchor_right = right;
+    }
+
+    pub fn setToken(self: *UndoState, token: []const u8) void {
+        if (self.change_token.len > 0) self.allocator.free(self.change_token);
+        self.change_token = self.allocator.dupe(u8, token) catch &.{};
+    }
+
+    fn setNoteRaw(self: *UndoState, msg: []const u8) void {
+        if (self.note.len > 0) self.allocator.free(self.note);
+        self.note = if (msg.len > 0) (self.allocator.dupe(u8, msg) catch &.{}) else &.{};
+    }
+
+    pub fn setNote(self: *UndoState, msg: []const u8) void {
+        self.setNoteRaw(msg);
+        self.touch();
+    }
+
+    /// Copy a version into the list; on OOM the version is dropped.
+    pub fn addVersion(self: *UndoState, mes: []const u8, backup_ts: []const u8, matched: bool) void {
+        const m = self.allocator.dupe(u8, mes) catch return;
+        const t = self.allocator.dupe(u8, backup_ts) catch {
+            self.allocator.free(m);
+            return;
+        };
+        self.versions.append(self.allocator, .{ .mes = m, .backup_ts = t, .matched = matched }) catch {
+            self.allocator.free(m);
+            self.allocator.free(t);
+            return;
+        };
+        self.touch();
+    }
+
+    /// Copy a snapshot into the list; on OOM the snapshot is dropped.
+    pub fn addSnapshot(self: *UndoState, s: Snapshot) void {
+        const ts = self.allocator.dupe(u8, s.backup_ts) catch return;
+        const pv = self.allocator.dupe(u8, s.last_mes_preview) catch {
+            self.allocator.free(ts);
+            return;
+        };
+        self.snapshots.append(self.allocator, .{
+            .backup_ts = ts,
+            .message_count = s.message_count,
+            .last_mes_preview = pv,
+            .added = s.added,
+            .removed = s.removed,
+            .edited = s.edited,
+            .too_large = s.too_large,
+        }) catch {
+            self.allocator.free(ts);
+            self.allocator.free(pv);
+            return;
+        };
+        self.touch();
+    }
+
+    pub fn isVersionsOpenFor(self: *const UndoState, abs: usize) bool {
+        return self.mode == .versions and self.target_index == abs;
+    }
+};
+
+/// The one undo state the surfaces render. `undo.zig` drives it; `message.zx`/`messagelog.zx` read it.
+pub var undo: UndoState = .{ .allocator = page_gpa };
 
 const testing = std.testing;
 
@@ -695,4 +874,112 @@ fn prependScenario(gpa: Allocator) !void {
 
 test "prepend_releases_everything_on_any_allocation_failure" {
     try testing.checkAllAllocationFailures(testing.allocator, prependScenario, .{});
+}
+
+test "undo_opens_versions_for_a_target_then_closes" {
+    var u = UndoState{ .allocator = testing.allocator };
+    defer u.deinit();
+    try testing.expectEqual(UndoMode.closed, u.mode);
+    u.openVersions(7);
+    try testing.expectEqual(UndoMode.versions, u.mode);
+    try testing.expectEqual(@as(usize, 7), u.target_index);
+    try testing.expect(u.busy);
+    try testing.expect(u.isVersionsOpenFor(7));
+    try testing.expect(!u.isVersionsOpenFor(6));
+    u.close();
+    try testing.expectEqual(UndoMode.closed, u.mode);
+    try testing.expect(!u.busy);
+    try testing.expect(!u.isVersionsOpenFor(7));
+}
+
+test "undo_add_version_copies_bytes_and_survives_the_source_freeing" {
+    var u = UndoState{ .allocator = testing.allocator };
+    defer u.deinit();
+    u.openVersions(1);
+    var src = [_]u8{ 'l', 'i', 't' };
+    u.addVersion(&src, "20260714-120000", true);
+    src[0] = 'X'; // mutate the source: the stored copy must be independent
+    try testing.expectEqual(@as(usize, 1), u.versions.items.len);
+    try testing.expectEqualStrings("lit", u.versions.items[0].mes);
+    try testing.expectEqualStrings("20260714-120000", u.versions.items[0].backup_ts);
+    try testing.expect(u.versions.items[0].matched);
+    u.setBusy(false);
+    try testing.expect(!u.busy);
+}
+
+test "undo_open_snapshots_holds_copied_rows" {
+    var u = UndoState{ .allocator = testing.allocator };
+    defer u.deinit();
+    u.openSnapshots();
+    try testing.expectEqual(UndoMode.snapshots, u.mode);
+    u.addSnapshot(.{ .backup_ts = "20260714-110000", .message_count = 4, .last_mes_preview = "the lantern gutters", .added = 0, .removed = 0, .edited = 1, .too_large = false });
+    try testing.expectEqual(@as(usize, 1), u.snapshots.items.len);
+    try testing.expectEqual(@as(usize, 4), u.snapshots.items[0].message_count);
+    try testing.expectEqual(@as(usize, 1), u.snapshots.items[0].edited);
+    try testing.expectEqualStrings("the lantern gutters", u.snapshots.items[0].last_mes_preview);
+    // Reopening versions must drop the snapshot rows.
+    u.openVersions(0);
+    try testing.expectEqual(@as(usize, 0), u.snapshots.items.len);
+}
+
+test "undo_set_token_and_note_replace_the_prior_value" {
+    var u = UndoState{ .allocator = testing.allocator };
+    defer u.deinit();
+    u.setToken("utok-0");
+    try testing.expectEqualStrings("utok-0", u.change_token);
+    u.setToken("utok-1");
+    try testing.expectEqualStrings("utok-1", u.change_token);
+    u.setNote("chat changed, reopen history");
+    try testing.expectEqualStrings("chat changed, reopen history", u.note);
+    u.setNote("");
+    try testing.expectEqual(@as(usize, 0), u.note.len);
+}
+
+test "undo_epoch_advances_on_every_mutation" {
+    var u = UndoState{ .allocator = testing.allocator };
+    defer u.deinit();
+    const e0 = u.epoch;
+    u.openVersions(2);
+    const e1 = u.epoch;
+    try testing.expect(e1 != e0);
+    u.addVersion("a", "20260714-120000", false);
+    try testing.expect(u.epoch != e1);
+    const e2 = u.epoch;
+    u.close();
+    try testing.expect(u.epoch != e2);
+}
+
+test "signalFor perturbs only the message whose version popover is open" {
+    // Drives the module globals; close restores them for the tests that follow.
+    defer undo.close();
+    const m0: Message = .{ .name = "You", .body = "one" };
+    const m1: Message = .{ .name = "You", .body = "two" };
+    const base0 = signalFor(0, m0);
+    const base1 = signalFor(1, m1);
+    undo.openVersions(0);
+    try testing.expect(signalFor(0, m0) != base0);
+    try testing.expectEqual(base1, signalFor(1, m1));
+}
+
+test "undo_state_leaves_no_leak_under_a_debug_allocator" {
+    var debug: std.heap.DebugAllocator(.{}) = .init;
+    const gpa = debug.allocator();
+
+    var u = UndoState{ .allocator = gpa };
+    u.setToken("utok-0");
+    u.openVersions(3);
+    for (0..8) |i| {
+        var buf: [8]u8 = undefined;
+        u.addVersion(std.fmt.bufPrint(&buf, "v{d}", .{i}) catch "v", "20260714-120000", i % 2 == 0);
+    }
+    u.setNote("stale, reopened");
+    u.openSnapshots();
+    for (0..8) |i| {
+        var buf: [8]u8 = undefined;
+        u.addSnapshot(.{ .backup_ts = std.fmt.bufPrint(&buf, "2026071{d}-000000", .{i}) catch "20260714-000000", .message_count = i, .last_mes_preview = "preview", .added = i, .removed = 0, .edited = 1, .too_large = false });
+    }
+    u.close();
+    u.deinit();
+
+    try testing.expectEqual(std.heap.Check.ok, debug.deinit());
 }
