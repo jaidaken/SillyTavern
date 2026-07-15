@@ -19,6 +19,7 @@ const conn_mod = @import("./connection.zig");
 const char_store = @import("./character_store.zig");
 const character_view = @import("./character_view.zig");
 const persona_store = @import("./persona_store.zig");
+const persona_actions = @import("./persona_actions.zig");
 const store = @import("./store.zig");
 const pager = @import("./pager.zig");
 const regions = @import("./regions.zig");
@@ -330,6 +331,9 @@ fn loadPersonas(status: u16, res: ?*zx.Fetch.Response) void {
     }
     // The connection lives in the same settings blob; mine it here so send knows the backend.
     conn_mod.setFrom(settings_str);
+    // Persona selection by precedence (user_avatar, default_persona, first), and mark the store
+    // authoritative so a later save can serialize the persona set (C-PERS).
+    persona_actions.applyAutoSelect(settings_str);
     regions.bumpShell();
 }
 

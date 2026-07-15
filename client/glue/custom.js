@@ -456,6 +456,22 @@
         input.value = '';
     };
 
+    // Persona avatar replace (C-PERS): FormData cannot cross the wasm boundary, so replaceAvatar hops here.
+    // Posts to /api/avatars/upload with the stock frontend's fields ('avatar' file + 'overwrite_name').
+    window.__st_persona_avatar = async function (avatar) {
+        const input = document.getElementById('persona-avatar-input');
+        if (!input || !input.files || !input.files[0]) return;
+        const fd = new FormData();
+        fd.append('avatar', input.files[0]);
+        fd.append('overwrite_name', avatar);
+        await ensureCsrfToken();
+        try {
+            const res = await loggedFetch('/api/avatars/upload', { method: 'POST', headers: withCsrf({}), body: fd });
+            if (!res.ok) { log.net.warn('persona avatar upload failed:', res.status); window.alert('Avatar update failed'); } else wasm.__st_persona_avatar_done();
+        } catch (err) { log.chars.error('persona avatar upload failed:', err); }
+        input.value = '';
+    };
+
     // Click telemetry, deliberate: it sees clicks on dead vnodes too, which is what a silently-dead
     // handler looks like. Motion, autogrow, reading presets and click-outside are zx handlers now.
     document.addEventListener('click', function (e) {

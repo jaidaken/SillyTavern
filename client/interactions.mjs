@@ -820,6 +820,102 @@ async function main() {
             `idle send=${idleSend}/stop=${idleStop} streamToggled=${streamToggled}`);
         // Let the reply seal so teardown is clean.
         await page.waitFor("!document.querySelector('#chat .mes[aria-busy=\\'true\\']')", 8000);
+
+        // ===== C-PERS (append-only): persona auto-select + remember-last + CRUD =====
+        // The mock settings blob is mutable (settings/save round-trips), so a persist shows on the
+        // next get. The "a b.png" persona proves the avatar-url encode fix; prompt/confirm are
+        // monkeypatched so the CRUD dialogs are deterministic under headless Chrome. The home landing
+        // no longer auto-opens (C-HOME), so open a recent chat after each nav to boot the session.
+        console.log('== persona: auto-select, remember-last, CRUD ==');
+        await page.navigate(`${args.base}/`);
+        await openRecentChat();
+        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+        await page.click('#d-persona');
+        await page.waitFor("document.querySelectorAll('#persona-list .char-item').length >= 3", 5000);
+
+        const encoded = await page.eval(
+            "Array.from(document.querySelectorAll('#persona-list img')).some(function(i){return (i.getAttribute('src')||'').indexOf('a%20b.png')>=0;})");
+        const rawSpace = await page.eval(
+            "Array.from(document.querySelectorAll('#persona-list img')).some(function(i){return (i.getAttribute('src')||'').indexOf('a b.png')>=0;})");
+        row('must', encoded && !rawSpace, 'C-PERS-1 persona avatar url percent-encodes a spaced filename', `enc=${encoded} raw=${rawSpace}`);
+
+        // Remember-last (non-vacuous): select persona 1 (differs from the boot auto-select), the
+        // selection persists as user_avatar, and a reload auto-selects it again.
+        await page.click('#persona-list .char-item[data-persona-index="1"] .char-name');
+        await page.waitFor("document.querySelector('#persona-list .char-item[data-persona-index=\\'1\\']').classList.contains('is-selected')", 3000);
+        const persistedSel = await (async () => {
+            const deadline = Date.now() + 8000;
+            while (Date.now() < deadline) {
+                const st = await (await fetch(`${args.base}/dev/state`)).json();
+                if (st.persona_settings && st.persona_settings.user_avatar === 'p2.png') return true;
+                await sleep(150);
+            }
+            return false;
+        })();
+        await page.navigate(`${args.base}/`);
+        await openRecentChat();
+        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+        await page.click('#d-persona');
+        await page.waitFor("document.querySelectorAll('#persona-list .char-item').length >= 3", 5000);
+        const remembered = await page.waitFor("document.querySelector('#persona-list .char-item[data-persona-index=\\'1\\']').classList.contains('is-selected')", 3000);
+        row('must', persistedSel && remembered, 'C-PERS-2 selection persists (user_avatar) and survives a reload', `persisted=${persistedSel} remembered=${remembered}`);
+
+        // Set default: with persona 1 selected, set-default writes power_user.default_persona.
+        await page.waitFor("document.querySelector('[data-persona-action=\\'set-default\\']')", 3000);
+        await page.click('[data-persona-action="set-default"]');
+        const defaultOk = await (async () => {
+            const deadline = Date.now() + 8000;
+            while (Date.now() < deadline) {
+                const st = await (await fetch(`${args.base}/dev/state`)).json();
+                const pu = st.persona_settings && st.persona_settings.power_user;
+                if (pu && pu.default_persona === 'p2.png') return true;
+                await sleep(150);
+            }
+            return false;
+        })();
+        row('must', defaultOk, 'C-PERS-3 set-default persists power_user.default_persona', `default=${defaultOk}`);
+
+        // CRUD mutates the store for instant UI, then the change round-trips through reading_prefs's
+        // one debounced saver (3s). Each row asserts BOTH the immediate DOM and the server state.
+        const pollPersonas = async (pred) => {
+            const deadline = Date.now() + 8000;
+            while (Date.now() < deadline) {
+                const st = await (await fetch(`${args.base}/dev/state`)).json();
+                const p = st.persona_settings && st.persona_settings.power_user && st.persona_settings.power_user.personas;
+                if (p && pred(p)) return true;
+                await sleep(150);
+            }
+            return false;
+        };
+
+        // Add: a monkeypatched prompt names the persona; the row appears at once and the save carries it.
+        const before = await page.eval("document.querySelectorAll('#persona-list .char-item').length");
+        await page.eval("window.prompt = function(){ return 'Zephyr'; }; window.confirm = function(){ return true; };");
+        await page.click('[data-persona-action="add"]');
+        const addedRow = await page.waitFor(
+            `document.querySelectorAll('#persona-list .char-item').length === ${before} + 1 && document.querySelector('#persona-list .char-item[data-persona-index="${before}"] .char-name').textContent.trim() === 'Zephyr'`, 6000);
+        const addedSaved = await pollPersonas((p) => Object.values(p).indexOf('Zephyr') >= 0);
+        row('must', addedRow && addedSaved, 'C-PERS-4 add persona appends a row and round-trips to the server', `row=${addedRow} saved=${addedSaved}`);
+
+        // Rename: select the new persona, rename it; the row updates and the save round-trips.
+        await page.click(`#persona-list .char-item[data-persona-index="${before}"] .char-name`);
+        await page.waitFor(`document.querySelector('#persona-list .char-item[data-persona-index="${before}"]').classList.contains('is-selected')`, 3000);
+        await page.eval("window.prompt = function(){ return 'Zephyr II'; };");
+        await page.waitFor("document.querySelector('[data-persona-action=\\'rename\\']')", 3000);
+        await page.click('[data-persona-action="rename"]');
+        const renamedRow = await page.waitFor(
+            `document.querySelector('#persona-list .char-item[data-persona-index="${before}"] .char-name').textContent.trim() === 'Zephyr II'`, 6000);
+        const renamedSaved = await pollPersonas((p) => Object.values(p).indexOf('Zephyr II') >= 0 && Object.values(p).indexOf('Zephyr') < 0);
+        row('must', renamedRow && renamedSaved, 'C-PERS-5 rename updates the name and round-trips', `row=${renamedRow} saved=${renamedSaved}`);
+
+        // Delete: select it, confirm; the row disappears and the removal round-trips (back to pre-add count).
+        await page.click(`#persona-list .char-item[data-persona-index="${before}"] .char-name`);
+        await page.waitFor(`document.querySelector('#persona-list .char-item[data-persona-index="${before}"]').classList.contains('is-selected')`, 3000);
+        await page.waitFor("document.querySelector('[data-persona-action=\\'delete\\']')", 3000);
+        await page.click('[data-persona-action="delete"]');
+        const deletedRow = await page.waitFor(`document.querySelectorAll('#persona-list .char-item').length === ${before}`, 6000);
+        const deletedSaved = await pollPersonas((p) => Object.keys(p).length === before && Object.values(p).indexOf('Zephyr II') < 0);
+        row('must', deletedRow && deletedSaved, 'C-PERS-6 delete removes the persona and round-trips', `row=${deletedRow} saved=${deletedSaved}`);
     } finally {
         clearTimeout(watchdog);
         cleanup();

@@ -6,6 +6,7 @@ const stream_mod = @import("./stream.zig");
 const char_store = @import("./character_store.zig");
 const character_view = @import("./character_view.zig");
 const persona_store = @import("./persona_store.zig");
+const persona_actions = @import("./persona_actions.zig");
 const reading_prefs = @import("./reading_prefs.zig");
 const appearance = @import("./appearance.zig");
 const char_api = @import("./char_api.zig");
@@ -199,6 +200,12 @@ fn refreshCharacters() callconv(.c) void {
     char_api.fetchCharacters();
 }
 
+/// Called by the __st_persona_avatar JS multipart helper after a successful persona-avatar upload,
+/// so the persona panel re-renders against the new image (C-PERS).
+fn personaAvatarUploaded() callconv(.c) void {
+    persona_actions.onAvatarUploaded();
+}
+
 // Demo fixtures are opt-in (glue calls this on ?demo or when no backend answers), so a real
 // deployment shows honest state instead of roleplay prose masking a dead load path.
 fn seedDemo() callconv(.c) void {
@@ -278,6 +285,7 @@ comptime {
         @export(&bootInit, .{ .name = "__st_boot_init" });
         @export(&seedDemo, .{ .name = "__st_seed_demo" });
         @export(&refreshCharacters, .{ .name = "__st_refresh_characters" });
+        @export(&personaAvatarUploaded, .{ .name = "__st_persona_avatar_done" });
         @export(&addPersona, .{ .name = "__st_add_persona" });
         @export(&clearPersonas, .{ .name = "__st_clear_personas" });
         @export(&selectPersona, .{ .name = "__st_select_persona" });

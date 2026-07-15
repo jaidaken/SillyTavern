@@ -79,6 +79,26 @@ def _mock_chat_page(req):
     }
 
 
+# C-PERS: the persona settings blob is mutable so a persist (settings/save) round-trips on the next
+# get. "a b.png" carries a space so the gate proves the persona avatar-URL encode fix.
+def _default_settings():
+    return {
+        "main_api": "textgenerationwebui",
+        "amount_gen": 64,
+        "textgenerationwebui_settings": {
+            "type": "llamacpp",
+            "server_urls": {"llamacpp": "http://127.0.0.1:5001"},
+            "temp": 0.8, "top_p": 0.95, "top_k": 40, "min_p": 0.05, "rep_pen": 1.1,
+        },
+        "power_user": {
+            "personas": {"p1.png": "Alice", "p2.png": "Bob", "a b.png": "Spacey"},
+            "persona_descriptions": {
+                "p1.png": "First persona", "p2.png": "Second persona", "a b.png": "Persona with a space",
+            },
+        },
+    }
+
+
 def _mock_characters(favs):
     chars = []
     for i in range(60):
@@ -184,6 +204,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # Undo fixture state (C4): the mutable current chat and its optimistic-concurrency token.
     undo_chat = None
     undo_token = "utok-0"
+    # C-PERS: mutable settings blob so a persona persist (settings/save) shows on the next get.
+    persona_settings = None
+
+    @classmethod
+    def settings_blob(cls):
+        if cls.persona_settings is None:
+            cls.persona_settings = _default_settings()
+        return cls.persona_settings
 
     @classmethod
     def undo_current(cls):
@@ -228,6 +256,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "append_409_count": Handler.append_409_count,
                     "get_count": Handler.get_count,
                     "get_409_count": Handler.get_409_count,
+                    "persona_settings": Handler.persona_settings,  # C-PERS
                 })
             if self.path.startswith("/dev/arm-get-409"):
                 Handler.arm_get_409 = True
@@ -360,20 +389,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/chats/recent":
             return self.mock_json([] if Handler.recent_empty else _mock_recent())
         if path == "/api/settings/get":
-            settings = {
-                "main_api": "textgenerationwebui",
-                "amount_gen": 64,
-                "textgenerationwebui_settings": {
-                    "type": "llamacpp",
-                    "server_urls": {"llamacpp": "http://127.0.0.1:5001"},
-                    "temp": 0.8, "top_p": 0.95, "top_k": 40, "min_p": 0.05, "rep_pen": 1.1,
-                },
-                "power_user": {
-                    "personas": {"p1.png": "Alice", "p2.png": "Bob"},
-                    "persona_descriptions": {"p1.png": "First persona", "p2.png": "Second persona"},
-                },
-            }
-            return self.mock_json({"settings": json.dumps(settings)})
+            return self.mock_json({"settings": json.dumps(Handler.settings_blob())})
+        if path == "/api/settings/save":
+            # C-PERS: merge the posted settings so a persona persist round-trips on the next get.
+            if isinstance(req, dict):
+                Handler.settings_blob().update(req)
+            return self.mock_json({})
+        if path == "/api/avatars/upload":
+            # C-PERS: the multipart body is not parsed here; ack with a stored filename.
+            return self.mock_json({"path": "persona-uploaded.png"})
+        if path == "/api/avatars/delete":
+            # C-PERS: ack the avatar delete; the client then removes the settings entry.
+            return self.mock_json({"result": "ok"})
         if path == "/api/characters/get":
             return self.mock_json({
                 "name": req.get("avatar_url", "char"),
