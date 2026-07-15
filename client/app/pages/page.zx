@@ -22,6 +22,7 @@ pub fn Page(ctx: zx.PageContext) !zx.Component {
         >
             <Shell @rendering={.client} />
             <MessageLog @rendering={.client} />
+            <Home @rendering={.client} />
             <Composer @rendering={.client} />
         </div>
     );
@@ -31,6 +32,7 @@ const zx = @import("zx");
 const store = @import("./store.zig");
 pub const Shell = @import("./shell.zx").Shell;
 pub const MessageLog = @import("./messagelog.zx").MessageLog;
+pub const Home = @import("./home_body.zx").Home;
 pub const Composer = @import("./composer.zx").Composer;
 
 comptime {

@@ -84,9 +84,9 @@ check   "main.wasm present" "$([ -f "$WASM" ] && echo yes || echo no)" "yes"
 
 echo
 echo "== served html (pre-hydration) =="
-# Three client regions (Shell, MessageLog, Composer), each with one SSR marker; three fixtures, each
-# body a placeholder the client replaces.
-check "region hydration markers in index.html" "$(count '<!--\$' dist/index.html)" 3
+# Four client regions (Shell, MessageLog, Home, Composer), each with one SSR marker; three fixtures,
+# each body a placeholder the client replaces.
+check "region hydration markers in index.html" "$(count '<!--\$' dist/index.html)" 4
 check "ssr placeholder, one per message" "$(count 'ST_SSR_PLACEHOLDER' dist/index.html)" 12
 # The justify gate (message.zx): long messages carry mes-justify, short roleplay turns stay plain, so
 # both classes must appear in the SSR. A regression that justified everything (or nothing) fails here.

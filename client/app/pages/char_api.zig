@@ -158,6 +158,9 @@ fn readDemoFlag() bool {
 fn seedDemoFixtures() void {
     fixtures.loadRoleplay(&store.global);
     regions.bumpMessageLog();
+    // Demo seeds a chat straight into the store, so Home must hide behind it. bumpMessageLog no longer
+    // bumps Home (it fires per stream flush), so the demo transition bumps Home directly.
+    regions.bumpHome();
 }
 
 fn bootStep() void {
@@ -167,13 +170,12 @@ fn bootStep() void {
     boot_done = true;
     if (boot_demo) return;
     switch (chars_outcome) {
-        .ok => autoOpenRecentChat(),
-        // Demo fallback ONLY when nothing answered (network throw or dead-proxy 502/504);
-        // a reachable backend's failure stays visible below, never masked by fixtures.
-        .unreachable_backend => {
-            seedDemoFixtures();
-            boot_log.info("backend unreachable - demo fixtures seeded", .{});
-        },
+        // Show home by default: home.zig self-loads the recent list on its first render, and its
+        // explicit "resume last" action replaces the old silent auto-open (HARD_RULE 4).
+        .ok => {},
+        // A live view never paints demo fixtures: an unreachable backend shows home, whose recent
+        // fetch also fails, so home renders its error state. Fixtures seed ONLY in ?demo (boot above).
+        .unreachable_backend => boot_log.warn("backend unreachable - showing home (no demo fixtures in a live view)", .{}),
         .err => boot_log.err("character load failed against a reachable backend - see [st:net] above", .{}),
     }
 }
@@ -278,16 +280,6 @@ fn recomputeView() void {
         chars_log.err("character view compute failed: {s}", .{@errorName(err)});
     };
     regions.bumpShell();
-}
-
-fn autoOpenRecentChat() void {
-    const chars = char_store.slice();
-    const best = data.mostRecentIndex(chars) orelse {
-        chars_log.debug("auto-open: no characters", .{});
-        return;
-    };
-    chars_log.info("auto-opening most recent chat: {s}", .{chars[best].name});
-    loadCharacterChat(best);
 }
 
 // ---- personas ---------------------------------------------------------------------------

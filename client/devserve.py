@@ -101,6 +101,26 @@ def _mock_characters(favs):
     return chars
 
 
+# ---- C-HOME recent-chats fixture: ChatInfo[] as /api/chats/recent returns. Character chats carry an
+# avatar; the group chat carries `group` and no avatar, so the client filters it out of the v1 list. ----
+def _mock_recent():
+    now_ms = int(time.time() * 1000)
+    return [
+        {"file_name": "Rita Recent - 2026-07-14.jsonl", "avatar": "char41.png",
+         "mes": "The harbor lights are on again tonight.", "last_mes": now_ms - 5 * 60 * 1000,
+         "file_size": "4 kB", "chat_items": 12},
+        {"file_name": "Char 05 Vex - 2026-07-13.jsonl", "avatar": "char05.png",
+         "mes": "Let us take the eastern road while the tide is low.", "last_mes": now_ms - 3 * 60 * 60 * 1000,
+         "file_size": "2 kB", "chat_items": 6},
+        {"file_name": "Char 06 Vex - 2026-07-10.jsonl", "avatar": "char06.png",
+         "mes": "The lantern gutters in the wind and the door creaks open.", "last_mes": now_ms - 4 * 24 * 60 * 60 * 1000,
+         "file_size": "1 kB", "chat_items": 4},
+        {"file_name": "Party - 2026-07-09.jsonl", "group": "grp1",
+         "mes": "We should make camp here before nightfall.", "last_mes": now_ms - 6 * 24 * 60 * 60 * 1000,
+         "file_size": "3 kB", "chat_items": 8},
+    ]
+
+
 # ---- undo fixture (C4): char00's chat is repurposed as a two-identical-message chat + one older
 # backup, so the 60-character count the B2b gate pins stays intact (no extra fixture character). ----
 UNDO_AVATAR = "char00.png"
@@ -159,6 +179,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # scroll-preservation gate can drive the real resync path the mock append 409 cannot reach.
     arm_get_409 = False
     get_409_count = 0
+    # C-HOME: armed via /dev/arm-recent-empty so the home landing's empty state can be driven.
+    recent_empty = False
     # Undo fixture state (C4): the mutable current chat and its optimistic-concurrency token.
     undo_chat = None
     undo_token = "utok-0"
@@ -209,6 +231,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 })
             if self.path.startswith("/dev/arm-get-409"):
                 Handler.arm_get_409 = True
+                return self.mock_json({"armed": True})
+            if self.path.startswith("/dev/arm-recent-empty"):
+                Handler.recent_empty = True
                 return self.mock_json({"armed": True})
             self.send_error(404, "not found")
             return
@@ -332,6 +357,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.mock_json({"token": "mock-csrf-token"})
         if path == "/api/characters/all":
             return self.mock_json(_mock_characters(Handler.mock_favs))
+        if path == "/api/chats/recent":
+            return self.mock_json([] if Handler.recent_empty else _mock_recent())
         if path == "/api/settings/get":
             settings = {
                 "main_api": "textgenerationwebui",

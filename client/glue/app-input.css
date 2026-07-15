@@ -770,3 +770,25 @@
     background: var(--color-bg);
     cursor: default;
 }
+
+/* ===== C-HOME: recent-chats landing (append-only) ===== */
+/* Signature staggered reveal (WD63): each recent thread rises on load, its delay stepped by --rd
+   (home_body.zx). --move follows the reduced-motion preference and zeroes only the MOVEMENT; the
+   opacity fade always plays, so the serif + amber identity survives prefers-reduced-motion (WD25).
+   The region keeps stable element identity across re-renders, so this fires once per mount, not per
+   bump. */
+.home-thread {
+    animation: home-rise 300ms var(--ease-settle) both;
+    animation-delay: var(--rd, 0ms);
+}
+@keyframes home-rise {
+    from { opacity: 0; transform: translateY(calc(var(--move) * 10px)); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+/* Loading skeleton: a gentle opacity pulse, its depth scaled by --move so reduced motion holds it
+   still rather than flashing. */
+.home-skel { animation: home-pulse 1.2s ease-in-out infinite; }
+@keyframes home-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: calc(1 - var(--move) * 0.45); }
+}

@@ -225,6 +225,17 @@ async function main() {
         };
         const page = new Page(cdp, sessionId, consoleLines);
         const hydrated = "document.querySelector('#chat-root.hydrated')";
+        // Boot shows the home landing now, not an auto-opened chat, so flows needing an open chat resume
+        // first. Retry the click: resume-last needs the character store, which races the recent-list load.
+        const openRecentChat = async () => {
+            await page.waitFor(`${hydrated} && document.querySelector('#home-resume')`, 15000);
+            const deadline = Date.now() + 15000;
+            while (Date.now() < deadline) {
+                await page.click('#home-resume');
+                if (await page.waitFor("document.querySelectorAll('#chat .mes').length>=3", 2000)) return;
+            }
+            throw new Error('openRecentChat: no chat opened after resume-last');
+        };
 
         // ---- Session A: demo fixtures + settings drawer + resize handles ----
         console.log('== session A: demo mode (?demo=1) ==');
@@ -280,9 +291,9 @@ async function main() {
         // ---- Session B: mock backend, real boot path ----
         console.log('== session B: mock backend (no demo) ==');
         await page.navigate(`${args.base}/`);
-        row('must', await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000)
-            && page.sawConsole('opened chat: Rita Recent'),
-            'B1 boot auto-opens the most recent chat (Rita Recent)');
+        row('must', await page.waitFor(`${hydrated} && document.querySelector('#chat-home:not(.hidden)') && document.querySelectorAll('#chat .mes').length===0`, 15000)
+            && !page.sawConsole('opened chat:'),
+            'B1 boot shows the home landing, no chat auto-opened');
 
         await page.click('#d-characters');
         row('must', await page.waitFor("document.querySelectorAll('#chat-root .char-item').length >= 60", 5000),
@@ -360,7 +371,7 @@ async function main() {
         console.log('== send loop (mock textgen backend) ==');
         const idle = "!document.querySelector('#chat .mes[aria-busy=\\'true\\']')";
         await page.navigate(`${args.base}/`);
-        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+        await openRecentChat();
         row('must', await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000),
             'SL-status shows the configured backend connected');
 
@@ -416,7 +427,7 @@ async function main() {
         const gotUser = (appends.appended || []).some(m => m.is_user && m.mes === 'PERSIST PROBE');
         const gotAsst = (appends.appended || []).some(m => !m.is_user && m.mes.includes('lantern'));
         await page.navigate(`${args.base}/`);
-        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+        await openRecentChat();
         const survived = await page.waitFor("document.body.textContent.includes('PERSIST PROBE')", 6000);
         row('must', gotUser && gotAsst && survived,
             'SL-send persists across a reload (user + assistant appended)', `user=${gotUser} asst=${gotAsst} reload=${survived}`);
@@ -426,7 +437,7 @@ async function main() {
         console.log('== connection setup (server-persisted) ==');
         const connUrl = 'http://127.0.0.1:9099';
         await page.navigate(`${args.base}/`);
-        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+        await openRecentChat();
         await page.click('#d-connections');
         await page.waitFor("document.getElementById('llama-url')", 4000);
         await page.eval("document.getElementById('llama-url').value=''");
@@ -460,7 +471,7 @@ async function main() {
         // store reset), not console lines, which are fragile after many prior sends.
         console.log('== append 409 resync ==');
         await page.navigate(`${args.base}/`);
-        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+        await openRecentChat();
         // Wait for the connection to load, else the send is a no-op (conn null) and never appends.
         await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000);
         const st0 = await (await fetch(`${args.base}/dev/state`)).json();
@@ -485,7 +496,7 @@ async function main() {
         // place, not tail-jump. Arm the mock to 409 the next prepend GET, scroll up to fire it, then assert.
         console.log('== prefetch 409 preserves scroll ==');
         await page.navigate(`${args.base}/`);
-        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+        await openRecentChat();
         await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000);
         const pf0 = await (await fetch(`${args.base}/dev/state`)).json();
         await fetch(`${args.base}/dev/arm-get-409`);
@@ -528,7 +539,7 @@ async function main() {
         // input must show that configured server, not the placeholder default.
         console.log('== J1 connection prefill ==');
         await page.navigate(`${args.base}/`);
-        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+        await openRecentChat();
         await page.click('#d-connections');
         await page.waitFor("document.getElementById('llama-url')", 4000);
         const prefill = await page.eval("document.getElementById('llama-url').value");
@@ -540,7 +551,7 @@ async function main() {
         // the spine) while the display must not: the prompt window is not bounded by what is on screen.
         console.log('== J1 invariant 2: prompt window exceeds the display window ==');
         await page.navigate(`${args.base}/`);
-        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+        await openRecentChat();
         await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000);
         const displayHas150 = await page.eval("document.body.textContent.includes('History message 150')");
         await page.focus('#send_textarea');
@@ -563,7 +574,7 @@ async function main() {
         // Dangerous property: index 1 and its twin at 3 both read "gutters"; restoring 1 changes only 1.
         console.log('== undo: per-message version history + snapshot overlay ==');
         await page.navigate(`${args.base}/`);
-        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+        await openRecentChat();
 
         // Open the undo fixture chat by search (kept oldest so it never auto-opens).
         await page.click('#d-characters');
@@ -635,6 +646,52 @@ async function main() {
             return false;
         })();
         row('must', snapRestored, 'UNDO-7 restoring a snapshot closes the overlay and resyncs the reader');
+
+        // ===== C-HOME (append-only): recent-chats home landing (list-first) =====
+        console.log('== home: recent-chats landing ==');
+        await page.navigate(`${args.base}/`);
+        // Boot shows the landing (no auto-open) with the recent list: three character chats, the group
+        // chat filtered out of v1.
+        row('must', await page.waitFor(
+            `${hydrated} && document.querySelector('#chat-home:not(.hidden)') && document.querySelectorAll('#chat-home .home-thread').length === 3`, 15000),
+            'HOME-1 boot shows the home landing with three recent character chats (group filtered)');
+
+        // A recent row opens that character's chat (loadCharacterChat) and the landing hides behind the log.
+        consoleLines.length = 0;
+        await page.click('#chat-home .home-thread');
+        const homeOpened = await (async () => {
+            const deadline = Date.now() + 6000;
+            while (Date.now() < deadline) {
+                if (page.sawConsole('opened chat: Rita Recent')
+                    && await page.eval("!!document.querySelector('#chat-home.hidden')")) return true;
+                await sleep(100);
+            }
+            return false;
+        })();
+        row('must', homeOpened, 'HOME-2 a recent row opens the chat and the landing hides');
+
+        // Empty state: arm the mock to return [], reload, and prove the invite renders (not a spinner).
+        await fetch(`${args.base}/dev/arm-recent-empty`);
+        await page.navigate(`${args.base}/`);
+        row('must', await page.waitFor(
+            `${hydrated} && document.querySelector('#chat-home:not(.hidden)')`
+            + ` && document.querySelectorAll('#chat-home .home-thread').length === 0`
+            + ` && document.querySelector('#chat-home').textContent.includes('No conversations yet')`
+            + ` && !document.querySelector('#chat-home [aria-busy=\\'true\\']')`, 15000),
+            'HOME-3 empty recent list renders the invite, not a spinner-forever');
+
+        // The explicit resume action opens the most recent chat even with an empty recent list.
+        consoleLines.length = 0;
+        await page.click('#home-resume');
+        const resumed = await (async () => {
+            const deadline = Date.now() + 6000;
+            while (Date.now() < deadline) {
+                if (page.sawConsole('resume last') && page.sawConsole('opened chat: Rita Recent')) return true;
+                await sleep(100);
+            }
+            return false;
+        })();
+        row('must', resumed, 'HOME-4 the resume-last action opens the most recent chat');
     } finally {
         clearTimeout(watchdog);
         cleanup();

@@ -88,9 +88,26 @@ async function main() {
             }
         };
 
-        // Boot + auto-open of the mock 300-message chat.
-        await waitFor('document.querySelector("#chat-root.hydrated") && window.__st_reader_scroll_bottom');
-        await waitFor('document.querySelectorAll("#chat .mes").length >= 50');
+        // A real click (ziex delegates events at body; the handler resolves via event.target).
+        const clickSel = async (sel) => {
+            const box = await evalRaw(`(function(){var el=document.querySelector(${JSON.stringify(sel)});if(!el)return null;el.scrollIntoView({block:'center'});var r=el.getBoundingClientRect();return {x:(r.left+r.right)/2,y:(r.top+r.bottom)/2};})()`);
+            if (!box) throw new Error('no element: ' + sel);
+            const base = { x: box.x, y: box.y, button: 'left', clickCount: 1, pointerType: 'mouse' };
+            await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base }, sessionId);
+            await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base }, sessionId);
+        };
+
+        // Boot shows the home landing; resume the most recent chat (the mock 300-message chat). resume-last
+        // needs the character store, which races the recent-list load, so retry the click until it opens.
+        await waitFor('document.querySelector("#chat-root.hydrated") && document.querySelector("#home-resume") && window.__st_reader_scroll_bottom');
+        {
+            const dl = Date.now() + 15000;
+            for (;;) {
+                await clickSel('#home-resume');
+                try { await waitFor('document.querySelectorAll("#chat .mes").length >= 50', 2500); break; } catch (_) { /* store not loaded yet */ }
+                if (Date.now() > dl) throw new Error('history-gate: chat did not open after resume-last');
+            }
+        }
         await sleep(400);
 
         const openAtBottom = await evalRaw(`(function(){
