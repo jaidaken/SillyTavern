@@ -467,9 +467,15 @@
     padding-left: 1.6em;
 }
 
-/* Stage directions align into the dialogue column too, so the left gutter is the name column alone. */
+/* Stage directions sit apart from the dialogue: flush at the margin in italic, so only the spoken
+   lines occupy the name-plus-column, and a direction never lines up with the speech. The spoken turns
+   nest inside those paragraphs, so reset them to roman or they would inherit the italic. */
 #chat-root[data-reading-indent="stage"] .mes_text p {
-    padding-left: 5.5em;
+    padding-left: 0;
+    font-style: italic;
+}
+#chat-root[data-reading-indent="stage"] .mes_text q {
+    font-style: normal;
 }
 
 /* Stage: the caps character name opens each turn in a fixed-width column, so dialogue aligns and
