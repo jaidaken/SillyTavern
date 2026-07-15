@@ -10,6 +10,7 @@ import yaml from 'yaml';
 import _ from 'lodash';
 import mime from 'mime-types';
 import { Jimp, JimpMime } from '../jimp.js';
+import * as jimpPool from '../jimp-pool.js';
 import storage from 'node-persist';
 
 import { AVATAR_WIDTH, AVATAR_HEIGHT, DEFAULT_AVATAR_PATH } from '../constants.js';
@@ -307,14 +308,24 @@ export async function applyAvatarCropResize(jimp, crop) {
 }
 
 /**
+ * Runs the avatar crop/resize on a pool worker, keeping the decode/encode off the event loop.
+ * @param {Buffer} buffer Encoded source image bytes.
+ * @param {Crop|undefined} [crop] Crop parameters
+ * @returns {Promise<Buffer>} Image buffer
+ */
+export async function runAvatarCropResize(buffer, crop) {
+    const { buffer: outBytes } = await jimpPool.run({ op: 'avatar', crop, avatarWidth: AVATAR_WIDTH, avatarHeight: AVATAR_HEIGHT }, buffer);
+    return Buffer.from(outBytes.buffer, outBytes.byteOffset, outBytes.byteLength);
+}
+
+/**
  * Parses an image buffer and applies crop if defined.
  * @param {Buffer} buffer Buffer of the image
  * @param {Crop|undefined} [crop] Crop parameters
  * @returns {Promise<Buffer>} Image buffer
  */
 async function parseImageBuffer(buffer, crop) {
-    const image = await Jimp.fromBuffer(buffer);
-    return await applyAvatarCropResize(image, crop);
+    return await runAvatarCropResize(buffer, crop);
 }
 
 /**
@@ -325,10 +336,10 @@ async function parseImageBuffer(buffer, crop) {
  */
 async function tryReadImage(imgPath, crop) {
     try {
-        const rawImg = await Jimp.read(imgPath);
-        return await applyAvatarCropResize(rawImg, crop);
+        const buffer = await fs.promises.readFile(imgPath);
+        return await runAvatarCropResize(buffer, crop);
     } catch (error) {
-        // If it's an unsupported type of image (APNG) - just read the file as buffer
+        // Unsupported image type (e.g. APNG) or decode failure: fall back to the raw file bytes.
         log.chars.error(`Failed to read image: ${imgPath}`, error);
         return await fs.promises.readFile(imgPath);
     }

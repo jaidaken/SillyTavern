@@ -3,12 +3,11 @@ import fs from 'node:fs';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
-import { Jimp } from '../jimp.js';
 import writeFileAtomic from 'write-file-atomic';
 
 import { getImages, tryParse } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
-import { applyAvatarCropResize } from './characters.js';
+import { runAvatarCropResize } from './characters.js';
 import { invalidateThumbnail } from './thumbnails.js';
 import cacheBuster from '../middleware/cacheBuster.js';
 import { log } from '../log.js';
@@ -50,8 +49,8 @@ router.post('/upload', getFileNameValidationFunction('overwrite_name'), async (r
     try {
         const pathToUpload = path.join(request.file.destination, request.file.filename);
         const crop = tryParse(request.query.crop);
-        const rawImg = await Jimp.read(pathToUpload);
-        const image = await applyAvatarCropResize(rawImg, crop);
+        const uploadBuffer = await fs.promises.readFile(pathToUpload);
+        const image = await runAvatarCropResize(uploadBuffer, crop);
 
         // Remove previous thumbnail and bust cache if overwriting
         if (request.body.overwrite_name) {

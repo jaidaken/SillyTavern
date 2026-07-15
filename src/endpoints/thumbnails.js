@@ -3,13 +3,12 @@ import path from 'node:path';
 
 import express from 'express';
 import sanitize from 'sanitize-filename';
-import { Jimp, JimpMime } from '../jimp.js';
 import writeFileAtomic from 'write-file-atomic';
 import { imageSize as sizeOf } from 'image-size';
 
 import { getConfigValue, invalidateFirefoxCache } from '../util.js';
 import { getThumbnailResolution, isAnimatedWebP, isAnimatedApng, thumbnailDimensions as dimensions } from './image-metadata.js';
-import { ResizeStrategy } from '@jimp/plugin-resize';
+import * as jimpPool from '../jimp-pool.js';
 import { log } from '../log.js';
 
 export const publicRouter = express.Router();
@@ -209,43 +208,22 @@ async function processSingleImage(file, originalFolder, thumbnailFolder, type) {
 
     try {
         const fileBuffer = await fs.promises.readFile(pathToOriginalFile);
-        const image = await Jimp.read(fileBuffer);
-
-        // Calculate aspect ratio from original image dimensions
-        const originalWidth = image.bitmap.width;
-        const originalHeight = image.bitmap.height;
-        const aspectRatio = (originalHeight > 0) ? (originalWidth / originalHeight) : 1.0;
-
-        const thumbImage = image.clone();
         const thumbnailResolution = getThumbnailResolution(type);
+        const [configWidth, configHeight] = dimensions[type];
 
-        if (type === 'bg') {
-            const [configWidth, configHeight] = dimensions[type];
-            const targetPixelArea = configWidth * configHeight;
+        // The decode/resize/encode runs on a pool worker so a large image never blocks the event loop.
+        const task = type === 'bg'
+            ? { op: 'thumbnail', type, targetPixelArea: configWidth * configHeight, pngFormat, quality }
+            : { op: 'thumbnail', type, coverWidth: configWidth, coverHeight: configHeight, pngFormat, quality };
 
-            // Calculate thumbnail dimensions to maintain target pixel area while preserving aspect ratio
-            // For aspect ratio w:h, if area = w*h and ratio = w/h, then:
-            // w = sqrt(area * ratio) and h = sqrt(area / ratio)
-            const thumbWidth = Math.round(Math.sqrt(targetPixelArea * aspectRatio));
-            const thumbHeight = Math.round(Math.sqrt(targetPixelArea / aspectRatio));
-
-            thumbImage.resize({ w: thumbWidth, h: thumbHeight, mode: ResizeStrategy.BILINEAR });
-        } else if (type === 'avatar' || type === 'persona') {
-            // Crop and resize to fixed dimensions
-            const [configWidth, configHeight] = dimensions[type];
-            thumbImage.cover({ w: configWidth, h: configHeight });
-        }
-
-        const buffer = pngFormat
-            ? await thumbImage.getBuffer(JimpMime.png)
-            : await thumbImage.getBuffer(JimpMime.jpeg, { quality: quality, jpegColorSpace: 'ycbcr' });
+        const { buffer: outBytes, aspectRatio, thumbRatio } = await jimpPool.run(task, fileBuffer);
+        const buffer = Buffer.from(outBytes.buffer, outBytes.byteOffset, outBytes.byteLength);
 
         await writeFileAtomic(pathToCachedFile, buffer);
 
         // Cache the thumb-derived ratio (what the hit path computes), not the original-derived return value.
         const thumbStat = await fs.promises.stat(pathToCachedFile);
-        const thumbRatio = (thumbImage.bitmap.height > 0) ? (thumbImage.bitmap.width / thumbImage.bitmap.height) : 1.0;
-        aspectRatioCache.set(pathToCachedFile, { mtimeMs: thumbStat.mtimeMs, aspectRatio: thumbRatio });
+        aspectRatioCache.set(pathToCachedFile, { mtimeMs: thumbStat.mtimeMs, aspectRatio: /** @type {number} */ (thumbRatio) });
 
         return { success: true, aspectRatio, resolution: thumbnailResolution };
     } catch (error) {
