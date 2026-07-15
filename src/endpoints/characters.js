@@ -442,6 +442,82 @@ const processCharacter = async (item, directories, { shallow }) => {
 };
 
 /**
+ * @typedef {Object} CharListCacheEntry
+ * @property {number} pngMtimeMs Modified time of the avatar PNG at cache time
+ * @property {number} chatDirMtimeMs Modified time of the character's chat directory at cache time
+ * @property {object} character Full processCharacter output (never a shallow projection)
+ */
+
+// Per-user cache of processed characters for /characters/all and /get, keyed on
+// {pngMtime, chatDirMtime}. No TTL: every mutation flows through this single-writer
+// process and busts explicitly; the mtime probe is the belt-and-braces for out-of-band edits.
+/** @type {Map<string, Map<string, CharListCacheEntry>>} */
+const charListCache = new Map();
+
+/**
+ * Processes a character, serving a cached copy when its PNG and chat directory are unchanged.
+ * @param {string} item Avatar filename (with extension)
+ * @param {import('../users.js').UserDirectoryList} directories User directories
+ * @param {string} handle User handle the cache is keyed under
+ * @returns {Promise<object>} Full character object
+ */
+async function getProcessedCharacter(item, directories, handle) {
+    const imgPath = path.join(directories.characters, item);
+    const chatDir = path.join(directories.chats, item.replace('.png', ''));
+    const [imgStat, chatDirStat] = await Promise.all([
+        fs.promises.stat(imgPath).catch(() => null),
+        fs.promises.stat(chatDir).catch(() => null),
+    ]);
+    const pngMtimeMs = imgStat ? imgStat.mtimeMs : 0;
+    const chatDirMtimeMs = chatDirStat ? chatDirStat.mtimeMs : 0;
+
+    let userCache = charListCache.get(handle);
+    const cached = userCache?.get(item);
+    if (cached && cached.pngMtimeMs === pngMtimeMs && cached.chatDirMtimeMs === chatDirMtimeMs) {
+        return cached.character;
+    }
+
+    const character = await processCharacter(item, directories, { shallow: false });
+    // The error placeholder carries no avatar; caching it would pin a failed read.
+    if (character && /** @type {any} */ (character).avatar) {
+        if (!userCache) {
+            userCache = new Map();
+            charListCache.set(handle, userCache);
+        }
+        userCache.set(item, { pngMtimeMs, chatDirMtimeMs, character });
+    }
+    return character;
+}
+
+/**
+ * Drops a single avatar's cache entry for a user.
+ * @param {string} handle User handle
+ * @param {string} avatar Avatar filename (with extension)
+ */
+function bustCharacterListCacheEntry(handle, avatar) {
+    charListCache.get(handle)?.delete(avatar);
+}
+
+/**
+ * Clears a user's entire character-list cache (used by bulk mutations).
+ * @param {string} handle User handle
+ */
+function bustCharacterListCacheUser(handle) {
+    charListCache.get(handle)?.clear();
+}
+
+/**
+ * Busts the cached list entry for a character when its chats change.
+ * Called from chats.js trySaveChat: a chat-content save moves chat_size and
+ * date_last_chat without moving the chat-directory mtime, so the probe alone misses it.
+ * @param {string} handle User handle
+ * @param {string} characterName Avatar filename without the .png extension
+ */
+export function bustCharacterListCacheForCharacter(handle, characterName) {
+    bustCharacterListCacheEntry(handle, `${characterName}.png`);
+}
+
+/**
  * Convert a character object to Spec V2 format.
  * @param {object} jsonObject Character object
  * @param {import('../users.js').UserDirectoryList} directories User directories
@@ -1033,6 +1109,8 @@ router.post('/create', getFileNameValidationFunction('file_name'), async functio
 
         if (!(await fs.promises.stat(chatsPath).catch(() => null))) await fs.promises.mkdir(chatsPath);
 
+        bustCharacterListCacheEntry(request.user.profile.handle, avatarName);
+
         if (!request.file) {
             await writeCharacterData(DEFAULT_AVATAR_PATH, char, internalName, request);
             return response.send(avatarName);
@@ -1087,6 +1165,9 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
         // Remove the old character file
         await fs.promises.unlink(oldAvatarPath);
 
+        bustCharacterListCacheEntry(request.user.profile.handle, oldAvatarName);
+        bustCharacterListCacheEntry(request.user.profile.handle, newAvatarName);
+
         // Return new avatar name to ST
         return response.send({ avatar: newAvatarName });
     } catch (err) {
@@ -1129,6 +1210,7 @@ router.post('/edit', validateAvatarUrlMiddleware, async function (request, respo
             cacheBuster.bust(request, response);
         }
 
+        bustCharacterListCacheEntry(request.user.profile.handle, request.body.avatar_url);
         return response.sendStatus(200);
     } catch (err) {
         log.chars.error('An error occurred, character edit invalidated.', err);
@@ -1169,6 +1251,7 @@ router.post('/edit-avatar', validateAvatarUrlMiddleware, async function (request
         // Reset images caches
         cacheBuster.bust(request, response);
         await invalidateThumbnail(request.user.directories, 'avatar', request.body.avatar_url);
+        bustCharacterListCacheEntry(request.user.profile.handle, request.body.avatar_url);
 
         return response.sendStatus(200);
     } catch (err) {
@@ -1221,6 +1304,7 @@ router.post('/edit-attribute', validateAvatarUrlMiddleware, async function (requ
         let newCharJSON = JSON.stringify(char);
         const targetFile = (request.body.avatar_url).replace('.png', '');
         await writeCharacterData(avatarPath, newCharJSON, targetFile, request);
+        bustCharacterListCacheEntry(request.user.profile.handle, request.body.avatar_url);
         return response.sendStatus(200);
     } catch (err) {
         log.chars.error('An error occurred, character edit invalidated.', err);
@@ -1391,6 +1475,10 @@ router.post('/merge-attributes', getFileNameValidationFunction('avatar'), async 
                 await Promise.allSettled(batch.map(processOne));
             }
 
+            if (updated.length) {
+                bustCharacterListCacheUser(request.user.profile.handle);
+            }
+
             return response.send({ updated, skipped, failed });
         }
 
@@ -1400,6 +1488,7 @@ router.post('/merge-attributes', getFileNameValidationFunction('avatar'), async 
 
         const result = await mergeCharacterUpdate(avatarPath, update.avatar, update, request);
         if (result.ok) {
+            bustCharacterListCacheEntry(request.user.profile.handle, update.avatar);
             response.sendStatus(200);
         } else {
             log.chars.warn(result.error);
@@ -1430,6 +1519,7 @@ router.post('/delete', validateAvatarUrlMiddleware, async function (request, res
         throw error;
     }
     await invalidateThumbnail(request.user.directories, 'avatar', request.body.avatar_url);
+    bustCharacterListCacheEntry(request.user.profile.handle, request.body.avatar_url);
     let dir_name = (request.body.avatar_url.replace('.png', ''));
 
     if (!dir_name.length) {
@@ -1465,10 +1555,12 @@ router.post('/delete', validateAvatarUrlMiddleware, async function (request, res
  */
 router.post('/all', async function (request, response) {
     try {
+        const handle = request.user.profile.handle;
         const files = await fs.promises.readdir(request.user.directories.characters);
         const pngFiles = files.filter(file => file.endsWith('.png'));
-        const processingPromises = pngFiles.map(file => processCharacter(file, request.user.directories, { shallow: useShallowCharacters }));
-        const data = (await Promise.all(processingPromises)).filter(c => c.name);
+        const processingPromises = pngFiles.map(file => getProcessedCharacter(file, request.user.directories, handle));
+        const processed = (await Promise.all(processingPromises)).filter(c => c.name);
+        const data = useShallowCharacters ? processed.map(toShallow) : processed;
         return response.send(data);
     } catch (err) {
         log.chars.error(err);
@@ -1487,7 +1579,7 @@ router.post('/get', validateAvatarUrlMiddleware, async function (request, respon
             return response.sendStatus(404);
         }
 
-        const data = await processCharacter(item, request.user.directories, { shallow: false });
+        const data = await getProcessedCharacter(item, request.user.directories, request.user.profile.handle);
 
         return response.send(data);
     } catch (err) {
@@ -1591,6 +1683,7 @@ router.post('/import', async function (request, response) {
             await invalidateThumbnail(request.user.directories, 'avatar', `${preservedFileName}.png`);
         }
 
+        bustCharacterListCacheEntry(request.user.profile.handle, `${fileName}.png`);
         response.send({ file_name: fileName });
     } catch (err) {
         log.chars.error(err);
@@ -1636,6 +1729,7 @@ router.post('/duplicate', validateAvatarUrlMiddleware, async function (request, 
 
         await fs.promises.copyFile(filename, newFilename);
         log.chars.info(`${filename} was copied to ${newFilename}`);
+        bustCharacterListCacheEntry(request.user.profile.handle, path.parse(newFilename).base);
         response.send({ path: path.parse(newFilename).base });
     } catch (error) {
         log.chars.error(error);
