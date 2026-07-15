@@ -480,6 +480,42 @@ async function main() {
             return false;
         })();
         row('must', resynced, 'SL-append 409 re-syncs the reader to the tail', `resync=${resynced}`);
+
+        // ================= J1: generation window (invariant 2) + connection prefill =================
+        // PREFILL: a fresh boot re-mines the mock settings blob (server 5001); the connections panel
+        // input must show that configured server, not the placeholder default.
+        console.log('== J1 connection prefill ==');
+        await page.navigate(`${args.base}/`);
+        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+        await page.click('#d-connections');
+        await page.waitFor("document.getElementById('llama-url')", 4000);
+        const prefill = await page.eval("document.getElementById('llama-url').value");
+        row('must', prefill === 'http://127.0.0.1:5001',
+            'J1 connections panel prefills the configured server url', prefill);
+
+        // INVARIANT 2: the mock chat is 300 messages, the reader shows only the tail (TAIL_LIMIT=50),
+        // so "History message 150" is below the display floor. The prompt must contain it (fetched from
+        // the spine) while the display must not: the prompt window is not bounded by what is on screen.
+        console.log('== J1 invariant 2: prompt window exceeds the display window ==');
+        await page.navigate(`${args.base}/`);
+        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+        await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000);
+        const displayHas150 = await page.eval("document.body.textContent.includes('History message 150')");
+        await page.focus('#send_textarea');
+        await page.insertText('INV2 PROBE');
+        await page.click('#composer button[aria-label="Send"]');
+        let gen = { last_generate_prompt: null };
+        for (let i = 0; i < 40; i++) {
+            gen = await (await fetch(`${args.base}/dev/state`)).json();
+            if (gen.last_generate_prompt && gen.last_generate_prompt.includes('INV2 PROBE')) break;
+            await sleep(150);
+        }
+        const promptText = gen.last_generate_prompt || '';
+        const promptHas150 = promptText.includes('History message 150');
+        const promptHasProbe = promptText.includes('INV2 PROBE');
+        row('must', promptHas150 && promptHasProbe && displayHas150 === false,
+            'J1 prompt window spans history beyond the display tail',
+            `promptHas150=${promptHas150} displayHas150=${displayHas150} probe=${promptHasProbe}`);
     } finally {
         clearTimeout(watchdog);
         cleanup();

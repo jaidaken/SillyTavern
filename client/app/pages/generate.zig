@@ -17,6 +17,7 @@ const Allocator = std.mem.Allocator;
 pub const Connection = struct {
     api_type: []u8,
     api_server: []u8,
+    max_context: i64,
     max_tokens: i64,
     temperature: f64,
     top_p: f64,
@@ -70,6 +71,7 @@ pub fn extractConnection(alloc: Allocator, settings_str: []const u8) ConnectionE
     return .{
         .api_type = api_type,
         .api_server = api_server,
+        .max_context = numI64(root, "max_context", 8192),
         .max_tokens = numI64(root, "amount_gen", 512),
         .temperature = numF64(tg, "temp", 1.0),
         .top_p = numF64(tg, "top_p", 1.0),
@@ -172,6 +174,40 @@ pub const PromptMsg = struct {
     mes: []const u8,
 };
 
+/// The client has no tokenizer, so the prompt window is bounded by a character budget approximated
+/// from the model's context size. ~3.5 chars/token is the classic client's rough estimate; an
+/// over-fill is clamped by llama.cpp truncating server-side, not fatal.
+const TOKEN_CHARS_NUM: usize = 7;
+const TOKEN_CHARS_DEN: usize = 2;
+
+/// Character budget for the whole prompt: the context size minus the response reserve, in chars.
+/// `max_context` is mined from the settings blob (the classic client writes the user's configured
+/// size there); a missing or non-positive value falls back to the classic 8192 default.
+pub fn promptCharBudget(conn: Connection) usize {
+    const ctx_tokens: usize = if (conn.max_context > 0) @intCast(conn.max_context) else 8192;
+    const resp_tokens: usize = if (conn.max_tokens > 0) @intCast(conn.max_tokens) else 0;
+    const hist_tokens = ctx_tokens -| resp_tokens;
+    return (hist_tokens *| TOKEN_CHARS_NUM) / TOKEN_CHARS_DEN;
+}
+
+/// The newest suffix of `history` whose cumulative `Name: mes\n` length fits `budget_chars`. Walks
+/// oldest-first from the tail so the freshest turns survive a tight budget; always keeps at least the
+/// last message so a send never ships an empty history. This is what decouples the prompt from the
+/// display window (invariant 2): the caller feeds the full spine window, not the on-screen tail.
+pub fn selectWindow(history: []const PromptMsg, budget_chars: usize) []const PromptMsg {
+    if (history.len == 0) return history;
+    var used: usize = 0;
+    var i: usize = history.len;
+    while (i > 0) {
+        const m = history[i - 1];
+        const cost = m.name.len + 2 + m.mes.len + 1;
+        if (i != history.len and used + cost > budget_chars) break;
+        used += cost;
+        i -= 1;
+    }
+    return history[i..];
+}
+
 /// Builds the minimal text-completion prompt: the card's description, personality, and scenario
 /// (each macro-substituted), then the example dialogue, then the chat history as `Name: mes` lines,
 /// then the character-name prefix that primes the model to continue in character. `history` is the
@@ -179,6 +215,13 @@ pub const PromptMsg = struct {
 /// full-history window (J1) can swap the source without touching this function (invariant 2). Owned
 /// result.
 pub fn buildPrompt(alloc: Allocator, ctx: Ctx, history: []const PromptMsg) Allocator.Error![]u8 {
+    return buildPromptBudgeted(alloc, ctx, history, std.math.maxInt(usize));
+}
+
+/// `buildPrompt` with a character budget for the history block. The card/system block is built in
+/// full first (it is per-card and small); the remaining budget bounds the history, trimmed
+/// oldest-first via `selectWindow`. Owned result.
+pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, budget_chars: usize) Allocator.Error![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(alloc);
 
@@ -187,7 +230,8 @@ pub fn buildPrompt(alloc: Allocator, ctx: Ctx, history: []const PromptMsg) Alloc
     try appendField(alloc, &out, ctx, ctx.scenario, "Scenario: ");
     try appendField(alloc, &out, ctx, ctx.mes_example, "");
 
-    for (history) |m| {
+    const windowed = selectWindow(history, budget_chars -| out.items.len);
+    for (windowed) |m| {
         try out.appendSlice(alloc, m.name);
         try out.appendSlice(alloc, ": ");
         try out.appendSlice(alloc, m.mes);
@@ -217,6 +261,8 @@ pub fn buildRequestBody(alloc: Allocator, conn: Connection, prompt: []const u8) 
         .prompt = prompt,
         .max_new_tokens = conn.max_tokens,
         .max_tokens = conn.max_tokens,
+        .truncation_length = conn.max_context,
+        .max_context_length = conn.max_context,
         .stream = true,
         .api_type = conn.api_type,
         .api_server = conn.api_server,
@@ -233,7 +279,7 @@ const testing = std.testing;
 
 test "extractConnection reads type, server_urls, and coerced samplers" {
     const settings =
-        \\{"main_api":"textgenerationwebui","amount_gen":320,
+        \\{"main_api":"textgenerationwebui","amount_gen":320,"max_context":16384,
         \\ "textgenerationwebui_settings":{"type":"llamacpp",
         \\   "server_urls":{"llamacpp":"http://127.0.0.1:8080","ooba":"http://x"},
         \\   "temp":0.8,"top_p":0.95,"top_k":40,"min_p":0.05,"rep_pen":1.1}}
@@ -242,6 +288,7 @@ test "extractConnection reads type, server_urls, and coerced samplers" {
     defer freeConnection(testing.allocator, conn);
     try testing.expectEqualStrings("llamacpp", conn.api_type);
     try testing.expectEqualStrings("http://127.0.0.1:8080", conn.api_server);
+    try testing.expectEqual(@as(i64, 16384), conn.max_context);
     try testing.expectEqual(@as(i64, 320), conn.max_tokens);
     try testing.expectEqual(@as(f64, 0.8), conn.temperature);
     try testing.expectEqual(@as(f64, 0.95), conn.top_p);
@@ -258,6 +305,7 @@ test "extractConnection defaults absent samplers and allows an empty server" {
     defer freeConnection(testing.allocator, conn);
     try testing.expectEqualStrings("ooba", conn.api_type);
     try testing.expectEqualStrings("", conn.api_server);
+    try testing.expectEqual(@as(i64, 8192), conn.max_context);
     try testing.expectEqual(@as(i64, 512), conn.max_tokens);
     try testing.expectEqual(@as(f64, 1.0), conn.temperature);
     try testing.expectEqual(@as(i64, 0), conn.top_k);
@@ -352,10 +400,59 @@ test "buildPrompt omits empty card fields and still primes the char" {
     try testing.expectEqualStrings("Rita:", out);
 }
 
+test "selectWindow keeps the newest suffix that fits the budget" {
+    const h = [_]PromptMsg{
+        .{ .name = "A", .mes = "xx" },
+        .{ .name = "A", .mes = "xx" },
+        .{ .name = "A", .mes = "xx" },
+        .{ .name = "A", .mes = "xx" },
+        .{ .name = "A", .mes = "xx" },
+    };
+    try testing.expectEqual(@as(usize, 3), selectWindow(&h, 18).len);
+    try testing.expectEqual(@as(usize, 2), selectWindow(&h, 17).len);
+    try testing.expectEqual(@as(usize, 5), selectWindow(&h, 1000).len);
+    try testing.expectEqualStrings(h[2].mes, selectWindow(&h, 18)[0].mes);
+}
+
+test "selectWindow keeps at least the newest message under a tiny budget" {
+    const h = [_]PromptMsg{
+        .{ .name = "Old", .mes = "gone" },
+        .{ .name = "New", .mes = "kept" },
+    };
+    const w = selectWindow(&h, 0);
+    try testing.expectEqual(@as(usize, 1), w.len);
+    try testing.expectEqualStrings("New", w[0].name);
+    try testing.expectEqual(@as(usize, 0), selectWindow(&.{}, 100).len);
+}
+
+test "promptCharBudget reserves the response and applies the char ratio" {
+    const base = Connection{ .api_type = "", .api_server = "", .max_context = 8192, .max_tokens = 512, .temperature = 0, .top_p = 0, .top_k = 0, .min_p = 0, .rep_pen = 0 };
+    try testing.expectEqual(@as(usize, (8192 - 512) * 7 / 2), promptCharBudget(base));
+    const unset = Connection{ .api_type = "", .api_server = "", .max_context = 0, .max_tokens = 0, .temperature = 0, .top_p = 0, .top_k = 0, .min_p = 0, .rep_pen = 0 };
+    try testing.expectEqual(@as(usize, 8192 * 7 / 2), promptCharBudget(unset));
+}
+
+test "buildPromptBudgeted trims history oldest-first but keeps the card block" {
+    const ctx = Ctx{ .char = "Rita", .description = "A diver." };
+    const history = [_]PromptMsg{
+        .{ .name = "Rita", .mes = "oldest line here" },
+        .{ .name = "Jamie", .mes = "middle line here" },
+        .{ .name = "Rita", .mes = "newest line here" },
+    };
+    // Budget past the card block that fits only the newest turn.
+    const out = try buildPromptBudgeted(testing.allocator, ctx, &history, "A diver.\n".len + 24);
+    defer testing.allocator.free(out);
+    try testing.expect(std.mem.startsWith(u8, out, "A diver.\n"));
+    try testing.expect(std.mem.indexOf(u8, out, "newest line here") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "oldest line here") == null);
+    try testing.expect(std.mem.endsWith(u8, out, "Rita:"));
+}
+
 test "buildRequestBody carries the connection, prompt, and stream flag" {
     const conn = Connection{
         .api_type = try testing.allocator.dupe(u8, "llamacpp"),
         .api_server = try testing.allocator.dupe(u8, "http://127.0.0.1:8080"),
+        .max_context = 8192,
         .max_tokens = 256,
         .temperature = 0.8,
         .top_p = 0.95,

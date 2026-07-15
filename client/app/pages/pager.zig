@@ -16,6 +16,10 @@ const log = std.log.scoped(.net);
 /// prepend. Operator-tunable, one place.
 pub const TAIL_LIMIT: usize = 50;
 pub const BATCH: usize = 100;
+/// Ceiling on the send-time prompt-window fetch (invariant 2): the model sees its own budgeted spine
+/// window, fetched separately from the display tail. Generous so the char budget, not this count, is
+/// the usual bound; a chat with more messages than this within budget under-fills (accepted).
+pub const PROMPT_LIMIT: usize = 300;
 
 var avatar_url: []u8 = &.{};
 var file_name: []u8 = &.{};

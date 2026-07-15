@@ -60,9 +60,60 @@ var send_file: []u8 = &.{};
 /// it mid-generation, so the seal-time assistant append checks it and skips a now-stale target.
 var send_seq: u32 = 0;
 
+// ---- pending send (invariant 2) -------------------------------------------------------------
+
+// net has no per-request ctx: the send context is stashed OWNED and consumed by onPromptWindowDone.
+var pend_active: bool = false;
+var pend_conn: ?generate.Connection = null;
+var pend_char_name: []u8 = &.{};
+var pend_char_avatar: []u8 = &.{};
+var pend_user_name: []u8 = &.{};
+var pend_user_text: []u8 = &.{};
+var pend_persona_desc: []u8 = &.{};
+var pend_description: []u8 = &.{};
+var pend_personality: []u8 = &.{};
+var pend_scenario: []u8 = &.{};
+var pend_mes_example: []u8 = &.{};
+var pend_first_mes: []u8 = &.{};
+
 fn setOwned(dst: *[]u8, src: []const u8) void {
     if (dst.len > 0) alloc.free(dst.*);
     dst.* = alloc.dupe(u8, src) catch &.{};
+}
+
+/// Dupes the connection's URLs into pending ownership so a boot re-mine or a Connect mid-fetch cannot
+/// free them under the in-flight prompt build. False on OOM of either URL.
+fn stashConn(conn: generate.Connection) bool {
+    const t = alloc.dupe(u8, conn.api_type) catch return false;
+    const s = alloc.dupe(u8, conn.api_server) catch {
+        alloc.free(t);
+        return false;
+    };
+    if (pend_conn) |c| generate.freeConnection(alloc, c);
+    pend_conn = .{
+        .api_type = t,
+        .api_server = s,
+        .max_context = conn.max_context,
+        .max_tokens = conn.max_tokens,
+        .temperature = conn.temperature,
+        .top_p = conn.top_p,
+        .top_k = conn.top_k,
+        .min_p = conn.min_p,
+        .rep_pen = conn.rep_pen,
+    };
+    return true;
+}
+
+fn freePending() void {
+    if (pend_conn) |c| {
+        generate.freeConnection(alloc, c);
+        pend_conn = null;
+    }
+    inline for (.{ &pend_char_name, &pend_char_avatar, &pend_user_name, &pend_user_text, &pend_persona_desc, &pend_description, &pend_personality, &pend_scenario, &pend_mes_example, &pend_first_mes }) |f| {
+        if (f.len > 0) alloc.free(f.*);
+        f.* = &.{};
+    }
+    pend_active = false;
 }
 
 // ---- boot orchestration ---------------------------------------------------------------
@@ -683,11 +734,10 @@ fn deepField(c: char_store.Character, shallow: []const u8, deep: []const u8) []c
     return shallow;
 }
 
-/// Send the composer's text: append the user turn, build the prompt from the on-screen history plus
-/// the card and persona, and open the streaming generate request through the JS pump (ZX16). The
-/// history source is the windowed store this phase; buildPrompt takes it as a parameter so the
-/// token-budgeted full-history source (J1) can replace it without coupling the prompt to the display
-/// window (invariant 2).
+/// Send the composer's text: append the user turn to the display, persist it, then fetch a budgeted
+/// prompt window from the spine (NOT the display store) and open the streaming generate through the JS
+/// pump (ZX16). The prompt window is a separate `/api/chats/get` fetch so a tail-only display never
+/// bounds what the model sees (invariant 2); onPromptWindowDone assembles + dispatches once it lands.
 pub fn sendMessage() void {
     if (zx.platform.role != .client) return;
     const conn = conn_mod.active() orelse {
@@ -702,6 +752,12 @@ pub fn sendMessage() void {
         net_log.warn("send: no character selected", .{});
         return;
     };
+    // A prior send is still assembling its prompt window; drop this one rather than race two builds
+    // through the single pending slot. The window is one fetch RTT.
+    if (pend_active) {
+        net_log.warn("send: previous send still assembling its prompt", .{});
+        return;
+    }
     const text = readComposer() orelse return;
     defer alloc.free(text);
     clearComposer();
@@ -733,16 +789,120 @@ pub fn sendMessage() void {
     send_seq = chat_load_seq;
     appendTurn(user_name, text, true);
 
-    const body = buildBody(conn, c, persona) catch |err| {
-        chars_log.err("send: prompt/body build failed: {s}", .{@errorName(err)});
+    if (!stashSend(conn, c, persona, user_name, text, char_avatar orelse "")) {
+        chars_log.err("send: could not stash the send context", .{});
+        return;
+    }
+    // No file yet: degrade to greeting + user turn (a null page) rather than fetch a malformed body.
+    if (send_file.len == 0) {
+        onPromptWindowDone(0, 0, null);
+        return;
+    }
+    const win_body = std.json.Stringify.valueAlloc(alloc, .{
+        .avatar_url = c.avatar,
+        .file_name = send_file,
+        .paged = true,
+        .limit = pager.PROMPT_LIMIT,
+    }, .{}) catch {
+        freePending();
         return;
     };
+    defer alloc.free(win_body);
+    net.request("/api/chats/get", win_body, 0, onPromptWindowDone, .{});
+}
+
+/// Dupes everything the deferred prompt build needs into pending ownership: the connection, the card
+/// ctx fields (deep form when loaded), the persona, the user turn, and the first_mes for greeting
+/// reconstruction. False only when the connection URLs cannot be duped (OOM).
+fn stashSend(conn: generate.Connection, c: char_store.Character, persona: ?persona_store.Persona, user_name: []const u8, text: []const u8, char_avatar_thumb: []const u8) bool {
+    if (!stashConn(conn)) return false;
+    setOwned(&pend_char_name, c.name);
+    setOwned(&pend_char_avatar, char_avatar_thumb);
+    setOwned(&pend_user_name, user_name);
+    setOwned(&pend_user_text, text);
+    setOwned(&pend_persona_desc, if (persona) |p| p.description else "");
+    setOwned(&pend_description, c.description);
+    setOwned(&pend_personality, deepField(c, c.personality, deep_personality));
+    setOwned(&pend_scenario, deepField(c, c.scenario, deep_scenario));
+    setOwned(&pend_mes_example, deepField(c, c.mes_example, deep_mes_example));
+    setOwned(&pend_first_mes, c.first_mes);
+    pend_active = true;
+    return true;
+}
+
+/// Prompt-window fetch completion: parse the spine page (a failure degrades to a null page), then
+/// assemble and dispatch the generate. Always frees the pending state.
+fn onPromptWindowDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
+    _ = tag;
+    if (!pend_active) return;
+    defer freePending();
+    var page: ?data.ChatPage = null;
+    if (res != null and status >= 200 and status < 300) {
+        if (res.?.json(std.json.Value)) |parsed| {
+            defer parsed.deinit();
+            if (data.parseChatPage(alloc, parsed.value)) |p| {
+                page = p;
+            } else |_| {}
+        } else |_| {}
+    } else if (res != null) {
+        net_log.warn("send: prompt window fetch returned {d} - degrading to the user turn", .{status});
+    }
+    defer if (page) |p| data.freeChatPage(alloc, p);
+    dispatchGenerate(page) catch |err| {
+        chars_log.err("send: prompt/body build failed: {s}", .{@errorName(err)});
+    };
+}
+
+/// Builds the prompt history from the fetched spine window and opens the generate stream. The window
+/// is the deep history (may exceed the display); the greeting is reconstructed when the fetch reached
+/// the head of the file (it is display-only, never persisted), and the just-sent user turn is appended
+/// unless the race already put it at the window tail (dedup). buildPromptBudgeted trims to the char
+/// budget, so nothing here is bounded by what is on screen (invariant 2).
+fn dispatchGenerate(page: ?data.ChatPage) !void {
+    const conn = pend_conn orelse return;
+    var history: std.ArrayList(generate.PromptMsg) = .empty;
+    defer history.deinit(alloc);
+
+    const at_head = if (page) |p| !p.has_more_before else true;
+    const first_is_user = if (page) |p| (p.messages.len > 0 and p.messages[0].is_user) else true;
+    var greeting: ?[]u8 = null;
+    defer if (greeting) |g| alloc.free(g);
+    if (at_head and first_is_user and pend_first_mes.len > 0) {
+        greeting = data.renderGreeting(alloc, pend_first_mes, pend_char_name, pend_user_name) catch null;
+        if (greeting) |g| try history.append(alloc, .{ .name = pend_char_name, .mes = g });
+    }
+
+    var user_turn_present = false;
+    if (page) |p| {
+        for (p.messages) |m| {
+            const name = if (m.name.len > 0) m.name else if (m.is_user) pend_user_name else pend_char_name;
+            try history.append(alloc, .{ .name = name, .mes = m.mes });
+        }
+        if (p.messages.len > 0) {
+            const last = p.messages[p.messages.len - 1];
+            user_turn_present = last.is_user and std.mem.eql(u8, last.mes, pend_user_text);
+        }
+    }
+    if (!user_turn_present) try history.append(alloc, .{ .name = pend_user_name, .mes = pend_user_text });
+
+    const ctx = generate.Ctx{
+        .char = pend_char_name,
+        .user = pend_user_name,
+        .persona = pend_persona_desc,
+        .description = pend_description,
+        .personality = pend_personality,
+        .scenario = pend_scenario,
+        .mes_example = pend_mes_example,
+    };
+    const prompt = try generate.buildPromptBudgeted(alloc, ctx, history.items, generate.promptCharBudget(conn));
+    defer alloc.free(prompt);
+    const body = try generate.buildRequestBody(alloc, conn, prompt);
     defer alloc.free(body);
 
     js.global.call(void, "__st_send_stream", .{
         js.string("/api/backends/text-completions/generate"),
-        js.string(c.name),
-        js.string(char_avatar orelse ""),
+        js.string(pend_char_name),
+        js.string(pend_char_avatar),
         js.string(body),
     }) catch {
         net_log.warn("send: __st_send_stream helper missing", .{});
@@ -825,25 +985,6 @@ pub fn stopStream() void {
     js.global.call(void, "__st_send_stop", .{}) catch {
         net_log.warn("send: __st_send_stop helper missing", .{});
     };
-}
-
-fn buildBody(conn: generate.Connection, c: char_store.Character, persona: ?persona_store.Persona) ![]u8 {
-    const ctx = generate.Ctx{
-        .char = c.name,
-        .user = if (persona) |p| p.name else "You",
-        .persona = if (persona) |p| p.description else "",
-        .description = c.description,
-        .personality = deepField(c, c.personality, deep_personality),
-        .scenario = deepField(c, c.scenario, deep_scenario),
-        .mes_example = deepField(c, c.mes_example, deep_mes_example),
-    };
-    const msgs = store.slice();
-    const history = try alloc.alloc(generate.PromptMsg, msgs.len);
-    defer alloc.free(history);
-    for (msgs, 0..) |m, i| history[i] = .{ .name = m.name, .mes = m.body };
-    const prompt = try generate.buildPrompt(alloc, ctx, history);
-    defer alloc.free(prompt);
-    return generate.buildRequestBody(alloc, conn, prompt);
 }
 
 fn readComposer() ?[]u8 {

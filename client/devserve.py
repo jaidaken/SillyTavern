@@ -109,6 +109,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # Send-loop/connection gate readback: what the client persisted and what its last generate carried.
     recorded_connection = None
     last_generate_server = None
+    # J1 invariant-2 gate: the prompt of the last generate, so a gate can prove it spans history
+    # beyond the display window.
+    last_generate_prompt = None
     # Turns the client appended via /api/chats/append; the mock /get echoes them so a reload shows them.
     appended_messages = []
     append_token = None
@@ -142,6 +145,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.mock_json({
                     "recorded_connection": Handler.recorded_connection,
                     "last_generate_server": Handler.last_generate_server,
+                    "last_generate_prompt": Handler.last_generate_prompt,  # J1 invariant-2
                     "appended": Handler.appended_messages,
                     "append_409_count": Handler.append_409_count,
                     "get_count": Handler.get_count,
@@ -306,6 +310,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.mock_json({"ok": True, "appended": len(msgs), "change_token": Handler.append_token})
         if path == "/api/backends/text-completions/generate":
             Handler.last_generate_server = req.get("api_server")
+            Handler.last_generate_prompt = req.get("prompt")  # J1 invariant-2
             return self._mock_generate_stream()
         if path == "/api/chats/get":
             # The client always sends paged:true (reader tail window + scroll-up prepend).

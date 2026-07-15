@@ -195,6 +195,7 @@ fn applyConnection(api_type: []const u8, api_server: []const u8) void {
     conn = .{
         .api_type = t,
         .api_server = s,
+        .max_context = 8192,
         .max_tokens = 512,
         .temperature = 1.0,
         .top_p = 1.0,
