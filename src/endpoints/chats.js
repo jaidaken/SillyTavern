@@ -363,6 +363,59 @@ async function checkChatIntegrity(filePath, integritySlug) {
  */
 
 /**
+ * @typedef {object} ChatInfoCacheEntry
+ * @property {number} mtimeMs - File modification time when the entry was derived.
+ * @property {number} size - File size in bytes when the entry was derived.
+ * @property {number} chat_items - Message count excluding the header line.
+ * @property {string} mes - Last message text.
+ * @property {number|string} last_mes - Last message timestamp.
+ * @property {object} [chat_metadata] - Header chat metadata, if the file carried any.
+ */
+
+// Derived chat metadata keyed by absolute file path; the path already includes the user handle dir, so entries are per-user.
+// A hit needs an exact mtimeMs+size match with a fresh stat (the out-of-band edit guard); every save/delete/rename busts.
+/** @type {Map<string, ChatInfoCacheEntry>} */
+const chatInfoCache = new Map();
+
+/**
+ * Derives the chat-metadata cache entry from a fresh stat and a chat array, mirroring what getChatInfo streams.
+ * @param {import('node:fs').Stats} stats - Fresh stat of the saved file.
+ * @param {Array} chatData - The chat array that was just written.
+ * @returns {ChatInfoCacheEntry} The cache entry.
+ */
+function deriveChatInfoCacheEntry(stats, chatData) {
+    const lastMessage = chatData[chatData.length - 1];
+    const chatMetadata = _.isObjectLike(chatData[0]?.chat_metadata) ? chatData[0].chat_metadata : undefined;
+    return {
+        mtimeMs: stats.mtimeMs,
+        size: stats.size,
+        chat_items: chatData.length - 1,
+        mes: lastMessage?.mes || '[The message is empty]',
+        last_mes: lastMessage?.send_date || new Date(Math.round(stats.mtimeMs)).toISOString(),
+        chat_metadata: chatMetadata,
+    };
+}
+
+/**
+ * Refreshes the cache entry after an in-process save so /recent and /search do not re-stream the file.
+ * @param {string} filePath - The saved chat file path.
+ * @param {Array} chatData - The chat array that was just written.
+ * @returns {Promise<void>}
+ */
+async function updateChatInfoCache(filePath, chatData) {
+    if (!Array.isArray(chatData) || chatData.length === 0) {
+        chatInfoCache.delete(filePath);
+        return;
+    }
+    const stats = await fs.promises.stat(filePath).catch(() => null);
+    if (!stats || stats.size === 0) {
+        chatInfoCache.delete(filePath);
+        return;
+    }
+    chatInfoCache.set(filePath, deriveChatInfoCacheEntry(stats, chatData));
+}
+
+/**
  * Reads the information from a chat file.
  * @param {string} pathToFile - Path to the chat file
  * @param {object} additionalData - Additional data to include in the result
@@ -373,27 +426,42 @@ async function checkChatIntegrity(filePath, integritySlug) {
  * @typedef {(textArray: string[]) => boolean} ChatMatchFunction
  */
 export async function getChatInfo(pathToFile, additionalData = {}, withMetadata = false, matcher = null) {
-    return new Promise(async (res) => {
-        const parsedPath = path.parse(pathToFile);
-        const stats = await fs.promises.stat(pathToFile);
-        const hasMatcher = (typeof matcher === 'function');
+    const parsedPath = path.parse(pathToFile);
+    const stats = await fs.promises.stat(pathToFile);
+    const hasMatcher = (typeof matcher === 'function');
 
-        const chatData = {
-            match: false,
-            file_id: parsedPath.name,
-            file_name: parsedPath.base,
-            file_size: formatBytes(stats.size),
-            chat_items: 0,
-            mes: '[The chat is empty]',
-            last_mes: stats.mtimeMs,
-            ...additionalData,
-        };
+    /** @type {ChatInfo} */
+    const chatData = {
+        match: false,
+        file_id: parsedPath.name,
+        file_name: parsedPath.base,
+        file_size: formatBytes(stats.size),
+        chat_items: 0,
+        mes: '[The chat is empty]',
+        last_mes: stats.mtimeMs,
+        ...additionalData,
+    };
 
-        if (stats.size === 0) {
-            res(chatData);
-            return;
+    if (stats.size === 0) {
+        return chatData;
+    }
+
+    // The metadata short-circuit is unsafe with a content matcher: `match` depends on the query, so a search always streams.
+    if (!hasMatcher) {
+        const cached = chatInfoCache.get(pathToFile);
+        if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
+            chatData.chat_items = cached.chat_items;
+            chatData.mes = cached.mes;
+            chatData.last_mes = cached.last_mes;
+            chatData.match = true;
+            if (withMetadata && cached.chat_metadata !== undefined) {
+                chatData.chat_metadata = cached.chat_metadata;
+            }
+            return chatData;
         }
+    }
 
+    return new Promise((res) => {
         const fileStream = fs.createReadStream(pathToFile);
         const rl = readline.createInterface({
             input: fileStream,
@@ -404,11 +472,13 @@ export async function getChatInfo(pathToFile, additionalData = {}, withMetadata 
         let itemCounter = 0;
         let hasAnyMatch = false;
         let matchBuffer = [];
+        // Captured regardless of withMetadata so a cache entry is complete for a later withMetadata read.
+        let headerMetadata;
         rl.on('line', (line) => {
-            if (withMetadata && itemCounter === 0) {
+            if (itemCounter === 0) {
                 const jsonData = tryParse(line);
                 if (jsonData && _.isObjectLike(jsonData.chat_metadata)) {
-                    chatData.chat_metadata = jsonData.chat_metadata;
+                    headerMetadata = jsonData.chat_metadata;
                 }
             }
             // Skip matching if any match was already found
@@ -431,10 +501,25 @@ export async function getChatInfo(pathToFile, additionalData = {}, withMetadata 
             if (lastLine) {
                 const jsonData = tryParse(lastLine);
                 if (jsonData && (jsonData.name || jsonData.character_name || jsonData.chat_metadata)) {
-                    chatData.chat_items = (itemCounter - 1);
-                    chatData.mes = jsonData.mes || '[The message is empty]';
-                    chatData.last_mes = jsonData.send_date || new Date(Math.round(stats.mtimeMs)).toISOString();
+                    const chatItems = itemCounter - 1;
+                    const mes = jsonData.mes || '[The message is empty]';
+                    const lastMes = jsonData.send_date || new Date(Math.round(stats.mtimeMs)).toISOString();
+                    chatData.chat_items = chatItems;
+                    chatData.mes = mes;
+                    chatData.last_mes = lastMes;
                     chatData.match = hasMatcher ? hasAnyMatch : true;
+
+                    chatInfoCache.set(pathToFile, {
+                        mtimeMs: stats.mtimeMs,
+                        size: stats.size,
+                        chat_items: chatItems,
+                        mes: mes,
+                        last_mes: lastMes,
+                        chat_metadata: headerMetadata,
+                    });
+                    if (withMetadata && headerMetadata !== undefined) {
+                        chatData.chat_metadata = headerMetadata;
+                    }
 
                     res(chatData);
                 } else {
@@ -565,6 +650,7 @@ export async function trySaveChat(chatData, filePath, skipIntegrityCheck = false
         throw new IntegrityMismatchError(`Chat integrity check failed for "${filePath}". The expected integrity slug was "${chatIntegritySlug}".`);
     }
     await tryWriteFile(filePath, jsonlData);
+    await updateChatInfoCache(filePath, chatData);
     getBackupFunction(handle)(backupDirectory, cardName, jsonlData);
     bustCharacterListCacheForCharacter(handle, cardName);
 }
@@ -954,6 +1040,8 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
 
         await fs.promises.copyFile(pathToOriginalFile, pathToRenamedFile);
         await fs.promises.unlink(pathToOriginalFile);
+        chatInfoCache.delete(pathToOriginalFile);
+        chatInfoCache.delete(pathToRenamedFile);
         log.chat.info('Successfully renamed chat file.');
         return response.send({ ok: true, sanitizedFileName });
     } catch (error) {
@@ -976,6 +1064,7 @@ router.post('/delete', validateAvatarUrlMiddleware, async function (request, res
         }
         //Return success if the file was deleted.
         if (await tryDeleteFile(chatFilePath)) {
+            chatInfoCache.delete(chatFilePath);
             return response.send({ ok: true });
         } else {
             log.chat.error('The chat file was not deleted.');
@@ -1239,6 +1328,7 @@ router.post('/group/delete', async (request, response) => {
 
         //Return success if the file was deleted.
         if (await tryDeleteFile(chatFilePath)) {
+            chatInfoCache.delete(chatFilePath);
             return response.send({ ok: true });
         } else {
             log.chat.error('The group chat file was not deleted.');
