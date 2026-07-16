@@ -30,6 +30,17 @@ node -e 'process.exit(typeof WebSocket==="function"&&typeof fetch==="function"?0
     echo "node lacks global WebSocket/fetch (need >=22; project pins >=26)" >&2; exit 1
 }
 
+# The readiness curl below proves A server answers on this port, never that it is OURS. A concurrent
+# run holding the port answers it on the first iteration, our own python3 then dies of EADDRINUSE
+# unnoticed, and the rows drive the OTHER run's mock: the CONN rows fail for a reason that has
+# nothing to do with the code under test. Refuse the port before it can lie to us.
+if curl -sS --max-time 2 -o /dev/null "http://127.0.0.1:$PORT/" 2>/dev/null; then
+    echo "port $PORT already answers before we started: another run holds it." >&2
+    echo "pass a unique IPORT (concurrent gates must not share one), or kill the stale server:" >&2
+    echo "  ps -eo pid,cmd | grep '[d]evserve'   # NixOS has no fuser; never a broad pkill" >&2
+    exit 1
+fi
+
 # -k 5 is load-bearing, not decoration: the three launches in verify.sh have it and this one did not,
 # so every orphan found so far has been THIS server. Without the SIGKILL escalation a timeout that
 # fires on a parked process leaves it holding this port forever, serving a STALE dist to later runs.
