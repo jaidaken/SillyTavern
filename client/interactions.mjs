@@ -2273,8 +2273,11 @@ async function main() {
             const statusMoved = await page.waitFor(
                 `document.getElementById('send-status').textContent.trim() !== ${JSON.stringify(statusBefore)}`, 6000);
             const statusAfter = await page.eval("document.getElementById('send-status').textContent.trim()");
+            // Named for what it PROVES. It does NOT guard the detached-node trap: arming that two ways
+            // (a literal child, then a {expr} child) left this row green both times, because the trap
+            // needs the vdom to own text it can lose and the composer publishes no region handle.
             row('must', statusMoved && statusAfter.length > 0,
-                'W6-7 the backend readout still updates in place (no vdom text child to detach)',
+                'W6-7 the backend readout tracks the backend it is reporting on',
                 `before=${JSON.stringify(statusBefore)} after=${JSON.stringify(statusAfter)} changed=${statusMoved}`);
 
             // The readout is a fixture, not a toast: connection.zig writes a standing line at boot and
@@ -2292,13 +2295,15 @@ async function main() {
             const phone = await page.eval("(function(){const s=document.getElementById('send-status');"
                 + "if(!s)return JSON.stringify({err:'no #send-status'});"
                 + "const sr=s.getBoundingClientRect();const cr=document.getElementById('chat').getBoundingClientRect();"
-                // Clip to #chat's box first: it scrolls, so an out-of-view message keeps a rect running
-                // past the container and read as covered (covers=1) with the chip provably below it.
+                // A message's rect runs past #chat's bottom under scroll, so a raw rect test counts
+                // overlaps that overflow clips and nobody can see. Clip each to the chat box first, or
+                // the diagnostic reports covered messages on a build where none are covered.
                 + "const over=[...document.querySelectorAll('#chat .mes_text')].filter(function(m){"
                 + "const r=m.getBoundingClientRect();"
-                + "const top=Math.max(r.top,cr.top), bot=Math.min(r.bottom,cr.bottom);"
-                + "if(bot<=top)return false;"
-                + "return sr.bottom>top+0.5 && sr.top<bot-0.5 && sr.right>r.left+0.5 && sr.left<r.right-0.5;});"
+                + "const vt=Math.max(r.top,cr.top),vb=Math.min(r.bottom,cr.bottom);"
+                + "const vl=Math.max(r.left,cr.left),vr=Math.min(r.right,cr.right);"
+                + "if(vb<=vt||vr<=vl)return false;"
+                + "return sr.bottom>vt+0.5 && sr.top<vb-0.5 && sr.right>vl+0.5 && sr.left<vr-0.5;});"
                 + "const h1=document.querySelector('#topbar h1');"
                 + "return JSON.stringify({text:s.textContent.trim(),h:Math.round(sr.height),covers:over.length,"
                 + "inChatBox: sr.bottom > cr.top + 0.5 && sr.top < cr.bottom - 0.5,"
