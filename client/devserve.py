@@ -63,7 +63,9 @@ def _mock_chat_page(req):
     messages = [dict(m) for m in all_msgs[start:end]]
     return {
         "messages": messages,
-        "header": {"user_name": "You", "chat_metadata": {}},
+        # C-CFG: the author's note lives in the chat's own header. note_depth is the STRING "2" so the
+        # gate proves the tolerant number parse; the client must still read a depth of 2.
+        "header": {"user_name": "You", "chat_metadata": Handler.chat_metadata()},
         "change_token": Handler.append_token or f"v1.{total}.mock",
         "full_token": Handler.full_token,
         "has_more_before": start > 0,
@@ -89,6 +91,35 @@ def _default_settings():
             "personas": {"p1.png": "Alice", "p2.png": "Bob", "a b.png": "Spacey"},
             "persona_descriptions": {
                 "p1.png": "First persona", "p2.png": "Second persona", "a b.png": "Persona with a space",
+            },
+            # C-CFG: the real ChatML shape, so the gate reads the templates the client actually ships
+            # against. `enabled` is the STRING "true" and `first_output_sequence` is null on purpose:
+            # this blob is written by the classic client and by hand, and a hostile field must cost
+            # THAT FIELD, never the whole template (the shape that emptied two lists already).
+            "instruct": {
+                "enabled": "true",
+                "name": "ChatML",
+                "input_sequence": "<|im_start|>user",
+                "output_sequence": "<|im_start|>assistant",
+                "system_sequence": "<|im_start|>system",
+                "stop_sequence": "<|im_end|>",
+                "input_suffix": "<|im_end|>\n",
+                "output_suffix": "<|im_end|>\n",
+                "system_suffix": "<|im_end|>\n",
+                "first_output_sequence": None,
+                "story_string_prefix": "<|im_start|>system",
+                "story_string_suffix": "<|im_end|>\n",
+                "wrap": True,
+                "macro": True,
+                "names_behavior": "none",
+                "system_same_as_user": False,
+            },
+            "context": {
+                "name": "ChatML",
+                "story_string": "{{#if system}}{{system}}\n{{/if}}{{#if description}}{{description}}\n{{/if}}{{#if personality}}{{personality}}\n{{/if}}{{#if scenario}}{{scenario}}\n{{/if}}{{#if persona}}{{persona}}\n{{/if}}{{#if anchorAfter}}{{anchorAfter}}\n{{/if}}{{trim}}",
+                "chat_start": "",
+                "example_separator": "***",
+                "story_string_position": 0,
             },
         },
     }
@@ -305,6 +336,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # J1 invariant-2 gate: the prompt of the last generate, so a gate can prove it spans history
     # beyond the display window.
     last_generate_prompt = None
+    # C-CFG: the whole generate body, so a gate can prove a panel sampler and the template's stop
+    # sequence actually reach the request rather than only localStorage.
+    last_generate_body = None
     # Turns the client appended via /api/chats/append; the mock /get echoes them so a reload shows them.
     appended_messages = []
     append_token = None
@@ -333,6 +367,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     persona_settings = None
     # C-CHAR: the avatar the last /api/characters/duplicate named, read back by /dev/duplicated.
     duplicated_avatar = None
+    # C-CFG: the open chat's metadata, mutated by /api/chats/metadata so a note save round-trips.
+    chat_meta = None
+    metadata_stale_once = False
+    last_metadata_body = None
+
+    @classmethod
+    def chat_metadata(cls):
+        if cls.chat_meta is None:
+            # A note the client must read back exactly: in_chat at depth 2, every message.
+            cls.chat_meta = {
+                "integrity": "mock-integrity",
+                "note_prompt": "The tide is coming in.",
+                "note_interval": 1,
+                "note_depth": "2",
+                "note_position": 1,
+                "note_role": 0,
+            }
+        return cls.chat_meta
 
     @classmethod
     def settings_blob(cls):
@@ -429,6 +481,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "recorded_connection": Handler.recorded_connection,
                     "last_generate_server": Handler.last_generate_server,
                     "last_generate_prompt": Handler.last_generate_prompt,  # J1 invariant-2
+                    "last_generate_body": Handler.last_generate_body,  # C-CFG
                     "appended": Handler.appended_messages,
                     "append_409_count": Handler.append_409_count,
                     "get_count": Handler.get_count,
@@ -449,6 +502,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.mock_json({"ok": True, "keys_exposed": True})
             if self.path.startswith("/dev/arm-get-409"):
                 Handler.arm_get_409 = True
+                return self.mock_json({"armed": True})
+            # C-CFG: what the client's last note save actually sent, and a one-shot 409 arm so the
+            # gate can drive the stale path a real concurrent writer would cause.
+            if self.path.startswith("/dev/note-save"):
+                return self.mock_json(Handler.last_metadata_body or {})
+            if self.path.startswith("/dev/chat-metadata"):
+                return self.mock_json(Handler.chat_metadata())
+            # C-CFG: drop the recorded generate so a gate can prove the NEXT body is the one its own
+            # send produced. Without this a completion predicate can match a previous send's text and
+            # the row reads an artifact it never caused.
+            if self.path.startswith("/dev/clear-generate"):
+                Handler.last_generate_body = None
+                Handler.last_generate_prompt = None
+                return self.mock_json({"cleared": True})
+            if self.path.startswith("/dev/arm-metadata-409"):
+                Handler.metadata_stale_once = True
                 return self.mock_json({"armed": True})
             if self.path.startswith("/dev/arm-recent-empty"):
                 Handler.recent_empty = True
@@ -590,6 +659,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.mock_json([] if Handler.recent_empty else _mock_recent())
         if path == "/api/settings/get":
             return self.mock_json({"settings": json.dumps(Handler.settings_blob())})
+        # C-CFG: the chat-metadata member of the descriptor-mutation family. The client sends the note
+        # fields plus the FULL change token; the server does the read-modify-write and returns the new
+        # token. Mirrors the shape the real route must have (reported to the lead), including the 409.
+        if path == "/api/chats/metadata":
+            Handler.last_metadata_body = req
+            if Handler.metadata_stale_once:
+                Handler.metadata_stale_once = False
+                Handler.bump_full_token()
+                return self.mock_status(409, {"error": "stale", "change_token": Handler.full_token})
+            meta = Handler.chat_metadata()
+            for key in ("note_prompt", "note_interval", "note_depth", "note_position", "note_role"):
+                if key in req:
+                    meta[key] = req[key]
+            Handler.bump_full_token()
+            return self.mock_json({
+                "ok": True,
+                "change_token": Handler.full_token,
+                "tail_token": Handler.append_token or "v1.mock",
+                "total_items": len(Handler.reader_current()) + len(Handler.appended_messages),
+            })
         if path == "/api/settings/save":
             # C-PERS: merge the posted settings so a persona persist round-trips on the next get.
             if isinstance(req, dict):
@@ -765,6 +854,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/backends/text-completions/generate":
             Handler.last_generate_server = req.get("api_server")
             Handler.last_generate_prompt = req.get("prompt")  # J1 invariant-2
+            Handler.last_generate_body = json.dumps(req)  # C-CFG
             return self._mock_generate_stream()
         if path == "/api/chats/get":
             # The client always sends paged:true (reader tail window + scroll-up prepend).

@@ -43,6 +43,13 @@ pub fn active() ?generate.Connection {
     return conn;
 }
 
+/// Mutate the live connection in place, for the config panel's samplers. Handed a pointer rather
+/// than a setter per field so the sampler model stays in samplers.zig; the URLs are this module's
+/// and the callback never touches them. A no-op when no backend is configured.
+pub fn withActive(f: *const fn (*generate.Connection) void) void {
+    if (conn) |*c| f(c);
+}
+
 /// The configured server URL, for prefilling the connections panel input so it shows what send
 /// actually uses (mined from the settings blob), not a hardcoded default. Empty when none is set.
 pub fn activeServerUrl() []const u8 {

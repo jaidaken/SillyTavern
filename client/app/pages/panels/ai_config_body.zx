@@ -1,9 +1,145 @@
-// AI Response Configuration panel body. Left dock.
-pub fn AiConfigBody(allocator: zx.Allocator) zx.Component {
-    // A bare component root transpiles to ziex's failing-allocator context; allocInit mounts it with the real one.
-    var zctx = zx.x.allocInit(allocator);
-    return zctx.cmp(PanelEmpty, .{ .name = "PanelEmpty" }, .{});
+// AI Response Configuration panel: the samplers that shape the model's reply. Left dock.
+//
+// Each row is a slider and a number box over the SAME value: the slider is for feel, the box for a
+// value the user already knows they want. Both write through config_state.setSampler, which clamps to
+// the spec's range, pushes the value at the live connection so the very next send carries it, and
+// queues the durable save into the settings blob the classic client shares.
+//
+// The spec table (samplers.zig) drives the whole panel (WD31: repetition is data, WD32: the copy is
+// in the data module): the label, the range, the step, the hint and the blob key all come from it, so
+// adding a sampler is one row there and nothing here. The visual language is the sibling config
+// panels' own (setting-row / setting-label / the accent token), deliberately: a config panel that
+// looked unlike Connections would be the defect, not the character (WD62).
+
+const row_cls = "setting-row flex flex-col gap-1";
+const head_cls = "flex items-center justify-between gap-3";
+const label_cls = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
+const num_cls = "sampler-num w-[5.5rem] rounded-md border border-control-border bg-bg px-2 py-[0.25rem] text-right font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
+const range_cls = "sampler-range w-full accent-accent";
+const hint_cls = "setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]";
+const reset_cls = "cfg-reset cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text";
+
+pub fn AiConfigBody(ctx: *zx.ComponentCtx(void)) zx.Component {
+    return (
+        <div @allocator={ctx.allocator} class="settings-body flex flex-col gap-4" @rendering={.client}>
+            {for (samplers.specs_slice) |spec| (
+                <div class={row_cls}>
+                    <div class={head_cls}>
+                        <label class={label_cls} for={numId(ctx.allocator, spec.id)}>{spec.label}</label>
+                        <input
+                            id={numId(ctx.allocator, spec.id)}
+                            name={spec.id}
+                            class={num_cls}
+                            type="number"
+                            inputmode="decimal"
+                            autocomplete="off"
+                            min={numStr(ctx.allocator, spec.min)}
+                            max={numStr(ctx.allocator, spec.max)}
+                            step={numStr(ctx.allocator, spec.step)}
+                            value={config_state.displayValue(ctx.allocator, spec)}
+                            aria-describedby={hintId(ctx.allocator, spec.id)}
+                            data-sampler={spec.id}
+                            oninput={ctx.bind(onSamplerInput)}
+                        />
+                    </div>
+                    <input
+                        id={rangeId(ctx.allocator, spec.id)}
+                        name={rangeName(ctx.allocator, spec.id)}
+                        class={range_cls}
+                        type="range"
+                        aria-label={spec.label}
+                        min={numStr(ctx.allocator, spec.min)}
+                        max={numStr(ctx.allocator, spec.max)}
+                        step={numStr(ctx.allocator, spec.step)}
+                        value={config_state.displayValue(ctx.allocator, spec)}
+                        data-sampler={spec.id}
+                        oninput={ctx.bind(onSamplerInput)}
+                    />
+                    <p id={hintId(ctx.allocator, spec.id)} class={hint_cls}>{spec.hint}</p>
+                </div>
+            )}
+            <div class="setting-row flex items-center justify-between gap-4">
+                <span class={label_cls}>Reset samplers</span>
+                <button type="button" class={reset_cls} onclick={onReset}>Reset</button>
+            </div>
+            <p class={hint_cls}>Saved to your SillyTavern settings and shared with the classic client.</p>
+        </div>
+    );
+}
+
+fn numId(a: zx.Allocator, id: []const u8) []const u8 {
+    return std.fmt.allocPrint(a, "sampler-{s}", .{id}) catch "sampler";
+}
+
+fn rangeId(a: zx.Allocator, id: []const u8) []const u8 {
+    return std.fmt.allocPrint(a, "sampler-range-{s}", .{id}) catch "sampler-range";
+}
+
+fn hintId(a: zx.Allocator, id: []const u8) []const u8 {
+    return std.fmt.allocPrint(a, "sampler-hint-{s}", .{id}) catch "sampler-hint";
+}
+
+// The range carries its own name so a form read sees two distinct controls rather than one field
+// with two values.
+fn rangeName(a: zx.Allocator, id: []const u8) []const u8 {
+    return std.fmt.allocPrint(a, "{s}_range", .{id}) catch "sampler_range";
+}
+
+fn numStr(a: zx.Allocator, v: f64) []const u8 {
+    if (v == @round(v) and @abs(v) < 1e9) return std.fmt.allocPrint(a, "{d}", .{@as(i64, @intFromFloat(v))}) catch "0";
+    return std.fmt.allocPrint(a, "{d}", .{v}) catch "0";
+}
+
+/// A slider or a number box moved. The pair share a data-sampler id, so one handler serves both.
+fn onSamplerInput(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const id = dom_event.datasetUp(target, "sampler") orelse {
+        log.warn("sampler input: control has no data-sampler", .{});
+        return;
+    };
+    defer zx.allocator.free(id);
+    const value = target.getAlloc(js.String, zx.allocator, "value") catch return;
+    defer zx.allocator.free(value);
+    config_state.setSampler(id, value);
+    syncTwin(id, target);
+}
+
+/// Write the committed value into the sampler's OTHER control, so the slider and the box never drift
+/// apart (drag the slider and the box must follow). A targeted DOM write, not a rerender: a rerender
+/// recreates the focused input and drops the caret mid-typing, and writing the value of the control
+/// the user is holding would jump its caret to the end. The source is skipped by id, because jsz
+/// offers no object identity test.
+fn syncTwin(id: []const u8, source: js.Object) void {
+    const i = samplers.indexOf(id) orelse return;
+    const spec = samplers.specs[i];
+    const text = samplers.format(zx.allocator, spec, config_state.valueFor(id)) catch return;
+    defer zx.allocator.free(text);
+
+    const src_id = source.getAlloc(js.String, zx.allocator, "id") catch return;
+    defer zx.allocator.free(src_id);
+
+    var num_buf: [64]u8 = undefined;
+    var range_buf: [64]u8 = undefined;
+    writeUnlessSource(std.fmt.bufPrint(&num_buf, "sampler-{s}", .{id}) catch return, src_id, text);
+    writeUnlessSource(std.fmt.bufPrint(&range_buf, "sampler-range-{s}", .{id}) catch return, src_id, text);
+}
+
+fn writeUnlessSource(target_id: []const u8, src_id: []const u8, text: []const u8) void {
+    if (std.mem.eql(u8, target_id, src_id)) return;
+    const el = dom_event.elementById(zx.allocator, target_id) orelse return;
+    defer el.deinit();
+    el.ref.set("value", js.string(text)) catch {};
+}
+
+fn onReset(_: zx.client.Event) void {
+    config_state.resetSamplers();
 }
 
 const zx = @import("zx");
-const PanelEmpty = @import("../panelchrome.zx").PanelEmpty;
+const std = @import("std");
+const js = zx.client.js;
+const log = std.log.scoped(.panels);
+const samplers = @import("../samplers.zig");
+const config_state = @import("../config_state.zig");
+const dom_event = @import("../dom_event.zig");

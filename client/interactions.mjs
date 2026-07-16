@@ -1876,6 +1876,221 @@ async function main() {
                 `notice=${avatarNotice}`);
         }
 
+        // --- C-CFG: the config panels (2a samplers, 2b templates, 2c author's note) ---
+        console.log('== config panels ==');
+        {
+            // The drawer button toggles, so a second click closes it. There is no #topdrawer id to
+            // reach the chrome's own close button by.
+            const closeTopDrawer = async () => {
+                await page.click('#d-formatting');
+                await page.waitFor("!document.getElementById('instruct-input_sequence')", 3000);
+            };
+            const openChat = async () => {
+                await page.navigate(`${args.base}/`);
+                await openRecentChat();
+            };
+            // One send, proven to be THIS send. The recorded generate is cleared first and the wait
+            // keys on the message COUNT growing, because the log already contains a previous send's
+            // "FIN": a predicate that only looked for FIN would match instantly, skip the send, and
+            // let the rows below read a body this gate never caused.
+            const sendProbe = async (text) => {
+                await (await fetch(`${args.base}/dev/clear-generate`)).json();
+                const before = await page.eval("document.querySelectorAll('#chat .mes').length");
+                await page.focus('#send_textarea');
+                await page.insertText(text);
+                await page.click('#composer button[aria-label="Send"]');
+                const grew = await page.waitFor(`document.querySelectorAll('#chat .mes').length >= ${before} + 2 && ${idle}`, 15000);
+                if (!grew) throw new Error(`sendProbe: no reply after "${text}"`);
+            };
+
+            // 2a SAMPLERS. The panel must open on the LIVE value from the settings blob (temp 0.8),
+            // not on the spec default (1.0), or it would silently rewrite the user's sampler on the
+            // first save.
+            await openChat();
+            await page.click('#d-ai_config');
+            await page.waitFor("document.getElementById('sampler-temp')", 4000);
+            const tempAtOpen = await page.eval("document.getElementById('sampler-temp').value");
+            row('must', tempAtOpen === '0.80',
+                'C-CFG-1 samplers open on the mined blob value, not the spec default', `temp=${tempAtOpen}`);
+
+            // The slider and the box are two controls over one value: moving one must move the other,
+            // or the panel lies about what it will send.
+            await page.eval("(function(){const r=document.getElementById('sampler-range-temp');r.value='1.5';r.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            const twinSynced = await page.waitFor("document.getElementById('sampler-temp').value === '1.50'", 2500);
+            row('must', twinSynced, 'C-CFG-2 moving the slider moves its number box',
+                `num=${await page.eval("document.getElementById('sampler-temp').value")}`);
+
+            // The clamp is the guard between a typed value and the request body. 99 is past temp's max.
+            await page.eval("(function(){const n=document.getElementById('sampler-temp');n.value='99';n.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            const clamped = await page.waitFor("document.getElementById('sampler-range-temp').value === '4'", 2500);
+            row('must', clamped, 'C-CFG-3 an out-of-range typed sampler clamps to the spec max',
+                `range=${await page.eval("document.getElementById('sampler-range-temp').value")}`);
+
+            // The sampler must reach the REQUEST, which is the only thing that proves the panel is
+            // wired to send rather than to localStorage alone. Send, then read the recorded body.
+            await page.eval("(function(){const n=document.getElementById('sampler-temp');n.value='0.35';n.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            await sleep(200);
+            await page.click('#panel-view .icon[data-icon="close"]');
+            await sleep(200);
+            await sendProbe('does the sampler ride the request');
+            const genBody = await (await fetch(`${args.base}/dev/state`)).json();
+            // Cleared before the send, so a body here can only be the one this row caused.
+            row('must', !!genBody.last_generate_body, 'C-CFG-4a the probe send actually reached the backend',
+                `recorded=${!!genBody.last_generate_body}`);
+            const sentTemp = genBody.last_generate_body && JSON.parse(genBody.last_generate_body).temperature;
+            row('must', sentTemp === 0.35,
+                'C-CFG-4 a panel sampler reaches the generate request body', `temperature=${sentTemp}`);
+
+            // The stop sequence: the tear that let the model run past its own end-of-turn.
+            const sentStop = genBody.last_generate_body && JSON.parse(genBody.last_generate_body).stop;
+            row('must', Array.isArray(sentStop) && sentStop[0] === '<|im_end|>',
+                'C-CFG-5 the instruct stop sequence reaches the request', `stop=${JSON.stringify(sentStop)}`);
+
+            // The prompt must carry the ChatML wrappers AND no literal handlebars. Both tears at once:
+            // a story string rendered by the flat resolver alone would ship "{{#if description}}".
+            const prompt = genBody.last_generate_prompt || '';
+            row('must', prompt.includes('<|im_start|>user') && prompt.includes('<|im_start|>system'),
+                'C-CFG-6 the prompt wraps turns in the blob template sequences',
+                `hasUser=${prompt.includes('<|im_start|>user')} hasSystem=${prompt.includes('<|im_start|>system')}`);
+            row('must', !prompt.includes('{{#if') && !prompt.includes('{{trim}}'),
+                'C-CFG-7 the story string renders rather than shipping literal handlebars',
+                `leaked=${prompt.includes('{{#if') || prompt.includes('{{trim}}')}`);
+
+            // 2c the note from the chat header must reach the prompt. The fixture note is in_chat.
+            row('must', prompt.includes('The tide is coming in.'),
+                'C-CFG-8 the chat header author\'s note reaches the prompt', `present=${prompt.includes('The tide is coming in.')}`);
+
+            // 2b FORMATTING panel. The instruct fields open on the blob, hostile shapes and all: the
+            // fixture writes enabled as the STRING "true" and first_output_sequence as null.
+            await page.click('#d-formatting');
+            await page.waitFor("document.getElementById('instruct-input_sequence')", 4000);
+            const inputSeq = await page.eval("document.getElementById('instruct-input_sequence').value");
+            const enabledBox = await page.eval("document.getElementById('instruct-enabled').checked");
+            row('must', inputSeq === '<|im_start|>user' && enabledBox === true,
+                'C-CFG-9 the instruct editor opens on the blob template despite hostile field shapes',
+                `input_sequence=${inputSeq} enabled=${enabledBox}`);
+
+            // The note editor opens on the chat's own note, including the depth the fixture stores as
+            // the STRING "2" (the tolerant number parse).
+            const notePrompt = await page.eval("document.getElementById('an-prompt').value");
+            const noteDepth = await page.eval("document.getElementById('an-depth').value");
+            row('must', notePrompt === 'The tide is coming in.' && noteDepth === '2',
+                'C-CFG-10 the note editor opens on the chat header note, string depth included',
+                `prompt=${JSON.stringify(notePrompt)} depth=${noteDepth}`);
+
+            // Editing an instruct field must reshape the NEXT prompt with no reload.
+            await page.eval("(function(){const n=document.getElementById('instruct-output_sequence');n.value='<|assistant|>';n.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            await sleep(200);
+            await closeTopDrawer();
+            await sleep(300);
+            await sendProbe('does the edited template reshape the prompt');
+            const afterEdit = await (await fetch(`${args.base}/dev/state`)).json();
+            row('must', (afterEdit.last_generate_prompt || '').includes('<|assistant|>'),
+                'C-CFG-11 an edited instruct sequence reshapes the very next prompt',
+                `present=${(afterEdit.last_generate_prompt || '').includes('<|assistant|>')}`);
+
+            // 2c the note SAVE round-trip: what the client sends must be the classic client's keys,
+            // and it must gate on the FULL token (a tail token would let two edits both pass).
+            await page.click('#d-formatting');
+            await page.waitFor("document.getElementById('an-prompt')", 4000);
+            await page.eval("(function(){const n=document.getElementById('an-prompt');n.value='The lamp is out.';n.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            await page.eval("(function(){const n=document.getElementById('an-interval');n.value='3';n.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            await sleep(150);
+            await page.click('.an-save');
+            const savedOk = await page.waitFor("document.getElementById('an-status').textContent === 'Note saved'", 4000);
+            const sent = await (await fetch(`${args.base}/dev/note-save`)).json();
+            row('must', savedOk && sent.note_prompt === 'The lamp is out.' && sent.note_interval === 3,
+                'C-CFG-12 saving the note posts the classic metadata keys', `sent=${JSON.stringify({p: sent.note_prompt, i: sent.note_interval})}`);
+            row('must', typeof sent.change_token === 'string' && sent.change_token.startsWith('full-'),
+                'C-CFG-13 the note save gates on the FULL change token, not the tail token',
+                `token=${sent.change_token}`);
+
+            const stored = await (await fetch(`${args.base}/dev/chat-metadata`)).json();
+            row('must', stored.note_prompt === 'The lamp is out.' && stored.integrity === 'mock-integrity',
+                'C-CFG-14 the note write keeps the chat metadata the client does not model',
+                `integrity=${stored.integrity}`);
+
+            // A concurrent writer moved the file. The user must be told, not silently dropped.
+            await (await fetch(`${args.base}/dev/arm-metadata-409`)).json();
+            await page.eval("(function(){const n=document.getElementById('an-prompt');n.value='A racing edit.';n.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            await sleep(150);
+            await page.click('.an-save');
+            const staleTold = await page.waitFor("document.getElementById('an-status').textContent.includes('Chat changed elsewhere')", 4000);
+            row('must', staleTold, 'C-CFG-15 a stale note save says so rather than dropping the edit',
+                `status=${await page.eval("document.getElementById('an-status').textContent")}`);
+
+            // And the adopted token makes the RETRY land, so the user is not stuck in a 409 loop.
+            await page.click('.an-save');
+            const retryOk = await page.waitFor("document.getElementById('an-status').textContent === 'Note saved'", 4000);
+            row('must', retryOk, 'C-CFG-16 saving again after a 409 lands on the refreshed token', `status=${await page.eval("document.getElementById('an-status').textContent")}`);
+
+            // The Escape guard, this panel's copy. A dropdown Escape must not take the whole drawer.
+            await page.click('[data-dd-toggle="an-position"]');
+            await page.waitFor("document.getElementById('dd-list-an-position')", 2500);
+            for (const type of ['rawKeyDown', 'keyUp']) {
+                await page.cdp.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }, page.sessionId);
+            }
+            const cfgMenuClosed = await page.waitFor("!document.getElementById('dd-list-an-position')", 2500);
+            const cfgPanelAlive = await page.eval("!!document.getElementById('an-prompt')");
+            row('must', cfgMenuClosed && cfgPanelAlive,
+                'C-CFG-17 Escape closes the note dropdown without dismissing the formatting panel',
+                `menuClosed=${cfgMenuClosed} panelAlive=${cfgPanelAlive}`);
+
+            // The C-CARD-7 shape: Escape with NO menu open must still close the panel, so a guard that
+            // fixes C-CFG-17 by swallowing every Escape cannot pass both.
+            for (const type of ['rawKeyDown', 'keyUp']) {
+                await page.cdp.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }, page.sessionId);
+            }
+            const cfgEscClosed = await page.waitFor("!document.getElementById('an-prompt')", 3000);
+            row('must', cfgEscClosed, 'C-CFG-18 Escape with no menu open still closes the formatting panel',
+                `closed=${cfgEscClosed}`);
+        }
+
+        // --- C-CFG-SEL: a refetch must not deselect the character (char_api.rebuildCharacterStore) ---
+        // clear() nulls selected_index and nothing put it back, so EVERY fetchCharacters silently
+        // deselected the character app-wide: a card save, an import, a duplicate and an avatar replace
+        // all refetch, and the chat reads the same selected(). No prior row caught it because they all
+        // navigated and reselected right after a save, restoring the selection by accident before
+        // anything looked. This row looks WITHOUT reselecting.
+        {
+            await page.navigate(`${args.base}/`);
+            await openRecentChat();
+            await page.click('#d-card_editor');
+            const cardLoaded = await page.waitFor("document.getElementById('card-name')", 5000);
+
+            // Duplicate refetches /characters/all, which is the rebuild path, with no navigation and
+            // no reselect after it.
+            await page.click('#d-characters');
+            await page.waitFor("document.querySelectorAll('#chat-root .char-item').length > 0", 5000);
+            const selBefore = await page.eval("(function(){const r=document.querySelector('#chat-root .char-item.is-selected');return r?r.querySelector('.char-name').textContent:null})()");
+            await page.focus("#chat-root .char-item.is-selected .char-row-act[data-char-action='duplicate']");
+            await page.click("#chat-root .char-item.is-selected .char-row-act[data-char-action='duplicate']");
+            // Wait on the SERVER seeing the duplicate, so the refetch it triggers has actually been
+            // issued before the selection is read back.
+            const dupSeen = await (async () => {
+                const deadline = Date.now() + 4000;
+                while (Date.now() < deadline) {
+                    const s = await (await fetch(`${args.base}/dev/state`)).json();
+                    if (s.duplicated_avatar) return true;
+                    await sleep(100);
+                }
+                return false;
+            })();
+            await page.waitFor("document.querySelectorAll('#chat-root .char-item').length > 0", 4000);
+            await sleep(400);
+            const selAfter = await page.eval("(function(){const r=document.querySelector('#chat-root .char-item.is-selected');return r?r.querySelector('.char-name').textContent:null})()");
+            row('must', cardLoaded && dupSeen && selBefore != null && selAfter === selBefore,
+                'C-CFG-SEL-1 a refetch keeps the same character selected',
+                `dupSeen=${dupSeen} before=${JSON.stringify(selBefore)} after=${JSON.stringify(selAfter)}`);
+
+            // The blast radius: the card editor reads the same selected(), so a deselect empties it.
+            await page.click('#d-card_editor');
+            const cardStillOpen = await page.waitFor("document.getElementById('card-name')", 4000);
+            row('must', cardStillOpen,
+                'C-CFG-SEL-2 the card editor still has its character after a refetch',
+                `cardOpen=${cardStillOpen}`);
+        }
+
     } finally {
         clearTimeout(watchdog);
         cleanup();

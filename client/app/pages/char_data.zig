@@ -170,10 +170,15 @@ pub fn freePersonas(alloc: Allocator, list: []PersonaJson) void {
     alloc.free(list);
 }
 
+/// One stored chat turn. `is_system` marks a narrator/system line, which the store's Message has
+/// carried all along (store.zig:32) but this struct did NOT, even though the PROMPT path reads THIS
+/// one: a narrator turn therefore wrapped as the character's own speech and the model answered as if
+/// the scene description had come from the character. Parsed here so the role reaches generate.
 pub const ChatMsg = struct {
     name: []u8,
     mes: []u8,
     is_user: bool,
+    is_system: bool = false,
 };
 
 /// Chat messages from a parsed /api/chats/get body. The server contract: element 0 is chat
@@ -199,6 +204,7 @@ pub fn chatMessages(alloc: Allocator, root: std.json.Value) Allocator.Error![]Ch
         var name_src: []const u8 = "";
         var mes_src: []const u8 = "";
         var is_user = false;
+        var is_system = false;
         switch (item) {
             .object => |o| {
                 if (o.get("name")) |v| switch (v) {
@@ -210,6 +216,7 @@ pub fn chatMessages(alloc: Allocator, root: std.json.Value) Allocator.Error![]Ch
                     else => {},
                 };
                 if (o.get("is_user")) |v| is_user = favTruthy(v);
+                if (o.get("is_system")) |v| is_system = favTruthy(v);
             },
             else => {},
         }
@@ -217,7 +224,7 @@ pub fn chatMessages(alloc: Allocator, root: std.json.Value) Allocator.Error![]Ch
         errdefer alloc.free(name);
         const mes = try alloc.dupe(u8, mes_src);
         errdefer alloc.free(mes);
-        try out.append(alloc, .{ .name = name, .mes = mes, .is_user = is_user });
+        try out.append(alloc, .{ .name = name, .mes = mes, .is_user = is_user, .is_system = is_system });
     }
     return try out.toOwnedSlice(alloc);
 }
@@ -234,11 +241,19 @@ pub fn freeChatMessages(alloc: Allocator, list: []ChatMsg) void {
 /// header-stripped by the server), oldest first. `change_token` is the opaque token to send
 /// back on the next `before_index` request; `total_items` and `has_more_before` drive the
 /// window bookkeeping. Owned result; free with freeChatPage.
+/// `chat_metadata` is the chat file's own header (buildChatPage returns it as `header`), which is
+/// where the classic client keeps the author's note. Carried as a raw JSON string rather than a
+/// parsed tree so it survives the caller's json arena; empty when the page had no header.
 pub const ChatPage = struct {
     messages: []ChatMsg,
     total_items: usize,
     has_more_before: bool,
     change_token: []u8,
+    chat_metadata: []u8,
+    /// The token covering the WHOLE file, which the mutation family gates on (the tail token hashes
+    /// only the head, so two concurrent in-window edits would both pass it and one would be lost).
+    /// buildChatPage emits it on every page so a windowed client always holds a current one.
+    full_token: []u8,
 };
 
 fn valueMessages(alloc: Allocator, v: std.json.Value) Allocator.Error![]ChatMsg {
@@ -258,6 +273,7 @@ fn valueMessages(alloc: Allocator, v: std.json.Value) Allocator.Error![]ChatMsg 
         var name_src: []const u8 = "";
         var mes_src: []const u8 = "";
         var is_user = false;
+        var is_system = false;
         switch (item) {
             .object => |o| {
                 if (o.get("name")) |x| switch (x) {
@@ -269,6 +285,7 @@ fn valueMessages(alloc: Allocator, v: std.json.Value) Allocator.Error![]ChatMsg 
                     else => {},
                 };
                 if (o.get("is_user")) |x| is_user = favTruthy(x);
+                if (o.get("is_system")) |x| is_system = favTruthy(x);
             },
             else => {},
         }
@@ -276,7 +293,7 @@ fn valueMessages(alloc: Allocator, v: std.json.Value) Allocator.Error![]ChatMsg 
         errdefer alloc.free(name);
         const mes = try alloc.dupe(u8, mes_src);
         errdefer alloc.free(mes);
-        try out.append(alloc, .{ .name = name, .mes = mes, .is_user = is_user });
+        try out.append(alloc, .{ .name = name, .mes = mes, .is_user = is_user, .is_system = is_system });
     }
     return try out.toOwnedSlice(alloc);
 }
@@ -287,10 +304,12 @@ fn valueMessages(alloc: Allocator, v: std.json.Value) Allocator.Error![]ChatMsg 
 pub fn parseChatPage(alloc: Allocator, root: std.json.Value) Allocator.Error!ChatPage {
     const obj = switch (root) {
         .object => |o| o,
-        else => return .{ .messages = try alloc.alloc(ChatMsg, 0), .total_items = 0, .has_more_before = false, .change_token = try alloc.dupe(u8, "") },
+        else => return .{ .messages = try alloc.alloc(ChatMsg, 0), .total_items = 0, .has_more_before = false, .change_token = try alloc.dupe(u8, ""), .chat_metadata = try alloc.dupe(u8, ""), .full_token = try alloc.dupe(u8, "") },
     };
     const messages = try valueMessages(alloc, obj.get("messages") orelse .null);
     errdefer freeChatMessages(alloc, messages);
+    const chat_metadata = try metadataJson(alloc, obj);
+    errdefer alloc.free(chat_metadata);
 
     var total: usize = messages.len;
     if (obj.get("total_items")) |v| switch (v) {
@@ -307,12 +326,30 @@ pub fn parseChatPage(alloc: Allocator, root: std.json.Value) Allocator.Error!Cha
         else => "",
     } else "";
     const change_token = try alloc.dupe(u8, token_src);
-    return .{ .messages = messages, .total_items = total, .has_more_before = has_more, .change_token = change_token };
+    errdefer alloc.free(change_token);
+    const full_src: []const u8 = if (obj.get("full_token")) |v| switch (v) {
+        .string => |s| s,
+        else => "",
+    } else "";
+    const full_token = try alloc.dupe(u8, full_src);
+    return .{ .messages = messages, .total_items = total, .has_more_before = has_more, .change_token = change_token, .chat_metadata = chat_metadata, .full_token = full_token };
+}
+
+/// The page header's `chat_metadata`, re-stringified so it outlives the response's json arena. A
+/// missing or non-object header yields "", which the author's-note parse reads as "no note".
+fn metadataJson(alloc: Allocator, obj: std.json.ObjectMap) Allocator.Error![]u8 {
+    const header = obj.get("header") orelse return alloc.dupe(u8, "");
+    if (header != .object) return alloc.dupe(u8, "");
+    const meta = header.object.get("chat_metadata") orelse return alloc.dupe(u8, "");
+    if (meta != .object) return alloc.dupe(u8, "");
+    return std.json.Stringify.valueAlloc(alloc, meta, .{});
 }
 
 pub fn freeChatPage(alloc: Allocator, page: ChatPage) void {
     freeChatMessages(alloc, page.messages);
     alloc.free(page.change_token);
+    alloc.free(page.chat_metadata);
+    alloc.free(page.full_token);
 }
 
 /// First-message greeting with the {{char}}/{{user}} macros substituted (both, every
@@ -651,4 +688,78 @@ test "isoDateFromMs formats UTC dates and degrades to the epoch" {
     try testing.expectEqualStrings("2026-07-11", isoDateFromMs(1783800000000, &buf));
     try testing.expectEqualStrings("2100-01-01", isoDateFromMs(4102444800000, &buf));
     try testing.expectEqualStrings("1970-01-01", isoDateFromMs(std.math.nan(f64), &buf));
+}
+
+test "chatMessages reads is_system so a narrator turn is not the character speaking" {
+    const body =
+        \\[{"user_name":"You"},
+        \\ {"name":"Rita","is_user":false,"mes":"Hello."},
+        \\ {"name":"Rita","is_user":false,"is_system":true,"mes":"The lamp dies."},
+        \\ {"name":"You","is_user":true,"mes":"Hi."}]
+    ;
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, body, .{});
+    defer parsed.deinit();
+    const msgs = try chatMessages(testing.allocator, parsed.value);
+    defer freeChatMessages(testing.allocator, msgs);
+    try testing.expectEqual(@as(usize, 3), msgs.len);
+    try testing.expect(!msgs[0].is_system);
+    try testing.expect(msgs[1].is_system);
+    try testing.expect(!msgs[1].is_user);
+    try testing.expect(!msgs[2].is_system);
+}
+
+test "parseChatPage reads is_system and the chat metadata off the header" {
+    const body =
+        \\{"messages":[{"name":"Rita","is_user":false,"mes":"Hello."},
+        \\ {"name":"Rita","is_system":true,"mes":"Dark."}],
+        \\ "header":{"user_name":"You","chat_metadata":{"note_prompt":"It is raining.","note_depth":2}},
+        \\ "total_items":2,"has_more_before":false,"change_token":"v1.2.abc"}
+    ;
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, body, .{});
+    defer parsed.deinit();
+    const page = try parseChatPage(testing.allocator, parsed.value);
+    defer freeChatPage(testing.allocator, page);
+    try testing.expect(!page.messages[0].is_system);
+    try testing.expect(page.messages[1].is_system);
+    try testing.expect(std.mem.indexOf(u8, page.chat_metadata, "It is raining.") != null);
+
+    // The metadata string must outlive the response arena it was mined from, so it re-parses alone.
+    const meta = try std.json.parseFromSlice(std.json.Value, testing.allocator, page.chat_metadata, .{});
+    defer meta.deinit();
+    try testing.expectEqualStrings("It is raining.", meta.value.object.get("note_prompt").?.string);
+    try testing.expectEqual(@as(i64, 2), meta.value.object.get("note_depth").?.integer);
+}
+
+test "parseChatPage degrades a missing or hostile header to empty metadata" {
+    const cases = [_][]const u8{
+        \\{"messages":[],"total_items":0}
+        ,
+        \\{"messages":[],"header":"nope"}
+        ,
+        \\{"messages":[],"header":{"chat_metadata":42}}
+        ,
+        \\{"messages":[],"header":{}}
+    };
+    for (cases) |body| {
+        const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, body, .{});
+        defer parsed.deinit();
+        const page = try parseChatPage(testing.allocator, parsed.value);
+        defer freeChatPage(testing.allocator, page);
+        try testing.expectEqualStrings("", page.chat_metadata);
+    }
+}
+
+test "parseChatPage with metadata cleans up on every allocation failure" {
+    const body =
+        \\{"messages":[{"name":"Rita","is_user":false,"mes":"Hello."}],
+        \\ "header":{"chat_metadata":{"note_prompt":"n"}},"total_items":1,"change_token":"t"}
+    ;
+    try testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn run(alloc: Allocator, s: []const u8) !void {
+            const parsed = try std.json.parseFromSlice(std.json.Value, alloc, s, .{});
+            defer parsed.deinit();
+            const page = try parseChatPage(alloc, parsed.value);
+            freeChatPage(alloc, page);
+        }
+    }.run, .{@as([]const u8, body)});
 }

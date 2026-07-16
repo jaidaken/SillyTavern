@@ -15,6 +15,10 @@ const js = zx.client.js;
 const net = @import("./net.zig");
 const data = @import("./char_data.zig");
 const generate = @import("./generate.zig");
+const templates = @import("./templates.zig");
+const authors_note = @import("./authors_note.zig");
+const an_state = @import("./authors_note_state.zig");
+const config_state = @import("./config_state.zig");
 const conn_mod = @import("./connection.zig");
 const char_store = @import("./character_store.zig");
 const character_view = @import("./character_view.zig");
@@ -110,11 +114,49 @@ fn stashConn(conn: generate.Connection) bool {
     return true;
 }
 
+/// The send's OWN copy of the templates and the chat's author's note, in an arena this file owns.
+///
+/// A send is not instant: the prompt window is a fetch RTT, and a settings re-mine or a template
+/// edit during it frees the live set (config_state swaps its arena) under the in-flight build. So the
+/// templates are duped at stash time exactly as stashConn dupes the connection's URLs, and the arena
+/// is dropped in freePending.
+var pend_tpl_arena: ?std.heap.ArenaAllocator = null;
+var pend_tpl: templates.Templates = .{};
+var pend_note: authors_note.Note = .{};
+
+fn stashTemplates(t: templates.Templates) bool {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    const duped = templates.dupeTemplates(arena.allocator(), t) catch {
+        arena.deinit();
+        return false;
+    };
+    if (pend_tpl_arena) |*a| a.deinit();
+    pend_tpl_arena = arena;
+    pend_tpl = duped;
+    return true;
+}
+
+/// The send's own copy of the note, into the same arena as the templates: the panel can edit the
+/// prompt during the window fetch, which frees the live string under the in-flight build.
+fn stashNote() bool {
+    const live = an_state.active();
+    const arena = (if (pend_tpl_arena) |*a| a else return false).allocator();
+    pend_note = live;
+    pend_note.prompt = arena.dupe(u8, live.prompt) catch return false;
+    return true;
+}
+
 fn freePending() void {
     if (pend_conn) |c| {
         generate.freeConnection(alloc, c);
         pend_conn = null;
     }
+    if (pend_tpl_arena) |*a| {
+        a.deinit();
+        pend_tpl_arena = null;
+    }
+    pend_tpl = .{};
+    pend_note = .{};
     inline for (.{ &pend_char_name, &pend_char_avatar, &pend_user_name, &pend_user_text, &pend_persona_desc, &pend_description, &pend_personality, &pend_scenario, &pend_mes_example, &pend_first_mes }) |f| {
         if (f.len > 0) alloc.free(f.*);
         f.* = &.{};
@@ -230,11 +272,30 @@ fn loadCharacters(status: u16, res: ?*zx.Fetch.Response) BootOutcome {
 }
 
 fn rebuildCharacterStore(list: []const data.CharacterJson) !void {
+    // clear() nulls selected_index, so without this every refetch (card save, import, duplicate,
+    // avatar replace) silently deselected the character app-wide. Duped because clear() frees it.
+    const prev_avatar: ?[]u8 = if (char_store.selected()) |c| (alloc.dupe(u8, c.avatar) catch null) else null;
+    defer if (prev_avatar) |a| alloc.free(a);
+
     char_store.global.clear();
     // Store rebuild invalidates any in-flight chat load: its captured index is now stale.
     chat_load_seq +%= 1;
     for (list) |cj| try appendCharacter(cj);
+    if (prev_avatar) |want| reselectByAvatar(want);
     recomputeView();
+}
+
+/// Re-select the character carrying `avatar` after a rebuild. A character deleted server-side is
+/// simply absent, and leaving the store deselected is the honest outcome rather than selecting
+/// whoever now sits at the old index.
+fn reselectByAvatar(avatar: []const u8) void {
+    for (char_store.slice(), 0..) |c, i| {
+        if (std.mem.eql(u8, c.avatar, avatar)) {
+            char_store.global.select(i);
+            return;
+        }
+    }
+    chars_log.debug("rebuild: previously selected avatar is gone, staying deselected", .{});
 }
 
 fn appendCharacter(cj: data.CharacterJson) !void {
@@ -333,6 +394,9 @@ fn loadPersonas(status: u16, res: ?*zx.Fetch.Response) void {
     }
     // The connection lives in the same settings blob; mine it here so send knows the backend.
     conn_mod.setFrom(settings_str);
+    // The samplers and the instruct/context templates ride the same blob. AFTER conn_mod.setFrom:
+    // the samplers are adopted off the freshly mined connection, then localStorage overrides (C-CFG).
+    config_state.setFrom(settings_str);
     // Persona selection by precedence (user_avatar, default_persona, first), and mark the store
     // authoritative so a later save can serialize the persona set (C-PERS).
     persona_actions.applyAutoSelect(settings_str);
@@ -471,6 +535,12 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     store.global.clear();
     pager.reset();
     char_store.global.select(index);
+    // The author's note belongs to THIS chat's header, so it loads with the chat and is replaced
+    // wholesale on every open. The full token gates its save (C-CFG).
+    if (chatFileName(c)) |fname| {
+        defer alloc.free(fname);
+        an_state.setFromPage(c.avatar, fname, page.chat_metadata, page.full_token);
+    }
     // Deep-load the card's personality/scenario/mesExamples once, so the send prompt is not the
     // degraded shallow form. Reused for every send against this card.
     fetchDeepCard(c.avatar);
@@ -859,6 +929,8 @@ pub fn sendMessage() void {
 /// reconstruction. False only when the connection URLs cannot be duped (OOM).
 fn stashSend(conn: generate.Connection, c: char_store.Character, persona: ?persona_store.Persona, user_name: []const u8, text: []const u8, char_avatar_thumb: []const u8) bool {
     if (!stashConn(conn)) return false;
+    if (!stashTemplates(config_state.activeTemplates())) return false;
+    if (!stashNote()) return false;
     setOwned(&pend_char_name, c.name);
     setOwned(&pend_char_avatar, char_avatar_thumb);
     setOwned(&pend_user_name, user_name);
@@ -871,6 +943,26 @@ fn stashSend(conn: generate.Connection, c: char_store.Character, persona: ?perso
     setOwned(&pend_first_mes, c.first_mes);
     pend_active = true;
     return true;
+}
+
+/// The instruct sequence family a stored turn wraps in. is_system wins over is_user: a narrator line
+/// is a system turn whoever is nominally credited with it.
+fn roleOf(m: data.ChatMsg) templates.Role {
+    if (m.is_system) return .system;
+    return if (m.is_user) .user else .assistant;
+}
+
+const Anchors = struct { before: []const u8 = "", after: []const u8 = "" };
+
+/// The note text for the story string's two anchor slots. Only the position the note actually names
+/// gets it; in_chat notes reach the prompt through the history instead and get neither.
+fn noteAnchors(note: authors_note.Note) Anchors {
+    if (!note.active()) return .{};
+    return switch (note.position) {
+        .before_prompt => .{ .before = note.prompt },
+        .in_prompt => .{ .after = note.prompt },
+        .in_chat => .{},
+    };
 }
 
 /// Prompt-window fetch completion: parse the spine page (a failure degrades to a null page), then
@@ -919,15 +1011,18 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
     if (page) |p| {
         for (p.messages) |m| {
             const name = if (m.name.len > 0) m.name else if (m.is_user) pend_user_name else pend_char_name;
-            try history.append(alloc, .{ .name = name, .mes = m.mes });
+            try history.append(alloc, .{ .name = name, .mes = m.mes, .role = roleOf(m) });
         }
         if (p.messages.len > 0) {
             const last = p.messages[p.messages.len - 1];
             user_turn_present = last.is_user and std.mem.eql(u8, last.mes, pend_user_text);
         }
     }
-    if (!user_turn_present) try history.append(alloc, .{ .name = pend_user_name, .mes = pend_user_text });
+    if (!user_turn_present) try history.append(alloc, .{ .name = pend_user_name, .mes = pend_user_text, .role = .user });
 
+    // The note's anchor positions render through the story string; the in_chat position is inserted
+    // into the history by the builder. Both read the same note, so only one of them ever fires.
+    const anchors = noteAnchors(pend_note);
     const ctx = generate.Ctx{
         .char = pend_char_name,
         .user = pend_user_name,
@@ -936,10 +1031,14 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
         .personality = pend_personality,
         .scenario = pend_scenario,
         .mes_example = pend_mes_example,
+        .anchor_before = anchors.before,
+        .anchor_after = anchors.after,
     };
-    const prompt = try generate.buildPromptBudgeted(alloc, ctx, history.items, generate.promptCharBudget(conn));
+    const shape = generate.Shape{ .tpl = pend_tpl, .note = pend_note };
+    const prompt = try generate.buildPromptBudgeted(alloc, ctx, history.items, generate.promptCharBudget(conn), shape);
     defer alloc.free(prompt);
-    const body = try generate.buildRequestBody(alloc, conn, prompt);
+    var stop_buf: [1][]const u8 = undefined;
+    const body = try generate.buildRequestBody(alloc, conn, prompt, generate.stopSequences(pend_tpl.instruct, &stop_buf));
     defer alloc.free(body);
 
     js.global.call(void, "__st_send_stream", .{

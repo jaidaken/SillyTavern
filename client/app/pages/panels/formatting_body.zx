@@ -1,9 +1,314 @@
-// AI Response Formatting panel body. Top-bar drawer.
-pub fn FormattingBody(allocator: zx.Allocator) zx.Component {
-    // A bare component root transpiles to ziex's failing-allocator context; allocInit mounts it with the real one.
-    var zctx = zx.x.allocInit(allocator);
-    return zctx.cmp(PanelEmpty, .{ .name = "PanelEmpty" }, .{});
+// AI Response Formatting panel: how the prompt is ASSEMBLED, as opposed to the samplers next door,
+// which decide how the model answers. Top-bar drawer.
+//
+// Three sections, and they are three because they have three different lifetimes:
+//   1. INSTRUCT TEMPLATE  - the literal sequences wrapping each turn (<|im_start|>user ... <|im_end|>).
+//   2. CONTEXT TEMPLATE   - the story string ordering the card block, plus chat_start and the example
+//                           separator. Both live in the account settings blob under power_user.
+//   3. AUTHOR'S NOTE      - per CHAT, not per account: it lives in that chat file's own header, so it
+//                           loads with the chat and saves to the chat (authors_note_state.zig).
+//
+// The note sits here rather than in its own panel because it is prompt CONTENT, the same subject as
+// the two templates above it: one panel answers "what does the model actually receive". Promoting it
+// to its own top-level panel is a 2-line change (reported to the lead) if Jamie wants it prominent.
+//
+// Visual language matches the sibling config panels on purpose (WD62): setting-row, setting-label,
+// the accent token, and the mono face that already carries this app's character.
+
+const input_cls = "flex-1 rounded-md border border-control-border bg-bg px-[0.7rem] py-[0.45rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
+const area_cls = "min-h-[6rem] w-full resize-y rounded-md border border-control-border bg-bg p-[0.7rem] font-mono text-sm leading-ui text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
+const label_cls = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
+const hint_cls = "setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]";
+const head_cls = "m-0 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
+const save_cls = "an-save cursor-pointer rounded-md border border-accent bg-accent px-[0.9rem] py-[0.45rem] font-mono text-sm text-on-accent transition-[background,filter] duration-120 ease-[ease] hover:brightness-[1.06]";
+
+pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
+    // allow-div-onclick: delegation root for the dropdowns' data-* controls; keyboard parity via onkeydown
+    return (
+        <div
+            @allocator={ctx.allocator}
+            class="settings-body flex flex-col gap-5"
+            @rendering={.client}
+            onclick={onBodyClick}
+            onkeydown={onBodyKey}
+        >
+            <section class="flex flex-col gap-3">
+                <h3 class={head_cls}>Instruct template</h3>
+                <div class="setting-row flex items-center justify-between gap-3">
+                    <label class={label_cls} for="instruct-enabled">Wrap turns in sequences</label>
+                    <input
+                        id="instruct-enabled"
+                        name="instruct_enabled"
+                        type="checkbox"
+                        class="size-4 flex-none accent-accent"
+                        checked={boolAttr(config_state.instructEnabled())}
+                        onchange={ctx.bind(onEnabledChange)}
+                    />
+                </div>
+                <p class={hint_cls}>Off sends plain "Name: message" lines. On wraps each turn in the sequences below, which is what a chat-tuned model expects.</p>
+
+                {if (config_state.instructEnabled()) (
+                    <div class="flex flex-col gap-3">
+                        {for (config_state.instruct_fields_slice) |f| (
+                            <div class="setting-row flex flex-col gap-1">
+                                <label class={label_cls} for={fieldId(ctx.allocator, f.id)}>{f.label}</label>
+                                <input
+                                    id={fieldId(ctx.allocator, f.id)}
+                                    name={f.id}
+                                    type="text"
+                                    autocomplete="off"
+                                    spellcheck="false"
+                                    class={input_cls}
+                                    value={config_state.instructValue(f.id)}
+                                    aria-describedby={fieldHintId(ctx.allocator, f.id)}
+                                    data-instruct={f.id}
+                                    oninput={ctx.bind(onInstructInput)}
+                                />
+                                <p id={fieldHintId(ctx.allocator, f.id)} class={hint_cls}>{f.hint}</p>
+                            </div>
+                        )}
+                        <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                            <span class={label_cls}>Speaker names</span>
+                            <Dropdown
+                                options={config_state.names_options}
+                                value={namesValue()}
+                                name="fmt-names"
+                                label="Speaker names in turns"
+                                onchange={&config_state.setNamesBehavior}
+                            />
+                        </div>
+                        <p class={hint_cls}>Whether each turn carries a "Name: " prefix inside its sequences.</p>
+                    </div>
+                )}
+            </section>
+
+            <section class="flex flex-col gap-3">
+                <h3 class={head_cls}>Context template</h3>
+                <div class="setting-row flex flex-col gap-1">
+                    <label class={label_cls} for="ctx-story">Story string</label>
+                    <textarea
+                        id="ctx-story"
+                        name="story_string"
+                        class={area_cls}
+                        spellcheck="false"
+                        autocomplete="off"
+                        aria-describedby="ctx-story-hint"
+                        oninput={ctx.bind(onStoryInput)}
+                    >{config_state.storyString()}</textarea>
+                    <p id="ctx-story-hint" class={hint_cls}>Orders the card block. Conditional blocks and field names are supported over system, description, personality, scenario, persona, wiBefore, wiAfter, anchorBefore and anchorAfter.</p>
+                </div>
+                <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                    <label class={label_cls} for="ctx-chat-start">Chat start</label>
+                    <input
+                        id="ctx-chat-start"
+                        name="chat_start"
+                        type="text"
+                        autocomplete="off"
+                        class={input_cls}
+                        value={config_state.chatStart()}
+                        oninput={ctx.bind(onChatStartInput)}
+                    />
+                </div>
+                <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                    <label class={label_cls} for="ctx-example-sep">Example separator</label>
+                    <input
+                        id="ctx-example-sep"
+                        name="example_separator"
+                        type="text"
+                        autocomplete="off"
+                        class={input_cls}
+                        value={config_state.exampleSeparator()}
+                        oninput={ctx.bind(onExampleSepInput)}
+                    />
+                </div>
+                <p class={hint_cls}>Saved to your SillyTavern settings and shared with the classic client.</p>
+            </section>
+
+            <section class="flex flex-col gap-3">
+                <h3 class={head_cls}>Author's note</h3>
+                {if (!an_state.hasChat()) (
+                    <p class={hint_cls}>Open a chat to write its note. A note belongs to one chat, so it travels with that conversation rather than with the character.</p>
+                )}
+                {if (an_state.hasChat()) (
+                    <div class="flex flex-col gap-3">
+                        <div class="setting-row flex flex-col gap-1">
+                            <label class={label_cls} for="an-prompt">Note</label>
+                            <textarea
+                                id="an-prompt"
+                                name="note_prompt"
+                                class={area_cls}
+                                placeholder="Steer the scene without editing the card."
+                                aria-describedby="an-prompt-hint"
+                                oninput={ctx.bind(onNoteInput)}
+                            >{an_state.prompt()}</textarea>
+                            <p id="an-prompt-hint" class={hint_cls}>Sent with every prompt from this chat, at the position below.</p>
+                        </div>
+                        <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                            <span class={label_cls}>Position</span>
+                            <Dropdown
+                                options={an_state.position_options}
+                                value={an_state.positionValue(ctx.allocator)}
+                                name="an-position"
+                                label="Author's note position"
+                                onchange={&an_state.setPosition}
+                            />
+                        </div>
+                        <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                            <span class={label_cls}>Speaks as</span>
+                            <Dropdown
+                                options={an_state.role_options}
+                                value={an_state.roleValue(ctx.allocator)}
+                                name="an-role"
+                                label="Author's note role"
+                                onchange={&an_state.setRole}
+                            />
+                        </div>
+                        {if (an_state.depthApplies()) (
+                            <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                                <label class={label_cls} for="an-depth">Depth</label>
+                                <input
+                                    id="an-depth"
+                                    name="note_depth"
+                                    type="number"
+                                    min="0"
+                                    max="64"
+                                    step="1"
+                                    inputmode="numeric"
+                                    autocomplete="off"
+                                    class={input_cls}
+                                    value={an_state.depthValue(ctx.allocator)}
+                                    aria-describedby="an-depth-hint"
+                                    oninput={ctx.bind(onDepthInput)}
+                                />
+                            </div>
+                        )}
+                        {if (an_state.depthApplies()) (
+                            <p id="an-depth-hint" class={hint_cls}>How many turns back from the newest the note sits. 0 puts it right before the reply.</p>
+                        )}
+                        <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                            <label class={label_cls} for="an-interval">Every</label>
+                            <input
+                                id="an-interval"
+                                name="note_interval"
+                                type="number"
+                                min="0"
+                                max="999"
+                                step="1"
+                                inputmode="numeric"
+                                autocomplete="off"
+                                class={input_cls}
+                                value={an_state.intervalValue(ctx.allocator)}
+                                aria-describedby="an-interval-hint"
+                                oninput={ctx.bind(onIntervalInput)}
+                            />
+                        </div>
+                        <p id="an-interval-hint" class={hint_cls}>Messages between insertions. 1 sends it every time; 0 switches the note off without deleting it.</p>
+                        <div class="setting-row flex items-center gap-3">
+                            <button type="button" class={save_cls} onclick={onSaveNote}>Save note</button>
+                            <span id="an-status" role="status" aria-live="polite" class="text-sm text-muted empty:hidden"></span>
+                        </div>
+                        <p class={hint_cls}>Stored in this chat's own file, where the classic client reads it.</p>
+                    </div>
+                )}
+            </section>
+        </div>
+    );
+}
+
+fn boolAttr(b: bool) []const u8 {
+    return if (b) "true" else "";
+}
+
+fn namesValue() []const u8 {
+    return @tagName(config_state.namesBehavior());
+}
+
+fn fieldId(a: zx.Allocator, id: []const u8) []const u8 {
+    return std.fmt.allocPrint(a, "instruct-{s}", .{id}) catch "instruct";
+}
+
+fn fieldHintId(a: zx.Allocator, id: []const u8) []const u8 {
+    return std.fmt.allocPrint(a, "instruct-hint-{s}", .{id}) catch "instruct-hint";
+}
+
+// An event the dropdown CONSUMED stops here. ziex delegates at <body> and hands one event to every
+// ancestor handler, and #shell's dismiss handlers sit further up that walk: without this, an Escape
+// aimed at an open menu reaches ui.onPageKey and takes the whole dock with it (gate row C-CFG-5).
+fn onBodyClick(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    if (dropdown.onClick(target)) ev.stopPropagation();
+}
+
+fn onBodyKey(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    if (dropdown.onKey(ev)) ev.stopPropagation();
+}
+
+fn onEnabledChange(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const on = target.get(bool, "checked") catch return;
+    config_state.setInstructEnabled(on);
+}
+
+fn onInstructInput(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const id = dom_event.datasetUp(target, "instruct") orelse return;
+    defer zx.allocator.free(id);
+    const value = readValue(target) orelse return;
+    defer zx.allocator.free(value);
+    config_state.setInstructField(id, value);
+}
+
+fn onStoryInput(e: *zx.client.Event.Stateful) void {
+    withValue(e, config_state.setStoryString);
+}
+
+fn onChatStartInput(e: *zx.client.Event.Stateful) void {
+    withValue(e, config_state.setChatStart);
+}
+
+fn onExampleSepInput(e: *zx.client.Event.Stateful) void {
+    withValue(e, config_state.setExampleSeparator);
+}
+
+fn onNoteInput(e: *zx.client.Event.Stateful) void {
+    withValue(e, an_state.setPrompt);
+}
+
+fn onDepthInput(e: *zx.client.Event.Stateful) void {
+    withValue(e, an_state.setDepth);
+}
+
+fn onIntervalInput(e: *zx.client.Event.Stateful) void {
+    withValue(e, an_state.setInterval);
+}
+
+/// Read a control's value and hand it to a setter. The value is BORROWED for the call: every setter
+/// copies what it keeps, so it is freed here.
+fn withValue(e: *zx.client.Event.Stateful, comptime set: fn ([]const u8) void) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const value = readValue(target) orelse return;
+    defer zx.allocator.free(value);
+    set(value);
+}
+
+fn readValue(target: js.Object) ?[]u8 {
+    return target.getAlloc(js.String, zx.allocator, "value") catch null;
+}
+
+fn onSaveNote(_: zx.client.Event) void {
+    an_state.save();
 }
 
 const zx = @import("zx");
-const PanelEmpty = @import("../panelchrome.zx").PanelEmpty;
+const std = @import("std");
+const js = zx.client.js;
+const config_state = @import("../config_state.zig");
+const an_state = @import("../authors_note_state.zig");
+const dom_event = @import("../dom_event.zig");
+const dropdown = @import("../dropdown.zx");
+const Dropdown = dropdown.Dropdown;

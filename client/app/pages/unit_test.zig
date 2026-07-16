@@ -34,6 +34,11 @@ comptime {
     _ = @import("character_row.zig");
     _ = @import("card_form.zig");
     _ = @import("datetime.zig");
+    // C-CFG
+    _ = @import("macros.zig");
+    _ = @import("templates.zig");
+    _ = @import("samplers.zig");
+    _ = @import("authors_note.zig");
 }
 
 const sink_call = "html.sink(";
