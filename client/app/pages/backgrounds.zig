@@ -39,10 +39,48 @@ var load_state: LoadState = .idle;
 var gallery: bg.List = .{};
 var last_error: []u8 = &.{};
 
-/// One in-flight mutation at a time. net.zig's callback carries only a u64 tag, so the filename the
-/// callback must act on parks here; the confirm/prompt dialog blocks the user between the two.
-var pending: []u8 = &.{};
-var pending_new: []u8 = &.{};
+/// One mutation on the wire. net.zig's callback carries only a u64 tag, so the names the callback
+/// must act on ride that tag as the mutation's own address, and each one is independent: a second
+/// delete while the first is still in flight is a real request, not a click swallowed in silence.
+///
+/// A single shared slot used to park these, guarded by `if (pending.len > 0) return;` BEFORE the
+/// dialog. The dialog was read as making that unreachable, but it does not: it blocks only while it
+/// is up, and the request outlives it, so a second delete during the in-flight window returned
+/// early and the user got no dialog, no error, and no delete.
+const Mutation = struct {
+    old: []u8,
+    new: []u8,
+};
+
+/// The mutation, or null when the client cannot afford it. Its address is the tag.
+fn startMutation(old_name: []const u8, new_name: []const u8) ?*Mutation {
+    const m = alloc.create(Mutation) catch return null;
+    const old_c = alloc.dupe(u8, old_name) catch {
+        alloc.destroy(m);
+        return null;
+    };
+    const new_c = alloc.dupe(u8, new_name) catch {
+        alloc.free(old_c);
+        alloc.destroy(m);
+        return null;
+    };
+    m.* = .{ .old = old_c, .new = new_c };
+    return m;
+}
+
+/// Safe on one invariant: net.zig passes a tag back UNTOUCHED on every path, the three early
+/// failures included (net.zig:72,76,81 `on_done(tag, 0, null)`; :165 replays the stored one). So the
+/// only tag that reaches here is one startMutation minted. Both callbacks are private and both call
+/// sites are a few lines away: keep it that way, because this deref cannot check its own input.
+fn mutationFor(tag: u64) *Mutation {
+    return @ptrFromInt(@as(usize, @intCast(tag)));
+}
+
+fn endMutation(m: *Mutation) void {
+    alloc.free(m.old);
+    alloc.free(m.new);
+    alloc.destroy(m);
+}
 
 /// The panel's render handle, published on its first render. It lives here rather than in
 /// regions.zig because backgrounds_body.zx is its only consumer and this module its only bumper.
@@ -227,32 +265,31 @@ pub fn select(filename: []const u8) void {
 /// refused delete leaves the gallery honest (WD56).
 pub fn deleteBg(filename: []const u8) void {
     if (zx.platform.role != .client) return;
-    if (pending.len > 0) return;
     const msg = std.fmt.allocPrint(alloc, "Delete background \"{s}\"? This cannot be undone.", .{filename}) catch return;
     defer alloc.free(msg);
     if (!confirmDialog(msg)) return;
 
     const body = std.json.Stringify.valueAlloc(alloc, .{ .bg = filename }, .{}) catch return;
     defer alloc.free(body);
-    pending = alloc.dupe(u8, filename) catch return;
-    net.request("/api/backgrounds/delete", body, 0, onDeleted, .{});
+    const m = startMutation(filename, "") orelse {
+        setError("\"{s}\" could not be deleted: the client is out of memory.", .{filename});
+        bump();
+        return;
+    };
+    net.request("/api/backgrounds/delete", body, @intFromPtr(m), onDeleted, .{});
 }
 
 fn onDeleted(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
-    _ = tag;
     _ = res;
-    const filename = pending;
-    defer {
-        alloc.free(filename);
-        pending = &.{};
-    }
+    const m = mutationFor(tag);
+    defer endMutation(m);
     if (status < 200 or status >= 300) {
-        setError("\"{s}\" could not be deleted ({d}). It is still on the server.", .{ filename, status });
+        setError("\"{s}\" could not be deleted ({d}). It is still on the server.", .{ m.old, status });
         bump();
         return;
     }
-    _ = gallery.remove(alloc, filename);
-    clearSelectionIf(filename);
+    _ = gallery.remove(alloc, m.old);
+    clearSelectionIf(m.old);
     clearError();
     bump();
 }
@@ -261,33 +298,26 @@ fn onDeleted(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
 /// a name that already exists, and that refusal has to reach the user rather than a renamed tile.
 pub fn renameBg(filename: []const u8) void {
     if (zx.platform.role != .client) return;
-    if (pending.len > 0) return;
     const name = promptString("Rename background:", filename) orelse return;
     defer alloc.free(name);
     if (std.mem.eql(u8, name, filename)) return;
 
     const body = std.json.Stringify.valueAlloc(alloc, .{ .old_bg = filename, .new_bg = name }, .{}) catch return;
     defer alloc.free(body);
-    pending = alloc.dupe(u8, filename) catch return;
-    pending_new = alloc.dupe(u8, name) catch {
-        alloc.free(pending);
-        pending = &.{};
+    const m = startMutation(filename, name) orelse {
+        setError("\"{s}\" could not be renamed: the client is out of memory.", .{filename});
+        bump();
         return;
     };
-    net.request("/api/backgrounds/rename", body, 0, onRenamed, .{});
+    net.request("/api/backgrounds/rename", body, @intFromPtr(m), onRenamed, .{});
 }
 
 fn onRenamed(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
-    _ = tag;
     _ = res;
-    const old = pending;
-    const new = pending_new;
-    defer {
-        alloc.free(old);
-        alloc.free(new);
-        pending = &.{};
-        pending_new = &.{};
-    }
+    const m = mutationFor(tag);
+    defer endMutation(m);
+    const old = m.old;
+    const new = m.new;
     if (status < 200 or status >= 300) {
         setError("\"{s}\" could not be renamed ({d}). A background of that name may already exist.", .{ old, status });
         bump();
@@ -311,6 +341,61 @@ fn clearSelectionIf(filename: []const u8) void {
     if (std.mem.eql(u8, sel, filename)) select("");
 }
 
+// ---- upload ------------------------------------------------------------------------------------
+
+/// The upload's own state, kept apart from the gallery's: a refused upload must not blank a gallery
+/// that loaded perfectly well.
+pub const UploadState = enum { idle, sending, failed };
+
+var upload_state: UploadState = .idle;
+var upload_error: []u8 = &.{};
+
+pub fn uploadState() UploadState {
+    return upload_state;
+}
+
+pub fn uploadErrorText() []const u8 {
+    return upload_error;
+}
+
+/// Post the file the user just picked. A FormData cannot cross the wasm boundary, so the glue's
+/// `__st_bg_upload` reads the file input and posts it; this only starts it and draws the wait.
+/// Driven by the input's change event, so a file is always present by the time it runs.
+pub fn uploadPick() void {
+    if (zx.platform.role != .client) return;
+    if (upload_state == .sending) return;
+    upload_state = .sending;
+    clearErrorOn(&upload_error);
+    bump();
+    js.global.call(void, "__st_bg_upload", .{}) catch {
+        upload_state = .failed;
+        setErrorOn(&upload_error, "This build cannot upload: its upload helper is missing.", .{});
+        bump();
+    };
+}
+
+/// The glue's answer, exported to JS as `__st_bg_upload_done` by bridge.zig. A 2xx means the file
+/// landed and the gallery re-fetches to show it (the server names the file from its own upload, so
+/// only the server knows what it ended up called); anything else is the status the glue saw, with 0
+/// for a request that never completed at all. The glue MUST call this on every path it takes: the
+/// wait is showing by the time it runs, and only this clears it.
+pub fn uploadDone(status: i32) void {
+    if (zx.platform.role != .client) return;
+    if (status >= 200 and status < 300) {
+        upload_state = .idle;
+        clearErrorOn(&upload_error);
+        reload();
+        return;
+    }
+    upload_state = .failed;
+    if (status == 0) {
+        setErrorOn(&upload_error, "The upload did not reach the server. The file was not added.", .{});
+    } else {
+        setErrorOn(&upload_error, "The upload was refused ({d}). The file was not added.", .{status});
+    }
+    bump();
+}
+
 // ---- the account-settings save -----------------------------------------------------------------
 
 /// Write the chosen background into the settings object reading_prefs is about to save. Called from
@@ -325,17 +410,27 @@ pub fn mergeState(a: std.mem.Allocator, root_obj: *std.json.ObjectMap) !void {
 
 // ---- error surface -----------------------------------------------------------------------------
 
-fn setError(comptime fmt: []const u8, args: anytype) void {
+/// The gallery and the upload each own their message. Sharing one slot would let a refused upload
+/// overwrite the reason the gallery is empty, and render the same sentence in both alerts at once.
+fn setErrorOn(slot: *[]u8, comptime fmt: []const u8, args: anytype) void {
     const msg = std.fmt.allocPrint(alloc, fmt, args) catch return;
-    if (last_error.len > 0) alloc.free(last_error);
-    last_error = msg;
+    if (slot.len > 0) alloc.free(slot.*);
+    slot.* = msg;
     log.warn("{s}", .{msg});
 }
 
+fn clearErrorOn(slot: *[]u8) void {
+    if (slot.len == 0) return;
+    alloc.free(slot.*);
+    slot.* = &.{};
+}
+
+fn setError(comptime fmt: []const u8, args: anytype) void {
+    setErrorOn(&last_error, fmt, args);
+}
+
 fn clearError() void {
-    if (last_error.len == 0) return;
-    alloc.free(last_error);
-    last_error = &.{};
+    clearErrorOn(&last_error);
 }
 
 fn promptString(msg: []const u8, default_value: []const u8) ?[]u8 {

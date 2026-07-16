@@ -233,7 +233,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     mock_favs = {}
     # C-BG: the gallery /api/backgrounds/all serves. Mutable, so a delete or rename shows on the next
     # load; "a b.jpg" carries the space that proves the url encode, "loop.webp" is the animated one.
-    mock_backgrounds = ["dusk harbor.jpg", "a b.jpg", "loop.webp", "study.png"]
+    mock_backgrounds = ["dusk harbor.jpg", "a b.jpg", "loop.webp", "study.png",
+                        # C-BG2: see mock_bg_odd. "slow delete.png" is the second-mutation row's file.
+                        "odd str.jpg", "odd null.jpg", "slow delete.png"]
+
+    # C-BG2: isAnimated reaches the wire in any json shape the on-disk index holds, because the server
+    # JSON.parses it unvalidated and defends only the ABSENT case (image-metadata.js:218,
+    # backgrounds.js:30). Typed `bool`, ONE of these emptied the whole gallery.
+    mock_bg_odd = {"odd str.jpg": "true", "odd null.jpg": None}
+
+    # C-BG2: the delete that stays in flight long enough for a second mutation to land during it. The
+    # dialog blocks only while it is up; the request outlives it, and that window is where a second
+    # click used to be dropped in silence.
+    mock_bg_slow_delete = "slow delete.png"
+
+    @staticmethod
+    def mock_bg_entry(f):
+        if f in Handler.mock_bg_odd:
+            return {"filename": f, "isAnimated": Handler.mock_bg_odd[f]}
+        return {"filename": f, "isAnimated": f.endswith(".webp")}
     # Send-loop/connection gate readback: what the client persisted and what its last generate carried.
     recorded_connection = None
     last_generate_server = None
@@ -691,13 +709,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # the status, so a json body stands in for it here.
         if path == "/api/backgrounds/all":
             return self.mock_json({
-                "images": [{"filename": f, "isAnimated": f.endswith(".webp")} for f in Handler.mock_backgrounds],
+                "images": [Handler.mock_bg_entry(f) for f in Handler.mock_backgrounds],
                 "config": {"width": 160, "height": 90},
             })
         if path == "/api/backgrounds/delete":
             name = req.get("bg")
             if name not in Handler.mock_backgrounds:
                 return self.mock_status(400, {"error": "not found"})
+            # C-BG2: hold this one open so a second mutation lands while it is still on the wire.
+            if name == Handler.mock_bg_slow_delete:
+                time.sleep(1.5)
             Handler.mock_backgrounds.remove(name)
             return self.mock_json({"ok": True})
         if path == "/api/backgrounds/rename":

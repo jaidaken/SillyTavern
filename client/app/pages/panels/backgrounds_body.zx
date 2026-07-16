@@ -12,6 +12,7 @@
 const tile_action = "bg-tile-action grid size-7 cursor-pointer place-items-center rounded-md border border-control-border bg-surface-2/90 text-muted transition-colors duration-120 ease-[ease] hover:text-text";
 const retry_btn = "cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text";
 const tile_btn = "bg-tile block w-full cursor-pointer overflow-hidden rounded-md border border-control-border bg-bg p-0 text-left transition-colors duration-120 ease-[ease] aria-pressed:border-accent";
+const file_input = "bg-upload-file max-w-[9rem] text-xs text-muted";
 const none_btn = "bg-tile grid aspect-[16/9] cursor-pointer place-items-center rounded-md border border-control-border bg-bg font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text aria-pressed:border-accent aria-pressed:text-accent";
 
 pub fn BackgroundsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
@@ -91,6 +92,27 @@ pub fn BackgroundsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     )}
                 </div>
             )}
+            <div class="bg-upload-row flex flex-wrap items-center gap-2">
+                <input
+                    id="bg-upload-input"
+                    name="bg-upload-input"
+                    type="file"
+                    accept="image/*,video/*"
+                    class={file_input}
+                    aria-label="Upload a background image"
+                    aria-describedby={uploadDescribedBy()}
+                    onchange={onUploadPick}
+                />
+                {if (backgrounds.uploadState() == .sending) (
+                    <span class="font-mono text-xs text-muted" role="status">Uploading...</span>
+                )}
+            </div>
+            {if (backgrounds.uploadState() == .failed) (
+                <div class="flex flex-col items-start gap-2 rounded-md border border-control-border bg-bg p-3" role="alert">
+                    <p id="bg-upload-error" class="m-0 text-sm text-text">{backgrounds.uploadErrorText()}</p>
+                    <p class="m-0 text-sm text-muted">Choose the file again to retry.</p>
+                </div>
+            )}
             <p class="setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]">The background sits behind the chat, dimmed so the text stays readable.</p>
         </div>
     );
@@ -151,6 +173,20 @@ fn onRetry(ev: zx.client.Event) void {
     if (zx.platform.role != .client) return;
     _ = ev;
     backgrounds.reload();
+}
+
+// The change event, not a click: it fires once a file is actually chosen, so a cancelled picker
+// never leaves the row saying it is uploading nothing.
+fn onUploadPick(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    _ = ev;
+    backgrounds.uploadPick();
+}
+
+/// Binds the failure text to the input that caused it (WD40). Empty when there is nothing to point
+/// at: the paragraph only exists in the failed state, and a dangling id names nothing.
+fn uploadDescribedBy() []const u8 {
+    return if (backgrounds.uploadState() == .failed) "bg-upload-error" else "";
 }
 
 const zx = @import("zx");

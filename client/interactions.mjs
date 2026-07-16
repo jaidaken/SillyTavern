@@ -1239,7 +1239,8 @@ async function main() {
         await page.waitFor(hydrated, 15000);
         await page.click('#d-backgrounds');
 
-        const listed = await page.waitFor("document.querySelectorAll('#bg-gallery .bg-tile-wrap').length === 4", 8000);
+        // C-BG2 raised the fixture from 4 to 7: three of them carry shapes the old typed parse died on.
+        const listed = await page.waitFor("document.querySelectorAll('#bg-gallery .bg-tile-wrap').length === 7", 8000);
         row('must', listed, 'C-BG-1 the gallery lists every background the server serves', `tiles=${await page.eval("document.querySelectorAll('#bg-gallery .bg-tile-wrap').length")}`);
 
         // The Wave-1 bug class: a space in a filename must reach the thumbnail url percent-encoded.
@@ -1333,6 +1334,63 @@ async function main() {
         const bootApplied = await page.waitFor(
             "document.documentElement.getAttribute('data-background') === 'on' && document.documentElement.style.getPropertyValue('--chat-bg-image').indexOf('loop.webp') >= 0", 5000);
         row('must', bootApplied, 'C-BG-12 a chosen background is applied again at boot', `applied=${bootApplied}`);
+
+        // ===== C-BG2 (append-only): the odd isAnimated shapes, the second mutation, the upload seam =====
+        console.log('== C-BG2 backgrounds: tolerant badge, concurrent mutation, upload ==');
+        await page.click('#d-backgrounds');
+        const bgAll = async () => {
+            const res = await fetch(`${args.base}/api/backgrounds/all`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            return (await res.json()).images.map((i) => i.filename);
+        };
+
+        // Two of these carry isAnimated as a string and as null. Typed `bool`, ONE of them failed the
+        // whole array parse and the gallery came up EMPTY: the count is what proves it costs no rows.
+        const oddListed = await page.waitFor("document.querySelectorAll('#bg-gallery .bg-tile-wrap').length === 6", 8000);
+        const oddTiles = await page.eval(
+            "!!document.querySelector('#bg-gallery [data-bg-file=\\'odd str.jpg\\']') && !!document.querySelector('#bg-gallery [data-bg-file=\\'odd null.jpg\\']')");
+        row('must', oddListed && oddTiles, 'C-BG2-1 a background with an odd isAnimated shape costs no tile, not the gallery', `six=${oddListed} tiles=${oddTiles}`);
+
+        // The badge is the ONLY thing the odd shape may cost. "true" as a string is not a claim: a
+        // truthiness read would badge it, and would badge a literal "false" just the same.
+        const badged = (f) => `Array.from(document.querySelectorAll('#bg-gallery .bg-tile-wrap')).some(function(w){return w.querySelector("[data-bg-file='${f}']") && /GIF/.test(w.textContent);})`;
+        const oddStrBadge = await page.eval(badged('odd str.jpg'));
+        const oddNullBadge = await page.eval(badged('odd null.jpg'));
+        const realBadge = await page.eval(badged('loop.webp'));
+        row('must', !oddStrBadge && !oddNullBadge && realBadge, 'C-BG2-2 only a real bool badges a background as animated', `str=${oddStrBadge} null=${oddNullBadge} real=${realBadge}`);
+
+        // A single shared pending slot dropped this on the floor: no dialog, no error, no delete. The
+        // first delete is held open server-side, so the second click lands squarely in the in-flight
+        // window the dialog was wrongly read as closing.
+        await page.eval('window.confirm = function(){ return true; };');
+        await page.click("#bg-gallery [data-bg-delete='slow delete.png']");
+        await page.click("#bg-gallery [data-bg-delete='odd null.jpg']");
+        const bothGone = await (async () => {
+            const deadline = Date.now() + 8000;
+            while (Date.now() < deadline) {
+                const names = await bgAll();
+                if (!names.includes('slow delete.png') && !names.includes('odd null.jpg')) return true;
+                await sleep(250);
+            }
+            return false;
+        })();
+        const secondServed = !(await bgAll()).includes('odd null.jpg');
+        row('must', bothGone && secondServed, 'C-BG2-3 a second mutation while one is in flight is not swallowed', `both=${bothGone} second=${secondServed}`);
+
+        // The upload control. The POST itself rides a FormData helper in custom.js that this member
+        // does not own, so what is pinned here is our half: the control, and the call into the seam.
+        const uploadCtl = await page.eval(
+            "(function(){var i=document.getElementById('bg-upload-input');return !!i && i.type==='file' && !!i.getAttribute('aria-label') && !!i.getAttribute('name');})()");
+        row('must', uploadCtl, 'C-BG2-4 the upload control is present, named and typed for files', `ctl=${uploadCtl}`);
+
+        const seam = await (async () => {
+            await page.eval('window.__bg_upload_called = false; window.__st_bg_upload = function(){ window.__bg_upload_called = true; };');
+            // bubbles: true is load-bearing. ziex delegates from a root, so a non-bubbling change
+            // event never reaches the handler and the row reads as a dead seam.
+            await page.eval("document.getElementById('bg-upload-input').dispatchEvent(new Event('change', { bubbles: true }))");
+            return await page.waitFor('window.__bg_upload_called === true', 4000);
+        })();
+        const sending = await page.waitFor("/Uploading/.test(document.querySelector('.bg-upload-row').textContent)", 4000);
+        row('must', seam && sending, 'C-BG2-5 picking a file calls the upload glue and shows the wait', `seam=${seam} sending=${sending}`);
         /* C-CONN */
         // The connection panel's type selector and its write-only API-key field. The key never
         // round-trips: the field renders empty and only a masked tail reaches the DOM.
