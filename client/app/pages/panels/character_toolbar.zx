@@ -3,13 +3,22 @@
 // list. Search re-renders only the list region (so the focused input keeps focus); the other
 // controls re-render the Shell region so their active state updates. Mirrors the old frontend's
 // rm_characters_block controls.
+//
+// Sort and page-size are dropdown.zx (the Wave-1 styled listbox), not native <select>s, which the
+// stylesheet could only give a focus ring. They are PLAIN prop-taking children whose dispatch is
+// DELEGATED: this component's root binds onclick/onkeydown and hands them to dropdown.onClick/onKey.
+// The dropdown bakes id + name from its `name` prop, which is where the sort/page-size controls'
+// form identity now comes from (plan item 1b).
 
 const zx = @import("zx");
 const std = @import("std");
 const char_store = @import("../character_store.zig");
 const cv = @import("../character_view.zig");
+const char_prefs = @import("../character_prefs.zig");
 const regions = @import("../regions.zig");
 const dom_event = @import("../dom_event.zig");
+const dropdown = @import("../dropdown.zx");
+const Dropdown = dropdown.Dropdown;
 
 // The pressed state of a toggle (favourites-only, grid, a tag chip) is aria-pressed, which these
 // buttons carry for assistive tech anyway, so the highlight is declared off tailwind's built-in
@@ -21,7 +30,10 @@ pub const tag_class = "char-tag cursor-pointer rounded-full border border-border
 const row_class = "char-toolbar-row flex flex-wrap items-center gap-2 max-[640px]:gap-[0.2rem]";
 
 pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
+    char_prefs.ensureHydrated();
     const view = cv.global;
+    // allow-div-onclick: delegation root for the dropdowns' data-* controls (dropdown.zx is a plain
+    // prop-taking child); every control inside is a real button. Keyboard parity via onkeydown.
     return (
         <div
             @allocator={ctx.allocator}
@@ -29,6 +41,8 @@ pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
             role="toolbar"
             aria-label="Character list controls"
             @rendering={.client}
+            onclick={onToolbarClick}
+            onkeydown={onToolbarKey}
         >
             <div class={row_class}>
                 <input
@@ -40,16 +54,13 @@ pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
                     value={view.query}
                     oninput={ctx.bind(onSearchInput)}
                 />
-                <select
-                    class="char-sort"
-                    aria-label="Sort characters"
+                <Dropdown
+                    options={&sort_options}
                     value={sortValue(view.sort)}
-                    onchange={ctx.bind(onSortChange)}
-                >
-                    {for (sort_options[0..]) |opt| (
-                        <option value={opt.value}>{opt.label}</option>
-                    )}
-                </select>
+                    name="char-sort"
+                    label="Sort characters"
+                    onchange={&onSortPick}
+                />
             </div>
             <div class={row_class}>
                 <button
@@ -80,57 +91,69 @@ pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
             </div>
             <div class={row_class ++ " char-pager justify-between"} role="group" aria-label="Pagination">
                 <button type="button" class={tool_class} data-page="prev" aria-label="Previous page" onclick={ctx.bind(onPageStep)}>‹</button>
-                <span class="char-page-label flex-1 text-center text-xs text-muted" aria-live="polite">{pageLabel(view)}</span>
+                <span class="char-page-label flex-1 text-center text-xs text-muted" aria-live="polite">{pageLabel(ctx.allocator, view)}</span>
                 <button type="button" class={tool_class} data-page="next" aria-label="Next page" onclick={ctx.bind(onPageStep)}>›</button>
-                <select
-                    class="char-pagesize max-w-[6rem] flex-none max-[640px]:hidden"
-                    aria-label="Characters per page"
-                    value={pageSizeValue(view)}
-                    onchange={ctx.bind(onPageSizeChange)}
-                >
-                    <option value="20">20</option>
-                    <option value="50">50</option>
-                    <option value="100">100</option>
-                    <option value="all">All</option>
-                </select>
+                <div class="char-pagesize flex-none max-[640px]:hidden">
+                    <Dropdown
+                        options={&page_size_options}
+                        value={pageSizeValue(view)}
+                        name="char-pagesize"
+                        label="Characters per page"
+                        onchange={&onPageSizePick}
+                    />
+                </div>
             </div>
         </div>
     );
 }
 
-const SortOption = struct {
-    value: []const u8,
-    label: []const u8,
-    key: cv.SortKey,
+// Every value is a SortKey tag name, so the pick maps back through std.meta.stringToEnum and the
+// option list needs no second key column.
+const sort_options = [_]dropdown.Option{
+    .{ .value = "recent", .label = "Recent" },
+    .{ .value = "name_asc", .label = "A-Z" },
+    .{ .value = "name_desc", .label = "Z-A" },
+    .{ .value = "newest", .label = "Newest" },
+    .{ .value = "oldest", .label = "Oldest" },
+    .{ .value = "favs", .label = "Favourites" },
+    .{ .value = "most_chats", .label = "Most chats" },
+    .{ .value = "least_chats", .label = "Least chats" },
+    .{ .value = "most_tokens", .label = "Most tokens" },
+    .{ .value = "least_tokens", .label = "Least tokens" },
+    .{ .value = "random", .label = "Random" },
 };
 
-const sort_options = [_]SortOption{
-    .{ .value = "name_asc", .label = "A-Z", .key = .name_asc },
-    .{ .value = "name_desc", .label = "Z-A", .key = .name_desc },
-    .{ .value = "newest", .label = "Newest", .key = .newest },
-    .{ .value = "oldest", .label = "Oldest", .key = .oldest },
-    .{ .value = "favs", .label = "Favourites", .key = .favs },
-    .{ .value = "recent", .label = "Recent", .key = .recent },
-    .{ .value = "most_chats", .label = "Most chats", .key = .most_chats },
-    .{ .value = "least_chats", .label = "Least chats", .key = .least_chats },
-    .{ .value = "most_tokens", .label = "Most tokens", .key = .most_tokens },
-    .{ .value = "least_tokens", .label = "Least tokens", .key = .least_tokens },
-    .{ .value = "random", .label = "Random", .key = .random },
+const page_size_options = [_]dropdown.Option{
+    .{ .value = "20", .label = "20" },
+    .{ .value = "50", .label = "50" },
+    .{ .value = "100", .label = "100" },
+    .{ .value = "all", .label = "All" },
 };
 
 fn sortValue(key: cv.SortKey) []const u8 {
     return @tagName(key);
 }
 
+/// The page-size dropdown's controlled value. Static strings: the sizes are a fixed list, and the
+/// allocPrint this used to do leaked its result on every render.
 fn pageSizeValue(view: cv.View) []const u8 {
-    if (view.page_size == 0) return "all";
-    return std.fmt.allocPrint(char_store.page_gpa, "{d}", .{view.page_size}) catch "20";
+    return switch (view.page_size) {
+        0 => "all",
+        20 => "20",
+        50 => "50",
+        100 => "100",
+        else => "all",
+    };
 }
 
-fn pageLabel(view: cv.View) []const u8 {
+/// Takes the render allocator, which ziex owns: page_gpa is the raw wasm allocator with no free
+/// here, so the old label leaked a string on every toolbar render (one per search keystroke). The
+/// range separator stays an en dash (correct for a numeric range), written as an escape.
+fn pageLabel(alloc: std.mem.Allocator, view: cv.View) []const u8 {
     if (view.total == 0) return "No characters";
-    return std.fmt.allocPrint(char_store.page_gpa, "{d}–{d} of {d}", .{ view.pageFrom(), view.pageTo(), view.total }) catch "";
+    return std.fmt.allocPrint(alloc, "{d}\u{2013}{d} of {d}", .{ view.pageFrom(), view.pageTo(), view.total }) catch "";
 }
+
 
 fn onSearchInput(e: *zx.client.Event.Stateful) void {
     if (zx.platform.role != .client) return;
@@ -143,17 +166,41 @@ fn onSearchInput(e: *zx.client.Event.Stateful) void {
     regions.bumpCharacterList();
 }
 
-fn onSortChange(e: *zx.client.Event.Stateful) void {
+// The dropdowns publish no onchange event of their own: the region root delegates to
+// dropdown.onClick/onKey, which call the picked option's registered callback with its value.
+// An event the dropdown CONSUMED stops here: ziex delegates at <body> and hands one event to every
+// ancestor handler, checking cancelBubble between them, and #shell's dismiss handlers sit further up
+// that walk. The KEY half is load-bearing: ui.onPageKey closes the panel on Escape, so without this
+// an Escape aimed at the open menu would take the whole dock with it (gate row C9). The CLICK half
+// is belt-and-braces since ui.onPageClick gained its detached-target guard.
+fn onToolbarClick(ev: zx.client.Event) void {
     if (zx.platform.role != .client) return;
-    const event = e.getEvent();
-    const target = event.ref.get(zx.client.js.Object, "target") catch return;
-    const val = target.getAlloc(zx.client.js.String, zx.allocator, "value") catch return;
-    defer zx.allocator.free(val);
-    if (std.meta.stringToEnum(cv.SortKey, val)) |key| {
-        cv.global.setSort(key);
-        cv.global.compute(char_store.slice()) catch return;
-        regions.bumpShell();
+    const target = dom_event.plainTarget(ev) orelse return;
+    if (dropdown.onClick(target)) ev.stopPropagation();
+}
+
+fn onToolbarKey(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    if (dropdown.onKey(ev)) ev.stopPropagation();
+}
+
+// A dropdown pick mutates state and STOPS: dropdown.commit fires its own zx.client.rerender() the
+// moment onchange returns, and bumping a region here as well ran a region render inside that click,
+// which tore the panel down (an empty dock, no console error).
+fn onSortPick(val: []const u8) void {
+    const key = std.meta.stringToEnum(cv.SortKey, val) orelse return;
+    char_prefs.setSort(key);
+    cv.global.compute(char_store.slice()) catch return;
+}
+
+fn onPageSizePick(val: []const u8) void {
+    if (std.mem.eql(u8, val, "all")) {
+        cv.global.setPageSize(0);
+    } else {
+        const ps = std.fmt.parseInt(usize, val, 10) catch return;
+        cv.global.setPageSize(ps);
     }
+    cv.global.compute(char_store.slice()) catch return;
 }
 
 fn onFavToggle(_: *zx.client.Event.Stateful) void {
@@ -200,18 +247,3 @@ fn onPageStep(e: *zx.client.Event.Stateful) void {
     regions.bumpShell();
 }
 
-fn onPageSizeChange(e: *zx.client.Event.Stateful) void {
-    if (zx.platform.role != .client) return;
-    const event = e.getEvent();
-    const target = event.ref.get(zx.client.js.Object, "target") catch return;
-    const val = target.getAlloc(zx.client.js.String, zx.allocator, "value") catch return;
-    defer zx.allocator.free(val);
-    if (std.mem.eql(u8, val, "all")) {
-        cv.global.setPageSize(0);
-    } else {
-        const ps = std.fmt.parseInt(usize, val, 10) catch return;
-        cv.global.setPageSize(ps);
-    }
-    cv.global.compute(char_store.slice()) catch return;
-    regions.bumpShell();
-}

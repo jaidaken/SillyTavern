@@ -121,6 +121,10 @@ def _mock_characters(favs):
         if i == 41:
             name = "Rita Recent"
         avatar = f"char{i:02d}.png"
+        if i == 12:
+            # C-CHAR: an avatar filename is a character's name + .png, so a space is ordinary. This
+            # row proves the list percent-encodes the thumbnail src instead of pasting it in raw.
+            avatar = "Char 12 Spaced.png"
         chars.append({
             "name": name,
             "avatar": avatar,
@@ -229,6 +233,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     undo_token = "utok-0"
     # C-PERS: mutable settings blob so a persona persist (settings/save) shows on the next get.
     persona_settings = None
+    # C-CHAR: the avatar the last /api/characters/duplicate named, read back by /dev/duplicated.
+    duplicated_avatar = None
 
     @classmethod
     def settings_blob(cls):
@@ -331,6 +337,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "get_409_count": Handler.get_409_count,
                     "persona_settings": Handler.persona_settings,  # C-PERS
                     "secrets": Handler.secrets,  # C-CONN
+                    "duplicated_avatar": Handler.duplicated_avatar,  # C-CHAR
                     "full_token": Handler.full_token,
                     "reader_total": len(Handler.reader_current()),
                     "reader_above_probe": Handler.reader_current()[0]["mes"],
@@ -487,6 +494,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/avatars/delete":
             # C-PERS: ack the avatar delete; the client then removes the settings entry.
             return self.mock_json({"result": "ok"})
+        # C-CHAR: duplicate is the one row action with no native dialog in front of it, so it is the
+        # one the gate can drive end to end. The client refetches /all on success.
+        if path == "/api/characters/duplicate":
+            Handler.duplicated_avatar = req.get("avatar_url")
+            return self.mock_json({"path": "duplicated.png"})
         if path == "/api/characters/get":
             return self.mock_json({
                 "name": req.get("avatar_url", "char"),

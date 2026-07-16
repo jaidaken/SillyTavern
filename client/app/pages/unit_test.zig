@@ -29,6 +29,9 @@ comptime {
     _ = @import("background_store.zig");
     _ = @import("textgen_types.zig");
     _ = @import("secret_mask.zig");
+    // character_view's tests never reached the runner: the module was absent here.
+    _ = @import("character_view.zig");
+    _ = @import("character_row.zig");
 }
 
 const sink_call = "html.sink(";

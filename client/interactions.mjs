@@ -323,11 +323,15 @@ async function main() {
         row('must', await page.waitFor("document.querySelector('.char-fav-star[data-char-index=\\'6\\']') && document.querySelector('.char-fav-star[data-char-index=\\'6\\']').textContent.trim()==='\\u2605'", 6000),
             'B4 fav star toggles and survives the refetch');
 
-        await page.eval("(function(){const s=document.querySelector('.char-pagesize'); s.value='20'; s.dispatchEvent(new Event('change',{bubbles:true}));})()");
+        // C-CHAR: page size is dropdown.zx now, not a native <select>, so this drives the real
+        // gesture (open the listbox, click the option) instead of dispatching a synthetic change.
         // Row count, not the label: at page_size=0 the label already reads "1..60 of 60", so a label
         // predicate passes with a dead handler (critic finding).
+        await page.click('[data-dd-toggle="char-pagesize"]');
+        await page.waitFor("document.querySelector('#dd-list-char-pagesize')", 2500);
+        await page.click('#dd-list-char-pagesize [data-dd-value="20"]');
         row('must', await page.waitFor("document.querySelectorAll('#chat-root .char-item').length === 20", 4000),
-            'B5 page size select paginates (working target-based handler)');
+            'B5 page size dropdown paginates (delegated dropdown dispatch)');
         const label0 = await page.eval("document.querySelector('.char-page-label').textContent");
         await page.click('.char-pager [data-page="next"]');
         row('must', await page.waitFor(`document.querySelector('.char-page-label').textContent !== ${JSON.stringify(label0)}`, 2500),
@@ -355,6 +359,114 @@ async function main() {
             return false;
         })();
         row('must', sawKeyOpen, 'B8a Enter on a focused character row opens the chat');
+
+        // ===== C-CHAR rows (character management 1c + a11y 1b) =====
+        // The list is still filtered to "rita" here, so clear the search before asserting on order.
+        await page.eval("(function(){const s=document.querySelector('.char-search'); s.value=''; s.dispatchEvent(new Event('input',{bubbles:true}));})()");
+        await page.waitFor("document.querySelectorAll('#chat-root .char-item').length === 20", 4000);
+
+        // Rita Recent carries the newest date_last_chat in the fixture, so the default sort puts her
+        // first. A default of name_asc would head the list with "Char 00 Moon".
+        row('must', await page.waitFor("document.querySelector('#chat-root .char-item .char-name').textContent.trim() === 'Rita Recent'", 3000)
+            && await page.eval("document.querySelector('#dd-btn-char-sort span').textContent.trim()") === 'Recent',
+            'C1 character list defaults to the most-recent sort');
+
+        // The subtitle is metadata, not the card blurb: recency + chat volume, and the description
+        // (which every fixture row carries) must be gone from the row entirely.
+        const meta = await page.eval("document.querySelector('#chat-root .char-item .char-meta').textContent.replace(/\\s+/g,' ').trim()");
+        const noDesc = await page.eval("!document.querySelector('#chat-root .char-item').textContent.includes('Mock character')");
+        row('must', /ago|just now|\d{4}-\d{2}-\d{2}|No chats yet/.test(meta) && /KB|MB|B$|B\b/.test(meta) && noDesc,
+            'C4 row subtitle is last-chat recency + chat volume, not the description', `meta=${JSON.stringify(meta)} noDesc=${noDesc}`);
+
+        // The avatar filename holds spaces; the src must be percent-encoded (character_list.zx:67 bug).
+        await page.click('[data-dd-toggle="char-pagesize"]');
+        await page.click('#dd-list-char-pagesize [data-dd-value="all"]');
+        await page.waitFor("document.querySelectorAll('#chat-root .char-item').length === 60", 4000);
+        const spacedSrc = await page.eval("(document.querySelector('#chat-root .char-item[data-char-select=\"12\"] .char-avatar')||{getAttribute:()=>null}).getAttribute('src')");
+        row('must', spacedSrc === '../thumbnail?type=avatar&file=Char%2012%20Spaced.png',
+            'C5 avatar src percent-encodes a spaced filename', `src=${spacedSrc}`);
+
+        // Sort pick through the styled dropdown, then the persistence contract: localStorage now, the
+        // account blob through reading_prefs' one debounced saver.
+        await page.click('[data-dd-toggle="char-sort"]');
+        await page.waitFor("document.querySelector('#dd-list-char-sort')", 2500);
+        await page.click('#dd-list-char-sort [data-dd-value="name_asc"]');
+        const azFirst = await page.waitFor("document.querySelector('#chat-root .char-item .char-name').textContent.trim() === 'Char 00 Moon'", 3000);
+        const azStored = await page.eval("localStorage.getItem('st-char-sort')");
+        row('must', azFirst && azStored === 'name_asc',
+            'C2 sort dropdown reorders the list and stores the pick', `stored=${azStored}`);
+
+        // Keyboard parity (WD35-WD40): the sort dropdown opens and commits from the keyboard alone.
+        await page.focus('#dd-btn-char-sort');
+        for (const key of ['ArrowDown', 'ArrowDown', 'Enter']) {
+            await page.cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key, code: key, windowsVirtualKeyCode: key === 'Enter' ? 13 : 40 }, page.sessionId);
+            await page.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key, windowsVirtualKeyCode: key === 'Enter' ? 13 : 40 }, page.sessionId);
+            await sleep(120);
+        }
+        const kbSort = await page.eval("localStorage.getItem('st-char-sort')");
+        row('must', kbSort !== null && kbSort !== 'name_asc',
+            'C3 sort dropdown is operable by keyboard alone', `stored=${kbSort}`);
+
+        // Escape aimed at an open dropdown closes the MENU only. ui.onPageKey dismisses the panel on
+        // Escape and rides the same delegated keydown, so the menu's own Escape must consume it or
+        // the dock goes with it. The click-path twin of this is ui.onPageClick's detached-target guard.
+        await page.click('[data-dd-toggle="char-sort"]');
+        await page.waitFor("document.querySelector('#dd-list-char-sort')", 2500);
+        for (const type of ['rawKeyDown', 'keyUp']) {
+            await page.cdp.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }, page.sessionId);
+        }
+        const menuClosed = await page.waitFor("!document.querySelector('#dd-list-char-sort')", 2500);
+        const panelAlive = await page.eval("!!document.querySelector('#panel-view') && !!document.querySelector('.char-toolbar')");
+        row('must', menuClosed && panelAlive,
+            'C9 Escape closes the dropdown without dismissing the panel', `menuClosed=${menuClosed} panelAlive=${panelAlive}`);
+
+        // The pick survives a reload: the list opens on the stored sort, not the .recent default.
+        await page.eval("localStorage.setItem('st-char-sort','name_desc')");
+        await page.navigate(`${args.base}/`);
+        await page.waitFor(hydrated, 15000);
+        await page.click('#d-characters');
+        await page.waitFor("document.querySelectorAll('#chat-root .char-item').length >= 60", 5000);
+        row('must', await page.waitFor("document.querySelector('#chat-root .char-item .char-name').textContent.trim() === 'Rita Recent' || document.querySelector('#chat-root .char-item .char-name').textContent.trim().startsWith('Char 59')", 3000)
+            && await page.eval("document.querySelector('#dd-btn-char-sort span').textContent.trim()") === 'Z-A',
+            'C6 a stored sort is applied on the next load');
+
+        // Row-hover actions: every one is a real focusable button with its own accessible name, and
+        // duplicate (the one with no native dialog in front of it) fires from the keyboard.
+        const actNames = await page.eval("JSON.stringify(Array.from(document.querySelectorAll('#chat-root .char-item .char-row-act')).slice(0,4).map(b=>[b.tagName,b.getAttribute('aria-label')]))");
+        row('must', /BUTTON/.test(actNames) && /Rename /.test(actNames) && /Delete /.test(actNames),
+            'C7 row actions are named buttons carrying their character', `names=${actNames}`);
+
+        await page.focus("#chat-root .char-item .char-row-act[data-char-action='duplicate']");
+        const actFocused = await page.eval("document.activeElement.getAttribute('data-char-action')");
+        // keyDown + text, not rawKeyDown: a native button's Enter-to-click is a DEFAULT ACTION, which
+        // Chrome only runs for a key event carrying its text ('\r'). rawKeyDown suppresses it.
+        await page.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', text: '\r', unmodifiedText: '\r', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, page.sessionId);
+        await page.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, page.sessionId);
+        const dup = await (async () => {
+            const deadline = Date.now() + 5000;
+            while (Date.now() < deadline) {
+                const st = await (await fetch(`${args.base}/dev/state`)).json();
+                if (st.duplicated_avatar) return st.duplicated_avatar;
+                await sleep(150);
+            }
+            return null;
+        })();
+        row('must', actFocused === 'duplicate' && typeof dup === 'string' && dup.endsWith('.png'),
+            'C8 Enter on a focused row action reaches char_api (duplicate)', `focused=${actFocused} dup=${dup}`);
+
+        // Mirrors C-BG-5: pins the panel against the dismiss defect from the CLICK side (a row action
+        // that ever rebuilt its own node would detach the target and read as an outside click).
+        // Focus, not hover, does the revealing here: headless Chrome answers `(hover: hover) and
+        // (pointer: fine)` with FALSE, so the WD25-gated hover rule is inert in this gate and only the
+        // focus-within twin is reachable. Both set opacity + pointer-events, so the click path is real.
+        await page.focus("#chat-root .char-item:nth-of-type(2) .char-row-act[data-char-action='duplicate']");
+        await sleep(200);
+        const revealed = await page.eval("(function(){const c=document.querySelectorAll('#chat-root .char-item')[1].querySelector('.char-row-actions');const s=getComputedStyle(c);return JSON.stringify({op:s.opacity, pe:s.pointerEvents})})()");
+        await page.click("#chat-root .char-item:nth-of-type(2) .char-row-act[data-char-action='duplicate']");
+        await sleep(400);
+        const panelAliveClick = await page.eval("!!document.querySelector('#panel-view') && !!document.querySelector('.char-toolbar') && document.querySelectorAll('#chat-root .char-item').length > 0");
+        row('must', JSON.parse(revealed).op === '1' && JSON.parse(revealed).pe === 'auto' && panelAliveClick,
+            'C10 a revealed row action is clickable and the click keeps the panel open', `reveal=${revealed} panelAlive=${panelAliveClick}`);
 
         await page.click('#d-persona');
         row('must', await page.waitFor("document.querySelectorAll('#persona-list .char-item').length >= 2", 5000),

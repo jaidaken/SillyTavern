@@ -21,6 +21,7 @@ const char_store = @import("./character_store.zig");
 const dom_event = @import("./dom_event.zig");
 const appearance = @import("./appearance.zig");
 const backgrounds = @import("./backgrounds.zig");
+const character_prefs = @import("./character_prefs.zig");
 const persona_actions = @import("./persona_actions.zig");
 
 const alloc = char_store.page_gpa;
@@ -281,6 +282,7 @@ fn mergedSettings(settings_str: []const u8) ![]u8 {
 
     try persona_actions.mergePersonaState(a, &root.object); // C-PERS persona
     try backgrounds.mergeState(a, &root.object); // C-BG background
+    try character_prefs.mergeCharPrefs(a, &root.object); // C-CHAR character list
 
     return std.json.Stringify.valueAlloc(alloc, root, .{});
 }

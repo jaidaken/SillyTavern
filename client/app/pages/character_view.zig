@@ -59,8 +59,13 @@ pub const IndexedChar = struct {
 /// only, and grid vs list presentation. No ziex dependency so it is unit-testable natively; the
 /// reactive bump lives in the components/handlers that call `compute` then `regions.bumpShell`.
 pub const View = struct {
+    /// The list opens on the character you spoke to last: it exists to resume a conversation, and
+    /// alphabetical order buries a recent chat behind every name earlier in the alphabet.
+    /// character_prefs.zig persists a different pick and falls back here.
+    pub const default_sort: SortKey = .recent;
+
     allocator: Allocator,
-    sort: SortKey = .name_asc,
+    sort: SortKey = default_sort,
     query: []const u8 = "",
     query_owned: ?[]u8 = null,
     tags: std.ArrayList([]const u8) = .empty,
@@ -345,7 +350,7 @@ test "sort by name asc/desc" {
         char("alpha", false, "", 0, 0, 0, &.{}),
         char("Charlie", false, "", 0, 0, 0, &.{}),
     };
-    const v: View = .{ .allocator = a };
+    const v: View = .{ .allocator = a, .sort = .name_asc };
     const r = try apply(a, v, &chars);
     defer a.free(r);
     try testing.expectEqualStrings("alpha", r[0].char.name);
@@ -354,6 +359,7 @@ test "sort by name asc/desc" {
 
     const v2: View = .{ .allocator = a, .sort = .name_desc };
     const r2 = try apply(a, v2, &chars);
+    defer a.free(r2);
     try testing.expectEqualStrings("Charlie", r2[0].char.name);
     try testing.expectEqualStrings("alpha", r2[2].char.name);
 }
@@ -365,7 +371,7 @@ test "fav_only filters and favs sort floats favourites first" {
         char("B", false, "", 0, 0, 0, &.{}),
         char("C", true, "", 0, 0, 0, &.{}),
     };
-    const v1: View = .{ .allocator = a, .fav_only = true };
+    const v1: View = .{ .allocator = a, .fav_only = true, .sort = .name_asc };
     const r1 = try apply(a, v1, &chars);
     defer a.free(r1);
     try testing.expectEqual(@as(usize, 2), r1.len);
@@ -374,18 +380,20 @@ test "fav_only filters and favs sort floats favourites first" {
 
     const v2: View = .{ .allocator = a, .fav_only = true, .sort = .favs };
     const r2 = try apply(a, v2, &chars);
+    defer a.free(r2);
     try testing.expectEqualStrings("A", r2[0].char.name);
     try testing.expectEqualStrings("C", r2[1].char.name);
 }
 
 test "search is case-insensitive over name and description" {
     const a = testing.allocator;
-    const chars = [_]Character{
+    var chars = [_]Character{
         char("Alice", false, "", 0, 0, 0, &.{}),
         char("Bob", false, "", 0, 0, 0, &.{}),
     };
     chars[1].description = "loves KNIGHTS";
     var v: View = .{ .allocator = a };
+    defer v.deinit();
     try v.setQuery("knight");
     const r = try apply(a, v, &chars);
     defer a.free(r);
@@ -406,7 +414,7 @@ test "tag filter requires every active tag (AND)" {
     defer a.free(r);
     try testing.expectEqual(@as(usize, 1), r.len);
     try testing.expectEqualStrings("A", r[0].char.name);
-    try v.deinit();
+    v.deinit();
 }
 
 test "numeric sorts order by chat_size and data_size" {
@@ -416,13 +424,14 @@ test "numeric sorts order by chat_size and data_size" {
         char("big", false, "", 0, 100, 0, &.{}),
     };
     var v: View = .{ .allocator = a, .sort = .most_chats };
-    var r = try apply(a, v, &chars);
+    const r = try apply(a, v, &chars);
     defer a.free(r);
     try testing.expectEqualStrings("big", r[0].char.name);
 
     v.sort = .least_chats;
-    r = try apply(a, v, &chars);
-    try testing.expectEqualStrings("small", r[0].char.name);
+    const r2 = try apply(a, v, &chars);
+    defer a.free(r2);
+    try testing.expectEqualStrings("small", r2[0].char.name);
 }
 
 test "apply preserves the source store index" {
@@ -437,6 +446,22 @@ test "apply preserves the source store index" {
     // B (index 1) sorts first but must keep its store index.
     try testing.expectEqual(@as(usize, 1), r[0].index);
     try testing.expectEqual(@as(usize, 0), r[1].index);
+}
+
+test "a default view sorts by most recent chat" {
+    const a = testing.allocator;
+    const chars = [_]Character{
+        char("stale", false, "", 1000, 0, 0, &.{}),
+        char("freshest", false, "", 9000, 0, 0, &.{}),
+        char("middling", false, "", 5000, 0, 0, &.{}),
+    };
+    const v: View = .{ .allocator = a };
+    try testing.expectEqual(SortKey.recent, v.sort);
+    const r = try apply(a, v, &chars);
+    defer a.free(r);
+    try testing.expectEqualStrings("freshest", r[0].char.name);
+    try testing.expectEqualStrings("middling", r[1].char.name);
+    try testing.expectEqualStrings("stale", r[2].char.name);
 }
 
 test "sortKeyFromField maps old frontend options" {
@@ -473,7 +498,7 @@ test "pagination slices the full result and clamps stale pages" {
     const names = [_][]const u8{ "0", "1", "2", "3", "4" };
     var chars: [5]Character = undefined;
     for (&chars, 0..) |*c, i| c.* = char(names[i], false, "", 0, 0, 0, &.{});
-    var v: View = .{ .allocator = a, .page_size = 2 };
+    var v: View = .{ .allocator = a, .page_size = 2, .sort = .name_asc };
     try v.compute(&chars);
     defer v.deinit();
     // 5 chars at size 2 -> 3 pages; page 0 shows 2.
