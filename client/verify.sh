@@ -373,6 +373,17 @@ kill -TERM -- -"$HISTSRV" 2>/dev/null
 HISTSRV=""
 
 echo
+echo "== api routes (every path the client calls exists on the real server) =="
+# Static, no browser and no mock: the mock is exactly what this cannot ask, since a mock that invents
+# a route makes the gate green while the user gets a 404.
+if node check-api-routes.mjs; then
+    echo "  ok    api routes"
+else
+    echo "  FAIL  api routes"
+    FAILURES=$((FAILURES + 1))
+fi
+
+echo
 echo "== interactions (real input against the served client) =="
 # Self-contained stage: verify-interactions.sh starts its own mock-api server on its own port.
 if [ "${INTERACTIONS:-1}" = "1" ]; then

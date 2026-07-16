@@ -2046,6 +2046,37 @@ async function main() {
                 `closed=${cfgEscClosed}`);
         }
 
+        // The panel shipped WORKING and HALF-PERSISTED: every live path was proven (a sampler reaches
+        // the request body, an edited template reshapes the next prompt) while the merge into the
+        // settings blob was never wired into the one saver. config_state keeps TWO channels, so the
+        // edit still survived a reload out of localStorage and looked fine; what never happened was
+        // the DURABLE write, so another browser, another device and the classic ST client all saw the
+        // old value forever. Assert the BLOB, not the reload: a reload row passes on localStorage
+        // alone and proves nothing about the channel that was missing (it did: this row's first
+        // draft stayed green with the merge line deleted).
+        {
+            await page.navigate(`${args.base}/`);
+            await openRecentChat();
+            await page.click('#d-ai_config');
+            await page.waitFor("document.getElementById('sampler-temp')", 4000);
+            await page.eval("(function(){const r=document.getElementById('sampler-range-temp');r.value='1.25';r.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            // The saver is debounced, so poll the server's own copy rather than sleep.
+            const blobTemp = await (async () => {
+                const deadline = Date.now() + 8000;
+                while (Date.now() < deadline) {
+                    const r = await (await fetch(`${args.base}/api/settings/get`, { method: 'POST' })).json();
+                    const s = JSON.parse(r.settings || '{}');
+                    const t = s.textgenerationwebui_settings && s.textgenerationwebui_settings.temp;
+                    if (t === 1.25) return t;
+                    await sleep(200);
+                }
+                return null;
+            })();
+            row('must', blobTemp === 1.25,
+                'C-CFG-19 an edited sampler reaches the settings blob, not just this browser',
+                `blobTemp=${blobTemp === null ? 'NEVER-ARRIVED' : blobTemp}`);
+        }
+
         // --- C-CFG-SEL: a refetch must not deselect the character (char_api.rebuildCharacterStore) ---
         // clear() nulls selected_index and nothing put it back, so EVERY fetchCharacters silently
         // deselected the character app-wide: a card save, an import, a duplicate and an avatar replace

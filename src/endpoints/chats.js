@@ -2172,6 +2172,59 @@ router.post('/message/checkpoint', async function (request, response) {
 });
 
 /**
+ * The author's note lives in the chat header, so a note edit is a header mutation and rides the same
+ * helper as the message family (full-token gate, double-read recheck, whole-file rewrite).
+ * The five keys are a literal allowlist, so a body cannot reach a key the client does not own.
+ */
+router.post('/metadata', async function (request, response) {
+    try {
+        await runMutation(request, response, (objs, body, entry) => {
+            if (!entry.header) {
+                return { status: 400, error: 'no_header' };
+            }
+            const meta = entry.header.chat_metadata = (entry.header.chat_metadata && typeof entry.header.chat_metadata === 'object') ? entry.header.chat_metadata : {};
+            if ('note_prompt' in body) {
+                if (typeof body.note_prompt !== 'string') {
+                    return { status: 400, error: 'note_prompt must be a string' };
+                }
+                meta.note_prompt = body.note_prompt;
+            }
+            if ('note_interval' in body) {
+                if (!Number.isFinite(body.note_interval)) {
+                    return { status: 400, error: 'note_interval must be a number' };
+                }
+                meta.note_interval = body.note_interval;
+            }
+            if ('note_depth' in body) {
+                if (!Number.isFinite(body.note_depth)) {
+                    return { status: 400, error: 'note_depth must be a number' };
+                }
+                meta.note_depth = body.note_depth;
+            }
+            if ('note_position' in body) {
+                if (!Number.isFinite(body.note_position)) {
+                    return { status: 400, error: 'note_position must be a number' };
+                }
+                meta.note_position = body.note_position;
+            }
+            if ('note_role' in body) {
+                if (typeof body.note_role !== 'string') {
+                    return { status: 400, error: 'note_role must be a string' };
+                }
+                meta.note_role = body.note_role;
+            }
+            // No message changed, so there is no affected object to name: the header is the mutation.
+            return { index: -1, obj: null };
+        });
+    } catch (error) {
+        log.chat.error(error);
+        if (!response.headersSent) {
+            return response.sendStatus(500);
+        }
+    }
+});
+
+/**
  * Resolves the destination ref for a duplicate/branch: a new solo file name in the same character
  * directory, or a new group id. Path traversal is guarded by ChatRef, same as the source.
  * @param {any} request The Express request.
