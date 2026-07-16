@@ -14,6 +14,7 @@ import datetime
 import http.server
 import json
 import pathlib
+import re
 import signal
 import socketserver
 import sys
@@ -148,6 +149,51 @@ def _mock_characters(favs):
     return chars
 
 
+# ---- C-CARD2 hostile card: the deep /characters/get body for a card another tool wrote. -------------
+# Every field here is a shape the server hands over untouched, straight from the PNG's own JSON
+# (characters.js:426-430). `avatar` and `json_data` stay well-formed because the SERVER sets those.
+# The value of a plain multipart text field, for asserting what an upload actually carried.
+def _multipart_value(raw, field):
+    m = re.search(r'name="' + re.escape(field) + r'"\r?\n\r?\n(.*?)\r?\n--', raw, re.S)
+    return m.group(1) if m else None
+
+
+# The uploaded file's name, which is what the server names a background after (sanitize of
+# request.file.originalname, backgrounds.js:144). Empty unless the part is BOTH the right field
+# and an actual file, which is the multer contract the real handler 400s on.
+def _multipart_filename(raw, field):
+    m = re.search(r'name="' + re.escape(field) + r'"; filename="([^"]*)"', raw)
+    return m.group(1) if m and m.group(1) else None
+
+
+def _hostile_card(avatar):
+    return {
+        "name": None,
+        "description": 42,
+        "personality": ["a", "b"],
+        "scenario": {"x": 1},
+        "first_mes": True,
+        "mes_example": None,
+        "tags": "solo, mystery",
+        "chat": 1700000000000,
+        "create_date": 1700000000000,
+        "fav": "true",
+        "talkativeness": "0.9",
+        "json_data": json.dumps({"name": avatar, "data": {"character_book": {"entries": []}}}),
+        "data": {
+            "creator_notes": None,
+            "system_prompt": 7,
+            "creator": "someone",
+            "character_version": 1.2,
+            "alternate_greetings": ["real one", 99, None],
+            "extensions": {
+                "world": None,
+                "depth_prompt": {"prompt": None, "depth": "3", "role": 5},
+            },
+        },
+    }
+
+
 # ---- C-HOME recent-chats fixture: ChatInfo[] as /api/chats/recent returns. Character chats carry an
 # avatar; the group chat carries `group` and no avatar, so the client filters it out of the v1 list. ----
 def _mock_recent():
@@ -266,6 +312,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # C-CARD: the last /characters/edit body, and the card /characters/get serves once one is saved.
     saved_edit = None
     saved_card = None
+    # C-CARD2: armed via /dev/arm-hostile-card, so /characters/get serves a card another tool wrote.
+    hostile_card = False
+    # C-CARD2: what the last /characters/edit-avatar multipart body actually carried.
+    avatar_post = None
+    # C-CARD2, for C-BG2: the same, for the last /backgrounds/upload body.
+    bg_upload = None
     get_count = 0
     # History-prefetch 409: armed once via /dev/arm-get-409, fires on the next prepend GET only, so the
     # scroll-preservation gate can drive the real resync path the mock append 409 cannot reach.
@@ -384,6 +436,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "secrets": Handler.secrets,  # C-CONN
                     "duplicated_avatar": Handler.duplicated_avatar,  # C-CHAR
                     "card_edit": Handler.saved_edit,  # C-CARD
+                    "avatar_post": Handler.avatar_post,  # C-CARD2
+                    "bg_upload": Handler.bg_upload,  # C-CARD2, for C-BG2
                     "full_token": Handler.full_token,
                     "reader_total": len(Handler.reader_current()),
                     "reader_above_probe": Handler.reader_current()[0]["mes"],
@@ -397,6 +451,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.mock_json({"armed": True})
             if self.path.startswith("/dev/arm-recent-empty"):
                 Handler.recent_empty = True
+                return self.mock_json({"armed": True})
+            # C-CARD2: serve a card written by another tool from /characters/get. A fixture that only
+            # ever serves the shape we expect tests our own reading of the server, not the server.
+            if self.path.startswith("/dev/arm-hostile-card"):
+                Handler.hostile_card = True
+                Handler.saved_card = None
                 return self.mock_json({"armed": True})
             if self.path.startswith("/dev/reader-at"):
                 params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -545,11 +605,39 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/characters/duplicate":
             Handler.duplicated_avatar = req.get("avatar_url")
             return self.mock_json({"path": "duplicated.png"})
+        # C-CARD2, for C-BG2: same global multer, so the same field-name contract. The real handler
+        # 400s on !request.file, names the file from request.file.originalname and answers with the
+        # sanitized name as PLAIN TEXT, not JSON (backgrounds.js:141-155). Only the server knows the
+        # final name, which is why the panel re-fetches /all rather than trusting what it sent.
+        if path == "/api/backgrounds/upload":
+            raw = body.decode("utf-8", "replace") if body else ""
+            name = _multipart_filename(raw, "avatar")
+            Handler.bg_upload = {"field_avatar": 'name="avatar"' in raw, "filename": name, "bytes": len(raw)}
+            if not name:
+                return self.mock_status(400, "Error: no file uploaded")
+            if name not in Handler.mock_backgrounds:
+                Handler.mock_backgrounds.append(name)
+            return self.mock_text(200, name)
+        if path == "/api/characters/edit-avatar":
+            # multer is mounted globally as .single('avatar') and the handler 400s on !request.file
+            # (characters.js:1234), so the FIELD NAME is the contract and this mock holds it: a body
+            # naming the file anything else gets the same 400 the real server would send.
+            raw = body.decode("utf-8", "replace") if body else ""
+            Handler.avatar_post = {
+                "field_avatar": 'name="avatar"' in raw,
+                "avatar_url": _multipart_value(raw, "avatar_url"),
+                "bytes": len(raw),
+            }
+            if not Handler.avatar_post["field_avatar"]:
+                return self.mock_status(400, "Error: no file uploaded")
+            return self.mock_json({"ok": True})
         if path == "/api/characters/get":
             # C-CARD: the three original keys are what char_api's DeepCard reads for the prompt and
             # must keep their values; everything below is the rest of the deep card the editor loads,
             # shaped as processCharacter returns it (top-level v1 mirror + data.* + json_data).
             avatar = req.get("avatar_url", "char")
+            if Handler.hostile_card:
+                return self.mock_json(_hostile_card(avatar))
             if Handler.saved_card is not None:
                 return self.mock_json(Handler.saved_card)
             return self.mock_json({
@@ -836,6 +924,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def mock_json(self, payload):
         return self.mock_status(200, payload)
+
+    # C-CARD2: /api/backgrounds/upload answers `response.send(filename)`, a bare string, so a mock
+    # that wrapped it in JSON would be testing a contract the server does not have.
+    def mock_text(self, status, text):
+        data = text.encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(data)
 
     def mock_status(self, status, payload):
         data = json.dumps(payload).encode()

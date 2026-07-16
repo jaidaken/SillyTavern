@@ -12,9 +12,12 @@ const std = @import("std");
 const zx = @import("zx");
 const net = @import("./net.zig");
 const char_api = @import("./char_api.zig");
+const char_data = @import("./char_data.zig");
 const char_store = @import("./character_store.zig");
+const dom_event = @import("./dom_event.zig");
 const regions = @import("./regions.zig");
 const form_mod = @import("./card_form.zig");
+const js = zx.client.js;
 
 const alloc = char_store.page_gpa;
 const log = std.log.scoped(.card);
@@ -28,7 +31,24 @@ pub const role_options = form_mod.role_options;
 pub const State = enum { idle, loading, ready, saving, err };
 
 /// What the footer says after a save attempt. Cleared as soon as the form is edited again.
-pub const Notice = enum { none, saved, save_failed, name_required, load_failed };
+pub const Notice = enum { none, saved, save_failed, name_required, load_failed, avatar_saved, avatar_failed, avatar_no_reply };
+
+/// The footer line, and the ONE place its wording lives: the panel renders it, and an edit writes it
+/// straight into the live node without a re-render (see reflectNotice), so a second copy of this
+/// mapping would be a second answer to the same question. Says what happened and what to do about
+/// it, never a bare word (WD55).
+pub fn noticeText() []const u8 {
+    return switch (notice) {
+        .saved => "Saved to the card.",
+        .save_failed => "The server refused the save. The card on disk is unchanged.",
+        .name_required => "A card needs a name before it can be saved.",
+        .load_failed => "That card would not load.",
+        .avatar_saved => "New image saved to the card.",
+        .avatar_failed => "The server refused the image. The card keeps the one it had.",
+        .avatar_no_reply => "The image never reached the server. The card keeps the one it had.",
+        .none => if (dirty()) "Unsaved changes." else "",
+    };
+}
 
 var state: State = .idle;
 var notice: Notice = .none;
@@ -40,18 +60,14 @@ var owned_avatar: []u8 = &.{};
 var owned_json_data: []u8 = &.{};
 var owned_chat: []u8 = &.{};
 var owned_create_date: []u8 = &.{};
-var owned_greetings: [][]u8 = &.{};
 var in_flight = false;
+/// Bumped on every accepted avatar upload; rides the image URL so the browser refetches bytes that
+/// changed under a filename that did not.
+var avatar_version: u32 = 0;
 
 fn setOwned(dst: *[]u8, src: []const u8) void {
     if (dst.len > 0) alloc.free(dst.*);
     dst.* = alloc.dupe(u8, src) catch &.{};
-}
-
-fn freeGreetings() void {
-    for (owned_greetings) |g| alloc.free(g);
-    if (owned_greetings.len > 0) alloc.free(owned_greetings);
-    owned_greetings = &.{};
 }
 
 pub fn editorState() State {
@@ -91,47 +107,6 @@ pub fn domId(arena: std.mem.Allocator, f: Field) []const u8 {
 pub fn hintId(arena: std.mem.Allocator, f: Field) []const u8 {
     return std.fmt.allocPrint(arena, "card-{s}-hint", .{@tagName(f)}) catch "card-field-hint";
 }
-
-/// The card fields the /get response carries. The text fields are typed: every card ST writes has
-/// been through charaFormatData, which forces `|| ''` on each of them. The four loose ones are
-/// std.json.Value because real cards disagree on their type (fav bool vs "true", create_date string
-/// vs number), and one odd field must not fail the whole editor.
-const DeepDepth = struct {
-    prompt: []const u8 = "",
-    depth: ?std.json.Value = null,
-    role: ?std.json.Value = null,
-};
-
-const DeepExt = struct {
-    world: []const u8 = "",
-    depth_prompt: DeepDepth = .{},
-};
-
-const DeepData = struct {
-    creator_notes: []const u8 = "",
-    system_prompt: []const u8 = "",
-    post_history_instructions: []const u8 = "",
-    creator: []const u8 = "",
-    character_version: []const u8 = "",
-    alternate_greetings: []const []const u8 = &.{},
-    extensions: DeepExt = .{},
-};
-
-const Deep = struct {
-    name: []const u8 = "",
-    description: []const u8 = "",
-    personality: []const u8 = "",
-    scenario: []const u8 = "",
-    first_mes: []const u8 = "",
-    mes_example: []const u8 = "",
-    tags: []const []const u8 = &.{},
-    json_data: []const u8 = "",
-    chat: ?std.json.Value = null,
-    create_date: ?std.json.Value = null,
-    fav: ?std.json.Value = null,
-    talkativeness: ?std.json.Value = null,
-    data: DeepData = .{},
-};
 
 /// Called from the body on every render: loads the selected card once, and reloads when the
 /// selection moved to a different character while the panel was closed.
@@ -179,13 +154,22 @@ fn onCardDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         fail(.load_failed);
         return;
     }
-    const parsed = res.?.json(Deep) catch {
+    // Not a typed struct: card fields arrive uncoerced, so a typed parse hands the whole card's fate
+    // to its oddest field (card_form's header has the contract).
+    const parsed = res.?.json(std.json.Value) catch {
         log.warn("card body unparseable", .{});
         fail(.load_failed);
         return;
     };
     defer parsed.deinit();
-    fill(parsed.value) catch {
+    const json_data = form_mod.cardJsonData(parsed.value) orelse {
+        // The one field worth failing on: the server sets it, and it carries the character_book the
+        // save echoes back. Loading without it would arm a save that erases the book.
+        log.warn("card body carries no json_data string: refusing to edit a card the save would strip", .{});
+        fail(.load_failed);
+        return;
+    };
+    fill(form_mod.readCard(parsed.value), json_data) catch {
         log.warn("card did not fit the edit buffers", .{});
         fail(.load_failed);
         return;
@@ -195,78 +179,210 @@ fn onCardDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     regions.bumpShell();
 }
 
-fn fill(d: Deep) !void {
+fn fill(c: form_mod.Card, json_data: []const u8) !void {
     if (form_init) form.deinit();
     form = form_mod.Form.init(alloc);
     form_init = true;
 
-    try form.load(.name, d.name);
-    try form.load(.description, d.description);
-    try form.load(.personality, d.personality);
-    try form.load(.scenario, d.scenario);
-    try form.load(.first_mes, d.first_mes);
-    try form.load(.mes_example, d.mes_example);
-    try form.load(.creator_notes, d.data.creator_notes);
-    try form.load(.system_prompt, d.data.system_prompt);
-    try form.load(.post_history_instructions, d.data.post_history_instructions);
-    try form.load(.creator, d.data.creator);
-    try form.load(.character_version, d.data.character_version);
-    try form.load(.world, d.data.extensions.world);
-    try form.load(.depth_prompt_prompt, d.data.extensions.depth_prompt.prompt);
+    try form.load(.name, c.name);
+    try form.load(.description, c.description);
+    try form.load(.personality, c.personality);
+    try form.load(.scenario, c.scenario);
+    try form.load(.first_mes, c.first_mes);
+    try form.load(.mes_example, c.mes_example);
+    try form.load(.creator_notes, c.creator_notes);
+    try form.load(.system_prompt, c.system_prompt);
+    try form.load(.post_history_instructions, c.post_history_instructions);
+    try form.load(.creator, c.creator);
+    try form.load(.character_version, c.character_version);
+    try form.load(.world, c.world);
+    try form.load(.depth_prompt_prompt, c.depth_prompt_prompt);
 
-    const tags = try form_mod.tagsJoin(alloc, d.tags);
+    const tags = try form_mod.tagsText(alloc, c.tags);
     defer alloc.free(tags);
     try form.load(.tags, tags);
 
-    const depth = try form_mod.valueText(alloc, d.data.extensions.depth_prompt.depth);
+    const depth = try form_mod.valueText(alloc, c.depth);
     defer alloc.free(depth);
     try form.load(.depth_prompt_depth, depth);
 
-    const role = try form_mod.valueText(alloc, d.data.extensions.depth_prompt.role);
+    const role = try form_mod.valueText(alloc, c.role);
     defer alloc.free(role);
-    try form.load(.depth_prompt_role, if (role.len > 0) role else "system");
+    try form.load(.depth_prompt_role, if (form_mod.roleKnown(role)) role else "system");
 
-    setOwned(&owned_json_data, d.json_data);
-    const chat = try form_mod.valueText(alloc, d.chat);
+    const greetings = try form_mod.greetingsAlloc(alloc, c.greetings);
+    defer {
+        for (greetings) |g| alloc.free(g);
+        alloc.free(greetings);
+    }
+    try form.loadGreetings(@ptrCast(greetings));
+
+    setOwned(&owned_json_data, json_data);
+    const chat = try form_mod.valueText(alloc, c.chat);
     defer alloc.free(chat);
     setOwned(&owned_chat, chat);
-    const created = try form_mod.valueText(alloc, d.create_date);
+    const created = try form_mod.valueText(alloc, c.create_date);
     defer alloc.free(created);
     setOwned(&owned_create_date, created);
-
-    freeGreetings();
-    var list = try alloc.alloc([]u8, d.data.alternate_greetings.len);
-    var filled: usize = 0;
-    errdefer {
-        for (list[0..filled]) |g| alloc.free(g);
-        alloc.free(list);
-    }
-    for (d.data.alternate_greetings) |g| {
-        list[filled] = try alloc.dupe(u8, g);
-        filled += 1;
-    }
-    owned_greetings = list;
 
     pass = .{
         .avatar_url = owned_avatar,
         .json_data = owned_json_data,
         .chat = owned_chat,
         .create_date = owned_create_date,
-        .fav = form_mod.valueBool(d.fav),
-        .talkativeness = form_mod.valueFloat(d.talkativeness, 0.5),
-        .alternate_greetings = @ptrCast(owned_greetings),
+        .fav = form_mod.valueBool(c.fav),
+        .talkativeness = form_mod.valueFloat(c.talkativeness, 0.5),
     };
 }
 
-/// A control changed: store the text. No re-render, so the caret stays where the user put it; the
-/// footer's dirty state is read on the next render the panel does anyway.
+/// A control changed: store the text. No re-render, so the caret stays where the user put it. The
+/// footer would otherwise be told nothing until the panel next rendered for some other reason, which
+/// left "Unsaved changes." absent while changes were unsaved: reflectNotice writes the one line that
+/// changed straight into its own node, which is a text write on a node the user is not typing in.
 pub fn setField(f: Field, text: []const u8) void {
     if (!form_init) return;
     form.set(f, text) catch {
         log.warn("edit dropped: out of memory", .{});
         return;
     };
-    if (notice != .none) notice = .none;
+    notice = .none;
+    reflectNotice();
+}
+
+/// Writes the footer line into the live node without a render. The panel's inputs deliberately do
+/// not re-render (that would cost the caret), so this is how the notice keeps up with the truth.
+fn reflectNotice() void {
+    if (zx.platform.role != .client) return;
+    const el = dom_event.elementById(alloc, "card-editor-notice") orelse return;
+    defer el.deinit();
+    el.ref.set("textContent", js.string(noticeText())) catch {};
+}
+
+// ---- alternate greetings --------------------------------------------------------------------
+
+pub fn greetingCount() usize {
+    if (!form_init) return 0;
+    return form.greetingCount();
+}
+
+pub fn greetingText(i: usize) []const u8 {
+    if (!form_init) return "";
+    return form.greeting(i);
+}
+
+/// The greeting control's element id, so its label can point at it natively.
+pub fn greetingDomId(arena: std.mem.Allocator, i: usize) []const u8 {
+    return std.fmt.allocPrint(arena, "card-greeting-{d}", .{i}) catch "card-greeting";
+}
+
+/// The greeting's `data-card-greeting` key. One-based on purpose: dom_event.datasetUp frees an
+/// EMPTY dataset value, so row zero written as "0" is fine but the empty string would be
+/// undispatchable, and this keeps the two ends honest about which number they mean.
+pub fn greetingKey(arena: std.mem.Allocator, i: usize) []const u8 {
+    return std.fmt.allocPrint(arena, "{d}", .{i}) catch "0";
+}
+
+pub fn greetingIndex(key: []const u8) ?usize {
+    return std.fmt.parseInt(usize, key, 10) catch null;
+}
+
+/// Every Remove button reads "Remove", so each needs its own accessible name or a screen reader
+/// hears the same word N times with no way to tell the rows apart (WD38).
+pub fn greetingRemoveLabel(arena: std.mem.Allocator, i: usize) []const u8 {
+    return std.fmt.allocPrint(arena, "Remove greeting {d}", .{i}) catch "Remove greeting";
+}
+
+/// A greeting textarea changed. Same no-render path as setField, for the same caret reason.
+pub fn setGreeting(i: usize, text: []const u8) void {
+    if (!form_init) return;
+    form.setGreeting(i, text) catch {
+        log.warn("greeting edit dropped: out of memory", .{});
+        return;
+    };
+    notice = .none;
+    reflectNotice();
+}
+
+pub fn addGreeting() void {
+    if (!form_init) return;
+    form.addGreeting() catch {
+        log.warn("greeting add dropped: out of memory", .{});
+        return;
+    };
+    notice = .none;
+    regions.bumpShell();
+    syncGreetingValues();
+}
+
+pub fn removeGreeting(i: usize) void {
+    if (!form_init) return;
+    form.removeGreeting(i);
+    notice = .none;
+    regions.bumpShell();
+    syncGreetingValues();
+}
+
+/// Writes every greeting's text back into its textarea after the list's SHAPE changed.
+///
+/// A textarea's text child is only its DEFAULT value: once the user has typed in one, the browser
+/// holds a dirty value of its own and ignores whatever the VDOM patches into that child. Removing
+/// row 0 shifts row 1 up into a node the user had typed in, so without this the row would keep
+/// showing the deleted text while the buffer holds the survivor's. Not a caret cost: the user
+/// clicked a button, they are not typing in these.
+fn syncGreetingValues() void {
+    if (zx.platform.role != .client) return;
+    var buf: [32]u8 = undefined;
+    for (0..form.greetingCount()) |i| {
+        const id = std.fmt.bufPrint(&buf, "card-greeting-{d}", .{i}) catch continue;
+        const el = dom_event.elementById(alloc, id) orelse continue;
+        defer el.deinit();
+        el.ref.set("value", js.string(form.greeting(i))) catch {};
+    }
+}
+
+// ---- avatar ---------------------------------------------------------------------------------
+
+/// The card's current image. Cache-busted by a counter rather than a timestamp: the browser has the
+/// old bytes under this exact URL, and the server writes the new image to the SAME filename.
+pub fn avatarUrl(arena: std.mem.Allocator) []const u8 {
+    if (owned_avatar.len == 0) return "";
+    const url = char_data.thumbUrl(arena, "avatar", owned_avatar) catch return "";
+    return std.fmt.allocPrint(arena, "{s}&v={d}", .{ url, avatar_version }) catch url;
+}
+
+/// The image's alt text. Names the character rather than describing the picture, which is what the
+/// image is FOR here (WD40).
+pub fn avatarAlt(arena: std.mem.Allocator) []const u8 {
+    const n = value(.name);
+    if (n.len == 0) return "The card's current image";
+    return std.fmt.allocPrint(arena, "{s}'s current card image", .{n}) catch "The card's current image";
+}
+
+/// The chosen file rides a FormData, which cannot cross the wasm boundary, so the POST hops to a JS
+/// helper (the same reason char_api and the persona panel do).
+pub fn uploadAvatar() void {
+    if (zx.platform.role != .client) return;
+    if (owned_avatar.len == 0) return;
+    js.global.call(void, "__st_card_avatar", .{js.string(owned_avatar)}) catch {
+        log.warn("card avatar helper missing", .{});
+        notice = .avatar_failed;
+        regions.bumpShell();
+    };
+}
+
+/// Called from the bridge when the JS helper's upload settles. Takes the HTTP status rather than a
+/// verdict so the footer can tell a refusal from a request that never landed; 0 is never-completed.
+pub fn onAvatarUploaded(status: i32) void {
+    if (status >= 200 and status < 300) {
+        notice = .avatar_saved;
+        avatar_version += 1;
+        // The list draws the same image from the same URL, so it needs the refetch to redraw too.
+        char_api.fetchCharacters();
+    } else {
+        notice = if (status == 0) .avatar_no_reply else .avatar_failed;
+        log.warn("card avatar upload failed: {d}", .{status});
+    }
+    regions.bumpShell();
 }
 
 /// The note role dropdown picked a value. This one DOES re-render: the dropdown is controlled, so

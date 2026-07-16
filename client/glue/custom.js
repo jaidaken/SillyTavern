@@ -440,20 +440,57 @@
         } catch (err) { log.chars.error('export failed:', err); }
     };
 
+    // Every upload rides the ONE global multer, `.single('avatar')` (server-main.js:292), so the file
+    // field is named 'avatar' whatever the endpoint and each 400s on `!request.file`.
+    // The `finally` is load-bearing: a caller that has drawn a wait state is released only by `done`,
+    // so a skipped call hangs it forever, and the language guarantees this where discipline would not.
+    // `sent` tells "no file picked" apart from "never completed", which a bare 0 status cannot.
+    async function postUpload(url, inputId, extra, done) {
+        const input = document.getElementById(inputId);
+        if (!input || !input.files || !input.files[0]) { done(0, false); return; }
+        const fd = new FormData();
+        fd.append('avatar', input.files[0]);
+        Object.keys(extra).forEach(function (k) { fd.append(k, extra[k]); });
+        await ensureCsrfToken();
+        let status = 0;
+        try {
+            const res = await loggedFetch(url, { method: 'POST', headers: withCsrf({}), body: fd });
+            status = res.status;
+            if (!res.ok) log.net.warn('upload refused:', url, res.status);
+        } catch (err) {
+            log.net.error('upload never completed:', url, err);
+        } finally {
+            input.value = '';
+            done(status, true);
+        }
+    }
+
     // Called from Zig (char_api.replaceAvatarFile) with the avatar_url it owns.
     window.__st_char_avatar = async function (avatar) {
-        const input = document.getElementById('char-avatar-input');
-        if (!input || !input.files || !input.files[0]) return;
-        const file = input.files[0];
-        const fd = new FormData();
-        fd.append('file', file);
-        fd.append('avatar_url', avatar);
-        await ensureCsrfToken();
-        try {
-            const res = await loggedFetch('/api/characters/edit-avatar', { method: 'POST', headers: withCsrf({}), body: fd });
-            if (!res.ok) { log.net.warn('avatar edit failed:', res.status); window.alert('Avatar update failed'); } else wasm.__st_refresh_characters();
-        } catch (err) { log.chars.error('avatar edit failed:', err); }
-        input.value = '';
+        await postUpload('/api/characters/edit-avatar', 'char-avatar-input', { avatar_url: avatar }, function (status, sent) {
+            if (!sent) return;
+            if (status >= 200 && status < 300) wasm.__st_refresh_characters();
+            else window.alert('Avatar update failed');
+        });
+    };
+
+    // Card editor's own image replace (C-CARD2). Reports the outcome back to the panel, which says
+    // what happened in its own footer instead of an alert. A cancelled picker is not an error.
+    window.__st_card_avatar = async function (avatar) {
+        await postUpload('/api/characters/edit-avatar', 'card-avatar-input', { avatar_url: avatar }, function (status, sent) {
+            if (sent) wasm.__st_card_avatar_done(status);
+        });
+    };
+
+    // Background upload (C-BG2): FormData cannot cross the wasm boundary, so uploadPick hops here.
+    // The server names the file from request.file.originalname and answers with the sanitized name
+    // (backgrounds.js:144-155), so only a re-fetch of /all knows what landed; the panel does that.
+    // Unlike the two above this reports a cancelled picker too, because uploadPick has already drawn
+    // its wait state and this callback is the only thing that clears it.
+    window.__st_bg_upload = async function () {
+        await postUpload('/api/backgrounds/upload', 'bg-upload-input', {}, function (status) {
+            wasm.__st_bg_upload_done(status);
+        });
     };
 
     // Persona avatar replace (C-PERS): FormData cannot cross the wasm boundary, so replaceAvatar hops here.

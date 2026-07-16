@@ -4,7 +4,7 @@
 // Usage: node interactions.mjs --base http://127.0.0.1:PORT [--timeout MS]
 
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1671,6 +1671,132 @@ async function main() {
             await escape();
             const escClosedPanel = await page.waitFor("!document.querySelector('#card-editor')", 3000);
             row('must', escClosedPanel, 'C-CARD-7 Escape with no menu open still closes the panel', `closed=${escClosedPanel}`);
+
+            // C-CARD2: the greetings the save was already echoing are now editable. Structural, so
+            // it drives the buttons rather than the buffers: a removal shifts row 1 up into a node
+            // the user typed in, and a textarea the user has typed in ignores its text child ever
+            // after, so the panel has to write the survivor's text into it explicitly.
+            await page.click('#d-card_editor');
+            await page.waitFor("!!document.querySelector('#card-greeting-0')", 8000);
+            const greetLoaded = await page.eval(
+                "(function(){var g=function(i){var e=document.getElementById('card-greeting-'+i);return e?e.value:null;};" +
+                "return JSON.stringify({n:document.querySelectorAll('[data-card-greeting]').length,a:g(0),b:g(1)});})()");
+            const gl = JSON.parse(greetLoaded || '{}');
+            row('must', gl.n === 2 && gl.a === 'The fog is in.' && gl.b === 'Mind the step.',
+                'C-CARD-8 the card\'s alternate greetings load into their own editors', greetLoaded);
+
+            // ISOLATION IS THE WHOLE ROW: Revert re-reads the card, so the footer is empty and the
+            // edit below is the ONLY thing that happens before the read. The inputs deliberately do
+            // not re-render (that would cost the caret), so nothing renders here at all: a notice
+            // computed only at render time reads "". An earlier draft typed after a button click and
+            // passed on that click's render, proving nothing.
+            await page.click('#card-revert');
+            await page.waitFor("!!document.getElementById('card-editor-notice')" +
+                " && document.getElementById('card-editor-notice').textContent === ''" +
+                " && !!document.getElementById('card-personality')", 8000);
+            const noticeBefore = await page.eval("document.getElementById('card-editor-notice').textContent");
+            await page.eval("(function(){var t=document.getElementById('card-personality'); t.value='changed by the gate'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            const noticeAfterEdit = await page.waitFor(
+                "document.getElementById('card-editor-notice').textContent.indexOf('Unsaved changes') >= 0", 3000);
+            row('must', noticeBefore === '' && noticeAfterEdit,
+                'C-CARD-10 an edit says so in the footer with no render to carry it',
+                `before="${noticeBefore}" after="${await page.eval("document.getElementById('card-editor-notice').textContent")}"`);
+
+            await page.click('#card-greeting-add');
+            await page.waitFor("!!document.querySelector('#card-greeting-2')", 3000);
+            await page.focus('#card-greeting-2');
+            await page.insertText('The lamp is out.');
+            // Remove row 0: row 1 and row 2 shift up into nodes that already hold typed-in text.
+            await page.click('[data-card-greeting-remove="0"]');
+            const shifted = await page.waitFor(
+                "document.querySelectorAll('[data-card-greeting]').length === 2" +
+                " && document.getElementById('card-greeting-0').value === 'Mind the step.'" +
+                " && document.getElementById('card-greeting-1').value === 'The lamp is out.'", 3000);
+            row('must', shifted, 'C-CARD-9 adding, typing and removing a greeting leaves every row showing its own text',
+                `shifted=${shifted} ${await page.eval("(function(){var v=[];document.querySelectorAll('[data-card-greeting]').forEach(function(e){v.push(e.value);});return JSON.stringify(v);})()")}`);
+
+            await page.click('#card-save');
+            const savedGreets = await pollCard((c) => Array.isArray(c.alternate_greetings) && c.alternate_greetings.length === 2);
+            const greetBody = savedGreets && savedGreets.alternate_greetings;
+            row('must', !!savedGreets && greetBody[0] === 'Mind the step.' && greetBody[1] === 'The lamp is out.',
+                'C-CARD-11 the edited greetings are what the save sends', JSON.stringify(greetBody));
+
+            // KNOWN RED, and the defect is NOT in the card editor: onSaveDone refreshes the character
+            // list, and char_api.rebuildCharacterStore calls char_store.clear(), which nulls
+            // selected_index (character_store.zig:85). Nothing restores it, so a save DESELECTS the
+            // character app-wide: the editor falls back to "Pick a character" and its own "Saved to
+            // the card." dies with the form. Fixing it means editing char_api.zig, which this member
+            // does not own. Promote this to must once the rebuild re-selects by avatar.
+            const aliveAfterSave = await page.eval("!!document.querySelector('#card-editor-notice')");
+            const noticeSaved = aliveAfterSave && await page.waitFor(
+                "document.getElementById('card-editor-notice').textContent.indexOf('Saved') >= 0", 4000);
+            row('pending', !!noticeSaved, 'C-CARD-14 a save keeps the character selected and says it saved',
+                `formAlive=${aliveAfterSave} selection=${await page.eval("!document.querySelector('#card-editor p')||document.querySelector('#card-editor p').textContent")}`);
+
+            // Every row above is served a card shaped the way we BELIEVE the server shapes them, so
+            // they prove our reading of the contract and nothing else. The server coerces none of a
+            // card's fields (characters.js:426-430); typed, one odd field failed the WHOLE parse.
+            await (await fetch(`${args.base}/dev/arm-hostile-card`)).json();
+            await page.navigate(`${args.base}/`);
+            await openRecentChat();
+            await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+            await page.click('#d-card_editor');
+            // The form mounting at all IS the assertion: the error screen has no fields.
+            const hostileMounted = await page.waitFor("!!document.querySelector('#card-creator')", 8000);
+            const hostileFields = await page.eval(
+                "(function(){var g=function(id){var e=document.getElementById(id);return e?e.value:null;};" +
+                "return JSON.stringify({name:g('card-name'),desc:g('card-description'),pers:g('card-personality')," +
+                "scen:g('card-scenario'),first:g('card-first_mes'),creator:g('card-creator'),ver:g('card-character_version')," +
+                "tags:g('card-tags'),depth:g('card-depth_prompt_depth'),world:g('card-world')," +
+                "role:(document.querySelector('#dd-btn-depth_prompt_role')||{}).textContent," +
+                "greets:document.querySelectorAll('[data-card-greeting]').length," +
+                "g0:g('card-greeting-0'),err:!!document.querySelector('#card-editor [role=alert]')});})()");
+            const h = JSON.parse(hostileFields || '{}');
+            // Each unreadable shape costs its OWN field and nothing else.
+            const hostileCosts = h.name === '' && h.desc === '' && h.pers === '' && h.scen === '' && h.first === '' && h.world === '';
+            // The readable fields beside them are untouched, which is the whole point of the row.
+            const hostileKeeps = h.creator === 'someone' && h.tags === 'solo, mystery' && h.depth === '3';
+            // A role of 5 matches no option: it falls back to the server's own default rather than
+            // rendering a dropdown with a blank face.
+            const hostileRole = (h.role || '').indexOf('System') >= 0;
+            // Three greetings in, three out: the two unreadable ones are empty rows the user can see.
+            const hostileGreets = h.greets === 3 && h.g0 === 'real one';
+            row('must', hostileMounted && !h.err && hostileCosts && hostileKeeps && hostileRole && hostileGreets,
+                'C-CARD-12 a card another tool wrote still opens, and each odd field costs only itself',
+                `mounted=${hostileMounted} ${hostileFields}`);
+
+            // The image replace, driven through the real <input type=file> with a real file: a
+            // FormData cannot cross the wasm boundary, so the POST hops to a JS helper, and the
+            // helper is the only thing that knows the field must be named 'avatar'.
+            const pngPath = join(mkdtempSync(join(tmpdir(), 'st-card-')), 'new-face.png');
+            writeFileSync(pngPath, Buffer.from(
+                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+                'base64'));
+            const doc = await page.cdp.send('DOM.getDocument', { depth: 1 }, page.sessionId);
+            const nodeId = (await page.cdp.send('DOM.querySelector',
+                { nodeId: doc.root.nodeId, selector: '#card-avatar-input' }, page.sessionId)).nodeId;
+            await page.cdp.send('DOM.setFileInputFiles', { files: [pngPath], nodeId }, page.sessionId);
+            const post = await (async () => {
+                const deadline = Date.now() + 8000;
+                while (Date.now() < deadline) {
+                    const st = (await (await fetch(`${args.base}/dev/state`)).json()).avatar_post;
+                    if (st) return st;
+                    await sleep(150);
+                }
+                return null;
+            })();
+            // The field name IS the contract: multer is .single('avatar'), so a body naming the file
+            // anything else 400s, which a user only ever sees as an image that did not change.
+            row('must', !!post && post.field_avatar === true && post.avatar_url === 'char41.png' && post.bytes > 100,
+                'C-CARD-13 picking an image posts it to edit-avatar under the field multer reads',
+                `post=${JSON.stringify(post)}`);
+
+            // Same deselect as C-CARD-14: the upload's own list refresh drops the selection, so the
+            // panel that would report the new image is gone by the time it lands.
+            const avatarNotice = await page.eval(
+                "!!document.getElementById('card-editor-notice') && document.getElementById('card-editor-notice').textContent.indexOf('New image saved') >= 0");
+            row('pending', avatarNotice, 'C-CARD-15 the panel reports the new image in its own footer',
+                `notice=${avatarNotice}`);
         }
 
     } finally {

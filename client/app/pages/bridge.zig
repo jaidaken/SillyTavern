@@ -7,6 +7,7 @@ const char_store = @import("./character_store.zig");
 const character_view = @import("./character_view.zig");
 const persona_store = @import("./persona_store.zig");
 const persona_actions = @import("./persona_actions.zig");
+const card_editor = @import("./card_editor.zig");
 const reading_prefs = @import("./reading_prefs.zig");
 const appearance = @import("./appearance.zig");
 const backgrounds = @import("./backgrounds.zig");
@@ -208,6 +209,13 @@ fn personaAvatarUploaded() callconv(.c) void {
     persona_actions.onAvatarUploaded();
 }
 
+/// Called by the __st_card_avatar JS multipart helper once the card-image upload settles, either
+/// way: the card editor states the outcome in its own footer, so it needs the failure too (C-CARD2).
+/// Carries the HTTP status, 0 meaning the request never completed.
+fn cardAvatarUploaded(status: i32) callconv(.c) void {
+    card_editor.onAvatarUploaded(status);
+}
+
 // Demo fixtures are opt-in (glue calls this on ?demo or when no backend answers), so a real
 // deployment shows honest state instead of roleplay prose masking a dead load path.
 fn seedDemo() callconv(.c) void {
@@ -288,6 +296,7 @@ comptime {
         @export(&seedDemo, .{ .name = "__st_seed_demo" });
         @export(&refreshCharacters, .{ .name = "__st_refresh_characters" });
         @export(&personaAvatarUploaded, .{ .name = "__st_persona_avatar_done" });
+        @export(&cardAvatarUploaded, .{ .name = "__st_card_avatar_done" });
         @export(&addPersona, .{ .name = "__st_add_persona" });
         @export(&clearPersonas, .{ .name = "__st_clear_personas" });
         @export(&selectPersona, .{ .name = "__st_select_persona" });

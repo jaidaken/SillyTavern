@@ -19,6 +19,7 @@ const control_base = "w-full rounded-md border border-control-border bg-bg px-3 
 const text_area = "min-h-[7rem] resize-y " ++ control_base;
 const action_btn = "cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text";
 const save_btn = "cursor-pointer rounded-md border border-accent bg-surface-2 px-3 py-1 font-mono text-sm text-accent transition-colors duration-120 ease-[ease] hover:bg-bg aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
+const greeting_btn = "self-start " ++ action_btn;
 
 const spec_list: []const card_form.Spec = &card_form.specs;
 const role_list: []const nav.Option = &card_form.role_options;
@@ -90,8 +91,65 @@ pub fn CardEditorBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         </div>
                     )}
 
+                    <div class={field_col}>
+                        <span class={field_label}>Alternate greetings</span>
+                        <p class={field_hint} id="card-greetings-hint">Other openings the user can swipe to instead of the first message.</p>
+                        {for (0..card_editor.greetingCount()) |i| (
+                            <div class="flex flex-col gap-2">
+                                <label class="text-sm text-muted" for={card_editor.greetingDomId(ctx.allocator, i)}>Greeting {card_editor.greetingKey(ctx.allocator, i)}</label>
+                                <textarea
+                                    id={card_editor.greetingDomId(ctx.allocator, i)}
+                                    name={card_editor.greetingDomId(ctx.allocator, i)}
+                                    data-card-greeting={card_editor.greetingKey(ctx.allocator, i)}
+                                    aria-describedby="card-greetings-hint"
+                                    class={text_area}
+                                    rows="3"
+                                    spellcheck="false"
+                                    autocomplete="off"
+                                    oninput={ctx.bind(onGreetingInput)}
+                                >{card_editor.greetingText(i)}</textarea>
+                                <button
+                                    class={greeting_btn}
+                                    type="button"
+                                    data-card-greeting-remove={card_editor.greetingKey(ctx.allocator, i)}
+                                    aria-label={card_editor.greetingRemoveLabel(ctx.allocator, i)}
+                                    onclick={ctx.bind(onGreetingRemove)}
+                                >Remove</button>
+                            </div>
+                        )}
+                        {if (card_editor.greetingCount() == 0) (
+                            <p class="m-0 text-sm text-muted">This card has none: the first message is its only opening. Add one and the user can swipe between them.</p>
+                        ) else (
+                            <></>
+                        )}
+                        <button class={greeting_btn} type="button" id="card-greeting-add" onclick={onGreetingAdd}>Add greeting</button>
+                    </div>
+
+                    <div class={field_col}>
+                        <span class={field_label}>Card image</span>
+                        <img
+                            class="h-24 w-24 rounded-md border border-control-border object-cover"
+                            id="card-avatar-img"
+                            src={card_editor.avatarUrl(ctx.allocator)}
+                            alt={card_editor.avatarAlt(ctx.allocator)}
+                            width="96"
+                            height="96"
+                        />
+                        <input
+                            id="card-avatar-input"
+                            name="card-avatar"
+                            type="file"
+                            accept="image/*"
+                            class="text-sm text-muted"
+                            aria-label="Replace the card image"
+                            aria-describedby="card-avatar-hint"
+                            onchange={ctx.bind(onAvatarPick)}
+                        />
+                        <p class={field_hint} id="card-avatar-hint">Writes straight to the card's file when you pick it. It does not wait for Save.</p>
+                    </div>
+
                     <div class="sticky bottom-0 flex items-center justify-between gap-3 border-t border-border bg-surface pt-3">
-                        <p class="m-0 font-mono text-sm text-muted" id="card-editor-notice" role="status" aria-live="polite">{noticeText()}</p>
+                        <p class="m-0 font-mono text-sm text-muted" id="card-editor-notice" role="status" aria-live="polite">{card_editor.noticeText()}</p>
                         <div class="flex gap-2">
                             <button class={action_btn} type="button" id="card-revert" onclick={onRevert}>Revert</button>
                             <button class={save_btn} type="button" id="card-save" aria-disabled={boolAttr(st == .saving)} onclick={onSave}>{if (st == .saving) ("Saving...") else ("Save card")}</button>
@@ -101,17 +159,6 @@ pub fn CardEditorBody(ctx: *zx.ComponentCtx(void)) zx.Component {
             )}
         </div>
     );
-}
-
-/// The footer line. Says what happened and what to do about it, never a bare word (WD55).
-fn noticeText() []const u8 {
-    return switch (card_editor.editorNotice()) {
-        .saved => "Saved to the card.",
-        .save_failed => "The server refused the save. The card on disk is unchanged.",
-        .name_required => "A card needs a name before it can be saved.",
-        .load_failed => "That card would not load.",
-        .none => if (card_editor.dirty()) "Unsaved changes." else "",
-    };
 }
 
 /// ziex renders an attribute whatever its value, and a PRESENT `disabled` disables the control
@@ -137,6 +184,45 @@ fn onFieldInput(e: *zx.client.Event.Stateful) void {
     const text = target.getAlloc(js.String, zx.allocator, "value") catch return;
     defer zx.allocator.free(text);
     card_editor.setField(field, text);
+}
+
+fn onGreetingInput(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const i = greetingIndexOf(target, "cardGreeting") orelse return;
+    const text = target.getAlloc(js.String, zx.allocator, "value") catch return;
+    defer zx.allocator.free(text);
+    card_editor.setGreeting(i, text);
+}
+
+fn onGreetingRemove(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const i = greetingIndexOf(target, "cardGreetingRemove") orelse return;
+    card_editor.removeGreeting(i);
+}
+
+/// The row a control belongs to, read off its own data attribute. datasetUp walks up from the
+/// target, so the Remove button answers for its row even when the click lands on inner text.
+fn greetingIndexOf(target: js.Object, comptime key: []const u8) ?usize {
+    const raw = dom_event.datasetUp(target, key) orelse {
+        log.warn("card greeting: control has no data-{s}", .{key});
+        return null;
+    };
+    defer zx.allocator.free(raw);
+    return card_editor.greetingIndex(raw);
+}
+
+fn onGreetingAdd(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    _ = ev;
+    card_editor.addGreeting();
+}
+
+fn onAvatarPick(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    _ = e;
+    card_editor.uploadAvatar();
 }
 
 fn onRootClick(ev: zx.client.Event) void {
