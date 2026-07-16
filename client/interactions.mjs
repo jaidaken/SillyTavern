@@ -6,7 +6,8 @@
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 function parseArgs(argv) {
     // Watchdog must exceed the worst-case sum of row waits (~140s all-red), or a fully broken build
@@ -245,6 +246,28 @@ async function main() {
         await page.navigate(`${args.base}/?demo=1`);
         row('must', await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=12`, 15000),
             'A1 boot: hydrated with 12 fixtures');
+
+        // A1b exists because 338a06bb4 shipped a glue call to a wasm export nobody added, and every
+        // gate stayed green: that call only throws at runtime, on a path one real upload reaches.
+        // Call sites come from SOURCE (dist is minified, which renames the `wasm` local); the
+        // denominator is the built module's OWN export table, because a source-side grep lies here:
+        // __st_set_panel_width is a `pub export fn` in ui.zig, not in bridge.zig's comptime block.
+        const glueSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'glue', 'custom.js'), 'utf8');
+        const calledExports = [...new Set([...glueSrc.matchAll(/wasm\.(__st_[a-zA-Z0-9_]+)/g)].map((m) => m[1]))].sort();
+        await page.eval(`window.__wasm_exports = null; (async function(){
+            try {
+                const r = await fetch('/client/assets/_/main.wasm');
+                const m = await WebAssembly.compile(await r.arrayBuffer());
+                window.__wasm_exports = WebAssembly.Module.exports(m).map(function(e){return e.name;}).join(',');
+            } catch (e) { window.__wasm_exports = 'FETCH-FAILED:' + e.message; }
+        })();`);
+        await page.waitFor('window.__wasm_exports !== null', 8000);
+        const wasmExports = String(await page.eval('window.__wasm_exports'));
+        const exportSet = new Set(wasmExports.split(','));
+        const missingExports = calledExports.filter((n) => !exportSet.has(n));
+        row('must', calledExports.length > 0 && !wasmExports.startsWith('FETCH-FAILED') && missingExports.length === 0,
+            'A1b every wasm export the glue calls exists in the built module',
+            `checked=${calledExports.length} missing=${missingExports.length ? missingExports.join(',') : 'none'}`);
 
         await page.click('#d-settings');
         row('must', await page.waitFor("document.querySelector('.settings-body')"),
@@ -1468,6 +1491,41 @@ async function main() {
         })();
         const sending = await page.waitFor("/Uploading/.test(document.querySelector('.bg-upload-row').textContent)", 4000);
         row('must', seam && sending, 'C-BG2-5 picking a file calls the upload glue and shows the wait', `seam=${seam} sending=${sending}`);
+
+        // C-BG2-5 STUBS __st_bg_upload, so it pins the seam and nothing past it: that is how
+        // 338a06bb4 shipped the glue without its bridge export and stayed green. Navigate fresh (the
+        // reload destroys the stub) and drive the REAL helper, because the failure lived past the
+        // seam and uploadPick's catch is blind to it (__st_bg_upload exists; its callee throws).
+        await page.navigate(`${args.base}/`);
+        await page.waitFor(hydrated, 15000);
+        await page.click('#d-backgrounds');
+        await page.waitFor("document.getElementById('bg-upload-input')", 8000);
+        const bgPngPath = join(mkdtempSync(join(tmpdir(), 'st-bg-')), 'picked bg.png');
+        writeFileSync(bgPngPath, Buffer.from(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+            'base64'));
+        const bgDoc = await page.cdp.send('DOM.getDocument', { depth: 1 }, page.sessionId);
+        const bgNodeId = (await page.cdp.send('DOM.querySelector',
+            { nodeId: bgDoc.root.nodeId, selector: '#bg-upload-input' }, page.sessionId)).nodeId;
+        await page.cdp.send('DOM.setFileInputFiles', { files: [bgPngPath], nodeId: bgNodeId }, page.sessionId);
+        const bgPost = await (async () => {
+            const deadline = Date.now() + 8000;
+            while (Date.now() < deadline) {
+                const st = (await (await fetch(`${args.base}/dev/state`)).json()).bg_upload;
+                if (st) return st;
+                await sleep(150);
+            }
+            return null;
+        })();
+        // The wait must LIFT. Reading for the absence of 'Uploading' is what the missing export
+        // failed and what a future glue edit that drops the callback will fail again.
+        const bgWaitLifted = await page.waitFor(
+            "!/Uploading/.test(document.querySelector('.bg-upload-row').textContent)", 8000);
+        const bgLanded = await page.eval(
+            "Array.from(document.querySelectorAll('#bg-gallery .bg-tile-wrap')).some(function(t){return /picked bg\\.png/.test(t.textContent);})");
+        row('must', !!bgPost && bgPost.field_avatar === true && bgWaitLifted && bgLanded,
+            'C-BG2-6 a real upload posts under the field multer reads, lifts the wait, and shows the file',
+            `post=${bgPost ? JSON.stringify(bgPost) : 'NEVER-ARRIVED'} waitLifted=${bgWaitLifted} tile=${bgLanded}`);
         /* C-CONN */
         // The connection panel's type selector and its write-only API-key field. The key never
         // round-trips: the field renders empty and only a masked tail reaches the DOM.

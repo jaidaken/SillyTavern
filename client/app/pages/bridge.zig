@@ -216,6 +216,15 @@ fn cardAvatarUploaded(status: i32) callconv(.c) void {
     card_editor.onAvatarUploaded(status);
 }
 
+/// Called by the __st_bg_upload JS multipart helper once the background upload settles, on every
+/// path it takes, including a cancelled picker. Carries the HTTP status, 0 meaning the request never
+/// completed. uploadPick has already drawn its wait state by then and uploadDone is the only thing
+/// that clears it, so this export is not optional: without it the helper's call throws, the wait
+/// never lifts, and the panel spins over a file that already uploaded.
+fn backgroundUploaded(status: i32) callconv(.c) void {
+    backgrounds.uploadDone(status);
+}
+
 // Demo fixtures are opt-in (glue calls this on ?demo or when no backend answers), so a real
 // deployment shows honest state instead of roleplay prose masking a dead load path.
 fn seedDemo() callconv(.c) void {
@@ -297,6 +306,7 @@ comptime {
         @export(&refreshCharacters, .{ .name = "__st_refresh_characters" });
         @export(&personaAvatarUploaded, .{ .name = "__st_persona_avatar_done" });
         @export(&cardAvatarUploaded, .{ .name = "__st_card_avatar_done" });
+        @export(&backgroundUploaded, .{ .name = "__st_bg_upload_done" });
         @export(&addPersona, .{ .name = "__st_add_persona" });
         @export(&clearPersonas, .{ .name = "__st_clear_personas" });
         @export(&selectPersona, .{ .name = "__st_select_persona" });
