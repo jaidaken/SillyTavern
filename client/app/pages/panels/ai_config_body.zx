@@ -18,10 +18,55 @@ const num_cls = "sampler-num w-[5.5rem] rounded-md border border-control-border 
 const range_cls = "sampler-range w-full accent-accent";
 const hint_cls = "setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]";
 const reset_cls = "cfg-reset cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text";
+const save_name_cls = "preset-save-name min-w-0 flex-1 rounded-md border border-control-border bg-bg px-2 py-[0.25rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
+const retry_cls = "preset-retry self-start cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text";
+const save_btn_cls = "preset-save cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text";
 
 pub fn AiConfigBody(ctx: *zx.ComponentCtx(void)) zx.Component {
+    // The list is fetched on this panel's first render rather than at boot: nothing needs it until
+    // the user is looking at the control. Idempotent, so a rerender does not refetch.
+    config_state.ensurePresetsLoaded();
+    // allow-div-onclick: delegation root for the dropdown's data-* controls; keyboard parity via onkeydown
     return (
-        <div @allocator={ctx.allocator} class="settings-body flex flex-col gap-4" @rendering={.client}>
+        <div
+            @allocator={ctx.allocator}
+            class="settings-body flex flex-col gap-4"
+            @rendering={.client}
+            onclick={onBodyClick}
+            onkeydown={onBodyKey}
+        >
+            <div class={row_cls}>
+                <div class={head_cls}>
+                    <span class={label_cls}>Preset</span>
+                    <Dropdown
+                        options={config_state.presetOptions()}
+                        value={config_state.selectedPreset()}
+                        name="sampler-preset"
+                        label="Sampler preset"
+                        onchange={&config_state.onPresetChange}
+                    />
+                </div>
+                {if (config_state.presetsLoadFailed()) (
+                    <button type="button" class={retry_cls} onclick={onRetryPresets}>Retry loading presets</button>
+                )}
+                <div class="flex items-center gap-2">
+                    <input
+                        id="preset-save-name"
+                        name="preset_save_name"
+                        class={save_name_cls}
+                        type="text"
+                        autocomplete="off"
+                        placeholder="Name this preset"
+                        aria-label="New preset name"
+                        aria-describedby="preset-status"
+                    />
+                    <button type="button" class={save_btn_cls} onclick={onSavePreset}>Save</button>
+                </div>
+                <p id="preset-status" class={hint_cls} aria-live="polite">{presetHint()}</p>
+                {if (config_state.unreadablePresets() > 0) (
+                    <p id="preset-unreadable" class={hint_cls}>{config_state.unreadableNotice(ctx.allocator)}</p>
+                )}
+            </div>
             {for (samplers.specs_slice) |spec| (
                 <div class={row_cls}>
                     <div class={head_cls}>
@@ -136,6 +181,43 @@ fn onReset(_: zx.client.Event) void {
     config_state.resetSamplers();
 }
 
+/// The status line's copy. The load/save report wins when there is one; otherwise the line explains
+/// what the picker is, and says so plainly when the list is genuinely empty rather than leaving a
+/// dropdown with nothing behind it (WD55).
+fn presetHint() []const u8 {
+    const status = config_state.presetStatus();
+    if (status.len > 0) return status;
+    if (config_state.presetOptions().len == 0) return "No preset files yet. Set the samplers below and save them as one.";
+    return "Picking a preset sets the samplers below. Saving writes a preset file the classic client can read.";
+}
+
+// An event the dropdown CONSUMED stops here: ziex delegates at <body> and hands one event to every
+// ancestor, and #shell's dismiss handlers sit further up that walk, so an Escape aimed at the open
+// menu would otherwise close the whole dock (the pattern connections_body's C-CONN-11 row pins).
+fn onBodyClick(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    if (dropdown.onClick(target)) ev.stopPropagation();
+}
+
+fn onBodyKey(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    if (dropdown.onKey(ev)) ev.stopPropagation();
+}
+
+fn onRetryPresets(_: zx.client.Event) void {
+    config_state.retryPresets();
+}
+
+fn onSavePreset(_: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const el = dom_event.elementById(zx.allocator, "preset-save-name") orelse return;
+    defer el.deinit();
+    const name = el.ref.getAlloc(js.String, zx.allocator, "value") catch return;
+    defer zx.allocator.free(name);
+    config_state.savePreset(name);
+}
+
 const zx = @import("zx");
 const std = @import("std");
 const js = zx.client.js;
@@ -143,3 +225,5 @@ const log = std.log.scoped(.panels);
 const samplers = @import("../samplers.zig");
 const config_state = @import("../config_state.zig");
 const dom_event = @import("../dom_event.zig");
+const dropdown = @import("../dropdown.zx");
+const Dropdown = dropdown.Dropdown;

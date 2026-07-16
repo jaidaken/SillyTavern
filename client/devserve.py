@@ -76,6 +76,74 @@ def _mock_chat_page(req):
     }
 
 
+# C-PRE-SAM: the real server runs the preset name through `sanitize-filename` (presets.js:44) and
+# 400s when the result is EMPTY, so a name the CLIENT happily accepts can still be rejected, and one
+# it accepts can be written under a DIFFERENT name. Modelling it is what lets the gate drive both:
+# a mock that only serves the happy shape tests itself. These are sanitize-filename's own regexes.
+_ILLEGAL_RE = re.compile(r'[\/\?<>\\:\*\|"]')
+_CONTROL_RE = re.compile(r'[\x00-\x1f\x80-\x9f]')
+_RESERVED_RE = re.compile(r'^\.+$')
+_WINDOWS_RESERVED_RE = re.compile(r'^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$', re.I)
+_WINDOWS_TRAILING_RE = re.compile(r'[\. ]+$')
+
+
+def _sanitize_filename(name):
+    if not isinstance(name, str):
+        return ""
+    out = _ILLEGAL_RE.sub("", name)
+    out = _CONTROL_RE.sub("", out)
+    out = _RESERVED_RE.sub("", out)
+    out = _WINDOWS_RESERVED_RE.sub("", out)
+    out = _WINDOWS_TRAILING_RE.sub("", out)
+    return out.encode("utf-8")[:255].decode("utf-8", "ignore")
+
+
+# C-PRE-SAM: the sampler presets, as PARALLEL ARRAYS of (name, RAW FILE TEXT) exactly as the real
+# server builds them (src/endpoints/settings.js:100-113 pushes the untouched file text after a
+# JSON.parse that only validates). They are SIBLINGS of `settings` in the /api/settings/get envelope,
+# not keys inside the settings string.
+#
+# These are user-writable files, so the fixture is deliberately not all well-formed: a fixture that
+# only served good presets would test itself, not the parse. In order the entries are: a real shipped
+# shape; a rich preset with keys the panel does not model (proves a save keeps them); one carrying the
+# dials under the PRESET spelling genamt/max_length; one whose every field is a different wrong shape;
+# one whose body is valid JSON but not an object; and one whose NAME is not a string.
+def _preset_files():
+    return [
+        # Deterministic.json's real shape: the five samplers, no genamt, no max_length.
+        ("Deterministic", '{"temp":0,"top_p":0,"top_k":1,"min_p":0,"rep_pen":1,"tfs":1,"typical_p":1}'),
+        # Extra keys the panel has no control for. A save based on this must not strip them.
+        ("Big O", '{"temp":0.87,"top_p":0.99,"top_k":100,"min_p":0.05,"rep_pen":1.05,'
+                  '"tfs":0.68,"dry_multiplier":0.8,"add_bos_token":true,"sampler_order":[6,0,1,3,4,2,5]}'),
+        # What the classic client writes on its own save (preset-manager.js:739-740). It also carries
+        # `preset` (a file naming itself) and the CONNECTION keys a hand-edit could leave in: picking
+        # it must not touch the live backend, and saving from it must not carry `preset` through.
+        ("Classic Saved", '{"temp":0.66,"top_k":20,"genamt":384,"max_length":32768,'
+                          '"preset":"Some Other Name","type":"koboldcpp",'
+                          '"server_urls":{"koboldcpp":"http://evil.example:9999"}}'),
+        # HOSTILE. temp is a quoted number (a hand-edit: still a number, so it must apply), and every
+        # other sampler is a shape that is not a number at all. Each bad field must cost ONLY itself,
+        # and this preset must still appear in the list.
+        # `preset` is here too, because this is the one a save is based on: a file that names itself
+        # must not carry that name through into the saved file.
+        ("Hostile Shapes", '{"temp":"0.55","top_p":null,"top_k":{"nested":1},"min_p":true,'
+                           '"rep_pen":"warm","genamt":[512],"max_length":"lots",'
+                           '"preset":"Some Other Name","tfs":0.42}'),
+        # Valid JSON, not an object: it can never apply a sampler, so it is dropped from the list.
+        ("Broken", '42'),
+        # A name that is not a string. The server would not write this, a hand-edit could.
+        (41, '{"temp":0.4}'),
+    ]
+
+
+def _preset_arrays():
+    files = _preset_files()
+    return {
+        "textgenerationwebui_preset_names": [name for name, _ in files],
+        "textgenerationwebui_presets": [body for _, body in files],
+    }
+
+
 # C-PERS: the persona settings blob is mutable so a persist (settings/save) round-trips on the next
 # get. "a b.png" carries a space so the gate proves the persona avatar-URL encode fix.
 def _default_settings():
@@ -86,6 +154,10 @@ def _default_settings():
             "type": "llamacpp",
             "server_urls": {"llamacpp": "http://127.0.0.1:5001"},
             "temp": 0.8, "top_p": 0.95, "top_k": 40, "min_p": 0.05, "rep_pen": 1.1,
+            # C-PRE-SAM: the classic client's own selected-preset key (textgen-settings.js:379). The
+            # picker must open on THIS name. Naming a preset does NOT apply it: the live sampler
+            # values above are the truth on load, which is why C-CFG-1 still reads temp 0.80.
+            "preset": "Big O",
         },
         "power_user": {
             "personas": {"p1.png": "Alice", "p2.png": "Bob", "a b.png": "Spacey"},
@@ -458,9 +530,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     undo_token = "utok-0"
     # C-PERS: mutable settings blob so a persona persist (settings/save) shows on the next get.
     persona_settings = None
-    # C-PRE-TPL: what the last /api/presets/save actually carried, and the library it grew.
+    # C-PRE-TPL + C-PRE-SAM: the last /api/presets/save body, read back by /dev/state so a row can
+    # assert the real POST contract. ONE attribute: both pickers save through the one route and mean
+    # the same thing by it.
     preset_save = None
+    # C-PRE-TPL: the context library a save grew.
     saved_context_presets = None
+    # C-PRE-SAM: the textgen presets a save wrote, which join the next settings/get list.
+    saved_presets = {}
+    # C-PRE-SAM: fail /api/settings/get on demand. Armed after boot (boot reads the same endpoint),
+    # and PERSISTENT: a one-shot failure ends the refetch loop it is meant to detect.
+    settings_fail = False
+    settings_get_count = 0
     # C-CHAR: the avatar the last /api/characters/duplicate named, read back by /dev/duplicated.
     duplicated_avatar = None
     # C-CFG: the open chat's metadata, mutated by /api/chats/metadata so a note save round-trips.
@@ -493,6 +574,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if cls.saved_context_presets is None:
             cls.saved_context_presets = _context_presets()
         return cls.saved_context_presets
+
+    # C-PRE-SAM: a saved preset shows up in the next list, the way the real server's re-read does.
+    @classmethod
+    def saved_presets_arrays(cls):
+        if not cls.saved_presets:
+            return {}
+        base = _preset_arrays()
+        return {
+            "textgenerationwebui_preset_names": base["textgenerationwebui_preset_names"] + list(cls.saved_presets.keys()),
+            "textgenerationwebui_presets": base["textgenerationwebui_presets"] + list(cls.saved_presets.values()),
+        }
 
     # C-CONN: mutable secrets store so a key write/delete round-trips on the next read.
     secrets = None
@@ -590,6 +682,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "get_count": Handler.get_count,
                     "get_409_count": Handler.get_409_count,
                     "persona_settings": Handler.persona_settings,  # C-PERS
+                    "preset_save": Handler.preset_save,  # C-PRE-SAM
+                    "settings_get_count": Handler.settings_get_count,  # C-PRE-SAM
                     "secrets": Handler.secrets,  # C-CONN
                     "duplicated_avatar": Handler.duplicated_avatar,  # C-CHAR
                     "card_edit": Handler.saved_edit,  # C-CARD
@@ -612,6 +706,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.mock_json(Handler.last_metadata_body or {})
             if self.path.startswith("/dev/chat-metadata"):
                 return self.mock_json(Handler.chat_metadata())
+            # C-PRE-SAM: arm/disarm the settings failure (see the Handler fields).
+            if self.path.startswith("/dev/arm-settings-fail"):
+                Handler.settings_fail = True
+                return self.mock_json({"armed": True})
+            if self.path.startswith("/dev/disarm-settings-fail"):
+                Handler.settings_fail = False
+                return self.mock_json({"armed": False})
             # C-CFG: drop the recorded generate so a gate can prove the NEXT body is the one its own
             # send produced. Without this a completion predicate can match a previous send's text and
             # the row reads an artifact it never caused.
@@ -761,28 +862,37 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/chats/recent":
             return self.mock_json([] if Handler.recent_empty else _mock_recent())
         if path == "/api/settings/get":
-            # C-PRE-TPL: the preset arrays ride ALONGSIDE the settings string, never inside it.
+            Handler.settings_get_count += 1
+            if Handler.settings_fail:
+                return self.mock_status(500, {"error": "settings unavailable"})
+            # Every preset array rides the ENVELOPE beside `settings`, never inside it
+            # (settings.js:428 `response.send({ settings, ...payload })`).
             return self.mock_json({
                 "settings": json.dumps(Handler.settings_blob()),
                 "instruct": _instruct_presets(),
                 "context": Handler.context_presets(),
+                **_preset_arrays(),
+                **Handler.saved_presets_arrays(),
             })
-        # C-PRE-TPL: the real route (presets.js:44). It 400s without `preset` or `name`, so record
-        # what arrived and let a gate read the field names back: they ARE the contract.
+        # The real save route (src/endpoints/presets.js:44-60), serving both pickers.
         if path == "/api/presets/save":
-            name = req.get("name")
-            preset = req.get("preset")
-            if not name or not preset:
-                self.send_response(400)
-                self.end_headers()
-                return
-            Handler.preset_save = {"name": name, "apiId": req.get("apiId"), "preset": preset}
-            # A saved preset joins the library, as the server's own re-read of the directory would.
-            if req.get("apiId") == "context":
+            # Mirrors presets.js:44-60: sanitize FIRST, 400 when the name empties or the preset is
+            # missing, and hand back the name actually written.
+            name = _sanitize_filename(req.get("name") if isinstance(req, dict) else None)
+            preset = req.get("preset") if isinstance(req, dict) else None
+            if not preset or not name:
+                return self.mock_status(400, {"error": "name and preset are required"})
+            Handler.preset_save = req
+            # A saved preset joins the library its apiId names, as the server's re-read of that one
+            # directory would. Routed, not shared: an instruct save must not enter the textgen list.
+            api_id = req.get("apiId")
+            if api_id == "context":
                 lib = Handler.context_presets()
                 saved = dict(preset)
                 saved["name"] = name
                 Handler.saved_context_presets = [p for p in lib if p.get("name") != name] + [saved]
+            elif api_id == "textgenerationwebui":
+                Handler.saved_presets[name] = json.dumps(preset)
             return self.mock_json({"name": name})
         # C-CFG: the chat-metadata member of the descriptor-mutation family. The client sends the note
         # fields plus the FULL change token; the server does the read-modify-write and returns the new

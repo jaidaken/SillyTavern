@@ -2373,6 +2373,336 @@ async function main() {
                 `menuClosed=${menuClosed} panelAlive=${panelAlive}`);
         }
 
+        // --- C-PRE-SAM: the sampler preset picker (list, pick, wire, save, persist) ---
+        // The presets arrive as PARALLEL ARRAYS of (name, RAW FILE TEXT) in the /api/settings/get
+        // ENVELOPE, beside `settings` rather than inside it. They are user-writable files that the
+        // server only validates as parseable JSON, so the fixture serves deliberately hostile ones
+        // and these rows are what prove one bad file cannot empty the list.
+        console.log('== sampler presets ==');
+        {
+            const openPresets = async () => {
+                await page.navigate(`${args.base}/`);
+                await openRecentChat();
+                await page.click('#d-ai_config');
+                await page.waitFor("document.getElementById('dd-btn-sampler-preset')", 4000);
+            };
+            // The options exist only while the menu is open, and the list is fetched lazily on the
+            // panel's first render, so the wait is for an OPTION to appear rather than for the
+            // button (which is present from the first paint and would make the wait return at once:
+            // the first draft of this waited on a `li, #dd-btn-...` selector, the button half
+            // matched instantly, and the two rows below read the face before the fetch had landed).
+            const openMenu = async () => {
+                await page.click('#dd-btn-sampler-preset');
+                await page.waitFor("document.querySelectorAll('#dd-list-sampler-preset li').length > 0", 5000);
+            };
+            const pick = async (name) => {
+                await openMenu();
+                await page.click(`#dd-list-sampler-preset li[data-dd-value="${name}"]`);
+                await page.waitFor(`document.querySelector('#dd-btn-sampler-preset span').textContent === ${JSON.stringify(name)}`, 3000);
+                // The pick writes through the debounced saver; give the DOM sync a beat.
+                await sleep(150);
+            };
+            const sampler = async (id) => page.eval(`document.getElementById('sampler-${id}').value`);
+
+            // The backend the user is on BEFORE any preset is picked. Captured rather than hardcoded:
+            // the C-CONN rows earlier in this run legitimately change the type, and the invariant is
+            // that a PICK does not move it, not that it holds some particular value.
+            const readConn = async () => {
+                const r = await (await fetch(`${args.base}/api/settings/get`, { method: 'POST' })).json();
+                const tg = (JSON.parse(r.settings || '{}')).textgenerationwebui_settings || {};
+                return JSON.stringify({ type: tg.type, server_urls: tg.server_urls });
+            };
+            const connBefore = await readConn();
+
+            await openPresets();
+            await openMenu();
+
+            // The face must show the name the BLOB carries under the classic client's own key
+            // (textgenerationwebui_settings.preset), not a placeholder. Read once the list has
+            // arrived: the face resolves the name against the options, so before the fetch lands it
+            // legitimately reads "Select..." and asserting it earlier would be asserting the race.
+            const faceAtOpen = await page.eval("document.querySelector('#dd-btn-sampler-preset span').textContent");
+            row('must', faceAtOpen === 'Big O',
+                'C-PRE-SAM-1 the picker opens on the preset the settings blob names', `face=${faceAtOpen}`);
+
+            // THE TOLERANCE ROW FOR THE LIST. The fixture serves 6 entries: 4 usable, one whose body
+            // is valid JSON but not an object ("Broken": 42), one whose NAME is the number 41. The
+            // two unusable ones must cost THEMSELVES and nothing else. A typed parse of this array
+            // would have rendered ZERO options, which is the bug that emptied the character list.
+            const labels = JSON.parse(await page.eval(
+                "JSON.stringify(Array.from(document.querySelectorAll('#dd-list-sampler-preset li')).map(x => x.textContent))"));
+            const listOk = labels.length === 4
+                && ['Deterministic', 'Big O', 'Classic Saved', 'Hostile Shapes'].every((n) => labels.includes(n))
+                && !labels.includes('Broken') && !labels.includes('41');
+            row('must', listOk,
+                'C-PRE-SAM-2 an unreadable preset costs that preset and never the list',
+                `options=${JSON.stringify(labels)}`);
+            await page.click('#dd-btn-sampler-preset');
+            await sleep(100);
+
+            // Picking must move the panel, AND move the two budget dials the preset spells
+            // genamt/max_length rather than amount_gen/max_context. Reading them under the blob
+            // spelling would silently ignore both, and every preset the classic client saves has them.
+            await pick('Classic Saved');
+            const cs = { temp: await sampler('temp'), top_k: await sampler('top_k'), max_tokens: await sampler('max_tokens'), max_context: await sampler('max_context') };
+            row('must', cs.temp === '0.66' && cs.top_k === '20' && cs.max_tokens === '384' && cs.max_context === '32768',
+                'C-PRE-SAM-3 picking a preset applies its samplers, dials included, under the preset spelling',
+                `temp=${cs.temp} top_k=${cs.top_k} amount_gen=${cs.max_tokens} max_context=${cs.max_context}`);
+
+            // Big O carries no dials at all, which is the shape of every SHIPPED preset. Absent must
+            // KEEP: a snap-to-default here would silently reset the user's prompt window to 512/8192
+            // every time they picked one.
+            await pick('Big O');
+            const bo = { temp: await sampler('temp'), top_p: await sampler('top_p'), max_tokens: await sampler('max_tokens'), max_context: await sampler('max_context') };
+            row('must', bo.temp === '0.87' && bo.top_p === '0.99' && bo.max_tokens === '384' && bo.max_context === '32768',
+                'C-PRE-SAM-4 a preset that carries no dials leaves them where it found them',
+                `temp=${bo.temp} top_p=${bo.top_p} amount_gen=${bo.max_tokens} max_context=${bo.max_context}`);
+
+            // THE HOSTILE-FIELD ROW. Every field of "Hostile Shapes" is a different wrong shape:
+            // temp is the quoted "0.55" (a hand-edit, still a number, so it MUST apply), top_p null,
+            // top_k an object, min_p a bool, rep_pen a non-numeric string, genamt an array,
+            // max_length a word. Only temp may move; every other sampler must still hold Big O's
+            // value, which is what proves a bad FIELD costs that field alone.
+            await pick('Hostile Shapes');
+            const h = {
+                temp: await sampler('temp'), top_p: await sampler('top_p'), top_k: await sampler('top_k'),
+                min_p: await sampler('min_p'), rep_pen: await sampler('rep_pen'),
+                max_tokens: await sampler('max_tokens'), max_context: await sampler('max_context'),
+            };
+            const hostileOk = h.temp === '0.55' && h.top_p === '0.99' && h.top_k === '100'
+                && h.min_p === '0.05' && h.rep_pen === '1.05' && h.max_tokens === '384' && h.max_context === '32768';
+            row('must', hostileOk,
+                'C-PRE-SAM-5 a hostile field costs that field and the preset applies the rest',
+                `temp=${h.temp} top_p=${h.top_p} top_k=${h.top_k} min_p=${h.min_p} rep_pen=${h.rep_pen} amount_gen=${h.max_tokens} max_context=${h.max_context}`);
+
+            // THE USER MUST BE TOLD WHAT IT DROPPED. Two of the six fixture entries are unusable, and
+            // a file the user can see on disk that never appears in the picker, with the reason only
+            // in a console they will never open, is the silent failure this parse exists to avoid.
+            const notice = await page.eval(
+                "document.getElementById('preset-unreadable') ? document.getElementById('preset-unreadable').textContent : ''");
+            row('must', notice.indexOf('2 preset files could not be read') >= 0,
+                'C-PRE-SAM-14 the panel says how many preset files it could not read',
+                `notice=${JSON.stringify(notice)}`);
+
+            // THE CONNECTION MUST SURVIVE A PICK. "Classic Saved" carries `type` and `server_urls`
+            // pointing at a backend that is not the user's. A picker that applied a preset by
+            // overwriting the textgen section would swap the user's backend out from under them the
+            // moment they picked it, and the only symptom would be that generation stopped working.
+            // Wait for the picked samplers to land in the blob first, so this reads a blob the picks
+            // have definitely been written to rather than one they had not reached yet.
+            await (async () => {
+                const deadline = Date.now() + 8000;
+                while (Date.now() < deadline) {
+                    const r = await (await fetch(`${args.base}/api/settings/get`, { method: 'POST' })).json();
+                    const tg = (JSON.parse(r.settings || '{}')).textgenerationwebui_settings || {};
+                    if (tg.temp === 0.55) return;
+                    await sleep(200);
+                }
+            })();
+            const connAfter = await readConn();
+            const c = JSON.parse(connAfter);
+            // Three things, because "unchanged" ALONE is blind: an earlier panel open in this run
+            // also triggers the save path, so a clobber can land before this block's baseline and
+            // then compare equal to itself. Assert the connection is still THERE, that it is not the
+            // preset's own backend, and only then that the picks did not move it.
+            const connIntact = !!c.type && !!c.server_urls && Object.keys(c.server_urls).length > 0;
+            const notThePresets = c.type !== 'koboldcpp' && !(c.server_urls && c.server_urls.koboldcpp);
+            row('must', connIntact && notThePresets && connAfter === connBefore,
+                'C-PRE-SAM-15 picking a preset never touches the backend connection',
+                `intact=${connIntact} notPresets=${notThePresets} unchanged=${connAfter === connBefore} after=${connAfter}`);
+
+            // THE WIRE ROW. The panel's displayed value proves nothing about what send carries. Clear
+            // the recorded generate first and key the wait on the message COUNT: a previous send's
+            // FIN already sits in the log, so a naive predicate would match instantly, skip the send
+            // and read a body this row never caused (the sendProbe discipline from C-CFG).
+            await page.click('#panel-view .icon[data-icon="close"]');
+            await sleep(200);
+            await (await fetch(`${args.base}/dev/clear-generate`)).json();
+            const before = await page.eval("document.querySelectorAll('#chat .mes').length");
+            await page.focus('#send_textarea');
+            await page.insertText('does the picked preset ride the request');
+            await page.click('#composer button[aria-label="Send"]');
+            const grew = await page.waitFor(`document.querySelectorAll('#chat .mes').length >= ${before} + 2 && ${idle}`, 15000);
+            if (!grew) throw new Error('C-PRE-SAM: no reply after the preset send');
+            const gen = await (await fetch(`${args.base}/dev/state`)).json();
+            row('must', !!gen.last_generate_body, 'C-PRE-SAM-6a the probe send actually reached the backend',
+                `recorded=${!!gen.last_generate_body}`);
+            const sent = gen.last_generate_body && JSON.parse(gen.last_generate_body);
+            // 0.55 is the quoted temp from the hostile preset: it reached the wire through the panel,
+            // the clamp and the connection, which is the whole chain this half was built for.
+            row('must', sent && sent.temperature === 0.55 && sent.max_tokens === 384,
+                'C-PRE-SAM-6 a picked preset reaches the generate request body',
+                `temperature=${sent && sent.temperature} max_tokens=${sent && sent.max_tokens}`);
+
+            // THE SAVE ROW. The field names ARE the contract: /api/presets/save 400s without `name`
+            // or `preset`, and routes the file by `apiId`. Assert the POST the client actually made.
+            await page.click('#d-ai_config');
+            await page.waitFor("document.getElementById('preset-save-name')", 4000);
+            await page.focus('#preset-save-name');
+            await page.insertText('My Saved Preset');
+            await page.click('.preset-save');
+            const saveBody = await (async () => {
+                const deadline = Date.now() + 6000;
+                while (Date.now() < deadline) {
+                    const st = (await (await fetch(`${args.base}/dev/state`)).json()).preset_save;
+                    if (st) return st;
+                    await sleep(150);
+                }
+                return null;
+            })();
+            const saveOk = !!saveBody && saveBody.name === 'My Saved Preset'
+                && saveBody.apiId === 'textgenerationwebui'
+                && !!saveBody.preset && Object.keys(saveBody.preset).length > 0;
+            row('must', saveOk,
+                'C-PRE-SAM-7 saving posts the real contract: name, apiId and a preset body',
+                `name=${saveBody && saveBody.name} apiId=${saveBody && saveBody.apiId} keys=${saveBody && saveBody.preset ? Object.keys(saveBody.preset).length : 0}`);
+
+            // The saved file must carry the samplers the panel holds AND the ~4 keys the panel does
+            // not model, or a save silently strips them. It came from the hostile preset's base, so
+            // the base's own extra keys are what must survive.
+            const savedPreset = saveBody && saveBody.preset;
+            row('must', savedPreset && savedPreset.temp === 0.55 && savedPreset.genamt === 384
+                && savedPreset.max_length === 32768,
+                'C-PRE-SAM-8 the saved preset carries the live samplers under the preset spelling',
+                `temp=${savedPreset && savedPreset.temp} genamt=${savedPreset && savedPreset.genamt} max_length=${savedPreset && savedPreset.max_length}`);
+
+            // A preset must not name itself: the base it was built from carried `preset`, and a file
+            // that names itself fights the blob's own selected-preset key on the next load. The name
+            // rides the envelope, which is where the server reads it from.
+            row('must', savedPreset && savedPreset.preset === undefined,
+                'C-PRE-SAM-16 a saved preset never names itself',
+                `presetKeyInFile=${savedPreset && savedPreset.preset}`);
+
+            // THE PERSISTENCE ROW, and it asserts the BLOB rather than a reload. config_state writes
+            // two channels: localStorage survives a reload on its own, so a reload row stays green
+            // while the DURABLE write is broken and every other browser and the classic client see
+            // the old value forever. The saver is debounced, so poll the server's own copy.
+            const blobPreset = await (async () => {
+                const deadline = Date.now() + 8000;
+                while (Date.now() < deadline) {
+                    const r = await (await fetch(`${args.base}/api/settings/get`, { method: 'POST' })).json();
+                    const s = JSON.parse(r.settings || '{}');
+                    const p = s.textgenerationwebui_settings && s.textgenerationwebui_settings.preset;
+                    if (p === 'My Saved Preset') return p;
+                    await sleep(200);
+                }
+                return null;
+            })();
+            row('must', blobPreset === 'My Saved Preset',
+                'C-PRE-SAM-9 the picked preset reaches the settings blob, not just this browser',
+                `blobPreset=${blobPreset === null ? 'NEVER-ARRIVED' : blobPreset}`);
+
+            // And the samplers it applied must be in the blob too, under the BLOB spelling this time
+            // (amount_gen, not genamt): the preset file and the blob disagree on the name, and the
+            // panel is the thing that has to get both right.
+            const blobSamplers = await (async () => {
+                const deadline = Date.now() + 8000;
+                while (Date.now() < deadline) {
+                    const r = await (await fetch(`${args.base}/api/settings/get`, { method: 'POST' })).json();
+                    const s = JSON.parse(r.settings || '{}');
+                    const tg = s.textgenerationwebui_settings || {};
+                    if (tg.temp === 0.55 && s.amount_gen === 384) return { temp: tg.temp, amount_gen: s.amount_gen, max_context: s.max_context };
+                    await sleep(200);
+                }
+                return null;
+            })();
+            row('must', blobSamplers && blobSamplers.temp === 0.55 && blobSamplers.amount_gen === 384 && blobSamplers.max_context === 32768,
+                'C-PRE-SAM-10 the samplers a preset applied reach the blob under the blob spelling',
+                `blob=${JSON.stringify(blobSamplers)}`);
+
+            // THE REJECTED SAVE. The server sanitizes the filename and 400s when the result is empty
+            // (presets.js:44), so a name the CLIENT accepts can still be refused: "con" is a reserved
+            // Windows device name and sanitize-filename reduces it to "". Nothing in the UI hints at
+            // that, which is exactly why the failure has to be handled rather than assumed away.
+            const typeName = async (n) => page.eval(
+                `document.getElementById('preset-save-name').value = ${JSON.stringify(n)}`);
+            const faceOf = async () => page.eval("document.querySelector('#dd-btn-sampler-preset span').textContent");
+            const blobPresetNow = async () => {
+                const r = await (await fetch(`${args.base}/api/settings/get`, { method: 'POST' })).json();
+                const s = JSON.parse(r.settings || '{}');
+                return (s.textgenerationwebui_settings || {}).preset;
+            };
+
+            const faceBeforeReject = await faceOf();
+            await typeName('con');
+            await page.click('.preset-save');
+            const saidNo = await page.waitFor(
+                "document.getElementById('preset-status').textContent.indexOf('not saved') >= 0", 5000);
+            await sleep(600);
+            const faceAfterReject = await faceOf();
+            const blobAfterReject = await blobPresetNow();
+            // The selection must not move to a file the server refused to write, and the blob must
+            // not record it either: an optimistic commit here would leave the picker, and every
+            // other client, naming a preset that does not exist.
+            row('must', saidNo && faceAfterReject === faceBeforeReject && blobAfterReject !== 'con'
+                && faceBeforeReject === 'My Saved Preset',
+                'C-PRE-SAM-17 a save the server rejects keeps the old selection and says so',
+                `saidNo=${saidNo} face=${faceAfterReject} blobPreset=${blobAfterReject}`);
+
+            // THE SANITIZED SAVE. "../x" is accepted by the client and WRITTEN AS "..x": the server
+            // strips the slash and returns the name it used. The picker must adopt the SERVER's name,
+            // because that is the file that now exists; adopting the typed one would name a ghost.
+            await typeName('../x');
+            await page.click('.preset-save');
+            const adopted = await page.waitFor(
+                "document.querySelector('#dd-btn-sampler-preset span').textContent === '..x'", 6000);
+            const blobAdopted = await (async () => {
+                const deadline = Date.now() + 8000;
+                while (Date.now() < deadline) {
+                    if (await blobPresetNow() === '..x') return '..x';
+                    await sleep(200);
+                }
+                return await blobPresetNow();
+            })();
+            row('must', adopted && blobAdopted === '..x',
+                'C-PRE-SAM-18 the picker adopts the name the server actually wrote',
+                `face=${await faceOf()} blobPreset=${blobAdopted}`);
+        }
+
+        // --- C-PRE-SAM-FAIL: the picker's load-failure state, its retry, and the loop it must not do ---
+        // The panel reads the SAME endpoint boot reads, so the failure is armed one-shot AFTER boot:
+        // a standing failure would break the app rather than the picker.
+        {
+            await page.navigate(`${args.base}/`);
+            await openRecentChat();
+            await (await fetch(`${args.base}/dev/arm-settings-fail`)).json();
+            await page.click('#d-ai_config');
+            const failShown = await page.waitFor(
+                "!!document.querySelector('.preset-retry') && document.getElementById('preset-status').textContent.indexOf('did not load') >= 0", 5000);
+            row('must', failShown,
+                'C-PRE-SAM-11 a preset list that fails to load says so and offers a retry',
+                `retryShown=${failShown}`);
+
+            // REGRESSION. The first draft of failPresetLoad re-armed the fetch and then rerendered,
+            // and the panel's render is what fires the fetch: it refetched, failed, rerendered and
+            // hammered the failing server forever. Count the server's own settings reads across a
+            // second of failure state; a loop shows up here as an unbounded climb.
+            const c0 = (await (await fetch(`${args.base}/dev/state`)).json()).settings_get_count;
+            await sleep(1000);
+            const c1 = (await (await fetch(`${args.base}/dev/state`)).json()).settings_get_count;
+            row('must', c1 - c0 <= 1,
+                'C-PRE-SAM-12 a failed preset load retries on the user, not in a loop',
+                `settingsReadsWhileFailed=${c1 - c0}`);
+
+            // The retry must actually recover: the same panel, no reload. Assert the four fixture
+            // presets are BACK rather than a count: an earlier row in this run saved a preset, and
+            // the server serves it too, so a count would pin this row to that row having happened.
+            await (await fetch(`${args.base}/dev/disarm-settings-fail`)).json();
+            await page.click('.preset-retry');
+            await page.click('#dd-btn-sampler-preset');
+            const recovered = await page.waitFor(
+                "document.querySelectorAll('#dd-list-sampler-preset li').length > 0", 5000);
+            const back = JSON.parse(await page.eval(
+                "JSON.stringify(Array.from(document.querySelectorAll('#dd-list-sampler-preset li')).map(x => x.textContent))"));
+            const allBack = recovered
+                && ['Deterministic', 'Big O', 'Classic Saved', 'Hostile Shapes'].every((n) => back.includes(n))
+                && !back.includes('Broken');
+            row('must', allBack,
+                'C-PRE-SAM-13 the retry loads the presets without a reload',
+                `options=${JSON.stringify(back)}`);
+        }
+
+
         // --- C-CFG-SEL: a refetch must not deselect the character (char_api.rebuildCharacterStore) ---
         // clear() nulls selected_index and nothing put it back, so EVERY fetchCharacters silently
         // deselected the character app-wide: a card save, an import, a duplicate and an avatar replace

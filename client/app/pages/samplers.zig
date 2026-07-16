@@ -34,6 +34,12 @@ pub const Spec = struct {
     label: []const u8,
     /// The settings-blob key. Not always the id: the response length is `amount_gen` in the blob.
     key: []const u8,
+    /// The key inside a PRESET FILE, when it differs from the blob key. The two budget dials are the
+    /// only ones that diverge: the classic client reads `preset.genamt`/`preset.max_length` and
+    /// writes the same pair back when it saves a preset (public/scripts/preset-manager.js:739-740,
+    /// public/script.js:8102-8112), while the blob calls them `amount_gen`/`max_context`. null means
+    /// the preset uses the blob key unchanged.
+    preset_key: ?[]const u8 = null,
     scope: Scope,
     kind: Kind,
     min: f64,
@@ -51,9 +57,15 @@ pub const specs = [_]Spec{
     .{ .id = "top_k", .label = "Top K", .key = "top_k", .scope = .textgen, .kind = .int, .min = 0, .max = 200, .step = 1, .default = 0, .hint = "Keeps only this many likeliest tokens. 0 disables it." },
     .{ .id = "min_p", .label = "Min P", .key = "min_p", .scope = .textgen, .kind = .float, .min = 0, .max = 1, .step = 0.01, .default = 0, .hint = "Drops tokens below this fraction of the likeliest one. 0 disables it." },
     .{ .id = "rep_pen", .label = "Repetition penalty", .key = "rep_pen", .scope = .textgen, .kind = .float, .min = 1, .max = 2, .step = 0.01, .default = 1.0, .hint = "Penalises repeats. 1 disables it." },
-    .{ .id = "max_tokens", .label = "Response length", .key = "amount_gen", .scope = .root, .kind = .int, .min = 16, .max = 8192, .step = 16, .default = 512, .hint = "Tokens the model may generate per reply." },
-    .{ .id = "max_context", .label = "Context size", .key = "max_context", .scope = .root, .kind = .int, .min = 512, .max = 262144, .step = 256, .default = 8192, .hint = "Tokens the prompt window is budgeted against." },
+    .{ .id = "max_tokens", .label = "Response length", .key = "amount_gen", .preset_key = "genamt", .scope = .root, .kind = .int, .min = 16, .max = 8192, .step = 16, .default = 512, .hint = "Tokens the model may generate per reply." },
+    .{ .id = "max_context", .label = "Context size", .key = "max_context", .preset_key = "max_length", .scope = .root, .kind = .int, .min = 512, .max = 262144, .step = 256, .default = 8192, .hint = "Tokens the prompt window is budgeted against." },
 };
+
+/// The key this sampler carries inside a preset file, which is the blob key for all but the two
+/// budget dials.
+pub fn presetKey(spec: Spec) []const u8 {
+    return spec.preset_key orelse spec.key;
+}
 
 /// A slice view for `{for}` in the panel (ZX1: the loop target must be a slice).
 pub const specs_slice: []const Spec = &specs;
