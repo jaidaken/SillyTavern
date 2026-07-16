@@ -170,6 +170,10 @@ fn finish(i: usize, status: u16, res: ?*zx.Fetch.Response) void {
     on_done(tag, status, res);
     if (res) |r| destroyResponse(r);
     alloc.free(url);
+    // The body carries plaintext secrets (the connection panel POSTs the API key), and a freed wasm
+    // allocation keeps its bytes until something reuses them, readable the whole time from JS via
+    // the memory buffer. secureZero, not @memset: the store is dead to the optimiser otherwise.
+    std.crypto.secureZero(u8, body);
     alloc.free(body);
 }
 

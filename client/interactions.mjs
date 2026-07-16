@@ -423,6 +423,23 @@ async function main() {
         row('must', menuClosed && panelAlive,
             'C9 Escape closes the dropdown without dismissing the panel', `menuClosed=${menuClosed} panelAlive=${panelAlive}`);
 
+        // C-UI: C9 cannot tell WHICH guard saved the dock, because this toolbar stops the key itself;
+        // its own line masks the component's. The half it cannot reach, that the dock survives a
+        // consumer which never stops the key, is pinned on the demo island instead (C12), the one
+        // root that discards onKey's result. C13 below is the other twin: the row that catches a
+        // guard which fixes C9 by BREAKING the feature. With no menu open the panel MUST still close
+        // on Escape, so ui.onPageKey standing down unconditionally, or nav.isOpenAny() stuck true,
+        // passes C9 and C12 and still leaves the dock undismissable.
+        const panelBeforeEsc = await page.eval("!!document.querySelector('#panel-view')");
+        for (const type of ['rawKeyDown', 'keyUp']) {
+            await page.cdp.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }, page.sessionId);
+        }
+        const panelDismissed = await page.waitFor("!document.querySelector('#panel-view')", 2500);
+        row('must', panelBeforeEsc && panelDismissed,
+            'C13 Escape with no menu open still dismisses the panel', `wasOpen=${panelBeforeEsc} dismissed=${panelDismissed}`);
+        await page.click('#d-characters');
+        await page.waitFor("document.querySelectorAll('#chat-root .char-item').length >= 60", 5000);
+
         // The pick survives a reload: the list opens on the stored sort, not the .recent default.
         await page.eval("localStorage.setItem('st-char-sort','name_desc')");
         await page.navigate(`${args.base}/`);
@@ -860,6 +877,22 @@ async function main() {
         row('must', hiddenByDefault && focusRevealed, 'C-MSG trigger hidden by default, revealed on message focus',
             `hidden=${hiddenByDefault} revealed=${focusRevealed}`);
 
+        // C-UI: the POINTER half of that same reveal (.mes:hover .msg-menu-trigger), which no row
+        // reached while the gate answered (hover: hover) false and the rule sat inert. Blur first and
+        // assert hidden BEFORE the mouse arrives, so a rule that revealed unconditionally cannot pass.
+        await page.eval("document.activeElement && document.activeElement.blur()");
+        await sleep(200);
+        const msgTrigSel = "document.querySelectorAll('#chat .mes')[0].querySelector('.msg-menu-trigger')";
+        const msgHiddenBefore = await page.eval(`getComputedStyle(${msgTrigSel}).opacity === '0'`);
+        const msgBox = await page.eval("(function(){const r=document.querySelectorAll('#chat .mes')[0].getBoundingClientRect();return JSON.stringify({x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)})})()");
+        const msgPt = JSON.parse(msgBox);
+        await page.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: msgPt.x, y: msgPt.y, buttons: 0 }, page.sessionId);
+        const msgHoverRevealed = await page.waitFor(`getComputedStyle(${msgTrigSel}).opacity === '1'`, 3000);
+        row('must', msgHiddenBefore && msgHoverRevealed,
+            'C14 hovering a message reveals its menu trigger (the pointer twin of the focus reveal)',
+            `hiddenBefore=${msgHiddenBefore} revealed=${msgHoverRevealed}`);
+        await page.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 0, y: 0, buttons: 0 }, page.sessionId);
+
         // Click the trigger: the popped list renders at the region root (escaping the .mes paint
         // containment that would clip it), sized, inside the reader region, and horizontally in view.
         const menuOpened = await openMenu(0);
@@ -1033,6 +1066,7 @@ async function main() {
             "document.querySelector('#dd-list-demo[role=\\'listbox\\']') && document.getElementById('dd-btn-demo').getAttribute('aria-expanded')==='true'", 4000);
         row('must', ddOpen, 'C-DROP-2 clicking the button opens the listbox (delegated onClick)');
 
+
         const ddClip = await page.eval(`(function(){
             var el = document.getElementById('dd-list-demo');
             if (!el) return null;
@@ -1057,6 +1091,29 @@ async function main() {
         row('must', ddPicked && ddClosed && ddRefocus,
             'C-DROP-4 keyboard select fires onchange, closes the menu, refocuses the button',
             `picked=${ddPicked} closed=${ddClosed} refocus=${ddRefocus}`);
+
+        // C-UI: the demo root is the ONE consumer that discards onKey's result (`_ = dropdown.onKey`),
+        // the exact shape that shipped the dock-eating bug, so it is the only place the component's
+        // OWN stop is observable: every real panel stops the key itself and masks it (C9 cannot see
+        // this). ziex delegates at <body>, so a key the dropdown stopped never reaches document.
+        // Delete the stopPropagation in dropdown.onKey and this goes red while C9 stays green.
+        await page.eval("window.__stEscAtDoc = 0; if (!window.__stEscProbe) { window.__stEscProbe = 1; document.addEventListener('keydown', function (e) { if (e.key === 'Escape') window.__stEscAtDoc++; }); }");
+        await page.click('#dd-btn-demo');
+        await page.waitFor("document.querySelector('#dd-list-demo')", 4000);
+        await press('Escape', 'Escape', 27);
+        const demoEscClosed = await page.waitFor("!document.querySelector('#dd-list-demo')", 2500);
+        const escAtDoc = await page.eval('window.__stEscAtDoc');
+        row('must', demoEscClosed && escAtDoc === 0,
+            'C12 the dropdown stops the Escape it consumed, so a consumer that never stops it is safe',
+            `menuClosed=${demoEscClosed} escapesReachingDocument=${escAtDoc}`);
+
+        // The control: a key the dropdown does NOT consume still reaches the page, so C12 above is
+        // measuring the stop and not a probe that never fires.
+        await press('Escape', 'Escape', 27);
+        const escAtDocClosed = await page.eval('window.__stEscAtDoc');
+        row('must', escAtDocClosed === 1,
+            'C15 an Escape with no menu open is left alone and reaches the page',
+            `escapesReachingDocument=${escAtDocClosed}`);
 
         // ==================== C-COMP: composer polish + appearance ====================
         // Demo mode carries .mes_text bodies and the settings drawer, so the pad/width/invariant-6
@@ -1257,6 +1314,22 @@ async function main() {
         const gifBadge = await page.eval(
             "!!document.querySelector('#bg-gallery [data-bg-file=\\'loop.webp\\']') && Array.from(document.querySelectorAll('#bg-gallery .bg-tile-wrap')).some(function(w){return w.querySelector('[data-bg-file=\\'loop.webp\\']') && /GIF/.test(w.textContent);})");
         row('must', gifBadge, 'C-BG-3 the animated background is badged as animated', `badge=${gifBadge}`);
+
+        // C-UI: the POINTER half of the tile-actions reveal (.bg-tile-wrap:hover .bg-tile-actions),
+        // inert under the gate until it started declaring a fine, hover-capable pointer. Hidden is
+        // asserted BEFORE the mouse arrives, so an unconditionally-revealed cluster cannot pass.
+        await page.eval("document.activeElement && document.activeElement.blur()");
+        await sleep(200);
+        const tileActSel = "document.querySelectorAll('#bg-gallery .bg-tile-wrap')[0].querySelector('.bg-tile-actions')";
+        const tileHiddenBefore = await page.eval(`getComputedStyle(${tileActSel}).opacity === '0'`);
+        const tileBox = await page.eval("(function(){const r=document.querySelectorAll('#bg-gallery .bg-tile-wrap')[0].getBoundingClientRect();return JSON.stringify({x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)})})()");
+        const tilePt = JSON.parse(tileBox);
+        await page.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: tilePt.x, y: tilePt.y, buttons: 0 }, page.sessionId);
+        const tileHoverRevealed = await page.waitFor(`getComputedStyle(${tileActSel}).opacity === '1'`, 3000);
+        row('must', tileHiddenBefore && tileHoverRevealed,
+            'C-BG-13 hovering a tile reveals its file actions (the pointer twin of the focus reveal)',
+            `hiddenBefore=${tileHiddenBefore} revealed=${tileHoverRevealed}`);
+        await page.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 0, y: 0, buttons: 0 }, page.sessionId);
 
         // Applying: the url rides a custom property on :root, encoded, and data-background gates the
         // layer on. Asserting the property (not pixels) keeps this off the browser's image decoder.

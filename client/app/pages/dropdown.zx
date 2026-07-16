@@ -11,14 +11,17 @@
 // delegates the undo controls to undo.onLogClick. onClick/onKey return true when they handled the
 // event, so the consumer short-circuits its own logic.
 //
-// CONSUMER CONTRACT, and the KEY half is load-bearing: an event these return true for MUST be
-// stopped (`if (dropdown.onKey(ev)) ev.stopPropagation();`). ziex hands one delegated event to every
-// ancestor handler, and #shell's ui.onPageKey closes the open panel on ANY Escape without reading
-// the target, so a panel that does not consume the menu's Escape loses the WHOLE DOCK when a user
-// dismisses a dropdown: empty dock, no console output, nothing to point at the cause. Both current
-// consumers pin it with a gate row (C9, C-CONN-11); a new panel needs one too. This cannot live in
-// ui.zig today because a .zig module cannot import a .zx one, so the guard cannot ask whether a menu
-// is open; see the ledger's dropdown-escape follow-up.
+// CONSUMER CONTRACT: a KEY this consumes is stopped HERE, not by the consumer. onKey calls
+// ev.stopPropagation() itself the moment it decides to handle the key, because ziex's delegated walk
+// re-reads cancelBubble between ancestors, so the component that owns the event ends the walk at its
+// own handler. A consumer's `if (dropdown.onKey(ev)) ev.stopPropagation();` is redundant-but-correct
+// semantics it may keep or drop: the dock survives either way (gate row C12 pins that). Two guards
+// answer the two halves a panel author can forget, because neither covers the other: the self-stop
+// answers a discarded onKey result, and ui.onPageKey standing down on nav.isOpenAny() answers a root
+// that never calls onKey at all (rows C9, C13). The open state lives in dropdown_nav.zig, not here,
+// because a .zig module cannot import a .zx, so ui.zig can only read it from the .zig sibling.
+// onClick takes a target rather than the event, so it cannot self-stop; the click path is instead
+// held by ui.onPageClick's own detached-target guard, and its consumer stop stays load-bearing.
 //
 // The panel is position:fixed off the button's viewport rect (captureAnchor, mirrors undo.zig), so it
 // escapes a dock/panel overflow-y:auto clip. A transparent fixed backdrop (data-dd-dismiss) catches an
@@ -51,14 +54,9 @@ const Entry = struct {
     count: usize,
 };
 
-// App-global open state (ZX4): one dropdown open at a time, keyed by name; mutations call
+// Which menu is open (and the name-copying that keeps it safe) lives in nav; mutations here call
 // zx.client.rerender(). The registry lets the delegated handlers reach a dropdown's onchange/count by
 // name; it is populated on the client render (in-process, so the fn pointer is live and unserialized).
-// The open dropdown's name is COPIED into a fixed buffer, never aliased: the name reaching openFor
-// comes from dom_event.datasetUp, an owned heap string the click branch frees on return, so storing
-// the slice would be a use-after-free (the freed bytes get reused mid-session and the key corrupts).
-var open_buf: [96]u8 = undefined;
-var open_len: usize = 0;
 var active: usize = 0;
 var anchor_top: f32 = 0;
 var anchor_left: f32 = 0;
@@ -78,7 +76,7 @@ pub fn Dropdown(allocator: zx.Allocator, props: Props) zx.Component {
             .count = props.options.len,
         }) catch {};
     }
-    const open = isOpen(props.name);
+    const open = nav.isOpen(props.name);
     const face = nav.selectedLabel(props.options, props.value, "Select...");
     const btn_id = std.fmt.allocPrint(allocator, "dd-btn-{s}", .{props.name}) catch "dd-btn";
     const list_id = std.fmt.allocPrint(allocator, "dd-list-{s}", .{props.name}) catch "dd-list";
@@ -142,12 +140,12 @@ pub fn onClick(target: js.Object) bool {
     }
     if (dom_event.datasetUp(target, "ddToggle")) |name| {
         defer zx.allocator.free(name);
-        if (isOpen(name)) closeAndRefocus(name) else openFor(name);
+        if (nav.isOpen(name)) closeAndRefocus(name) else openFor(name);
         return true;
     }
     if (dom_event.datasetUp(target, "ddDismiss")) |name| {
         zx.allocator.free(name);
-        closeMenu();
+        nav.closeMenu();
         zx.client.rerender();
         return true;
     }
@@ -155,30 +153,31 @@ pub fn onClick(target: js.Object) bool {
 }
 
 /// Handle a keydown for the open menu (Arrow/Home/End move, Enter/Space select, Escape close) or the
-/// closed toggle button (Enter/Space/Arrow opens). Returns true when it consumed the key.
+/// closed toggle button (Enter/Space/Arrow opens). Returns true when it consumed the key, having
+/// already stopped it: the caller need not, and must not rely on doing so (see CONSUMER CONTRACT).
 pub fn onKey(ev: zx.client.Event) bool {
     if (zx.platform.role != .client) return false;
     const key = ev.key() orelse return false;
     defer zx.allocator.free(key);
 
-    if (openName()) |name| {
+    if (nav.openName()) |name| {
         if (eqlKey(key, "Escape")) {
-            ev.preventDefault();
+            consume(ev);
             closeAndRefocus(name);
             return true;
         }
         if (eqlKey(key, "Tab")) {
-            closeMenu();
+            nav.closeMenu();
             zx.client.rerender();
             return false;
         }
         if (eqlKey(key, "Enter") or eqlKey(key, " ")) {
-            ev.preventDefault();
+            consume(ev);
             commitActive(name);
             return true;
         }
         if (navFor(key)) |dir| {
-            ev.preventDefault();
+            consume(ev);
             active = nav.move(active, countFor(name), dir);
             zx.client.rerender();
             focusButton(name);
@@ -191,7 +190,7 @@ pub fn onKey(ev: zx.client.Event) bool {
     if (dom_event.datasetUp(target, "ddToggle")) |name| {
         defer zx.allocator.free(name);
         if (eqlKey(key, "Enter") or eqlKey(key, " ") or eqlKey(key, "ArrowDown") or eqlKey(key, "ArrowUp")) {
-            ev.preventDefault();
+            consume(ev);
             openFor(name);
             return true;
         }
@@ -199,15 +198,15 @@ pub fn onKey(ev: zx.client.Event) bool {
     return false;
 }
 
+/// End this key's life at the dropdown: no default action, and no ancestor handler after us. ziex
+/// re-reads cancelBubble between ancestors, so stopping here is what keeps #shell's Escape dismiss
+/// off a key the menu owns, whether or not the consuming panel stops it too.
+fn consume(ev: zx.client.Event) void {
+    ev.preventDefault();
+    ev.stopPropagation();
+}
+
 // ---- internals --------------------------------------------------------------------------------
-
-fn openName() ?[]const u8 {
-    return if (open_len == 0) null else open_buf[0..open_len];
-}
-
-fn isOpen(name: []const u8) bool {
-    return open_len > 0 and std.mem.eql(u8, open_buf[0..open_len], name);
-}
 
 fn boolStr(b: bool) []const u8 {
     return if (b) "true" else "false";
@@ -229,29 +228,26 @@ fn countFor(name: []const u8) usize {
     return if (registry.get(name)) |e| e.count else 0;
 }
 
-fn closeMenu() void {
-    open_len = 0;
-}
-
 fn openFor(name: []const u8) void {
     active = if (registry.get(name)) |e| e.selected else 0;
     captureAnchor(name);
-    const n = @min(name.len, open_buf.len);
-    @memcpy(open_buf[0..n], name[0..n]);
-    open_len = n;
+    if (!nav.setOpen(name)) {
+        log.warn("dropdown name is not 1..{d} bytes, menu not opened: {s}", .{ nav.max_name_len, name });
+        return;
+    }
     zx.client.rerender();
     focusButton(name);
 }
 
 fn closeAndRefocus(name: []const u8) void {
-    closeMenu();
+    nav.closeMenu();
     zx.client.rerender();
     focusButton(name);
 }
 
 fn commit(name: []const u8, val: []const u8) void {
     if (registry.get(name)) |e| e.onchange(val);
-    closeMenu();
+    nav.closeMenu();
     zx.client.rerender();
     focusButton(name);
 }
@@ -318,3 +314,5 @@ const std = @import("std");
 const js = zx.client.js;
 const nav = @import("./dropdown_nav.zig");
 const dom_event = @import("./dom_event.zig");
+
+const log = std.log.scoped(.ui);

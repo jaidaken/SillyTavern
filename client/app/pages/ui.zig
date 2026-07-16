@@ -10,6 +10,7 @@ const js = zx.client.js;
 const ui_state = @import("./ui_state.zig");
 const regions = @import("./regions.zig");
 const dom_event = @import("./dom_event.zig");
+const dropdown_nav = @import("./dropdown_nav.zig");
 
 const log = std.log.scoped(.panels);
 
@@ -108,13 +109,18 @@ pub fn onPageClick(ev: zx.client.Event) void {
 }
 
 /// Escape closes the open panel: the keyboard equivalent of clicking outside it, so the dismiss is
-/// not mouse-only (WD37).
+/// not mouse-only (WD37). An open dropdown menu owns Escape first (the innermost dismissable wins,
+/// per the WAI-ARIA layering convention), so this stands down while one is open rather than tearing
+/// the whole dock down under it. The check lives here, not in each panel: dropdown.onKey stops a key
+/// it consumes, but a panel root that never called onKey would still leave a menu open, and the dock
+/// must survive that too. dropdown_nav.zig holds the state because ui.zig cannot import dropdown.zx.
 pub fn onPageKey(ev: zx.client.Event) void {
     if (zx.platform.role != .client) return;
     if (ui.panels.active == null) return;
     const key = ev.key() orelse return;
     defer zx.allocator.free(key);
     if (!std.mem.eql(u8, key, "Escape")) return;
+    if (dropdown_nav.isOpenAny()) return;
     close();
 }
 
