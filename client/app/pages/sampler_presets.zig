@@ -67,7 +67,15 @@ pub const Preset = struct {
 /// ~14 `*_model` keys name a MODEL rather than a host, `can_use_*`/`derived` are runtime-derived
 /// capability flags, and `streaming`/`seed`/`n`/`enabled`/`truncation_length` are session state.
 /// Leaking any of those out of a shared preset is cosmetic; leaking a host is not. Five keys we can
-/// each state a reason for beats fifty that must stay correct forever.
+/// each state a reason for beats fifty that must stay correct forever. THIS SET MUST NOT GROW INTO
+/// THAT LIST.
+///
+/// `streaming_url` IS DEAD AND STAYS GUARDED. It occurs in exactly ONE place in the whole codebase:
+/// that denylist entry. Nothing reads it, nothing writes it, no shipped preset carries it; it
+/// predates `server_urls`. That makes it MORE worth guarding, not less. A preset file old enough to
+/// carry one has been passed around for years, and because no current client reads the key, no
+/// current client strips it either, so this guard is the only one it will ever meet. Do not "clean
+/// up" a key that greps as unused.
 const forbidden_keys = [_][]const u8{ "preset", "api_server", "type", "server_urls", "streaming_url" };
 
 pub const Parsed = struct {
