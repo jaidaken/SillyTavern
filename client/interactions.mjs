@@ -1798,17 +1798,33 @@ async function main() {
             row('must', !!savedGreets && greetBody[0] === 'Mind the step.' && greetBody[1] === 'The lamp is out.',
                 'C-CARD-11 the edited greetings are what the save sends', JSON.stringify(greetBody));
 
-            // KNOWN RED, and the defect is NOT in the card editor: onSaveDone refreshes the character
-            // list, and char_api.rebuildCharacterStore calls char_store.clear(), which nulls
-            // selected_index (character_store.zig:85). Nothing restores it, so a save DESELECTS the
-            // character app-wide: the editor falls back to "Pick a character" and its own "Saved to
-            // the card." dies with the form. Fixing it means editing char_api.zig, which this member
-            // does not own. Promote this to must once the rebuild re-selects by avatar.
+            // THE EDIT ABOVE IS THE TRAP, so it has to stay above: reflectNotice writes the footer with
+            // no render, and writing it through textContent REPLACED the text node ziex holds by vnode
+            // id, so every later render patched a detached node and the save reported into thin air.
+            // A row that saves a pristine form proves nothing here (C-CARD-15 passed throughout for
+            // exactly that reason: it never edits first).
             const aliveAfterSave = await page.eval("!!document.querySelector('#card-editor-notice')");
             const noticeSaved = aliveAfterSave && await page.waitFor(
                 "document.getElementById('card-editor-notice').textContent.indexOf('Saved') >= 0", 4000);
-            row('pending', !!noticeSaved, 'C-CARD-14 a save keeps the character selected and says it saved',
+            row('must', !!noticeSaved, 'C-CARD-14 a save keeps the character selected and says it saved',
                 `formAlive=${aliveAfterSave} selection=${await page.eval("!document.querySelector('#card-editor p')||document.querySelector('#card-editor p').textContent")}`);
+
+            // THE REFUSAL PATH, and the one that costs the user most: the same detached-node defect
+            // silenced every notice, and a save that is REFUSED in silence reads as a save that worked.
+            // Clearing the name is the only refusal reachable without the server playing along, and it
+            // runs through an edit, so it re-enters the trap C-CARD-14 guards from the other side.
+            const nameBefore = await page.eval("document.getElementById('card-name').value");
+            await page.eval("(function(){var t=document.getElementById('card-name'); t.value=''; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            await page.click('#card-save');
+            const refusal = await page.waitFor(
+                "document.getElementById('card-editor-notice').textContent.indexOf('needs a name') >= 0", 4000);
+            // The guard refuses BEFORE the request, so the server must still hold the last good name.
+            // The body names it ch_name, which is the key the server 400s on (characters.js:1197).
+            await sleep(400);
+            const serverName = (await (await fetch(`${args.base}/dev/state`)).json()).card_edit.ch_name;
+            row('must', refusal && serverName === nameBefore && nameBefore.length > 0,
+                'C-CARD-16 a save refused for a missing name says so instead of failing silently',
+                `notice="${await page.eval("document.getElementById('card-editor-notice').textContent")}" serverName=${JSON.stringify(serverName)} nameBefore=${JSON.stringify(nameBefore)}`);
 
             // Every row above is served a card shaped the way we BELIEVE the server shapes them, so
             // they prove our reading of the contract and nothing else. The server coerces none of a
@@ -1849,6 +1865,12 @@ async function main() {
             writeFileSync(pngPath, Buffer.from(
                 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
                 'base64'));
+            // Edit BEFORE the pick, deliberately. An edit is what used to detach the footer's text
+            // node, so an upload onto a pristine form reported fine while the same upload after a
+            // keystroke reported into a node no user could see. This row passed throughout the defect
+            // for exactly that reason; now it enters the trap the way a user does.
+            await page.focus('#card-personality');
+            await page.insertText('!');
             const doc = await page.cdp.send('DOM.getDocument', { depth: 1 }, page.sessionId);
             const nodeId = (await page.cdp.send('DOM.querySelector',
                 { nodeId: doc.root.nodeId, selector: '#card-avatar-input' }, page.sessionId)).nodeId;
@@ -1868,11 +1890,9 @@ async function main() {
                 'C-CARD-13 picking an image posts it to edit-avatar under the field multer reads',
                 `post=${JSON.stringify(post)}`);
 
-            // Same deselect as C-CARD-14: the upload's own list refresh drops the selection, so the
-            // panel that would report the new image is gone by the time it lands.
-            const avatarNotice = await page.eval(
-                "!!document.getElementById('card-editor-notice') && document.getElementById('card-editor-notice').textContent.indexOf('New image saved') >= 0");
-            row('pending', avatarNotice, 'C-CARD-15 the panel reports the new image in its own footer',
+            const avatarNotice = await page.waitFor(
+                "!!document.getElementById('card-editor-notice') && document.getElementById('card-editor-notice').textContent.indexOf('New image saved') >= 0", 4000);
+            row('must', avatarNotice, 'C-CARD-15 the panel reports the new image in its own footer',
                 `notice=${avatarNotice}`);
         }
 

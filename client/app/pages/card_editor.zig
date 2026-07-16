@@ -251,11 +251,21 @@ pub fn setField(f: Field, text: []const u8) void {
 
 /// Writes the footer line into the live node without a render. The panel's inputs deliberately do
 /// not re-render (that would cost the caret), so this is how the notice keeps up with the truth.
+///
+/// Writes the TEXT NODE's value, never the element's textContent. Both writers have to address the
+/// same node: ziex creates one text node for `{noticeText()}` and keeps it by vnode id (render.zig
+/// createPlatformNodes -> _ct, patched later by _snv). textContent's setter REPLACES an element's
+/// children, so writing it here detached the node ziex holds, and every later render then patched
+/// that detached node instead of the document. The first edit froze the footer at "Unsaved changes."
+/// and the save, the refusals and the image lines all landed where no user could read them.
 fn reflectNotice() void {
     if (zx.platform.role != .client) return;
     const el = dom_event.elementById(alloc, "card-editor-notice") orelse return;
     defer el.deinit();
-    el.ref.set("textContent", js.string(noticeText())) catch {};
+    // No text child means ziex holds no node for this line either, so the next render writes it.
+    const text_node = el.ref.get(js.Object, "firstChild") catch return;
+    defer text_node.deinit();
+    text_node.set("nodeValue", js.string(noticeText())) catch {};
 }
 
 // ---- alternate greetings --------------------------------------------------------------------
