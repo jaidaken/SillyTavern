@@ -4,7 +4,7 @@
 // Usage: node interactions.mjs --base http://127.0.0.1:PORT [--timeout MS]
 
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -252,7 +252,11 @@ async function main() {
         // Call sites come from SOURCE (dist is minified, which renames the `wasm` local); the
         // denominator is the built module's OWN export table, because a source-side grep lies here:
         // __st_set_panel_width is a `pub export fn` in ui.zig, not in bridge.zig's comptime block.
-        const glueSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'glue', 'custom.js'), 'utf8');
+        // Every glue file, not just custom.js: today it is the only one, so naming it would make this
+        // denominator right by luck and silently blind to the second.
+        const glueDir = join(dirname(fileURLToPath(import.meta.url)), 'glue');
+        const glueSrc = readdirSync(glueDir).filter((f) => f.endsWith('.js'))
+            .map((f) => readFileSync(join(glueDir, f), 'utf8')).join('\n');
         const calledExports = [...new Set([...glueSrc.matchAll(/wasm\.(__st_[a-zA-Z0-9_]+)/g)].map((m) => m[1]))].sort();
         await page.eval(`window.__wasm_exports = null; (async function(){
             try {
@@ -928,6 +932,7 @@ async function main() {
 
         // Narrow viewport keeps the trigger shown at the top-right (touch has no hover).
         await closeMenu();
+        const wideWidth = await page.eval('window.innerWidth');
         await page.cdp.send('Emulation.setDeviceMetricsOverride',
             { width: 600, height: 900, deviceScaleFactor: 1, mobile: false }, page.sessionId);
         const narrowShown = await page.waitFor(
@@ -935,18 +940,23 @@ async function main() {
             + "const o=getComputedStyle(t).opacity;const mr=t.closest('.mes').getBoundingClientRect();"
             + "const r=t.getBoundingClientRect();return o!=='0' && r.right<=mr.right+2 && r.top<=mr.top+40;})()", 3000);
         await page.cdp.send('Emulation.clearDeviceMetricsOverride', {}, page.sessionId);
+        // clearDeviceMetricsOverride RETURNS before the page has relaid out, and every later row
+        // inherits the half-restored layout. That was the C-MSG copy flake, ~1 run in 3 for four
+        // reporters: the copy row read the item's rect at 600px, the page snapped back to 1400 before
+        // the mouse event dispatched, and the click landed where the menu no longer was
+        // (clickLanded=0, copied=NEVER-CALLED, menu still open). Wait for the width to really return.
+        const vpRestored = await page.waitFor(`window.innerWidth === ${wideWidth}`, 5000);
         row('must', narrowShown, 'C-MSG narrow viewport keeps the trigger inside the top-right');
+        row('must', vpRestored, 'C-MSG the viewport override is fully restored before later rows run',
+            `wide=${wideWidth} now=${await page.eval('window.innerWidth')}`);
 
         // Copy writes the message's own text to the clipboard (no endpoint, no history write).
         await page.eval("(function(){window.__copied=null;const s=(t)=>{window.__copied=t;return Promise.resolve();};"
             + "try{navigator.clipboard.writeText=s;}catch(e){Object.defineProperty(navigator,'clipboard',{value:{writeText:s},configurable:true});}})()");
         const msg0text = await page.eval("document.querySelectorAll('#chat .mes_text')[0].textContent.trim()");
         const copyMenuOpen = await openMenu(0);
-        // This row has flaked as menuOpen=true copied=NEVER-CALLED, roughly 1 run in 3, and the cause
-        // is NOT established: three instrumented runs came back clean, each landing the click on the
-        // item. Counting the click separates the two candidates the report otherwise cannot tell
-        // apart (the click never landed vs it landed and copyMessage bailed at a guard), so the next
-        // occurrence explains itself instead of costing another hunt.
+        // clickLanded is what caught the flake above: it read 0, which ruled out every copyMessage
+        // guard in one run. Keep it, so a recurrence still names its own half.
         await page.eval(`window.__clickHits = 0;
             (function(){ const el = document.querySelector("#msg-menu [data-msg-action='copy']");
               if (el) el.addEventListener('click', function(){ window.__clickHits++; }, true); })();`);

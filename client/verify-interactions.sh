@@ -9,7 +9,16 @@ PORT="${IPORT:-8907}"
 PROFILE=$(mktemp -d)
 SRV=""
 cleanup() {
-    [ -n "$SRV" ] && kill -TERM -- -"$SRV" 2>/dev/null
+    if [ -n "$SRV" ]; then
+        kill -TERM -- -"$SRV" 2>/dev/null
+        # SIGTERM alone has left servers alive holding this port: the graceful path can park the main
+        # thread in an untimed futex, and then nothing here escalates. Give it a moment, then insist.
+        for _ in 1 2 3 4 5 6 7 8; do
+            kill -0 -- -"$SRV" 2>/dev/null || break
+            sleep 0.25
+        done
+        kill -KILL -- -"$SRV" 2>/dev/null
+    fi
     rm -rf "$PROFILE"
 }
 trap cleanup EXIT
@@ -21,7 +30,10 @@ node -e 'process.exit(typeof WebSocket==="function"&&typeof fetch==="function"?0
     echo "node lacks global WebSocket/fetch (need >=22; project pins >=26)" >&2; exit 1
 }
 
-setsid timeout 300 python3 devserve.py --port "$PORT" --dist dist --dev --mock-api >"$PROFILE/srv.log" 2>&1 &
+# -k 5 is load-bearing, not decoration: the three launches in verify.sh have it and this one did not,
+# so every orphan found so far has been THIS server. Without the SIGKILL escalation a timeout that
+# fires on a parked process leaves it holding this port forever, serving a STALE dist to later runs.
+setsid timeout -k 5 300 python3 devserve.py --port "$PORT" --dist dist --dev --mock-api >"$PROFILE/srv.log" 2>&1 &
 SRV=$!
 ready=no
 for _ in $(seq 1 100); do

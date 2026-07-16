@@ -13,6 +13,7 @@ import base64
 import datetime
 import http.server
 import json
+import os
 import pathlib
 import re
 import signal
@@ -1001,7 +1002,16 @@ def main():
         # forever -> `timeout` blocks on it -> the orphan holds its port serving a STALE dist).
         while not stopping.wait(0.25):
             pass
-        httpd.shutdown()
+        # shutdown() waits UNTIMED for serve_forever to return, so if that thread is gone or wedged
+        # the main thread parks in a futex and the process outlives its own SIGTERM: found one 26min
+        # old, wchan=futex_do_wait, SigPnd=0, still holding its port and serving a stale dist to
+        # every later run. Bound the graceful path, then leave regardless. A test server that will
+        # not die is worse than an abrupt one: the OS reclaims the socket either way.
+        closing = threading.Thread(target=httpd.shutdown, daemon=True)
+        closing.start()
+        closing.join(5)
+        sys.stderr.flush()
+        os._exit(0)
 
     return 0
 
