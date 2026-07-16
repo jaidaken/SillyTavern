@@ -942,7 +942,16 @@ async function main() {
             + "try{navigator.clipboard.writeText=s;}catch(e){Object.defineProperty(navigator,'clipboard',{value:{writeText:s},configurable:true});}})()");
         const msg0text = await page.eval("document.querySelectorAll('#chat .mes_text')[0].textContent.trim()");
         const copyMenuOpen = await openMenu(0);
+        // This row has flaked as menuOpen=true copied=NEVER-CALLED, roughly 1 run in 3, and the cause
+        // is NOT established: three instrumented runs came back clean, each landing the click on the
+        // item. Counting the click separates the two candidates the report otherwise cannot tell
+        // apart (the click never landed vs it landed and copyMessage bailed at a guard), so the next
+        // occurrence explains itself instead of costing another hunt.
+        await page.eval(`window.__clickHits = 0;
+            (function(){ const el = document.querySelector("#msg-menu [data-msg-action='copy']");
+              if (el) el.addEventListener('click', function(){ window.__clickHits++; }, true); })();`);
         if (copyMenuOpen) await page.click("#msg-menu [data-msg-action='copy']");
+        const clickHits = await page.eval('window.__clickHits');
         const copied = await (async () => {
             const deadline = Date.now() + 3000;
             while (Date.now() < deadline) {
@@ -957,7 +966,7 @@ async function main() {
         // null (writeText never ran) and "" (it ran with empty text) are different failures; the old
         // report printed both as copied="", which is why this row read as a mystery when it flaked.
         row('must', copyOk, 'C-MSG copy writes the message text to the clipboard',
-            `menuOpen=${copyMenuOpen} copied=${copied === null ? 'NEVER-CALLED' : JSON.stringify(copied.slice(0, 24))} msg0=${JSON.stringify(msg0text.slice(0, 16))}`);
+            `menuOpen=${copyMenuOpen} clickLanded=${clickHits} copied=${copied === null ? 'NEVER-CALLED' : JSON.stringify(copied.slice(0, 24))} msg0=${JSON.stringify(msg0text.slice(0, 16))}`);
 
         // The relocated history control: Earlier versions opens the version UI (undo.openVersionsFor).
         const verMenuOpen = await openMenu(1);
