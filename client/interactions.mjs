@@ -2345,6 +2345,46 @@ async function main() {
                 'C-PRE-TPL-17 the picked context preset lands in the blob with its anchors already migrated',
                 `blobStory=${JSON.stringify(blobStory.slice(0, 72))}`);
 
+            // WHAT A SAVE KEEPS. Instruct is on Alpaca from C-PRE-TPL-16, so this is the round trip a
+            // user performs: pick a shipped preset, name it, save it. The save must carry the fields
+            // this client does not model back out of the file it picked.
+            //
+            // ONLY A BROWSER CAN PROVE THIS ONE. saveBody's rules are proven natively 6 ways over, but
+            // the BASE it preserves from is chosen by template_presets.baseFor, which imports zx and
+            // therefore has NO native test at all: stub it to null and all 426 native tests stay green
+            // while every save silently deletes the same 7 fields again. This row is the only thing
+            // standing on that wire. It reads the body THE SERVER RECEIVED (/dev/state.preset_save),
+            // never the panel.
+            await ensureFormattingOpen();
+            await page.eval("(function(){const n=document.getElementById('instruct-preset-name');n.value='My Alpaca';n.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            await sleep(150);
+            await page.click('#instruct-preset-name ~ button');
+            const savedInstruct = await page.waitFor("document.getElementById('instruct-preset-name-status').textContent === 'Preset saved'", 5000);
+            const sentI = (await (await fetch(`${args.base}/dev/state`)).json()).preset_save;
+            const iPreset = (sentI && sentI.preset) || {};
+            // The two the shipped files really carry a non-default value for: sequences_as_stop_strings
+            // is true in 37 of 38, and the alignment message is prose in 5. A dropped key reads back as
+            // undefined, and the classic client's apply loop then keeps its LIVE value rather than the
+            // file's, which is how a save silently reverts them.
+            const keptStops = iPreset.sequences_as_stop_strings === true;
+            const keptAlign = typeof iPreset.user_alignment_message === 'string' && iPreset.user_alignment_message.startsWith("Let's get started");
+            // Presence, not truth, for the five whose shipped value IS the type default: the key going
+            // missing is the defect, and `=== ''` would pass just as well on a key that was never sent.
+            const keptKeys = ['activation_regex', 'skip_examples', 'first_input_sequence', 'last_input_sequence', 'last_system_sequence']
+                .filter((k) => iPreset[k] === undefined);
+            row('must', savedInstruct && sentI && sentI.apiId === 'instruct' && keptStops && keptAlign && keptKeys.length === 0,
+                'C-PRE-TPL-18 saving a picked preset keeps the fields this client does not model',
+                `stops=${iPreset.sequences_as_stop_strings} align=${JSON.stringify(String(iPreset.user_alignment_message).slice(0, 24))} dropped=${JSON.stringify(keptKeys)}`);
+            // The name is the one place the panel MUST beat the base: same key, both halves carry it.
+            row('must', iPreset.name === 'My Alpaca' && sentI.name === 'My Alpaca',
+                'C-PRE-TPL-19 the typed name overwrites the base preset\'s own name in both places',
+                `presetName=${JSON.stringify(iPreset.name)} envelopeName=${JSON.stringify(sentI && sentI.name)}`);
+            // `enabled` is instruct mode itself. The classic client strips it from every preset it
+            // writes; one riding a shared file switches instruct OFF for whoever picks it.
+            row('must', iPreset.enabled === undefined && iPreset.preset === undefined,
+                'C-PRE-TPL-20 a saved preset carries neither instruct mode itself nor a name for the file',
+                `enabled=${iPreset.enabled} preset=${iPreset.preset}`);
+
             // The C-CFG-17 shape, this picker's copy: Escape must close the MENU and leave the panel.
             await ensureFormattingOpen();
             await page.click('[data-dd-toggle="fmt-instruct-preset"]');
@@ -2357,6 +2397,98 @@ async function main() {
             row('must', menuClosed && panelAlive,
                 'C-PRE-TPL-15 Escape closes the preset menu without dismissing the formatting panel',
                 `menuClosed=${menuClosed} panelAlive=${panelAlive}`);
+        }
+
+        // --- C-PRE-TPL-FAIL: the load-failure state, its retry, and the loop it must not do ---
+        // THIS BLOCK IS WHY THE BUG SHIPPED: there was no load-failure row here at all, so the panel
+        // painted "Reading the preset library..." forever at anyone whose settings fetch failed, with
+        // no error and no retry, and every existing row stayed green because they all load fine.
+        // The panel reads the SAME endpoint boot reads, so the failure is armed AFTER boot: a standing
+        // failure would break the app rather than the picker.
+        {
+            await page.navigate(`${args.base}/`);
+            await openRecentChat();
+            await (await fetch(`${args.base}/dev/arm-settings-fail`)).json();
+            await page.click('#d-formatting');
+            const hintNow = () => page.eval(
+                "(document.getElementById('instruct-preset-name-hint')||{}).textContent || ''");
+            const failShown = await page.waitFor(
+                "!!document.querySelector('.tpl-preset-retry') && (document.getElementById('instruct-preset-name-hint')||{}).textContent.indexOf('did not load') >= 0", 6000);
+            const failHint = await hintNow();
+            row('must', failShown,
+                'C-PRE-TPL-21 a preset library that fails to load says so and offers a retry',
+                `retryShown=${failShown} hint=${JSON.stringify(failHint.slice(0, 40))}`);
+            // The defect itself, named: the panel must not still be claiming it is reading.
+            row('must', failShown && failHint.indexOf('Reading the preset library') < 0,
+                'C-PRE-TPL-22 a failed load stops claiming it is still reading the library',
+                `hint=${JSON.stringify(failHint.slice(0, 40))}`);
+
+            // THE LOOP. ensureLoaded fires from the panel's RENDER, so a failure that returned to
+            // .idle would fetch, fail, rerender and hammer the failing server forever. Count the
+            // server's own settings reads across a second of failure state: a loop is an unbounded
+            // climb. config_state's twin read 423 here before its latch.
+            const c0 = (await (await fetch(`${args.base}/dev/state`)).json()).settings_get_count;
+            await sleep(1000);
+            const c1 = (await (await fetch(`${args.base}/dev/state`)).json()).settings_get_count;
+            row('must', c1 - c0 <= 1,
+                'C-PRE-TPL-23 a failed preset load retries on the user, not in a loop',
+                `settingsReadsWhileFailed=${c1 - c0}`);
+
+            // The retry must actually recover, in the same panel, with no reload. Assert the fixture's
+            // own preset NAMES are back rather than a count: an earlier row in this run saved
+            // "My Alpaca", and the server serves it too, so a count would pin this row to that one.
+            await (await fetch(`${args.base}/dev/disarm-settings-fail`)).json();
+            await page.click('.tpl-preset-retry');
+            const recovered = await page.waitFor(
+                "!document.querySelector('.tpl-preset-retry')", 6000);
+            await page.click('[data-dd-toggle="fmt-instruct-preset"]');
+            await page.waitFor("document.querySelectorAll('#dd-list-fmt-instruct-preset [role=option]').length > 0", 6000);
+            const backOpts = JSON.parse(await page.eval(
+                "JSON.stringify(Array.from(document.querySelectorAll('#dd-list-fmt-instruct-preset [role=option]')).map(o => o.textContent))"));
+            const allBack = recovered && ['ChatML', 'Alpaca', 'Hostile'].every((n) => backOpts.includes(n));
+            row('must', allBack,
+                'C-PRE-TPL-24 the retry loads the library without a reload',
+                `retryGone=${recovered} options=${JSON.stringify(backOpts)}`);
+
+            // SAVE-AS MUST NOT COME PRE-LOADED WITH A SHIPPED PRESET'S NAME. The field used to prefill
+            // the live template's name, so the panel's loudest control sat ONE CLICK from replacing
+            // ChatML: the server takes that write with no exists-check and no confirmation
+            // (presets.js:57 writeFileAtomic). Nothing has been typed in this block, and the picker is
+            // on ChatML, so this is exactly that click.
+            await page.click('[data-dd-toggle="fmt-instruct-preset"]');
+            const nameValue = await page.eval("document.getElementById('instruct-preset-name').value");
+            const savesBefore = (await (await fetch(`${args.base}/dev/state`)).json()).preset_save;
+            await page.click('#instruct-preset-name ~ button');
+            await sleep(400);
+            const savesAfter = (await (await fetch(`${args.base}/dev/state`)).json()).preset_save;
+            const statusText = await page.eval(
+                "(document.getElementById('instruct-preset-name-status')||{}).textContent || ''");
+            // The property, not the preset name I assumed: NO WRITE REACHED THE SERVER. Keying on
+            // `name === 'ChatML'` looked right and was blind, because the picker is on Alpaca by here;
+            // the restored prefill saved "Alpaca" and a ChatML-shaped check would have waved it past.
+            const wrote = JSON.stringify(savesBefore) !== JSON.stringify(savesAfter);
+            row('must', nameValue === '' && !wrote && statusText.indexOf('Name the preset') >= 0,
+                'C-PRE-TPL-25 save-as starts empty, so one click cannot overwrite the shipped preset the picker is on',
+                `value=${JSON.stringify(nameValue)} status=${JSON.stringify(statusText)} wroteToServer=${wrote} lastSave=${JSON.stringify(savesAfter && savesAfter.name)}`);
+
+            // The 44px touch target at phone width, MEASURED. A class-name grep would pass on a token
+            // tailwind never generated (ZX14: its extractor silently drops classes), so the only honest
+            // check is the rendered height.
+            const wideW = await page.eval('window.innerWidth');
+            await page.cdp.send('Emulation.setDeviceMetricsOverride',
+                { width: 390, height: 844, deviceScaleFactor: 1, mobile: false }, page.sessionId);
+            await page.waitFor('window.innerWidth === 390', 3000);
+            const tap = JSON.parse(await page.eval(
+                "(function(){const b=document.querySelector('#instruct-preset-name ~ button');"
+                + "if(!b)return JSON.stringify({err:'no save button'});"
+                + "return JSON.stringify({h:Math.round(b.getBoundingClientRect().height)});})()"));
+            await page.cdp.send('Emulation.clearDeviceMetricsOverride', {}, page.sessionId);
+            // The override returns before the relayout, so a later row would inherit a half-restored
+            // page (the W6-10 lesson).
+            const tapRestored = await page.waitFor(`window.innerWidth === ${wideW}`, 5000);
+            row('must', tap.h >= 44 && tapRestored,
+                'C-PRE-TPL-26 the preset save button clears the 44px touch target at 390px',
+                `saveHeight=${tap.h}px restored=${tapRestored} wide=${wideW}`);
         }
 
         // --- C-PRE-SAM: the sampler preset picker (list, pick, wire, save, persist) ---

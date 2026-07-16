@@ -228,6 +228,13 @@ def _instruct_presets():
         },
         # A genuinely different shape, so picking it visibly reshapes the prompt rather than
         # re-applying what was already live.
+        #
+        # SHIPPED-SHAPED ON PURPOSE: it carries all 23 keys of the real Alpaca.json, including the 7
+        # this client does not model. Until 2026-07-16 it carried only the 14 modelled ones, and a
+        # fixture with no unmodelled fields CANNOT EXPRESS the defect that saving deletes them: every
+        # save row passed while a real user's round trip through the panel silently reverted
+        # `sequences_as_stop_strings` (true in 37 of the 38 shipped presets) and dropped the alignment
+        # message. Values are the real file's, except `activation_regex`, which is "" in all 38.
         {
             "name": "Alpaca",
             "input_sequence": "### Instruction:",
@@ -237,12 +244,21 @@ def _instruct_presets():
             "input_suffix": "",
             "output_suffix": "",
             "system_suffix": "",
+            "first_output_sequence": "",
+            "last_output_sequence": "",
             "story_string_prefix": "",
             "story_string_suffix": "",
             "wrap": True,
             "macro": True,
             "names_behavior": "none",
             "system_same_as_user": False,
+            "activation_regex": "",
+            "skip_examples": False,
+            "user_alignment_message": "Let's get started. Please respond based on the information and instructions provided above.",
+            "last_system_sequence": "",
+            "first_input_sequence": "",
+            "last_input_sequence": "",
+            "sequences_as_stop_strings": True,
         },
         # HOSTILE. Every field here is a shape the struct does not expect, next to two that are
         # perfectly good. The good ones must still apply and this preset must not cost the others.

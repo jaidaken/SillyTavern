@@ -20,11 +20,17 @@ const area_cls = "min-h-[6rem] w-full resize-y rounded-md border border-control-
 const label_cls = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
 const hint_cls = "setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]";
 const head_cls = "m-0 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
+// Every button here clears the 44px touch target at phone width, the way the repo's own action
+// buttons do (character_list.zx:170 carries these on an otherwise identical class string).
+const tap_cls = " max-[768px]:min-h-11 max-[768px]:px-3 max-[768px]:py-2";
 // The LOOK only. `an-save` is the note button's identity, not part of its styling, so it is applied
 // at that one button rather than riding this constant: three buttons sharing the class would make
 // `.an-save` mean "whichever save button renders first" and silently move what a click hits.
-const save_cls = "cursor-pointer rounded-md border border-accent bg-accent px-[0.9rem] py-[0.45rem] font-mono text-sm text-on-accent transition-[background,filter] duration-120 ease-[ease] hover:brightness-[1.06]";
+const save_cls = "cursor-pointer rounded-md border border-accent bg-accent px-[0.9rem] py-[0.45rem] font-mono text-sm text-on-accent transition-[background,filter] duration-120 ease-[ease] hover:brightness-[1.06]" ++ tap_cls;
 const note_save_cls = "an-save " ++ save_cls;
+// `tpl-preset-retry`, NOT the sibling's `.preset-retry`: both panels can sit in the DOM at once, so a
+// shared token would make that selector mean "whichever retry rendered first" for a handler or a row.
+const retry_cls = "tpl-preset-retry self-start cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text" ++ tap_cls;
 
 /// One preset family's pick-and-save row. TWO of these render (instruct, context) over two families
 /// whose only difference is which strings they name, so it is one component with the variance in
@@ -42,12 +48,18 @@ const PresetProps = struct {
     // read their element off the delegated event exactly as statefulTarget would.
     onname: *const fn (zx.client.Event) void,
     onsave: *const fn (zx.client.Event) void,
+    onretry: *const fn (zx.client.Event) void,
 };
 
 fn PresetRow(allocator: zx.Allocator, props: PresetProps) zx.Component {
     // The fetch is lazy and idempotent: the library costs nothing until this panel renders.
     presets.ensureLoaded();
     const status_id = std.fmt.allocPrint(allocator, "{s}-status", .{props.name_id}) catch "preset-status";
+    const hint_id = std.fmt.allocPrint(allocator, "{s}-hint", .{props.name_id}) catch "preset-hint";
+    // The hint carries the load error, so the field that error is about points at it (WD40).
+    const described_by = std.fmt.allocPrint(allocator, "{s} {s}", .{ hint_id, status_id }) catch hint_id;
+    // The hint is rendered ALWAYS and is a live region for the same reason: a region inserted whole,
+    // already holding its news, announces nothing to a reader who never had it (WD39).
     return (
         <div @allocator={allocator} class="flex flex-col gap-3">
             <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
@@ -60,7 +72,10 @@ fn PresetRow(allocator: zx.Allocator, props: PresetProps) zx.Component {
                     onchange={props.onpick}
                 />
             </div>
-            <p class={hint_cls}>{presetHint(props.kind)}</p>
+            <p id={hint_id} class={hint_cls} role="status" aria-live="polite">{presetHint(props.kind)}</p>
+            {if (presets.loadFailed()) (
+                <button type="button" class={retry_cls} onclick={props.onretry}>Retry loading presets</button>
+            )}
             <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
                 <label class={label_cls} for={props.name_id}>Save as</label>
                 <input
@@ -71,7 +86,9 @@ fn PresetRow(allocator: zx.Allocator, props: PresetProps) zx.Component {
                     spellcheck="false"
                     class={input_cls}
                     value={presets.saveNameFor(props.kind)}
+                    placeholder="Name this preset"
                     aria-label={props.name_label}
+                    aria-describedby={described_by}
                     oninput={props.onname}
                 />
                 <button type="button" class={save_cls} onclick={props.onsave}>Save preset</button>
@@ -84,14 +101,19 @@ fn PresetRow(allocator: zx.Allocator, props: PresetProps) zx.Component {
 /// The four states a fetched list has (WD54): still loading, loaded but empty, unreachable, ready.
 /// A bare empty menu would leave a user clicking a control that does nothing and say nothing about
 /// why, so the hint carries the state rather than the dropdown swallowing it.
+///
+/// UNREACHABLE IS ITS OWN STATE, and it was unreachable copy until 2026-07-16: a failed load left this
+/// saying "Reading the preset library..." forever, because the fetch never repainted and any repaint
+/// re-armed it (template_presets.failLoad). Both of the old strings also promised that reopening the
+/// panel tries again, which the latch makes false and which was already false for a load that returned
+/// nothing: nothing refetches now except the user's Retry, so only Retry may claim to (WD55, WD68).
 fn presetHint(kind: presets.Kind) []const u8 {
     if (presets.optionsFor(kind).len > 0) {
         return "Fills the fields below with a known-good set. A template your model was not tuned for makes it answer badly with nothing on screen to explain why.";
     }
-    return if (presets.isLoading())
-        "Reading the preset library..."
-    else
-        "No presets came back from the server. The fields below still work by hand, and reopening this panel tries again.";
+    if (presets.isLoading()) return "Reading the preset library...";
+    if (presets.loadFailed()) return "The preset library did not load. The fields below still work by hand; Retry reads it again.";
+    return "No presets came back from the server. The fields below still work by hand.";
 }
 
 pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
@@ -115,6 +137,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     onpick={&presets.pickInstruct}
                     onname={&onInstructPresetName}
                     onsave={&onSaveInstructPreset}
+                    onretry={&onRetryPresets}
                 />
                 <div class="setting-row flex items-center justify-between gap-3">
                     <label class={label_cls} for="instruct-enabled">Wrap turns in sequences</label>
@@ -175,6 +198,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     onpick={&presets.pickContext}
                     onname={&onContextPresetName}
                     onsave={&onSaveContextPreset}
+                    onretry={&onRetryPresets}
                 />
                 <div class="setting-row flex flex-col gap-1">
                     <label class={label_cls} for="ctx-story">Story string</label>
@@ -420,6 +444,11 @@ fn onSaveInstructPreset(_: zx.client.Event) void {
 
 fn onSaveContextPreset(_: zx.client.Event) void {
     presets.saveContext();
+}
+
+// One library serves both rows, so either Retry refetches it for both.
+fn onRetryPresets(_: zx.client.Event) void {
+    presets.retry();
 }
 
 const zx = @import("zx");
