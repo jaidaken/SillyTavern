@@ -224,15 +224,32 @@ fn strField(arena: Allocator, o: std.json.ObjectMap, key: []const u8) Allocator.
 
 /// A bool field, tolerating the string and number spellings the blob has carried historically
 /// (favTruthy in char_data.zig makes the same allowance for is_user).
+///
+/// An UNRECOGNISED string reads as the field's DEFAULT, not as false. A bad field must cost that
+/// field, and for a default-true field like `wrap` "costing itself" means staying true: falling to
+/// false would silently unwrap every turn in the prompt off one junk byte in a hand-edited preset.
+/// Both vocabularies are spelled out because "no" must mean false, not merely "not true".
 fn boolField(o: std.json.ObjectMap, key: []const u8, default: bool) bool {
     const v = o.get(key) orelse return default;
     return switch (v) {
         .bool => |b| b,
         .integer => |i| i != 0,
         .float => |f| f != 0,
-        .string => |s| std.mem.eql(u8, s, "true") or std.mem.eql(u8, s, "1"),
+        .string => |s| boolString(s) orelse default,
         else => default,
     };
+}
+
+fn boolString(s: []const u8) ?bool {
+    const yes = [_][]const u8{ "true", "1", "yes", "on" };
+    const no = [_][]const u8{ "false", "0", "no", "off" };
+    for (yes) |w| {
+        if (std.ascii.eqlIgnoreCase(s, w)) return true;
+    }
+    for (no) |w| {
+        if (std.ascii.eqlIgnoreCase(s, w)) return false;
+    }
+    return null;
 }
 
 fn namesBehavior(o: std.json.ObjectMap) NamesBehavior {
@@ -644,6 +661,20 @@ test "parseTemplates tolerates hostile field shapes without losing the template"
     // A null story_string falls back to the default rather than emptying the system block.
     try testing.expectEqualStrings(default_story_string, tpl.context.story_string);
     try testing.expectEqualStrings("", tpl.context.chat_start);
+}
+
+test "an unreadable bool string costs its own field rather than flipping it" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    // `wrap` defaults TRUE, so a junk string must leave it true; reading it as false would unwrap
+    // every turn in the prompt and nothing on screen would say why.
+    const junk =
+        \\{"power_user":{"instruct":{"wrap":"banana","macro":"off","system_same_as_user":"YES"}}}
+    ;
+    const tpl = try parseTemplates(arena.allocator(), junk);
+    try testing.expect(tpl.instruct.wrap);
+    try testing.expect(!tpl.instruct.macro);
+    try testing.expect(tpl.instruct.system_same_as_user);
 }
 
 test "parseTemplates degrades a malformed blob to defaults" {

@@ -20,7 +20,79 @@ const area_cls = "min-h-[6rem] w-full resize-y rounded-md border border-control-
 const label_cls = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
 const hint_cls = "setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]";
 const head_cls = "m-0 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
-const save_cls = "an-save cursor-pointer rounded-md border border-accent bg-accent px-[0.9rem] py-[0.45rem] font-mono text-sm text-on-accent transition-[background,filter] duration-120 ease-[ease] hover:brightness-[1.06]";
+// The LOOK only. `an-save` is the note button's identity, not part of its styling, so it is applied
+// at that one button rather than riding this constant: three buttons sharing the class would make
+// `.an-save` mean "whichever save button renders first" and silently move what a click hits.
+const save_cls = "cursor-pointer rounded-md border border-accent bg-accent px-[0.9rem] py-[0.45rem] font-mono text-sm text-on-accent transition-[background,filter] duration-120 ease-[ease] hover:brightness-[1.06]";
+const note_save_cls = "an-save " ++ save_cls;
+
+/// One preset family's pick-and-save row. TWO of these render (instruct, context) over two families
+/// whose only difference is which strings they name, so it is one component with the variance in
+/// props rather than a second hand-copied block (WD30/WD31).
+const PresetProps = struct {
+    kind: presets.Kind,
+    /// Unique per dropdown on the page: the delegated handlers tell siblings apart by this name.
+    dd_name: []const u8,
+    dd_label: []const u8,
+    name_id: []const u8,
+    name_label: []const u8,
+    onpick: *const fn ([]const u8) void,
+    // Plain handlers, not ctx.bind'd stateful ones: ctx.bind takes a COMPTIME handler and a plain
+    // prop-taking child has no ctx to bind with. Nothing here needs component state anyway; both
+    // read their element off the delegated event exactly as statefulTarget would.
+    onname: *const fn (zx.client.Event) void,
+    onsave: *const fn (zx.client.Event) void,
+};
+
+fn PresetRow(allocator: zx.Allocator, props: PresetProps) zx.Component {
+    // The fetch is lazy and idempotent: the library costs nothing until this panel renders.
+    presets.ensureLoaded();
+    const status_id = std.fmt.allocPrint(allocator, "{s}-status", .{props.name_id}) catch "preset-status";
+    return (
+        <div @allocator={allocator} class="flex flex-col gap-3">
+            <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                <span class={label_cls}>Preset</span>
+                <Dropdown
+                    options={presets.optionsFor(props.kind)}
+                    value={presets.selectedFor(props.kind)}
+                    name={props.dd_name}
+                    label={props.dd_label}
+                    onchange={props.onpick}
+                />
+            </div>
+            <p class={hint_cls}>{presetHint(props.kind)}</p>
+            <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                <label class={label_cls} for={props.name_id}>Save as</label>
+                <input
+                    id={props.name_id}
+                    name={props.name_id}
+                    type="text"
+                    autocomplete="off"
+                    spellcheck="false"
+                    class={input_cls}
+                    value={presets.saveNameFor(props.kind)}
+                    aria-label={props.name_label}
+                    oninput={props.onname}
+                />
+                <button type="button" class={save_cls} onclick={props.onsave}>Save preset</button>
+                <span id={status_id} role="status" aria-live="polite" class="text-sm text-muted empty:hidden">{presets.statusFor(props.kind)}</span>
+            </div>
+        </div>
+    );
+}
+
+/// The four states a fetched list has (WD54): still loading, loaded but empty, unreachable, ready.
+/// A bare empty menu would leave a user clicking a control that does nothing and say nothing about
+/// why, so the hint carries the state rather than the dropdown swallowing it.
+fn presetHint(kind: presets.Kind) []const u8 {
+    if (presets.optionsFor(kind).len > 0) {
+        return "Fills the fields below with a known-good set. A template your model was not tuned for makes it answer badly with nothing on screen to explain why.";
+    }
+    return if (presets.isLoading())
+        "Reading the preset library..."
+    else
+        "No presets came back from the server. The fields below still work by hand, and reopening this panel tries again.";
+}
 
 pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
     // allow-div-onclick: delegation root for the dropdowns' data-* controls; keyboard parity via onkeydown
@@ -34,6 +106,16 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
         >
             <section class="flex flex-col gap-3">
                 <h3 class={head_cls}>Instruct template</h3>
+                <PresetRow
+                    kind={.instruct}
+                    dd_name="fmt-instruct-preset"
+                    dd_label="Instruct template preset"
+                    name_id="instruct-preset-name"
+                    name_label="Instruct preset name"
+                    onpick={&presets.pickInstruct}
+                    onname={&onInstructPresetName}
+                    onsave={&onSaveInstructPreset}
+                />
                 <div class="setting-row flex items-center justify-between gap-3">
                     <label class={label_cls} for="instruct-enabled">Wrap turns in sequences</label>
                     <input
@@ -84,6 +166,16 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
 
             <section class="flex flex-col gap-3">
                 <h3 class={head_cls}>Context template</h3>
+                <PresetRow
+                    kind={.context}
+                    dd_name="fmt-context-preset"
+                    dd_label="Context template preset"
+                    name_id="context-preset-name"
+                    name_label="Context preset name"
+                    onpick={&presets.pickContext}
+                    onname={&onContextPresetName}
+                    onsave={&onSaveContextPreset}
+                />
                 <div class="setting-row flex flex-col gap-1">
                     <label class={label_cls} for="ctx-story">Story string</label>
                     <textarea
@@ -204,7 +296,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         </div>
                         <p id="an-interval-hint" class={hint_cls}>Messages between insertions. 1 sends it every time; 0 switches the note off without deleting it.</p>
                         <div class="setting-row flex items-center gap-3">
-                            <button type="button" class={save_cls} onclick={onSaveNote}>Save note</button>
+                            <button type="button" class={note_save_cls} onclick={onSaveNote}>Save note</button>
                             <span id="an-status" role="status" aria-live="polite" class="text-sm text-muted empty:hidden"></span>
                         </div>
                         <p class={hint_cls}>Stored in this chat's own file, where the classic client reads it.</p>
@@ -304,10 +396,37 @@ fn onSaveNote(_: zx.client.Event) void {
     an_state.save();
 }
 
+fn onInstructPresetName(ev: zx.client.Event) void {
+    withPlainValue(ev, presets.setInstructSaveName);
+}
+
+fn onContextPresetName(ev: zx.client.Event) void {
+    withPlainValue(ev, presets.setContextSaveName);
+}
+
+/// withValue's plain-event twin, for a control rendered by a prop-taking child (which has no ctx to
+/// bind a stateful handler with). Same borrow rule: the setter copies what it keeps.
+fn withPlainValue(ev: zx.client.Event, comptime set: fn ([]const u8) void) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    const value = readValue(target) orelse return;
+    defer zx.allocator.free(value);
+    set(value);
+}
+
+fn onSaveInstructPreset(_: zx.client.Event) void {
+    presets.saveInstruct();
+}
+
+fn onSaveContextPreset(_: zx.client.Event) void {
+    presets.saveContext();
+}
+
 const zx = @import("zx");
 const std = @import("std");
 const js = zx.client.js;
 const config_state = @import("../config_state.zig");
+const presets = @import("../template_presets.zig");
 const an_state = @import("../authors_note_state.zig");
 const dom_event = @import("../dom_event.zig");
 const dropdown = @import("../dropdown.zx");

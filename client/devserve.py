@@ -125,6 +125,99 @@ def _default_settings():
     }
 
 
+# --- C-PRE-TPL: the instruct/context preset library -------------------------------------------
+# These arrive as SIBLINGS of the settings string in the /api/settings/get response, not inside it
+# (settings.js:429 `response.send({ settings, ...payload })`), so they are served that way here.
+#
+# The library is deliberately NOT all well-formed. These files are user-writable, other tools write
+# them, and the server validates only that a file is parseable JSON, never its shape: a fixture that
+# served only tidy objects would test itself. So the arrays below carry a hostile preset, a
+# non-object element, and a nameless one. The bar: a bad FIELD costs that field, a bad PRESET costs
+# that preset, and every other preset still lists and still applies.
+def _instruct_presets():
+    return [
+        # The one the settings blob is already on, byte-shaped like the shipped ChatML.json (which
+        # carries NO `enabled` key: it is a user toggle, not a template property).
+        {
+            "name": "ChatML",
+            "input_sequence": "<|im_start|>user",
+            "output_sequence": "<|im_start|>assistant",
+            "system_sequence": "<|im_start|>system",
+            "stop_sequence": "<|im_end|>",
+            "input_suffix": "<|im_end|>\n",
+            "output_suffix": "<|im_end|>\n",
+            "system_suffix": "<|im_end|>\n",
+            "story_string_prefix": "<|im_start|>system",
+            "story_string_suffix": "<|im_end|>\n",
+            "wrap": True,
+            "macro": True,
+            "names_behavior": "none",
+            "system_same_as_user": False,
+        },
+        # A genuinely different shape, so picking it visibly reshapes the prompt rather than
+        # re-applying what was already live.
+        {
+            "name": "Alpaca",
+            "input_sequence": "### Instruction:",
+            "output_sequence": "### Response:",
+            "system_sequence": "### System:",
+            "stop_sequence": "### Instruction:",
+            "input_suffix": "",
+            "output_suffix": "",
+            "system_suffix": "",
+            "story_string_prefix": "",
+            "story_string_suffix": "",
+            "wrap": True,
+            "macro": True,
+            "names_behavior": "none",
+            "system_same_as_user": False,
+        },
+        # HOSTILE. Every field here is a shape the struct does not expect, next to two that are
+        # perfectly good. The good ones must still apply and this preset must not cost the others.
+        {
+            "name": "Hostile",
+            "input_sequence": "<|hostile_user|>",      # good: must reach the prompt
+            "output_sequence": "<|hostile_bot|>",      # good: must reach the prompt
+            "output_suffix": None,                     # null where a string belongs -> costs itself
+            "system_sequence": ["nope"],               # array where a string belongs -> costs itself
+            "stop_sequence": {"deep": "er"},           # object where a string belongs -> costs itself
+            "wrap": "yes",                             # unparseable bool string -> keeps its default
+            "names_behavior": 42,                      # number where an enum belongs -> keeps default
+            "activation_regex": {"unmodelled": True},  # a field this client does not model at all
+        },
+        # A non-object element. The server JSON.parses each file without validating it, so an array
+        # can hold anything at all. It must cost itself and nothing else.
+        "this is not a preset object",
+        # Nameless: a preset nobody can name is a preset nobody can pick, so it is skipped. It must
+        # not take the pickable ones down with it.
+        {"input_sequence": "<|orphan|>"},
+    ]
+
+
+def _context_presets():
+    return [
+        # Carries the migration marker AND both anchors, exactly like every shipped context preset.
+        {
+            "name": "ChatML",
+            "story_string": "{{#if system}}{{system}}\n{{/if}}{{#if description}}{{description}}\n{{/if}}{{#if anchorBefore}}{{anchorBefore}}\n{{/if}}{{#if anchorAfter}}{{anchorAfter}}\n{{/if}}{{trim}}",
+            "chat_start": "",
+            "example_separator": "***",
+            "story_string_position": 0,
+        },
+        # THE TRAP, and it is the whole reason this fixture exists. A story string with NO anchors and
+        # NO story_string_position: exactly what a hand-written preset, or one from an older tool,
+        # looks like. Picking it must run the same one-time anchor migration the classic client runs
+        # on a picked preset (power-user.js:2032), or the author's note that worked a moment ago
+        # renders NOWHERE and nothing on screen says why.
+        {
+            "name": "Unmigrated",
+            "story_string": "{{#if description}}{{description}}\n{{/if}}{{#if personality}}{{personality}}\n{{/if}}",
+            "chat_start": "",
+            "example_separator": "---",
+        },
+    ]
+
+
 # --- C-CONN: secrets store for the connection panel's API-key field ---------------------------
 # DUMMY values only, never a real key. Mirrors src/endpoints/secrets.js: the store is a map of
 # secret key -> entry list, one entry active at a time. tabby is seeded so the gate can prove the
@@ -365,6 +458,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     undo_token = "utok-0"
     # C-PERS: mutable settings blob so a persona persist (settings/save) shows on the next get.
     persona_settings = None
+    # C-PRE-TPL: what the last /api/presets/save actually carried, and the library it grew.
+    preset_save = None
+    saved_context_presets = None
     # C-CHAR: the avatar the last /api/characters/duplicate named, read back by /dev/duplicated.
     duplicated_avatar = None
     # C-CFG: the open chat's metadata, mutated by /api/chats/metadata so a note save round-trips.
@@ -391,6 +487,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if cls.persona_settings is None:
             cls.persona_settings = _default_settings()
         return cls.persona_settings
+
+    @classmethod
+    def context_presets(cls):
+        if cls.saved_context_presets is None:
+            cls.saved_context_presets = _context_presets()
+        return cls.saved_context_presets
 
     # C-CONN: mutable secrets store so a key write/delete round-trips on the next read.
     secrets = None
@@ -482,6 +584,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "last_generate_server": Handler.last_generate_server,
                     "last_generate_prompt": Handler.last_generate_prompt,  # J1 invariant-2
                     "last_generate_body": Handler.last_generate_body,  # C-CFG
+                    "preset_save": Handler.preset_save,  # C-PRE-TPL
                     "appended": Handler.appended_messages,
                     "append_409_count": Handler.append_409_count,
                     "get_count": Handler.get_count,
@@ -658,7 +761,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/chats/recent":
             return self.mock_json([] if Handler.recent_empty else _mock_recent())
         if path == "/api/settings/get":
-            return self.mock_json({"settings": json.dumps(Handler.settings_blob())})
+            # C-PRE-TPL: the preset arrays ride ALONGSIDE the settings string, never inside it.
+            return self.mock_json({
+                "settings": json.dumps(Handler.settings_blob()),
+                "instruct": _instruct_presets(),
+                "context": Handler.context_presets(),
+            })
+        # C-PRE-TPL: the real route (presets.js:44). It 400s without `preset` or `name`, so record
+        # what arrived and let a gate read the field names back: they ARE the contract.
+        if path == "/api/presets/save":
+            name = req.get("name")
+            preset = req.get("preset")
+            if not name or not preset:
+                self.send_response(400)
+                self.end_headers()
+                return
+            Handler.preset_save = {"name": name, "apiId": req.get("apiId"), "preset": preset}
+            # A saved preset joins the library, as the server's own re-read of the directory would.
+            if req.get("apiId") == "context":
+                lib = Handler.context_presets()
+                saved = dict(preset)
+                saved["name"] = name
+                Handler.saved_context_presets = [p for p in lib if p.get("name") != name] + [saved]
+            return self.mock_json({"name": name})
         # C-CFG: the chat-metadata member of the descriptor-mutation family. The client sends the note
         # fields plus the FULL change token; the server does the read-modify-write and returns the new
         # token. Mirrors the shape the real route must have (reported to the lead), including the 409.

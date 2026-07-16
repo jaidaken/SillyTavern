@@ -2114,6 +2114,265 @@ async function main() {
                 `blobTemp=${blobTemp === null ? 'NEVER-ARRIVED' : blobTemp}`);
         }
 
+        // --- C-PRE-TPL: the instruct/context preset pickers (wave 3b) ---
+        // Hand-typing ChatML into six fields and getting one subtly wrong makes a model answer badly
+        // in a way a user cannot diagnose. These rows prove the pick reaches the PROMPT, not the panel.
+        console.log('== template presets ==');
+        {
+            // The C-CFG sendProbe, re-declared because that one is block-scoped next door. Same
+            // discipline and for the same reason: the recorded generate is cleared first and the wait
+            // keys on the message COUNT, because a previous send's FIN is still in the log and a
+            // predicate that only looked for FIN would match instantly, skip the send, and let the
+            // rows below read a body they never caused.
+            const sendProbe = async (text) => {
+                await (await fetch(`${args.base}/dev/clear-generate`)).json();
+                const before = await page.eval("document.querySelectorAll('#chat .mes').length");
+                await page.focus('#send_textarea');
+                await page.insertText(text);
+                await page.click('#composer button[aria-label="Send"]');
+                const grew = await page.waitFor(`document.querySelectorAll('#chat .mes').length >= ${before} + 2 && ${idle}`, 15000);
+                if (!grew) throw new Error(`sendProbe: no reply after "${text}"`);
+            };
+            const pick = async (dd, value) => {
+                await page.click(`[data-dd-toggle="${dd}"]`);
+                await page.waitFor(`document.getElementById('dd-list-${dd}')`, 3000);
+                await page.click(`#dd-list-${dd} [data-dd-value="${value}"]`);
+                await page.waitFor(`!document.getElementById('dd-list-${dd}')`, 3000);
+                await sleep(150);
+            };
+            const optionsOf = async (dd) => {
+                await page.click(`[data-dd-toggle="${dd}"]`);
+                await page.waitFor(`document.getElementById('dd-list-${dd}')`, 3000);
+                // The library is fetched lazily on the panel's first render, so an open menu is NOT
+                // proof it has arrived: reading straight away races the fetch and reports [] for a
+                // list that was merely late. Bounded, so a genuinely empty list still fails the row
+                // rather than hanging it.
+                await page.waitFor(`document.querySelectorAll('#dd-list-${dd} [role=option]').length > 0`, 6000);
+                const labels = await page.eval(
+                    `JSON.stringify(Array.from(document.querySelectorAll('#dd-list-${dd} [role=option]')).map(o => o.textContent))`);
+                await page.click(`[data-dd-toggle="${dd}"]`);
+                await page.waitFor(`!document.getElementById('dd-list-${dd}')`, 3000);
+                return JSON.parse(labels);
+            };
+            const promptNow = async () => (await (await fetch(`${args.base}/dev/state`)).json()).last_generate_prompt || '';
+
+            await page.navigate(`${args.base}/`);
+            await openRecentChat();
+            await page.click('#d-formatting');
+            await page.waitFor("document.getElementById('instruct-input_sequence')", 4000);
+            await page.waitFor("!!document.querySelector('#dd-btn-fmt-instruct-preset')", 4000);
+
+            // TOLERANCE. The fixture library carries a hostile preset, a non-object element and a
+            // nameless one. A typed parse of the array would fail on ONE of them and empty the WHOLE
+            // list, which is the exact shape that shipped three times here. The two unnameable
+            // entries cost themselves; the three nameable ones must all still list.
+            const instructOpts = await optionsOf('fmt-instruct-preset');
+            row('must', instructOpts.length === 3 && instructOpts.includes('ChatML') && instructOpts.includes('Alpaca') && instructOpts.includes('Hostile'),
+                'C-PRE-TPL-1 the instruct list renders every nameable preset despite a hostile, a non-object and a nameless one',
+                `options=${JSON.stringify(instructOpts)}`);
+
+            const contextOpts = await optionsOf('fmt-context-preset');
+            row('must', contextOpts.length === 2 && contextOpts.includes('ChatML') && contextOpts.includes('Unmigrated'),
+                'C-PRE-TPL-2 the context list renders its presets', `options=${JSON.stringify(contextOpts)}`);
+
+            // The panel must open on the LIVE template's name, or it would claim the user is on a
+            // preset they are not and a save would overwrite the wrong file.
+            const faceAtOpen = await page.eval("document.querySelector('#dd-btn-fmt-instruct-preset span').textContent");
+            row('must', faceAtOpen === 'ChatML', 'C-PRE-TPL-3 the picker opens on the live template name, not on the first option',
+                `face=${faceAtOpen}`);
+
+            // THE ROW THAT MATTERS: the pick must reshape the PROMPT, not the panel's own display.
+            await pick('fmt-instruct-preset', 'Alpaca');
+            // Null-safe: a regression that drops `enabled` collapses the whole sequence editor, and a
+            // throwing read here would abort the block and take every row below it with it.
+            const seqAfterPick = await page.eval("(document.getElementById('instruct-input_sequence')||{}).value || 'FIELDS-GONE'");
+            await page.click('#d-formatting');
+            await page.waitFor("!document.getElementById('instruct-input_sequence')", 3000);
+            await sendProbe('does the picked preset reshape the prompt');
+            const alpacaPrompt = await promptNow();
+            row('must', alpacaPrompt.includes('### Instruction:') && alpacaPrompt.includes('### Response:') && !alpacaPrompt.includes('<|im_start|>user'),
+                'C-PRE-TPL-4 picking an instruct preset reshapes the very next prompt',
+                `hasAlpaca=${alpacaPrompt.includes('### Instruction:')} chatmlGone=${!alpacaPrompt.includes('<|im_start|>user')} field=${seqAfterPick}`);
+
+            // The stop sequence rides the same preset and is what stops the model running past its
+            // own end-of-turn, so it must move with the pick too.
+            const genBody = await (await fetch(`${args.base}/dev/state`)).json();
+            const stop = genBody.last_generate_body && JSON.parse(genBody.last_generate_body).stop;
+            row('must', Array.isArray(stop) && stop[0] === '### Instruction:',
+                'C-PRE-TPL-5 the picked preset\'s stop sequence reaches the request', `stop=${JSON.stringify(stop)}`);
+
+            // HOSTILE. Its two good fields must apply, its five bad ones must cost only themselves,
+            // and `enabled` (which NO shipped instruct preset carries: it is a user toggle, not a
+            // template property) must survive the pick. A wholesale replace reads the struct default
+            // and silently switches instruct wrapping OFF, so the user picks a template and gets LESS
+            // templating: the prompt would fall back to bare "Name: mes" lines.
+            await page.click('#d-formatting');
+            await page.waitFor("document.getElementById('instruct-input_sequence')", 4000);
+            await pick('fmt-instruct-preset', 'Hostile');
+            const stillEnabled = await page.eval("document.getElementById('instruct-enabled').checked");
+            const hostileOpts = await optionsOf('fmt-instruct-preset');
+            await page.click('#d-formatting');
+            await page.waitFor("!document.getElementById('instruct-input_sequence')", 3000);
+            await sendProbe('does the hostile preset still apply its good fields');
+            const hostilePrompt = await promptNow();
+            row('must', hostilePrompt.includes('<|hostile_user|>') && hostilePrompt.includes('<|hostile_bot|>'),
+                'C-PRE-TPL-6 a hostile preset still applies the fields that ARE readable',
+                `user=${hostilePrompt.includes('<|hostile_user|>')} bot=${hostilePrompt.includes('<|hostile_bot|>')}`);
+            // The prompt must END on the preset's own output sequence, because that is the reply
+            // prime. It is the one observable that isolates `enabled`: with instruct off,
+            // continuationPrefix primes with a bare "<char>:" no matter what the sequences say.
+            // NOT the checkbox (its `checked` DOM property survives a VDOM patch that drops the
+            // attribute, so it reads true either way: asserting on it proves nothing), and NOT a
+            // hardcoded name regex (this chat's character is not named what a guess would guess).
+            // Both of those were the first draft, and both stayed green with the fix broken.
+            const primed = hostilePrompt.trimEnd().endsWith('<|hostile_bot|>');
+            row('must', primed,
+                'C-PRE-TPL-7 a preset carrying no `enabled` key leaves instruct wrapping ON',
+                `primedWithSequence=${primed} tail=${JSON.stringify(hostilePrompt.trimEnd().slice(-24))} checkbox=${stillEnabled}`);
+            row('must', hostileOpts.length === 3,
+                'C-PRE-TPL-8 a hostile preset costs its own bad fields and not the list',
+                `options=${JSON.stringify(hostileOpts)}`);
+            // `wrap` arrived as the junk string "yes". It defaults TRUE, so it must STAY true: read as
+            // false it would unwrap every turn, and the separator newline after the prefix is the
+            // observable that says which happened.
+            row('must', hostilePrompt.includes('<|hostile_user|>\n'),
+                'C-PRE-TPL-9 an unreadable bool string keeps its default rather than flipping the prompt shape',
+                `wrapped=${hostilePrompt.includes('<|hostile_user|>\n')}`);
+
+            // THE ANCHOR MIGRATION, and it is the one that fails SILENTLY. "Unmigrated" is what a
+            // hand-written or older preset looks like: a story string with no anchors and no
+            // story_string_position. Picking it must run the same one-time migration the classic
+            // client runs on a picked preset (power-user.js:2032), or the author's note renders
+            // NOWHERE and nothing on screen says why. The note is put at the anchorAfter slot first,
+            // so it can only arrive through a slot the migration inserted.
+            await page.click('#d-formatting');
+            await page.waitFor("document.getElementById('an-prompt')", 4000);
+            await pick('an-position', '0');
+            await page.eval("(function(){const n=document.getElementById('an-prompt');n.value='The lighthouse is unmanned.';n.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            await sleep(150);
+            await pick('fmt-context-preset', 'Unmigrated');
+            await page.click('#d-formatting');
+            await page.waitFor("!document.getElementById('an-prompt')", 3000);
+            await sendProbe('does the note survive an unmigrated context preset');
+            const notePrompt = await promptNow();
+            row('must', notePrompt.includes('The lighthouse is unmanned.'),
+                'C-PRE-TPL-10 an author\'s note still reaches the prompt after picking a context preset that predates the anchors',
+                `notePresent=${notePrompt.includes('The lighthouse is unmanned.')}`);
+            // The preset really did take effect (its own story string is in play) and the migration
+            // did not leave the anchor handlebars sitting literal in the prompt.
+            row('must', !notePrompt.includes('{{anchorAfter}}') && !notePrompt.includes('{{#if'),
+                'C-PRE-TPL-11 the migrated story string renders rather than shipping literal handlebars',
+                `leaked=${notePrompt.includes('{{anchorAfter}}') || notePrompt.includes('{{#if')}`);
+
+            // THE SAVE CONTRACT. The field names ARE the contract: the route 400s without `preset` or
+            // `name`, and apiId is what picks the directory it writes to (presets.js:29-32).
+            await page.click('#d-formatting');
+            await page.waitFor("document.getElementById('context-preset-name')", 4000);
+            await page.eval("(function(){const n=document.getElementById('context-preset-name');n.value='Lighthouse';n.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            await sleep(150);
+            await page.click('#context-preset-name ~ button');
+            const savedOk = await page.waitFor("document.getElementById('context-preset-name-status').textContent === 'Preset saved'", 5000);
+            const sent = (await (await fetch(`${args.base}/dev/state`)).json()).preset_save;
+            row('must', savedOk && !!sent && sent.apiId === 'context' && sent.name === 'Lighthouse',
+                'C-PRE-TPL-12 saving a preset posts the name and the apiId the route switches on',
+                `sent=${JSON.stringify({ name: sent && sent.name, apiId: sent && sent.apiId })}`);
+            row('must', !!sent && !!sent.preset && typeof sent.preset.story_string === 'string' && sent.preset.story_string.length > 0 && sent.preset.name === 'Lighthouse',
+                'C-PRE-TPL-13 the saved preset body carries the live template, not an empty object',
+                `story_len=${sent && sent.preset && sent.preset.story_string && sent.preset.story_string.length} name=${sent && sent.preset && sent.preset.name}`);
+
+            // A saved preset must be pickable NOW. The library is re-read after a save, so the name
+            // appears without a reload; without that the user saves a preset and cannot see it.
+            const grownOpts = await (async () => {
+                for (let i = 0; i < 20; i++) {
+                    const o = await optionsOf('fmt-context-preset');
+                    if (o.includes('Lighthouse')) return o;
+                    await sleep(200);
+                }
+                return await optionsOf('fmt-context-preset');
+            })();
+            row('must', grownOpts.includes('Lighthouse'),
+                'C-PRE-TPL-14 a just-saved preset is pickable without a reload',
+                `options=${JSON.stringify(grownOpts)}`);
+
+            // THE DURABLE WRITE. A pick rides reading_prefs' ONE debounced saver, and nothing above
+            // proves it: every row up to here reads the LIVE templates or the prompt, all of which
+            // are served from memory. Deleting the scheduleSave() call left all fifteen green, which
+            // is the half-persisted panel this project already shipped once: the pick works all
+            // session, survives a reload out of localStorage, and another browser, another device and
+            // the classic client see the old template forever.
+            //
+            // Assert the BLOB THE SERVER HOLDS, never a reloaded panel: a reload row passes on
+            // localStorage alone and proves nothing about the channel that would be missing.
+            // #d-formatting TOGGLES, so a blind click here CLOSES the drawer the save rows left open.
+            // Ask, then open only if it is shut.
+            const ensureFormattingOpen = async () => {
+                if (await page.eval("!!document.querySelector('#dd-btn-fmt-instruct-preset')")) return;
+                await page.click('#d-formatting');
+                await page.waitFor("!!document.querySelector('#dd-btn-fmt-instruct-preset')", 4000);
+            };
+            await ensureFormattingOpen();
+            await pick('fmt-instruct-preset', 'Alpaca');
+            const blobSeq = await (async () => {
+                const deadline = Date.now() + 8000;
+                while (Date.now() < deadline) {
+                    const r = await (await fetch(`${args.base}/api/settings/get`, { method: 'POST' })).json();
+                    const s = JSON.parse(r.settings || '{}');
+                    const pu = s.power_user || {};
+                    const seq = pu.instruct && pu.instruct.input_sequence;
+                    if (seq === '### Instruction:') return seq;
+                    await sleep(200);
+                }
+                const r = await (await fetch(`${args.base}/api/settings/get`, { method: 'POST' })).json();
+                const s = JSON.parse(r.settings || '{}');
+                return (s.power_user && s.power_user.instruct && s.power_user.instruct.input_sequence) || 'NEVER-ARRIVED';
+            })();
+            row('must', blobSeq === '### Instruction:',
+                'C-PRE-TPL-16 a picked instruct preset reaches the settings blob, not just this browser',
+                `blobInputSequence=${JSON.stringify(blobSeq)}`);
+
+            // The context half rides the same saver and is a separate merge, so a pick that persisted
+            // instruct alone would still lose the story string.
+            // The predicate must be something ONLY the picked "Unmigrated" preset can produce, and
+            // that rules out the anchors on their own: the fixture's OWN ChatML context already
+            // carries {{anchorAfter}}, so an anchors-only assertion passes on the untouched default
+            // blob and proves nothing. It did: this row's first draft stayed green with the
+            // scheduleSave() deleted. `{{#if personality}}` is unique to Unmigrated and `{{#if
+            // system}}` is unique to the fixture default, so together they say WHICH story string
+            // landed; the anchors then say it was migrated on the way.
+            const landed = (str) => typeof str === 'string'
+                && str.includes('{{#if personality}}') && !str.includes('{{#if system}}')
+                && str.includes('{{anchorBefore}}') && str.includes('{{anchorAfter}}');
+            const blobStory = await (async () => {
+                const deadline = Date.now() + 8000;
+                let last = 'NEVER-ARRIVED';
+                while (Date.now() < deadline) {
+                    const r = await (await fetch(`${args.base}/api/settings/get`, { method: 'POST' })).json();
+                    const s = JSON.parse(r.settings || '{}');
+                    const ctx = (s.power_user || {}).context;
+                    if (ctx && typeof ctx.story_string === 'string') last = ctx.story_string;
+                    if (landed(last)) return last;
+                    await sleep(200);
+                }
+                return last;
+            })();
+            row('must', landed(blobStory),
+                'C-PRE-TPL-17 the picked context preset lands in the blob with its anchors already migrated',
+                `blobStory=${JSON.stringify(blobStory.slice(0, 72))}`);
+
+            // The C-CFG-17 shape, this picker's copy: Escape must close the MENU and leave the panel.
+            await ensureFormattingOpen();
+            await page.click('[data-dd-toggle="fmt-instruct-preset"]');
+            await page.waitFor("document.getElementById('dd-list-fmt-instruct-preset')", 2500);
+            for (const type of ['rawKeyDown', 'keyUp']) {
+                await page.cdp.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }, page.sessionId);
+            }
+            const menuClosed = await page.waitFor("!document.getElementById('dd-list-fmt-instruct-preset')", 2500);
+            const panelAlive = await page.eval("!!document.getElementById('instruct-input_sequence')");
+            row('must', menuClosed && panelAlive,
+                'C-PRE-TPL-15 Escape closes the preset menu without dismissing the formatting panel',
+                `menuClosed=${menuClosed} panelAlive=${panelAlive}`);
+        }
+
         // --- C-CFG-SEL: a refetch must not deselect the character (char_api.rebuildCharacterStore) ---
         // clear() nulls selected_index and nothing put it back, so EVERY fetchCharacters silently
         // deselected the character app-wide: a card save, an import, a duplicate and an avatar replace
