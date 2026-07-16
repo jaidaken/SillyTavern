@@ -10,6 +10,7 @@ Usage: python3 devserve.py [--port 8080] [--dist dist] [--backend http://127.0.0
 
 import argparse
 import base64
+import datetime
 import http.server
 import json
 import pathlib
@@ -116,19 +117,23 @@ def _mock_characters(favs):
 # ---- C-HOME recent-chats fixture: ChatInfo[] as /api/chats/recent returns. Character chats carry an
 # avatar; the group chat carries `group` and no avatar, so the client filters it out of the v1 list. ----
 def _mock_recent():
-    now_ms = int(time.time() * 1000)
+    # last_mes is an ISO 8601 string, matching the real endpoint (getChatInfo: send_date ||
+    # mtime.toISOString()) -- NOT a number. The client parses it via JS Date.parse.
+    def iso(ago_ms):
+        dt = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(milliseconds=ago_ms)
+        return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
     return [
         {"file_name": "Rita Recent - 2026-07-14.jsonl", "avatar": "char41.png",
-         "mes": "The harbor lights are on again tonight.", "last_mes": now_ms - 5 * 60 * 1000,
+         "mes": "The harbor lights are on again tonight.", "last_mes": iso(5 * 60 * 1000),
          "file_size": "4 kB", "chat_items": 12},
         {"file_name": "Char 05 Vex - 2026-07-13.jsonl", "avatar": "char05.png",
-         "mes": "Let us take the eastern road while the tide is low.", "last_mes": now_ms - 3 * 60 * 60 * 1000,
+         "mes": "Let us take the eastern road while the tide is low.", "last_mes": iso(3 * 60 * 60 * 1000),
          "file_size": "2 kB", "chat_items": 6},
         {"file_name": "Char 06 Vex - 2026-07-10.jsonl", "avatar": "char06.png",
-         "mes": "The lantern gutters in the wind and the door creaks open.", "last_mes": now_ms - 4 * 24 * 60 * 60 * 1000,
+         "mes": "The lantern gutters in the wind and the door creaks open.", "last_mes": iso(4 * 24 * 60 * 60 * 1000),
          "file_size": "1 kB", "chat_items": 4},
         {"file_name": "Party - 2026-07-09.jsonl", "group": "grp1",
-         "mes": "We should make camp here before nightfall.", "last_mes": now_ms - 6 * 24 * 60 * 60 * 1000,
+         "mes": "We should make camp here before nightfall.", "last_mes": iso(6 * 24 * 60 * 60 * 1000),
          "file_size": "3 kB", "chat_items": 8},
     ]
 

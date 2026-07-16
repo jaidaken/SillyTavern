@@ -41,7 +41,9 @@ pub const RecentRow = struct {
 const RecentJson = struct {
     file_name: []const u8 = "",
     mes: []const u8 = "",
-    last_mes: f64 = 0,
+    // The backend sends this as an ISO 8601 STRING (getChatInfo: send_date || mtime.toISOString()),
+    // not a number; parsed to epoch ms at render time (parseDateMs).
+    last_mes: []const u8 = "",
     avatar: []const u8 = "",
     group: []const u8 = "",
 };
@@ -163,7 +165,8 @@ fn dupePreview(mes: []const u8) ![]u8 {
     return out;
 }
 
-fn formatWhen(then_ms: f64, now_ms: f64) ![]u8 {
+fn formatWhen(last_mes: []const u8, now_ms: f64) ![]u8 {
+    const then_ms = parseDateMs(last_mes);
     const diff = now_ms - then_ms;
     if (!std.math.isFinite(diff) or diff < 0) return alloc.dupe(u8, "recently");
     const secs: u64 = @intFromFloat(@trunc(diff / 1000.0));
@@ -176,6 +179,15 @@ fn formatWhen(then_ms: f64, now_ms: f64) ![]u8 {
     if (days < 7) return std.fmt.allocPrint(alloc, "{d}d ago", .{days});
     var buf: [10]u8 = undefined;
     return alloc.dupe(u8, data.isoDateFromMs(then_ms, &buf));
+}
+
+/// Parse the last-message date string (ISO 8601 from the backend) to epoch ms via JS Date.parse.
+/// Returns NaN for an empty or unparseable value, which formatWhen renders as "recently".
+fn parseDateMs(s: []const u8) f64 {
+    if (zx.platform.role != .client or s.len == 0) return std.math.nan(f64);
+    const date_ctor = zx.client.js.global.get(zx.client.js.Object, "Date") catch return std.math.nan(f64);
+    defer date_ctor.deinit();
+    return date_ctor.call(f64, "parse", .{zx.client.js.string(s)}) catch std.math.nan(f64);
 }
 
 fn nowMs() f64 {
