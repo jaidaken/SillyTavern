@@ -8,6 +8,9 @@
 // The width stays an inline style: it is a dragged pixel value, which is what an inline style is
 // for. Below 768px the dock goes full-screen, so its width utility is important-flagged; nothing
 // else can beat an inline style.
+//
+// Every dock id has a body, so the trailing else only terminates the chain and renders nothing (the
+// drawer router says the same).
 pub const PanelProps = struct {
     panel: ui.Panel,
 };
@@ -37,7 +40,7 @@ pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
                         <CharacterListRegion />
                     </div>
                 ) else (
-                    <PanelEmpty />
+                    <></>
                 )}
             </div>
             <div
@@ -59,7 +62,6 @@ pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
 const zx = @import("zx");
 const ui = @import("../ui.zig");
 const PanelHead = @import("../panelchrome.zx").PanelHead;
-const PanelEmpty = @import("../panelchrome.zx").PanelEmpty;
 const AiConfigBody = @import("ai_config_body.zx").AiConfigBody;
 const PersonaList = @import("persona_list.zx").PersonaList;
 const CharacterToolbar = @import("character_toolbar.zx").CharacterToolbar;

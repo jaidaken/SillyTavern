@@ -4,6 +4,10 @@
 // them, so the two lists cannot drift. The list never goes to grid view, so it carries no data-view;
 // the row's group-data-[view=grid] utilities simply never match.
 //
+// Which row is selected is a STATE, so it rides aria-selected on a listbox option, not the
+// .is-selected class alone: the class paints the amber wash, and a class is invisible to a screen
+// reader (WD38). The keyboard behaviour is unchanged (tabindex=0, Enter and Space select).
+//
 // Below the list sits the CRUD block, mirroring character_actions.zx: a toolbar-level New, and a
 // per-selection block (rename, edit description, set default, replace avatar, delete). Each action
 // calls persona_actions directly (Zig owns the fetch, the dialogs, and the store reload); only the
@@ -21,13 +25,14 @@ pub fn PersonaList(ctx: *zx.ComponentCtx(void)) zx.Component {
                 <div
                     id="persona-list"
                     class="char-list group/list flex min-h-[8rem] flex-col gap-[2px]"
-                    role="list"
+                    role="listbox"
                     aria-label="Personas"
                 >
                     {for (ps, 0..) |p, i| (
                         <div
                             class={if (isSelected(i)) (char_list.row_class ++ " is-selected") else char_list.row_class}
-                            role="listitem"
+                            role="option"
+                            aria-selected={if (isSelected(i)) "true" else "false"}
                             data-persona-index={i}
                             tabindex="0"
                             onclick={ctx.bind(onPersonaSelect)}
@@ -71,9 +76,13 @@ fn selectedActions(ctx: *zx.ComponentCtx(void)) zx.Component {
     );
 }
 
-const act_btn = "persona-act-btn flex-none cursor-pointer rounded-md border border-border bg-surface-2 px-3 py-1 text-xs text-text hover:bg-tool-hover max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:px-3 max-[768px]:py-2 max-[640px]:flex-1 max-[640px]:justify-center";
-const act_danger = "persona-act-btn persona-act-danger flex-none cursor-pointer rounded-md border border-border bg-surface-2 px-3 py-1 text-xs text-text hover:bg-danger-hover hover:outline-1 hover:outline-danger-ring max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:px-3 max-[768px]:py-2 max-[640px]:flex-1 max-[640px]:justify-center";
-const file_input = "persona-avatar-file max-w-[9rem] text-xs text-muted";
+// The character panel's buttons, in a persona's clothes: same tokens, same reasons (an interactive
+// edge is --color-control-border at 3:1, not the 1.23:1 structural --color-border; the chrome is mono
+// and only prose is serif). See character_actions.zx.
+const act_base = "flex-none cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-text max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:px-3 max-[768px]:py-2 max-[640px]:flex-1 max-[640px]:justify-center";
+const act_btn = "persona-act-btn " ++ act_base ++ " hover:bg-tool-hover";
+const act_danger = "persona-act-btn persona-act-danger " ++ act_base ++ " hover:bg-danger-hover hover:outline-1 hover:outline-danger-ring";
+const file_input = "persona-avatar-file " ++ panelchrome.file_picker;
 
 fn isSelected(index: usize) bool {
     const sel = persona_store.selectedIndex();
@@ -141,3 +150,4 @@ const persona_actions = @import("../persona_actions.zig");
 const regions = @import("../regions.zig");
 const dom_event = @import("../dom_event.zig");
 const char_list = @import("character_list.zx");
+const panelchrome = @import("../panelchrome.zx");

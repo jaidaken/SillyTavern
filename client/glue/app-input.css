@@ -214,6 +214,30 @@
     display: contents;
 }
 
+/* The file picker's button is Chrome's own, drawn inside the control's shadow tree, so it is exactly
+   the case this file exists for: we author the <input>, but no class of ours can reach the button it
+   paints, and unstyled it is the one piece of foreign chrome in the app. Five inputs across four
+   panels wear .file-picker (panelchrome.zx); the input itself stays real, visible and focusable, so
+   the keyboard, .click() and the gate's setFileInputFiles all keep working. The button matches the
+   house one: mono, control-border, radius-md, surface-2. */
+.file-picker::file-selector-button {
+    margin-inline-end: 0.5rem;
+    padding: 0.2rem 0.6rem;
+    border: 1px solid var(--color-control-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-2);
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    cursor: pointer;
+    transition: color 120ms ease, background 120ms ease;
+}
+
+.file-picker::file-selector-button:hover {
+    background: var(--color-tool-hover);
+    color: var(--color-text);
+}
+
 /* ===================================================================================
    THE READING SURFACE.
    A message body is markdown turned into HTML at runtime, so we never author its

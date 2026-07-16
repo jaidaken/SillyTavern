@@ -2,8 +2,12 @@
 pub fn WorldInfoBody(allocator: zx.Allocator) zx.Component {
     // A bare component root transpiles to ziex's failing-allocator context; allocInit mounts it with the real one.
     var zctx = zx.x.allocInit(allocator);
-    return zctx.cmp(PanelEmpty, .{ .name = "PanelEmpty" }, .{});
+    return zctx.cmp(PanelEmpty, .{ .name = "PanelEmpty" }, .{ .text = copy });
 }
+
+// What the panel is for, in the words of the person using it. It used to describe the state of our
+// build instead (WD68).
+const copy = "World Info holds the lore a chat pulls in on its own: mention something an entry lists as a keyword and that entry joins the prompt. This client does not read them yet.";
 
 const zx = @import("zx");
 const PanelEmpty = @import("../panelchrome.zx").PanelEmpty;

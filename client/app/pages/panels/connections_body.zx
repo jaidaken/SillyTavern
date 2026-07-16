@@ -10,9 +10,14 @@
 const input_cls = "flex-1 rounded-md border border-control-border bg-bg px-[0.7rem] py-[0.45rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
 // `conn-connect` is the Connect button's own marker: the gate clicks it by class, so no other
 // control may carry it.
-const btn_base = "cursor-pointer rounded-md border border-accent bg-accent px-[0.9rem] py-[0.45rem] font-mono text-sm text-on-accent transition-[background,filter] duration-120 ease-[ease] hover:brightness-[1.06]";
-const btn_cls = "conn-connect " ++ btn_base;
-const key_save_cls = "conn-key-save " ++ btn_base;
+//
+// Connect is this panel's one filled amber. The theme spends the accent once, on the single active
+// signal (app-input.css:12-13), and Save key wore the identical fill: two golds in one panel, both
+// shouting, neither meaning "this is the button". Save key is the secondary of its own row (it files
+// a key away; Connect is the thing you came here to do), so it keeps the amber as an outline.
+const btn_base = "cursor-pointer rounded-md px-[0.9rem] py-[0.45rem] font-mono text-sm transition-[background,filter,color] duration-120 ease-[ease]";
+const btn_cls = "conn-connect " ++ btn_base ++ " border border-accent bg-accent text-on-accent hover:brightness-[1.06]";
+const key_save_cls = "conn-key-save " ++ btn_base ++ " border border-accent bg-surface-2 text-accent hover:bg-bg";
 const key_clear_cls = "conn-key-clear cursor-pointer rounded-md border border-control-border bg-surface px-[0.9rem] py-[0.45rem] font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:border-border hover:text-text";
 const label_cls = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
 

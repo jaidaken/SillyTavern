@@ -8,6 +8,13 @@
 //
 // The `drawers` class on the nav is an API, not styling: ui.onPageClick walks a click's ancestors
 // looking for it, which is what stops a drawer button from dismissing the panel it just opened.
+//
+// The NAV is the shrink target, never the wordmark. The h1 used to carry shrink + overflow-hidden
+// with the beta chip inside it, so at 390px the mark was 28px of an intended 36 and the chip was
+// sliced down the middle: the app's own name, cut in half, at the size the app is most used. The nav
+// already scrolls its buttons horizontally, which is what a row of 10 icons should do when the
+// viewport runs out; the h1 is flex-none and always renders whole. (The 712-byte beta subset in
+// app-input.css:193-196 exists to draw that glyph at this width; it now draws all of it.)
 pub fn TopBar(allocator: zx.Allocator) zx.Component {
     return (
         <header
@@ -16,7 +23,7 @@ pub fn TopBar(allocator: zx.Allocator) zx.Component {
             class="relative z-20 col-span-full row-start-1 flex h-[var(--topbar-h)] items-center justify-between border-b border-border bg-surface pt-[env(safe-area-inset-top,0px)] pr-2 pb-0 pl-4 max-[768px]:min-w-0 max-[768px]:gap-2 max-[768px]:pl-3"
         >
             <h1
-                class="m-0 flex items-baseline gap-2 font-serif text-[1.1rem] font-semibold tracking-[0.01em] max-[768px]:min-w-0 max-[768px]:shrink max-[768px]:gap-0 max-[768px]:overflow-hidden max-[768px]:text-[0.95rem] max-[768px]:text-ellipsis max-[768px]:whitespace-nowrap"
+                class="m-0 flex flex-none items-baseline gap-2 font-serif text-[1.1rem] font-semibold tracking-[0.01em] whitespace-nowrap max-[768px]:gap-1 max-[768px]:text-[0.95rem]"
                 aria-label="SillyTavern beta"
             >
                 <span class="max-[480px]:hidden" aria-hidden="true">SillyTavern</span>

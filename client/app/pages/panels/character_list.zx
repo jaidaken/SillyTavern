@@ -5,6 +5,9 @@
 // the interaction gate reads back), and whether a row is a favourite (data-fav on the star, the one
 // control whose colour it drives). The grid view restyles the rows from the list, so the list is a
 // named group and the rows read it with group-data-* variants.
+//
+// Selection is a listbox option's aria-selected as well as that class: the class is what paints the
+// amber wash, and paint is not something a screen reader can hear (WD38).
 pub const row_class = "char-item group/row relative flex cursor-pointer items-center gap-3 rounded-md p-2 select-none hover:bg-surface-2 selected:bg-selected selected:outline-1 selected:outline-selected-ring group-data-[view=grid]/list:flex-col group-data-[view=grid]/list:items-stretch group-data-[view=grid]/list:text-center max-[640px]:min-h-[52px] max-[640px]:px-2 max-[640px]:py-[10px]";
 pub const avatar_class = "char-avatar size-[2.4rem] flex-none rounded-md bg-bg object-cover group-data-[view=grid]/list:aspect-square group-data-[view=grid]/list:h-auto group-data-[view=grid]/list:w-full max-[640px]:size-10";
 pub const info_class = "min-w-0 flex-1";
@@ -19,22 +22,28 @@ pub const meta_class = "char-meta mt-px flex items-center gap-1.5 font-mono text
 pub fn CharacterList(ctx: *zx.ComponentCtx(void)) zx.Component {
     char_prefs.ensureHydrated();
     const view = character_view.global;
-    const items = view.result orelse return emptyState(ctx.allocator);
-    if (items.len == 0) return emptyState(ctx.allocator);
+    // Three different nothings, and they used to share one message. `result == null` is the only one
+    // that means the list never loaded; `len == 0` means the store answered and the filters ate
+    // every row, which is what a search for a name nobody has looks like. Telling a user with 60
+    // characters loaded to go and connect a backend, because they mistyped a name, is the panel
+    // lying to them (WD55).
+    const items = view.result orelse return notLoadedState(ctx.allocator);
+    if (items.len == 0) return emptyState(ctx, view);
     const now = nowMs();
     return (
         <div
             @allocator={ctx.allocator}
             class="char-list group/list flex min-h-[8rem] flex-col gap-[2px] data-[view=grid]:grid data-[view=grid]:grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] data-[view=grid]:items-start data-[view=grid]:gap-2"
             data-view={if (view.grid) "grid" else "list"}
-            role="list"
+            role="listbox"
             aria-label="Characters"
             @rendering={.client}
         >
             {for (items) |it| (
                 <div
                     class={if (isSelected(it.index)) (row_class ++ " is-selected") else row_class}
-                    role="listitem"
+                    role="option"
+                    aria-selected={if (isSelected(it.index)) "true" else "false"}
                     data-char-select={it.index}
                     tabindex="0"
                     onclick={ctx.bind(onCharSelect)}
@@ -129,10 +138,72 @@ fn actionsLabel(alloc: std.mem.Allocator, name: []const u8) []const u8 {
     return std.fmt.allocPrint(alloc, "Actions for {s}", .{name}) catch "Character actions";
 }
 
-fn emptyState(allocator: zx.Allocator) zx.Component {
+/// Before the first compute: the store has never answered, so the backend is the thing to talk about.
+fn notLoadedState(allocator: zx.Allocator) zx.Component {
     return (
         <p @allocator={allocator} class="panel-empty m-0 text-sm leading-ui text-muted">No characters loaded. Connect to the SillyTavern backend to see your characters.</p>
     );
+}
+
+/// The store answered and nothing survived. Either the filters ate the list, and the way out is to
+/// drop them, or there are genuinely no characters, and the way out is the New and Import controls
+/// sitting right above this text (WD55: an empty state says what this is and how to fill it).
+fn emptyState(ctx: *zx.ComponentCtx(void), view: character_view.View) zx.Component {
+    if (!filtersActive(view)) {
+        return (
+            <p @allocator={ctx.allocator} class="panel-empty m-0 text-sm leading-ui text-muted">No characters here yet. New writes one from scratch, Import reads a card file you already have.</p>
+        );
+    }
+    return (
+        <div @allocator={ctx.allocator} class="panel-empty flex flex-col items-start gap-2">
+            <p class="m-0 text-sm leading-ui text-muted">{noMatchText(ctx.allocator, view)}</p>
+            <button
+                id="char-clear-filters"
+                class={clear_btn}
+                type="button"
+                onclick={ctx.bind(onClearFilters)}
+            >{clearLabel(view)}</button>
+        </div>
+    );
+}
+
+const clear_btn = "cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-text hover:bg-tool-hover max-[768px]:min-h-11 max-[768px]:px-3 max-[768px]:py-2";
+
+fn filtersActive(view: character_view.View) bool {
+    return view.query.len > 0 or view.fav_only or view.tags.items.len > 0;
+}
+
+/// Names the search term, because the term is the thing the user can act on: a typo is invisible
+/// once the rows are gone and the field is a few pixels tall.
+fn noMatchText(alloc: std.mem.Allocator, view: character_view.View) []const u8 {
+    if (view.query.len == 0) return "No characters match the filters you have on.";
+    if (view.fav_only or view.tags.items.len > 0) {
+        return std.fmt.allocPrint(alloc, "No characters match \"{s}\" with the filters you have on.", .{view.query}) catch "No characters match your search and filters.";
+    }
+    return std.fmt.allocPrint(alloc, "No characters match \"{s}\".", .{view.query}) catch "No characters match your search.";
+}
+
+fn clearLabel(view: character_view.View) []const u8 {
+    if (view.query.len > 0 and !view.fav_only and view.tags.items.len == 0) return "Clear search";
+    return "Clear filters";
+}
+
+/// Clears every filter through the View's own public setters. A tag is removed by handing toggleTag
+/// a COPY of the stored string: it frees the one it holds, so passing the stored slice itself would
+/// have it read freed memory on the way out.
+fn onClearFilters(_: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    character_view.global.setQuery("") catch return;
+    character_view.global.setFavOnly(false);
+    while (character_view.global.tags.items.len > 0) {
+        const tag = zx.allocator.dupe(u8, character_view.global.tags.items[0]) catch break;
+        defer zx.allocator.free(tag);
+        character_view.global.toggleTag(tag) catch break;
+    }
+    character_view.global.compute(char_store.slice()) catch return;
+    // The whole Shell: the search field and the tag chips live in the toolbar, a different component,
+    // and they have to stop showing filters that are no longer on.
+    regions.bumpShell();
 }
 
 fn isSelected(index: usize) bool {
@@ -207,3 +278,4 @@ const char_prefs = @import("../character_prefs.zig");
 const character_row = @import("../character_row.zig");
 const character_view = @import("../character_view.zig");
 const dom_event = @import("../dom_event.zig");
+const regions = @import("../regions.zig");

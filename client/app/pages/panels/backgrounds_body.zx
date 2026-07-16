@@ -12,7 +12,7 @@
 const tile_action = "bg-tile-action grid size-7 cursor-pointer place-items-center rounded-md border border-control-border bg-surface-2/90 text-muted transition-colors duration-120 ease-[ease] hover:text-text";
 const retry_btn = "cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text";
 const tile_btn = "bg-tile block w-full cursor-pointer overflow-hidden rounded-md border border-control-border bg-bg p-0 text-left transition-colors duration-120 ease-[ease] aria-pressed:border-accent";
-const file_input = "bg-upload-file max-w-[9rem] text-xs text-muted";
+const file_input = "bg-upload-file " ++ panelchrome.file_picker;
 const none_btn = "bg-tile grid aspect-[16/9] cursor-pointer place-items-center rounded-md border border-control-border bg-bg font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text aria-pressed:border-accent aria-pressed:text-accent";
 
 pub fn BackgroundsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
@@ -193,5 +193,6 @@ const zx = @import("zx");
 const std = @import("std");
 const dom_event = @import("../dom_event.zig");
 const backgrounds = @import("../backgrounds.zig");
+const panelchrome = @import("../panelchrome.zx");
 
 const log = std.log.scoped(.panels);

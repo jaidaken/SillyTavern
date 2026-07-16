@@ -2,6 +2,10 @@
 //
 // It drops from the bar and overlays the content: elevation is surface + border, never a shadow
 // (WD16, dark UI). Below 768px it spans the full width and loses its corners.
+//
+// Every drawer id has a body, so the trailing else only terminates the chain and renders nothing. It
+// used to render a shared placeholder, which is how one sentence about the state of our build ended
+// up shipped inside two real panels; a body with nothing to show now says its own piece.
 pub const DrawerProps = struct {
     panel: ui.Panel,
 };
@@ -32,7 +36,7 @@ pub fn TopDrawer(allocator: zx.Allocator, props: DrawerProps) zx.Component {
                 ) else if (p.id == .card_editor) (
                     <CardEditorBody />
                 ) else (
-                    <PanelEmpty />
+                    <></>
                 )}
             </div>
         </section>
@@ -42,7 +46,6 @@ pub fn TopDrawer(allocator: zx.Allocator, props: DrawerProps) zx.Component {
 const zx = @import("zx");
 const ui = @import("../ui.zig");
 const PanelHead = @import("../panelchrome.zx").PanelHead;
-const PanelEmpty = @import("../panelchrome.zx").PanelEmpty;
 const ConnectionsBody = @import("connections_body.zx").ConnectionsBody;
 const FormattingBody = @import("formatting_body.zx").FormattingBody;
 const WorldInfoBody = @import("world_info_body.zx").WorldInfoBody;

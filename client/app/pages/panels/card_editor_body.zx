@@ -18,7 +18,10 @@ const field_col = "setting-col flex flex-col gap-2";
 const control_base = "w-full rounded-md border border-control-border bg-bg px-3 py-2 font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] placeholder:text-faint focus:border-accent focus:not-focus-visible:outline-none";
 const text_area = "min-h-[7rem] resize-y " ++ control_base;
 const action_btn = "cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text";
-const save_btn = "cursor-pointer rounded-md border border-accent bg-surface-2 px-3 py-1 font-mono text-sm text-accent transition-colors duration-120 ease-[ease] hover:bg-bg aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
+// Save is what this whole panel is for, so it is the one filled amber in it: the theme spends the
+// accent once, on the single active signal (app-input.css:12-13). It was an outline sitting beside
+// an outline Revert, which left the panel's actual primary indistinguishable from its escape hatch.
+const save_btn = "cursor-pointer rounded-md border border-accent bg-accent px-3 py-1 font-mono text-sm text-on-accent transition-[background,filter] duration-120 ease-[ease] hover:brightness-[1.06] aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
 const greeting_btn = "self-start " ++ action_btn;
 
 const spec_list: []const card_form.Spec = &card_form.specs;
@@ -140,7 +143,7 @@ pub fn CardEditorBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                             name="card-avatar"
                             type="file"
                             accept="image/*"
-                            class="text-sm text-muted"
+                            class={panelchrome.file_picker}
                             aria-label="Replace the card image"
                             aria-describedby="card-avatar-hint"
                             onchange={ctx.bind(onAvatarPick)}
@@ -264,6 +267,7 @@ const dom_event = @import("../dom_event.zig");
 const card_editor = @import("../card_editor.zig");
 const card_form = @import("../card_form.zig");
 const char_store = @import("../character_store.zig");
+const panelchrome = @import("../panelchrome.zx");
 const nav = @import("../dropdown_nav.zig");
 const dropdown = @import("../dropdown.zx");
 const Dropdown = dropdown.Dropdown;

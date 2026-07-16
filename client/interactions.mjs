@@ -25,6 +25,23 @@ function parseArgs(argv) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/* W6 */
+// WCAG contrast for the W6 rows, injected into a page eval. The colour is PAINTED to resolve it:
+// this theme is authored in oklch and color-mix, and Chrome keeps both verbatim in computed style
+// ("oklch(0.54 0.018 72)"), so scraping the numbers out of the string reads L/C/H as if they were
+// RGB and lands every pair at ~1:1. A 1x1 canvas gives the sRGB bytes the display actually gets.
+const contrastFn = `
+    const rgb = (c) => { const cv = document.createElement('canvas'); cv.width = cv.height = 1;
+        const x = cv.getContext('2d', { willReadFrequently: true });
+        x.fillStyle = c; x.fillRect(0, 0, 1, 1);
+        const d = x.getImageData(0, 0, 1, 1).data; return [d[0], d[1], d[2]]; };
+    const lum = (c) => { const [r, g, b] = rgb(c).map((v) => { const s = v / 255;
+        return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4); });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    const contrast = (a, b) => { const l1 = lum(a), l2 = lum(b);
+        return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05); };
+`;
+
 class CDP {
     constructor(ws) {
         this.ws = ws;
@@ -2140,6 +2157,168 @@ async function main() {
             row('must', cardStillOpen,
                 'C-CFG-SEL-2 the card editor still has its character after a refetch',
                 `cardOpen=${cardStillOpen}`);
+        }
+
+        /* W6 */
+        // Ten design findings against the panels. Three files had drifted in their own worktree
+        // (character/persona actions + lists), and the rest were single-panel defects. Every row here
+        // re-establishes its own state, so the block is position-independent.
+        console.log('== W6 panel design fixes ==');
+        {
+            await page.navigate(`${args.base}/`);
+            await openRecentChat();
+            await page.click('#d-characters');
+            await page.waitFor("document.querySelectorAll('#chat-root .char-item').length > 0", 5000);
+
+            // A search that matches nothing is NOT the same nothing as a list that never loaded, and
+            // both used to render "Connect to the SillyTavern backend": with 60 characters in the
+            // store, a typo was answered by an instruction to connect a backend already connected.
+            await page.focus('.char-search');
+            await page.insertText('zzzzznotacharacter');
+            const noRows = await page.waitFor("document.querySelectorAll('#chat-root .char-item').length === 0", 4000);
+            const emptyCopy = await page.eval("(function(){const e=document.querySelector('#chat-root .panel-empty');return e?e.textContent.trim():'';})()");
+            const namesTheTerm = emptyCopy.includes('zzzzznotacharacter');
+            const noConnectLie = !/connect to the sillytavern backend/i.test(emptyCopy);
+            const offersOut = await page.eval("!!document.getElementById('char-clear-filters')");
+            row('must', noRows && namesTheTerm && noConnectLie && offersOut,
+                'W6-1 a search matching nothing names the term and offers a way out, never "connect a backend"',
+                `rowsGone=${noRows} namesTerm=${namesTheTerm} noConnectCopy=${noConnectLie} clearControl=${offersOut} copy=${JSON.stringify(emptyCopy)}`);
+
+            await page.click('#char-clear-filters');
+            const rowsBack = await page.waitFor("document.querySelectorAll('#chat-root .char-item').length > 0", 4000);
+            const boxCleared = await page.eval("document.querySelector('.char-search').value === ''");
+            row('must', rowsBack && boxCleared,
+                'W6-2 clearing from that empty state empties the search box and brings the list back',
+                `rows=${rowsBack} searchBoxCleared=${boxCleared}`);
+
+            // The action buttons reached for --color-border (the STRUCTURAL edge, for a panel
+            // divider) where every other panel uses --color-control-border, and inherited the body
+            // serif where all other chrome is mono. Measured from the rendered page, not asserted as
+            // a class string: a class-string row passes on a token resolving to anything at all.
+            const btnStyle = await page.eval(`(function(){${contrastFn}
+                const b=document.querySelector('.char-act-btn');
+                if(!b)return JSON.stringify({err:'no .char-act-btn'});
+                const s=getComputedStyle(b);
+                const ta=document.getElementById('send_textarea');
+                return JSON.stringify({
+                    ratio:Math.round(contrast(s.borderTopColor,s.backgroundColor)*100)/100,
+                    font:s.fontFamily,
+                    matchesHouseControl: ta ? s.borderTopColor === getComputedStyle(ta).borderTopColor : false,
+                });})()`);
+            const bs = JSON.parse(btnStyle);
+            const monoChrome = /JetBrains Mono/i.test(bs.font || '');
+            row('must', bs.ratio >= 3 && monoChrome && bs.matchesHouseControl,
+                'W6-3 the character action buttons wear the interactive edge (>=3:1) and the chrome face',
+                `borderVsFill=${bs.ratio}:1 mono=${monoChrome} sameEdgeAsComposerInput=${bs.matchesHouseControl} font=${JSON.stringify(bs.font)}`);
+
+            // Chrome's own file button INHERITS the mono font off the input and paints a strong edge
+            // of its own, so "is it mono" and "has contrast" BOTH pass on the unstyled default. What
+            // separates our button from the browser's is the app's own tokens. The input stays real
+            // and focusable on purpose: two of these are driven by setFileInputFiles (C-CARD-13,
+            // C-BG2-6) and one by .click() while detached.
+            const picker = await page.eval(`(function(){${contrastFn}
+                const i=document.getElementById('char-import-input');
+                if(!i)return JSON.stringify({err:'no #char-import-input'});
+                const s=getComputedStyle(i,'::file-selector-button');
+                const house=getComputedStyle(document.querySelector('.char-act-btn'));
+                i.focus();
+                return JSON.stringify({
+                    housefill:s.backgroundColor === house.backgroundColor,
+                    houseEdge:s.borderTopColor === house.borderTopColor,
+                    edge:Math.round(contrast(s.borderTopColor,s.backgroundColor)*100)/100,
+                    mono:/JetBrains Mono/i.test(s.fontFamily),
+                    focusable:document.activeElement===i,
+                    stillAFileInput:i.type==='file' && typeof i.files==='object',
+                });})()`);
+            const pk = JSON.parse(picker);
+            row('must', pk.housefill && pk.houseEdge && pk.edge >= 3 && pk.mono && pk.focusable && pk.stillAFileInput,
+                'W6-4 the file picker wears the house button, not Chrome\'s, and stays a real focusable file input',
+                `sameFillAsHouseBtn=${pk.housefill} sameEdgeAsHouseBtn=${pk.houseEdge} buttonEdge=${pk.edge}:1 mono=${pk.mono} focusable=${pk.focusable} realFileInput=${pk.stillAFileInput}`);
+
+            // Selection rode a class alone, which paints the amber wash and tells a screen reader
+            // nothing. aria-selected has to track the same condition the class does, on every row.
+            const ariaOf = (listSel) => page.eval(`(function(){const l=document.querySelector('${listSel}');
+                if(!l)return JSON.stringify({list:'MISSING',roles:[],agree:false,selected:-1});
+                const rows=[...l.querySelectorAll('.char-item')];
+                return JSON.stringify({list:l.getAttribute('role'),
+                roles:[...new Set(rows.map(function(r){return r.getAttribute('role');}))],
+                agree:rows.length>0 && rows.every(function(r){return r.getAttribute('aria-selected') === String(r.classList.contains('is-selected'));}),
+                selected:rows.filter(function(r){return r.getAttribute('aria-selected')==='true';}).length});})()`);
+            const ca = JSON.parse(await ariaOf('#chat-root .char-list[aria-label="Characters"]'));
+            row('must', ca.list === 'listbox' && ca.roles.length === 1 && ca.roles[0] === 'option' && ca.agree,
+                'W6-5 every character row publishes its selection state in ARIA, not just in a class',
+                `list=${ca.list} rowRoles=${JSON.stringify(ca.roles)} ariaMatchesClass=${ca.agree}`);
+
+            await page.click('#d-persona');
+            await page.waitFor("document.querySelectorAll('#persona-list .char-item').length >= 2", 5000);
+            await page.click('#persona-list .char-item[data-persona-index="1"] .char-name');
+            await page.waitFor("document.querySelector('#persona-list .char-item[data-persona-index=\\'1\\']').classList.contains('is-selected')", 2500);
+            const pa = JSON.parse(await ariaOf('#persona-list'));
+            row('must', pa.list === 'listbox' && pa.roles.length === 1 && pa.roles[0] === 'option' && pa.agree && pa.selected === 1,
+                'W6-6 the selected persona says so in ARIA, not just in a class',
+                `list=${pa.list} rowRoles=${JSON.stringify(pa.roles)} ariaMatchesClass=${pa.agree} selectedCount=${pa.selected}`);
+
+            // #send-status must STILL UPDATE after being moved into the composer's flow. It is
+            // childless in the markup on purpose: connection.zig reflects into it with a textContent
+            // write, whose setter REPLACES an element's children with a fresh text node. Give that
+            // span a vdom text child and ziex owns a node by vnode id, the first status write detaches
+            // it, and every later render patches an orphan while the reader sees a frozen line
+            // (858e2c9fd, the card editor's footer). A geometry-only row would stay green with the
+            // readout frozen at "Connected" while the backend is down, so drive a real transition:
+            // Connect persists, and onPersistDone calls updateSendStatus -> "Backend: <type>".
+            const statusBefore = await page.eval("document.getElementById('send-status').textContent.trim()");
+            await page.click('#d-connections');
+            await page.waitFor("document.getElementById('dd-btn-conn-type')", 4000);
+            await page.click('.conn-connect');
+            const statusMoved = await page.waitFor(
+                `document.getElementById('send-status').textContent.trim() !== ${JSON.stringify(statusBefore)}`, 6000);
+            const statusAfter = await page.eval("document.getElementById('send-status').textContent.trim()");
+            row('must', statusMoved && statusAfter.length > 0,
+                'W6-7 the backend readout still updates in place (no vdom text child to detach)',
+                `before=${JSON.stringify(statusBefore)} after=${JSON.stringify(statusAfter)} changed=${statusMoved}`);
+
+            // The readout is a fixture, not a toast: connection.zig writes a standing line at boot and
+            // leaves it. Absolutely positioned over the log it was a permanent label on the
+            // conversation, covering the last line of the chat at phone width. Measured against the
+            // CHAT REGION's box, not against whichever messages are loaded: #chat is the
+            // conversation's airspace whether it holds two messages or two hundred, and an
+            // overlapped-message count reads 0 on the unfixed build purely because this fixture's chat
+            // is too short to reach the composer at 390px. The wordmark rides the same override.
+            await page.click('#d-connections');
+            const wideW = await page.eval('window.innerWidth');
+            await page.cdp.send('Emulation.setDeviceMetricsOverride',
+                { width: 390, height: 844, deviceScaleFactor: 1, mobile: false }, page.sessionId);
+            await page.waitFor('window.innerWidth === 390', 3000);
+            const phone = await page.eval("(function(){const s=document.getElementById('send-status');"
+                + "if(!s)return JSON.stringify({err:'no #send-status'});"
+                + "const sr=s.getBoundingClientRect();const cr=document.getElementById('chat').getBoundingClientRect();"
+                // Clip to #chat's box first: it scrolls, so an out-of-view message keeps a rect running
+                // past the container and read as covered (covers=1) with the chip provably below it.
+                + "const over=[...document.querySelectorAll('#chat .mes_text')].filter(function(m){"
+                + "const r=m.getBoundingClientRect();"
+                + "const top=Math.max(r.top,cr.top), bot=Math.min(r.bottom,cr.bottom);"
+                + "if(bot<=top)return false;"
+                + "return sr.bottom>top+0.5 && sr.top<bot-0.5 && sr.right>r.left+0.5 && sr.left<r.right-0.5;});"
+                + "const h1=document.querySelector('#topbar h1');"
+                + "return JSON.stringify({text:s.textContent.trim(),h:Math.round(sr.height),covers:over.length,"
+                + "inChatBox: sr.bottom > cr.top + 0.5 && sr.top < cr.bottom - 0.5,"
+                + "statusTop:Math.round(sr.top),chatBottom:Math.round(cr.bottom),"
+                + "markClipped:h1.scrollWidth > h1.clientWidth + 1,"
+                + "markW:h1.clientWidth,markFull:h1.scrollWidth});})()");
+            const ph = JSON.parse(phone);
+            await page.cdp.send('Emulation.clearDeviceMetricsOverride', {}, page.sessionId);
+            // Same restore discipline the C-MSG rows learned the hard way: the override returns before
+            // the relayout, and a later row would inherit the half-restored page.
+            const phoneRestored = await page.waitFor(`window.innerWidth === ${wideW}`, 5000);
+            row('must', ph.inChatBox === false && ph.h > 0 && (ph.text || '').length > 0,
+                'W6-8 the backend readout stays out of the conversation at 390px',
+                `insideChatBox=${ph.inChatBox} messagesCovered=${ph.covers} statusTop=${ph.statusTop} chatBottom=${ph.chatBottom} statusHeight=${ph.h} text=${JSON.stringify(ph.text)}`);
+            row('must', ph.markClipped === false,
+                'W6-9 the wordmark renders whole at 390px (the nav is what gives way, not the brand)',
+                `clipped=${ph.markClipped} rendered=${ph.markW}px full=${ph.markFull}px`);
+            row('must', phoneRestored,
+                'W6-10 the 390px override is fully restored before later rows run',
+                `wide=${wideW} now=${await page.eval('window.innerWidth')}`);
         }
 
     } finally {
