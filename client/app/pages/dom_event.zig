@@ -28,6 +28,14 @@ pub fn plainTarget(ev: zx.client.Event) ?js.Object {
     };
 }
 
+/// True while the node is still in the document. ziex dispatches one delegated event to EVERY
+/// ancestor handler on the path, so an earlier handler's rerender can detach the target before a
+/// later handler reads it; a detached node's ancestor walk cannot say where the click landed.
+pub fn isConnected(el: js.Object) bool {
+    if (zx.platform.role != .client) return false;
+    return el.get(bool, "isConnected") catch false;
+}
+
 /// Walk start -> parents for a dataset key, returning the owned value (caller frees) or null.
 pub fn datasetUp(start: js.Object, comptime key: []const u8) ?[]const u8 {
     if (zx.platform.role != .client) return null;

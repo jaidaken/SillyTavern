@@ -27,6 +27,8 @@ comptime {
     _ = @import("log_spec.zig");
     _ = @import("dropdown_nav.zig");
     _ = @import("background_store.zig");
+    _ = @import("textgen_types.zig");
+    _ = @import("secret_mask.zig");
 }
 
 const sink_call = "html.sink(";

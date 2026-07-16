@@ -1,16 +1,45 @@
-// API Connections panel: the llama.cpp server URL, a Connect button that probes the backend and
-// persists the connection into SillyTavern settings (shared with the classic client), and a live
-// status line. connection.zig owns the fetch, the persist and the status reflection; this file only
-// renders the controls and hands the click over.
+// API Connections panel: the backend type selector, the server URL, a Connect button that probes the
+// backend and persists the connection into SillyTavern settings (shared with the classic client), an
+// API-key field for the types that take one, and live status lines. connection.zig owns the fetch,
+// the persist, the key lifecycle and the status reflection; this file renders the controls and
+// delegates the events.
+//
+// The key field is WRITE-ONLY: it renders empty on every pass and the plaintext is never read back
+// from the server (connection.zig header). The line beside it reports presence only.
+
 const input_cls = "flex-1 rounded-md border border-control-border bg-bg px-[0.7rem] py-[0.45rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
-const btn_cls = "conn-connect cursor-pointer rounded-md border border-accent bg-accent px-[0.9rem] py-[0.45rem] font-mono text-sm text-on-accent transition-[background,filter] duration-120 ease-[ease] hover:brightness-[1.06]";
+// `conn-connect` is the Connect button's own marker: the gate clicks it by class, so no other
+// control may carry it.
+const btn_base = "cursor-pointer rounded-md border border-accent bg-accent px-[0.9rem] py-[0.45rem] font-mono text-sm text-on-accent transition-[background,filter] duration-120 ease-[ease] hover:brightness-[1.06]";
+const btn_cls = "conn-connect " ++ btn_base;
+const key_save_cls = "conn-key-save " ++ btn_base;
+const key_clear_cls = "conn-key-clear cursor-pointer rounded-md border border-control-border bg-surface px-[0.9rem] py-[0.45rem] font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:border-border hover:text-text";
+const label_cls = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
 
 pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
+    connection.ensureSecretState();
+    // allow-div-onclick: delegation root for the dropdown's data-* controls; keyboard parity via onkeydown
     return (
-        <div @allocator={ctx.allocator} class="settings-body flex flex-col gap-3" @rendering={.client}>
+        <div
+            @allocator={ctx.allocator}
+            class="settings-body flex flex-col gap-3"
+            @rendering={.client}
+            onclick={onBodyClick}
+            onkeydown={onBodyKey}
+        >
             <div class="flex flex-col gap-3">
                 <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
-                    <label for="llama-url" class="setting-label text-base font-medium max-[768px]:text-[0.88rem]">llama.cpp server</label>
+                    <span class={label_cls}>Backend</span>
+                    <Dropdown
+                        options={textgen.options}
+                        value={connection.selectedType()}
+                        name="conn-type"
+                        label="Backend type"
+                        onchange={&connection.onTypeChange}
+                    />
+                </div>
+                <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                    <label for="llama-url" class={label_cls}>Server URL</label>
                     <input
                         id="llama-url"
                         name="llama_url"
@@ -20,6 +49,28 @@ pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         class={input_cls}
                     />
                 </div>
+                {if (connection.keyFieldVisible()) (
+                    <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                        <label for="conn-api-key" class={label_cls}>API key</label>
+                        <input
+                            id="conn-api-key"
+                            name="conn_api_key"
+                            type="password"
+                            autocomplete="off"
+                            placeholder="Leave blank to keep the stored key"
+                            aria-describedby="conn-key-state"
+                            class={input_cls}
+                        />
+                        <button type="button" class={key_save_cls} onclick={onSaveKey}>Save key</button>
+                        <button type="button" class={key_clear_cls} onclick={onClearKey}>Remove</button>
+                    </div>
+                )}
+                {if (connection.keyFieldVisible()) (
+                    <div class="setting-row flex items-center gap-3">
+                        <span id="conn-key-state" class="text-sm text-muted empty:hidden">{connection.keyStatusText(ctx.allocator)}</span>
+                        <span id="conn-key-status" role="status" aria-live="polite" class="text-sm text-muted empty:hidden"></span>
+                    </div>
+                )}
                 <div class="setting-row flex items-center gap-3">
                     <button type="button" class={btn_cls} onclick={onConnect}>Connect</button>
                     <span id="conn-status" role="status" aria-live="polite" class="text-sm text-muted empty:hidden"></span>
@@ -30,9 +81,32 @@ pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
     );
 }
 
+fn onBodyClick(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    _ = dropdown.onClick(target);
+}
+
+fn onBodyKey(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    _ = dropdown.onKey(ev);
+}
+
 fn onConnect(_: zx.client.Event) void {
-    connection.connectLlama();
+    connection.connect();
+}
+
+fn onSaveKey(_: zx.client.Event) void {
+    connection.saveKey();
+}
+
+fn onClearKey(_: zx.client.Event) void {
+    connection.clearKey();
 }
 
 const zx = @import("zx");
 const connection = @import("../connection.zig");
+const textgen = @import("../textgen_types.zig");
+const dom_event = @import("../dom_event.zig");
+const dropdown = @import("../dropdown.zx");
+const Dropdown = dropdown.Dropdown;

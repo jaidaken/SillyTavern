@@ -98,6 +98,10 @@ pub fn onPageClick(ev: zx.client.Event) void {
     if (zx.platform.role != .client) return;
     if (ui.panels.active == null) return;
     const target = dom_event.plainTarget(ev) orelse return;
+    // A control inside the panel (a dropdown option) rerenders itself away on this same click, and
+    // this handler runs after it, so the membership tests below would walk a detached node and read
+    // an inside click as an outside one. A click the panel already consumed never dismisses it.
+    if (!dom_event.isConnected(target)) return;
     if (dom_event.hasAncestorId(target, "panel-view")) return;
     if (dom_event.hasAncestorClass(target, "drawers")) return;
     close();

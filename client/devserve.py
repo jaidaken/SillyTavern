@@ -92,6 +92,28 @@ def _default_settings():
     }
 
 
+# --- C-CONN: secrets store for the connection panel's API-key field ---------------------------
+# DUMMY values only, never a real key. Mirrors src/endpoints/secrets.js: the store is a map of
+# secret key -> entry list, one entry active at a time. tabby is seeded so the gate can prove the
+# "key already set" path without writing first; llamacpp starts bare to prove "no key set".
+MOCK_SECRET_VALUE = "dummy-tabby-key-for-the-gate-0001"
+
+
+def _mask_secret(value):
+    """The masking secrets.js getMaskedValue applies when allowKeysExposure is off."""
+    if len(value) <= 10:
+        return "*" * 10
+    return "*" * 7 + value[-3:]
+
+
+def _default_secrets():
+    return {
+        "api_key_tabby": [
+            {"id": "sec-tabby-1", "value": MOCK_SECRET_VALUE, "label": "seeded", "active": True},
+        ],
+    }
+
+
 def _mock_characters(favs):
     chars = []
     for i in range(60):
@@ -214,6 +236,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             cls.persona_settings = _default_settings()
         return cls.persona_settings
 
+    # C-CONN: mutable secrets store so a key write/delete round-trips on the next read.
+    secrets = None
+
+    # C-CONN: armed via /dev/arm-keys-exposed to model config allowKeysExposure=true, where
+    # secrets.js getMaskedValue returns the RAW key. The client's own re-mask is then the only guard
+    # between a live key and the DOM, so the gate has to drive this path to test that guard at all.
+    keys_exposed = False
+
+    @classmethod
+    def secrets_store(cls):
+        if cls.secrets is None:
+            cls.secrets = _default_secrets()
+        return cls.secrets
+
     @classmethod
     def undo_current(cls):
         if cls.undo_chat is None:
@@ -275,6 +311,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.dev_stream()
             if self.path.startswith("/dev/hold"):
                 return self.dev_hold()
+            # C-CONN: seed the configured textgen type so the gate can tell a reflected mined type
+            # from the client's own default (the fixture blob's type IS the default).
+            if self.path.startswith("/dev/conn-type"):
+                params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                api_type = params.get("t", ["llamacpp"])[0]
+                textgen = Handler.settings_blob().setdefault("textgenerationwebui_settings", {})
+                textgen["type"] = api_type
+                textgen.setdefault("server_urls", {})[api_type] = f"http://127.0.0.1:5001/{api_type}"
+                return self.mock_json({"ok": True, "type": api_type})
             if self.path.startswith("/dev/state"):
                 return self.mock_json({
                     "recorded_connection": Handler.recorded_connection,
@@ -285,10 +330,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "get_count": Handler.get_count,
                     "get_409_count": Handler.get_409_count,
                     "persona_settings": Handler.persona_settings,  # C-PERS
+                    "secrets": Handler.secrets,  # C-CONN
                     "full_token": Handler.full_token,
                     "reader_total": len(Handler.reader_current()),
                     "reader_above_probe": Handler.reader_current()[0]["mes"],
                 })
+            # C-CONN: model allowKeysExposure=true, so /api/secrets/read hands back raw keys.
+            if self.path.startswith("/dev/arm-keys-exposed"):
+                Handler.keys_exposed = True
+                return self.mock_json({"ok": True, "keys_exposed": True})
             if self.path.startswith("/dev/arm-get-409"):
                 Handler.arm_get_409 = True
                 return self.mock_json({"armed": True})
@@ -449,6 +499,50 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/settings/set-connection":
             Handler.recorded_connection = {"api_type": req.get("api_type"), "api_server": req.get("api_server")}
             return self.mock_json({"ok": True, "connection": Handler.recorded_connection})
+        # --- C-CONN: secrets routes, contract-faithful to src/endpoints/secrets.js ---
+        if path == "/api/secrets/read":
+            # allowKeysExposure=true skips the server-side mask entirely (secrets.js getMaskedValue).
+            expose = Handler.keys_exposed
+            return self.mock_json({
+                key: [
+                    {
+                        "id": e["id"],
+                        "value": e["value"] if expose else _mask_secret(e["value"]),
+                        "label": e["label"],
+                        "active": e["active"],
+                    }
+                    for e in entries
+                ]
+                for key, entries in Handler.secrets_store().items()
+            })
+        if path == "/api/secrets/write":
+            key, value = req.get("key"), req.get("value")
+            if not key or not isinstance(value, str):
+                return self.mock_status(400, {"error": "Invalid key or value"})
+            entries = Handler.secrets_store().setdefault(key, [])
+            for entry in entries:
+                entry["active"] = False
+            new_id = f"sec-{key}-{len(entries) + 1}"
+            entries.append({"id": new_id, "value": value, "label": req.get("label") or "Unlabeled", "active": True})
+            return self.mock_json({"id": new_id})
+        if path == "/api/secrets/delete":
+            key, secret_id = req.get("key"), req.get("id")
+            if not key:
+                return self.mock_status(400, {"error": "Key and ID are required"})
+            entries = Handler.secrets_store().get(key) or []
+            for i, entry in enumerate(entries):
+                hit = (entry["id"] == secret_id) if secret_id else entry["active"]
+                if hit:
+                    entries.pop(i)
+                    break
+            if entries and not any(e["active"] for e in entries):
+                entries[0]["active"] = True
+            if not entries:
+                Handler.secrets_store().pop(key, None)
+            # The real route answers 204, so it carries no body.
+            self.send_response(204)
+            self.end_headers()
+            return
         if path == "/api/chats/append":
             msgs = req.get("messages") or []
             # Deterministic resync trigger: a message whose text starts with "409:" forces a mismatch.

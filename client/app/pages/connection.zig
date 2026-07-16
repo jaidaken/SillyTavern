@@ -1,7 +1,13 @@
 //! The backend connection domain: the active connection mined from the settings blob, the boot
-//! status pre-flight, and the interactive llama.cpp connect + server-persist flow. Split out of
-//! char_api (the data layer) so neither file is a god-file; char_api's send loop reads active() here.
-//! The pure parse lives in generate.zig under `zig build test`; this module is browser-verified (ZX5).
+//! status pre-flight, the interactive connect + server-persist flow, and the API-key field's
+//! write-only lifecycle. Split out of char_api (the data layer) so neither file is a god-file;
+//! char_api's send loop reads active() here. The pure parse lives in generate.zig and the type table
+//! in textgen_types.zig, both under `zig build test`; this module is browser-verified (ZX5).
+//!
+//! The API key is WRITE-ONLY by design. `/api/secrets/find` returns plaintext but 403s unless
+//! `allowKeysExposure` is set (src/endpoints/secrets.js:577), so no plaintext round-trip exists on a
+//! default install and this module never asks for one. Presence is read from `/api/secrets/read`,
+//! whose value this module re-masks locally before it reaches the DOM.
 
 const std = @import("std");
 const zx = @import("zx");
@@ -10,6 +16,8 @@ const js = zx.client.js;
 const net = @import("./net.zig");
 const generate = @import("./generate.zig");
 const dom_event = @import("./dom_event.zig");
+const textgen = @import("./textgen_types.zig");
+const secret_mask = @import("./secret_mask.zig");
 
 const alloc = @import("./character_store.zig").page_gpa;
 const log = std.log.scoped(.net);
@@ -26,6 +34,11 @@ var connecting: bool = false;
 var pending_model_buf: [96]u8 = undefined;
 var pending_model_len: usize = 0;
 
+/// The type the panel's selector shows. Copied into a fixed buffer, never aliased: the mined slice
+/// belongs to `conn`, which setFrom frees on the next settings load.
+var selected_buf: [64]u8 = undefined;
+var selected_len: usize = 0;
+
 pub fn active() ?generate.Connection {
     return conn;
 }
@@ -34,6 +47,30 @@ pub fn active() ?generate.Connection {
 /// actually uses (mined from the settings blob), not a hardcoded default. Empty when none is set.
 pub fn activeServerUrl() []const u8 {
     return if (conn) |c| c.api_server else "";
+}
+
+/// The type the selector renders and Connect persists. Falls back to the table default only when
+/// nothing has been mined or picked, so the panel opens on the live configured backend.
+pub fn selectedType() []const u8 {
+    return if (selected_len == 0) textgen.default_type else selected_buf[0..selected_len];
+}
+
+fn storeSelected(t: []const u8) void {
+    const n = @min(t.len, selected_buf.len);
+    @memcpy(selected_buf[0..n], t[0..n]);
+    selected_len = n;
+}
+
+/// The dropdown's onchange. Re-points the key field at the new type's secret and re-reads its state,
+/// so one backend's key presence is never shown under another's name. The dropdown rerenders after
+/// this returns; the state repaint rides the read's callback.
+pub fn onTypeChange(value: []const u8) void {
+    if (!textgen.isKnown(value)) return;
+    if (std.mem.eql(u8, value, selectedType())) return;
+    storeSelected(value);
+    key_state = .{};
+    setKeyStatus("");
+    loadSecretState();
 }
 
 // ---- from the settings blob (boot) ---------------------------------------------------------
@@ -54,6 +91,11 @@ pub fn setFrom(settings_str: []const u8) void {
         setSendStatus("No backend configured");
         return;
     };
+    // The mined type wins over the table default even when the table does not offer it: the selector
+    // showing "Select..." is honest about an unoffered backend, where showing llamacpp would not be.
+    if (conn) |c| {
+        if (c.api_type.len > 0) storeSelected(c.api_type);
+    }
     updateSendStatus();
     checkStatus();
 }
@@ -90,11 +132,11 @@ fn onBootStatusDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     setSendStatusFmt("Backend error {d}", .{status});
 }
 
-// ---- interactive llama.cpp connect (the connections panel) --------------------------------
+// ---- interactive connect (the connections panel) --------------------------------------------
 
-/// Read the server URL from the panel input, probe the backend status, and on a reachable 200
+/// Read the server URL from the panel input, probe the selected backend type, and on a reachable 200
 /// persist the connection to the shared SillyTavern settings. Reflects progress into #conn-status.
-pub fn connectLlama() void {
+pub fn connect() void {
     if (zx.platform.role != .client) return;
     if (connecting) return;
     const url = readUrlInput() orelse {
@@ -105,7 +147,7 @@ pub fn connectLlama() void {
     pending_url = url;
     connecting = true;
     setConnStatus("Connecting...");
-    const body = statusBody(url, "llamacpp") orelse {
+    const body = statusBody(url, selectedType()) orelse {
         connecting = false;
         return;
     };
@@ -145,12 +187,12 @@ fn onProbeDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     pending_model_len = model.len;
     if (model.len > 0) @memcpy(pending_model_buf[0..model.len], model);
     setConnStatus("Saving...");
-    persistLlama(pending_url);
+    persistConnection(selectedType(), pending_url);
 }
 
-fn persistLlama(url: []const u8) void {
+fn persistConnection(api_type: []const u8, url: []const u8) void {
     const body = std.json.Stringify.valueAlloc(alloc, .{
-        .api_type = "llamacpp",
+        .api_type = api_type,
         .api_server = url,
     }, .{}) catch return;
     defer alloc.free(body);
@@ -177,7 +219,7 @@ fn onPersistDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
             }
         } else |_| {}
     }
-    if (!adopted) applyConnection("llamacpp", pending_url);
+    if (!adopted) applyConnection(selectedType(), pending_url);
     updateSendStatus();
     // "Connected" is the post-save signal: the connection is now adopted and send will use it.
     if (pending_model_len > 0) setConnStatusFmt("Connected: {s}", .{pending_model_buf[0..pending_model_len]}) else setConnStatus("Connected");
@@ -203,6 +245,181 @@ fn applyConnection(api_type: []const u8, api_server: []const u8) void {
         .min_p = 0.0,
         .rep_pen = 1.0,
     };
+    storeSelected(api_type);
+}
+
+// ---- the API key (write-only) ---------------------------------------------------------------
+
+/// What the panel knows about the selected type's stored key. Never the key itself: `masked` holds a
+/// locally re-masked tail, and the plaintext exists only inside saveKey's zeroed scratch buffers.
+const KeyState = struct {
+    requested: bool = false,
+    loaded: bool = false,
+    has: bool = false,
+    // Sized to the mask, not to a key: too small to hold one even if the mask ever regressed.
+    masked_buf: [secret_mask.width]u8 = undefined,
+    masked_len: usize = 0,
+    id_buf: [48]u8 = undefined,
+    id_len: usize = 0,
+};
+
+var key_state: KeyState = .{};
+
+/// True when the selected type authenticates with a key at all. Ollama does not, so its field is
+/// never rendered rather than rendered dead.
+pub fn keyFieldVisible() bool {
+    return textgen.secretKeyFor(selectedType()) != null;
+}
+
+/// The key-presence line. Empty until the read lands, so the panel never claims "No key set" about a
+/// backend it has not asked about yet.
+pub fn keyStatusText(allocator: std.mem.Allocator) []const u8 {
+    if (!key_state.loaded) return "";
+    if (!key_state.has) return "No key set";
+    if (key_state.masked_len == 0) return "Key set";
+    return std.fmt.allocPrint(allocator, "Key set ({s})", .{key_state.masked_buf[0..key_state.masked_len]}) catch "Key set";
+}
+
+/// Fire the key-state read once per selected type. Called from the panel's client render, so a
+/// session that never opens the panel never asks the server for secret state at all.
+pub fn ensureSecretState() void {
+    if (zx.platform.role != .client) return;
+    if (key_state.requested) return;
+    loadSecretState();
+}
+
+fn loadSecretState() void {
+    if (zx.platform.role != .client) return;
+    if (textgen.secretKeyFor(selectedType()) == null) return;
+    key_state.requested = true;
+    net.request("/api/secrets/read", "{}", 0, onSecretStateDone, .{});
+}
+
+fn onSecretStateDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
+    _ = tag;
+    key_state.loaded = true;
+    key_state.has = false;
+    key_state.masked_len = 0;
+    key_state.id_len = 0;
+    defer zx.client.rerender();
+    if (status < 200 or status >= 300) {
+        log.warn("secret state read returned {d}", .{status});
+        return;
+    }
+    const r = res orelse return;
+    const key = textgen.secretKeyFor(selectedType()) orelse return;
+    const parsed = r.json(std.json.Value) catch {
+        log.warn("secret state read: response is not json", .{});
+        return;
+    };
+    defer parsed.deinit();
+    if (parsed.value != .object) return;
+    const entry = parsed.value.object.get(key) orelse return;
+    if (entry != .array) return;
+    adoptSecretState(entry.array.items);
+}
+
+/// Adopt the active secret for the selected key, falling back to the first when the server marks
+/// none active (its own delete path reactivates index 0, so an inactive-only list is transient).
+fn adoptSecretState(items: []const std.json.Value) void {
+    var chosen: ?std.json.ObjectMap = null;
+    for (items) |item| {
+        if (item != .object) continue;
+        if (chosen == null) chosen = item.object;
+        const flag = item.object.get("active") orelse continue;
+        if (flag == .bool and flag.bool) {
+            chosen = item.object;
+            break;
+        }
+    }
+    const obj = chosen orelse return;
+    key_state.has = true;
+    if (obj.get("value")) |v| {
+        if (v == .string) storeMasked(v.string);
+    }
+    if (obj.get("id")) |v| {
+        if (v == .string) {
+            const n = @min(v.string.len, key_state.id_buf.len);
+            @memcpy(key_state.id_buf[0..n], v.string[0..n]);
+            key_state.id_len = n;
+        }
+    }
+}
+
+/// Re-mask locally. `/api/secrets/read` returns the RAW value when allowKeysExposure is on
+/// (secrets.js getMaskedValue), so masking here keeps a live key out of the DOM under either config.
+/// The mask itself lives in secret_mask.zig, where `zig build test` proves it browser-free.
+fn storeMasked(value: []const u8) void {
+    key_state.masked_len = secret_mask.mask(value, &key_state.masked_buf).len;
+}
+
+/// Write the key field's value to the server's secret store. The value is never logged and never
+/// echoed back: the field is cleared and the masked presence re-read instead.
+pub fn saveKey() void {
+    if (zx.platform.role != .client) return;
+    const key = textgen.secretKeyFor(selectedType()) orelse return;
+    const value = readKeyInput() orelse {
+        setKeyStatus("Enter an API key");
+        return;
+    };
+    defer {
+        @memset(value, 0);
+        alloc.free(value);
+    }
+    const body = std.json.Stringify.valueAlloc(alloc, .{
+        .key = key,
+        .value = value,
+        .label = "SillyTavern client",
+    }, .{}) catch return;
+    defer {
+        @memset(body, 0);
+        alloc.free(body);
+    }
+    setKeyStatus("Saving key...");
+    net.request("/api/secrets/write", body, 0, onKeyWriteDone, .{});
+}
+
+fn onKeyWriteDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
+    _ = tag;
+    _ = res;
+    if (status < 200 or status >= 300) {
+        setKeyStatusFmt("Key save failed: {d}", .{status});
+        return;
+    }
+    clearKeyInput();
+    setKeyStatus("Key saved");
+    key_state.requested = false;
+    loadSecretState();
+}
+
+/// Delete the selected type's stored key. With no id the server deletes whichever secret is active
+/// (secrets.js deleteSecret), which is the one the panel reported.
+pub fn clearKey() void {
+    if (zx.platform.role != .client) return;
+    const key = textgen.secretKeyFor(selectedType()) orelse return;
+    if (!key_state.has) return;
+    const body = if (key_state.id_len > 0)
+        std.json.Stringify.valueAlloc(alloc, .{
+            .key = key,
+            .id = key_state.id_buf[0..key_state.id_len],
+        }, .{}) catch return
+    else
+        std.json.Stringify.valueAlloc(alloc, .{ .key = key }, .{}) catch return;
+    defer alloc.free(body);
+    setKeyStatus("Removing key...");
+    net.request("/api/secrets/delete", body, 0, onKeyDeleteDone, .{});
+}
+
+fn onKeyDeleteDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
+    _ = tag;
+    _ = res;
+    if (status < 200 or status >= 300) {
+        setKeyStatusFmt("Key removal failed: {d}", .{status});
+        return;
+    }
+    setKeyStatus("Key removed");
+    key_state.requested = false;
+    loadSecretState();
 }
 
 // ---- helpers -------------------------------------------------------------------------------
@@ -222,14 +439,32 @@ fn statusOffline(res: ?*zx.Fetch.Response) bool {
 }
 
 fn readUrlInput() ?[]u8 {
+    return readInput("llama-url");
+}
+
+fn readKeyInput() ?[]u8 {
+    return readInput("conn-api-key");
+}
+
+fn readInput(id: []const u8) ?[]u8 {
     if (zx.platform.role != .client) return null;
-    const el = dom_event.elementById(alloc, "llama-url") orelse return null;
+    const el = dom_event.elementById(alloc, id) orelse return null;
     defer el.deinit();
     const raw = el.ref.getAlloc(js.String, alloc, "value") catch return null;
-    defer alloc.free(raw);
+    defer {
+        @memset(raw, 0);
+        alloc.free(raw);
+    }
     const trimmed = std.mem.trim(u8, raw, " \t\r\n");
     if (trimmed.len == 0) return null;
     return alloc.dupe(u8, trimmed) catch null;
+}
+
+fn clearKeyInput() void {
+    if (zx.platform.role != .client) return;
+    const el = dom_event.elementById(alloc, "conn-api-key") orelse return;
+    defer el.deinit();
+    el.ref.set("value", js.string("")) catch {};
 }
 
 fn setSendStatus(text: []const u8) void {
@@ -238,6 +473,10 @@ fn setSendStatus(text: []const u8) void {
 
 fn setConnStatus(text: []const u8) void {
     reflectText("conn-status", text);
+}
+
+fn setKeyStatus(text: []const u8) void {
+    reflectText("conn-key-status", text);
 }
 
 fn reflectText(id: []const u8, text: []const u8) void {
@@ -253,6 +492,10 @@ fn setSendStatusFmt(comptime fmt: []const u8, args: anytype) void {
 
 fn setConnStatusFmt(comptime fmt: []const u8, args: anytype) void {
     fmtInto("conn-status", fmt, args);
+}
+
+fn setKeyStatusFmt(comptime fmt: []const u8, args: anytype) void {
+    fmtInto("conn-key-status", fmt, args);
 }
 
 fn fmtInto(id: []const u8, comptime fmt: []const u8, args: anytype) void {

@@ -1193,6 +1193,111 @@ async function main() {
         const bootApplied = await page.waitFor(
             "document.documentElement.getAttribute('data-background') === 'on' && document.documentElement.style.getPropertyValue('--chat-bg-image').indexOf('loop.webp') >= 0", 5000);
         row('must', bootApplied, 'C-BG-12 a chosen background is applied again at boot', `applied=${bootApplied}`);
+        /* C-CONN */
+        // The connection panel's type selector and its write-only API-key field. The key never
+        // round-trips: the field renders empty and only a masked tail reaches the DOM.
+        console.log('== C-CONN connection panel ==');
+        const openConnections = async () => {
+            await page.navigate(`${args.base}/`);
+            await openRecentChat();
+            await page.click('#d-connections');
+            await page.waitFor("document.getElementById('dd-btn-conn-type')", 4000);
+        };
+        const ddFace = () => page.eval("document.querySelector('#dd-btn-conn-type span').textContent");
+
+        // Reflect the MINED type: seed a configured type the client does not default to, so a pass
+        // cannot come from the default.
+        await (await fetch(`${args.base}/dev/conn-type?t=tabby`)).json();
+        await openConnections();
+        row('must', (await ddFace()) === 'TabbyAPI',
+            'C-CONN-1 selector reflects the mined type from the settings blob', await ddFace());
+
+        // tabby is seeded with a key, so presence shows without a write, masked to a 3-char tail.
+        const keyState = await page.waitFor("document.getElementById('conn-key-state').textContent.includes('Key set')", 4000)
+            && await page.eval("document.getElementById('conn-key-state').textContent");
+        row('must', typeof keyState === 'string' && keyState.includes('*******001'),
+            'C-CONN-2 a stored key shows as a masked tail only', String(keyState));
+        row('must', !(await page.eval("document.body.textContent.includes('dummy-tabby-key')")),
+            'C-CONN-3 the stored key plaintext never reaches the DOM');
+        row('must', (await page.eval("document.getElementById('conn-api-key').value")) === '',
+            'C-CONN-4 the key field renders empty (write-only, no round-trip)');
+
+        // Write a key: the field clears, presence re-reads, and the mock records it under the
+        // selected type's secret key.
+        await page.focus('#conn-api-key');
+        await page.insertText('dummy-written-key-9zz');
+        await page.click('.conn-key-save');
+        const savedMsg = await page.waitFor("document.getElementById('conn-key-status').textContent.includes('Key saved')", 6000);
+        const clearedField = await page.eval("document.getElementById('conn-api-key').value");
+        const secretsAfterWrite = (await (await fetch(`${args.base}/dev/state`)).json()).secrets;
+        const tabbyEntries = (secretsAfterWrite && secretsAfterWrite.api_key_tabby) || [];
+        const activeEntry = tabbyEntries.find((e) => e.active);
+        row('must', savedMsg && clearedField === '' && !!activeEntry && activeEntry.value === 'dummy-written-key-9zz',
+            'C-CONN-5 save writes the key under api_key_tabby and clears the field',
+            `saved=${savedMsg} field="${clearedField}" active=${activeEntry && activeEntry.id}`);
+
+        // Switching to a type with no key field: ollama takes no key in SECRET_KEYS.
+        await page.click('#dd-btn-conn-type');
+        await page.waitFor("document.getElementById('dd-list-conn-type')", 3000);
+        await page.click("#dd-list-conn-type [data-dd-value='ollama']");
+        const ollamaFace = await page.waitFor("document.querySelector('#dd-btn-conn-type span').textContent === 'Ollama'", 3000);
+        const keyGone = await page.waitFor("!document.getElementById('conn-api-key')", 3000);
+        row('must', ollamaFace && keyGone,
+            'C-CONN-6 a type that takes no key hides the key field', `face=${ollamaFace} hidden=${keyGone}`);
+
+        // Connect persists the SELECTED type, not the hardcoded llamacpp the panel used to send.
+        await page.eval("document.getElementById('llama-url').value=''");
+        await page.focus('#llama-url');
+        await page.insertText('http://127.0.0.1:9098');
+        await page.click('.conn-connect');
+        const connOk = await page.waitFor("document.getElementById('conn-status').textContent.includes('Connected')", 6000);
+        const recorded = (await (await fetch(`${args.base}/dev/state`)).json()).recorded_connection;
+        row('must', connOk && !!recorded && recorded.api_type === 'ollama',
+            'C-CONN-7 connect persists the selected type', JSON.stringify(recorded));
+
+        // Remove drops only the ACTIVE key; secrets.js reactivates the next one, so the panel must
+        // fall back to reporting the seeded key rather than claiming the type has none.
+        await (await fetch(`${args.base}/dev/conn-type?t=tabby`)).json();
+        await openConnections();
+        await page.waitFor("document.getElementById('conn-key-state').textContent.includes('Key set')", 4000);
+        await page.click('.conn-key-clear');
+        const rotated = await page.waitFor("document.getElementById('conn-key-state').textContent.includes('*******001')", 6000);
+        const afterOne = (await (await fetch(`${args.base}/dev/state`)).json()).secrets;
+        const leftAfterOne = (afterOne && afterOne.api_key_tabby) || [];
+        row('must', rotated && leftAfterOne.length === tabbyEntries.length - 1 && leftAfterOne[0].active,
+            'C-CONN-8 remove deletes the active key and reports the one that takes over',
+            `rotated=${rotated} left=${leftAfterOne.length}`);
+
+        // Removing the last one empties the key: the panel states it plainly (no bare spinner).
+        await page.click('.conn-key-clear');
+        const emptied = await page.waitFor("document.getElementById('conn-key-state').textContent.includes('No key set')", 6000);
+        const afterAll = (await (await fetch(`${args.base}/dev/state`)).json()).secrets;
+        row('must', emptied && !(afterAll && afterAll.api_key_tabby),
+            'C-CONN-9 removing the last key empties the store and shows the empty state',
+            `emptied=${emptied} key=${JSON.stringify(afterAll && afterAll.api_key_tabby)}`);
+
+        // DANGEROUS PROPERTY (T0): with allowKeysExposure=true the server returns the key in the
+        // CLEAR, so the client's own re-mask is the only thing between a live key and the DOM. The
+        // masked-server path above cannot leak and therefore cannot test this. Drive the raw path.
+        const rawKey = 'dummy-exposed-key-7xy';
+        await (await fetch(`${args.base}/dev/arm-keys-exposed`)).json();
+        await (await fetch(`${args.base}/dev/conn-type?t=tabby`)).json();
+        await openConnections();
+        await page.focus('#conn-api-key');
+        await page.insertText(rawKey);
+        await page.click('.conn-key-save');
+        await page.waitFor("document.getElementById('conn-key-status').textContent.includes('Key saved')", 6000);
+        // The re-read after the write is the one the server answers in the clear.
+        const maskedShown = await page.waitFor("document.getElementById('conn-key-state').textContent.includes('*******7xy')", 6000);
+        const servedRaw = ((await (await fetch(`${args.base}/dev/state`)).json()).secrets.api_key_tabby || [])
+            .some((e) => e.active && e.value === rawKey);
+        const leaked = await page.eval(
+            `document.body.textContent.includes('${rawKey}')` +
+            ` || document.documentElement.outerHTML.includes('${rawKey}')` +
+            ` || document.getElementById('conn-api-key').value.includes('${rawKey}')`);
+        row('must', servedRaw && maskedShown && !leaked,
+            'C-CONN-10 allowKeysExposure=true: the raw key the server returns never reaches the DOM',
+            `servedRaw=${servedRaw} masked=${maskedShown} leaked=${leaked}`);
     } finally {
         clearTimeout(watchdog);
         cleanup();
