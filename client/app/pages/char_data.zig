@@ -11,18 +11,34 @@ const Character = @import("./character_store.zig").Character;
 /// One character as /api/characters/all returns it (the shallow form). Types are tolerant on
 /// purpose: real card data carries fav as bool OR string, and the numeric metadata may be
 /// absent. Unknown fields are ignored by the parse options (see parseJson).
+/// The card fields below are NOT typed `[]const u8`, and that is deliberate. The server reads them
+/// straight out of the card's own PNG JSON and passes them through UNCOERCED (characters.js:426-430:
+/// `const character = jsonObject; character.create_date = jsonObject.create_date || ...`), so a card
+/// written by another tool can carry any JSON shape at all. Typed as a string, ONE such card does not
+/// merely render oddly: it fails the WHOLE array parse and the user sees ZERO characters. `avatar`,
+/// `date_last_chat`, `chat_size` and `data_size` stay typed because the SERVER sets them (it assigns
+/// the filename and computes the sizes), so a wrong shape there is a broken contract worth failing on.
 pub const CharacterJson = struct {
-    name: []const u8 = "",
+    name: std.json.Value = .null,
     avatar: []const u8 = "",
-    description: []const u8 = "",
-    chat: []const u8 = "",
-    first_mes: []const u8 = "",
+    description: std.json.Value = .null,
+    chat: std.json.Value = .null,
+    first_mes: std.json.Value = .null,
     fav: std.json.Value = .null,
-    create_date: []const u8 = "",
+    create_date: std.json.Value = .null,
     date_last_chat: ?f64 = null,
     chat_size: ?f64 = null,
     data_size: ?f64 = null,
 };
+
+/// The string a loosely-typed JSON field carries, or "" for any other shape. Borrowed from the
+/// parse; copy it to retain.
+pub fn jsonStr(v: std.json.Value) []const u8 {
+    return switch (v) {
+        .string, .number_string => |s| s,
+        else => "",
+    };
+}
 
 /// The one field of /api/settings/get the client reads; the rest is ignored.
 pub const SettingsJson = struct {
@@ -404,11 +420,37 @@ test "parseJson tolerates unknown fields and missing metadata on characters" {
     const parsed = try parseJson([]CharacterJson, testing.allocator, body);
     defer parsed.deinit();
     try testing.expectEqual(@as(usize, 2), parsed.value.len);
-    try testing.expectEqualStrings("Rita", parsed.value[0].name);
+    try testing.expectEqualStrings("Rita", jsonStr(parsed.value[0].name));
     try testing.expect(favTruthy(parsed.value[0].fav));
     try testing.expectEqual(@as(u64, 1783800000000), metaU64(parsed.value[0].date_last_chat));
-    try testing.expectEqualStrings("", parsed.value[1].chat);
+    try testing.expectEqualStrings("", jsonStr(parsed.value[1].chat));
     try testing.expectEqual(@as(u64, 0), metaU64(parsed.value[1].chat_size));
+}
+
+test "one card with an odd field shape costs that field, never the whole list" {
+    // Typed as strings these failed the WHOLE array parse and the user saw ZERO characters. The odd
+    // card sits BETWEEN two good ones, so a parse that bails at the first bad field still fails this.
+    const body =
+        \\[{"name":"Good","avatar":"a.png","description":"d","create_date":"2026-07-01"},
+        \\ {"name":"Odd","avatar":"b.png","description":null,"create_date":1700000000000,
+        \\  "chat":42,"first_mes":["not","a","string"]},
+        \\ {"name":"AlsoGood","avatar":"c.png","description":"d","create_date":"2026-07-02"}]
+    ;
+    const parsed = try parseJson([]CharacterJson, testing.allocator, body);
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 3), parsed.value.len);
+
+    // The good cards are untouched.
+    try testing.expectEqualStrings("Good", jsonStr(parsed.value[0].name));
+    try testing.expectEqualStrings("2026-07-01", jsonStr(parsed.value[0].create_date));
+    try testing.expectEqualStrings("AlsoGood", jsonStr(parsed.value[2].name));
+
+    // The odd card loads, and every field the client cannot read reads as empty rather than wrong.
+    try testing.expectEqualStrings("Odd", jsonStr(parsed.value[1].name));
+    try testing.expectEqualStrings("", jsonStr(parsed.value[1].description));
+    try testing.expectEqualStrings("", jsonStr(parsed.value[1].create_date));
+    try testing.expectEqualStrings("", jsonStr(parsed.value[1].chat));
+    try testing.expectEqualStrings("", jsonStr(parsed.value[1].first_mes));
 }
 
 test "parseJson yields null settings when the field is absent" {

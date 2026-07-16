@@ -125,7 +125,7 @@ def _mock_characters(favs):
             # C-CHAR: an avatar filename is a character's name + .png, so a space is ordinary. This
             # row proves the list percent-encodes the thumbnail src instead of pasting it in raw.
             avatar = "Char 12 Spaced.png"
-        chars.append({
+        entry = {
             "name": name,
             "avatar": avatar,
             "description": f"Mock character {i} for the interactions gate.",
@@ -136,7 +136,15 @@ def _mock_characters(favs):
             "chat_size": 1024 + i,
             "data_size": 4096 + i,
             "create_date": "2026-07-01",
-        })
+        }
+        if i == 30:
+            # A card from another tool: the server passes card JSON through UNCOERCED
+            # (characters.js:426-430), and serving only well-formed cards hid a bug where ONE of
+            # these emptied the whole list. The other 59 pin that it costs only its own fields.
+            entry["create_date"] = 1700000000000
+            entry["description"] = None
+            entry["chat"] = 42
+        chars.append(entry)
     return chars
 
 

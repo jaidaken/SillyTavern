@@ -240,17 +240,19 @@ fn rebuildCharacterStore(list: []const data.CharacterJson) !void {
 fn appendCharacter(cj: data.CharacterJson) !void {
     // Copies out of the json Parsed arena into the store's allocator (Z97: the Parsed is
     // deinited right after this loop).
-    const name = try alloc.dupe(u8, cj.name);
+    // Through data.jsonStr: these arrive straight from the card's own JSON, so a card from another
+    // tool can carry any shape and a wrong one must cost that field, never the whole list.
+    const name = try alloc.dupe(u8, data.jsonStr(cj.name));
     errdefer alloc.free(name);
     const avatar = try alloc.dupe(u8, cj.avatar);
     errdefer alloc.free(avatar);
-    const desc = try alloc.dupe(u8, cj.description);
+    const desc = try alloc.dupe(u8, data.jsonStr(cj.description));
     errdefer alloc.free(desc);
-    const chat = try alloc.dupe(u8, cj.chat);
+    const chat = try alloc.dupe(u8, data.jsonStr(cj.chat));
     errdefer alloc.free(chat);
-    const first_mes = try alloc.dupe(u8, cj.first_mes);
+    const first_mes = try alloc.dupe(u8, data.jsonStr(cj.first_mes));
     errdefer alloc.free(first_mes);
-    const create_date = try alloc.dupe(u8, cj.create_date);
+    const create_date = try alloc.dupe(u8, data.jsonStr(cj.create_date));
     errdefer alloc.free(create_date);
     try char_store.global.append(.{
         .name = name,

@@ -430,6 +430,41 @@ test "the_raw_child_scan_accepts_every_child_individually_sunk" {
     try std.testing.expectEqual(@as(?[]const u8, null), scanRawChildren(escaped_element).offender);
 }
 
+/// `libc_shim` is imported by module name rather than by path, so the aggregator's own line for it
+/// carries no `.zig`. This file is the aggregator, so it is not asked to import itself.
+const import_scan_exempt = [_][]const u8{ "libc_shim.zig", "unit_test.zig" };
+
+// A module the runner never reaches reads as green while proving nothing: character_view.zig sat
+// like that, nine tests that never ran and did not even compile once they did.
+test "every_module_that_has_tests_is_imported_by_this_aggregator" {
+    const gpa = std.testing.allocator;
+    const sources = try loadSources(gpa, std.testing.io, ".zig", &[_][]const u8{});
+    defer freeZxSources(gpa, sources);
+    try std.testing.expect(sources.len >= known_zig_min);
+
+    // The aggregator reads its own source: the import list to check against is the text above.
+    var self_text: ?[]const u8 = null;
+    for (sources) |src| {
+        if (std.mem.eql(u8, src.name, "unit_test.zig")) self_text = src.text;
+    }
+    const imports = self_text orelse return error.AggregatorSourceNotFound;
+
+    var missing: usize = 0;
+    for (sources) |src| {
+        if (isExcluded(src.name, &import_scan_exempt)) continue;
+        // A test declaration at column 0. `test "` inside a string or a comment is not one.
+        if (std.mem.indexOf(u8, src.text, "\ntest \"") == null) continue;
+
+        var needle_buf: [128]u8 = undefined;
+        const needle = try std.fmt.bufPrint(&needle_buf, "@import(\"{s}\")", .{src.name});
+        if (std.mem.indexOf(u8, imports, needle) == null) {
+            std.debug.print("\n{s} has tests but unit_test.zig never imports it: they never run.\n", .{src.name});
+            missing += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 0), missing);
+}
+
 test "no_zx_source_unwraps_sanitized_html_outside_the_sink" {
     const gpa = std.testing.allocator;
     const sources = try loadZxSources(gpa, std.testing.io);
