@@ -62,7 +62,9 @@ pub const specs = [_]Spec{
     .{ .field = .creator, .label = "Creator", .kind = .line, .hint = "Who made the card." },
     .{ .field = .character_version, .label = "Version", .kind = .line, .hint = "The card's own version label." },
     .{ .field = .tags, .label = "Tags", .kind = .line, .hint = "Comma separated." },
-    .{ .field = .world, .label = "World info book", .kind = .line, .hint = "Name of a lorebook to bind. Blank leaves the card's own book alone." },
+    // A non-empty world makes the server REPLACE data.character_book from that lorebook
+    // (characters.js:714-726); blank only clears the binding (:703). The hint says so.
+    .{ .field = .world, .label = "World info book", .kind = .line, .hint = "Lorebook to bind. Saving replaces the card's own book with it. Blank unbinds and leaves the book as it is." },
 };
 
 /// The role options for the character note, matching the original's depth_prompt_role select. Typed
