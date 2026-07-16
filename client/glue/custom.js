@@ -3,6 +3,72 @@
 (function () {
     'use strict';
 
+    // ---- DOM debug channel -------------------------------------------------------------------
+    // The door traces its vnode patches on [zx:dom] too, so app writes into framework-owned DOM
+    // interleave with the framework's own ops under one console filter. That is the diagnostic.
+    // DO NOT MOVE BELOW init(): the door reads globalThis.__zx_debug, and init()'s dynamic import()
+    // is the only thing that loads it, so setting the flag here (module scope, before init runs at
+    // DOMContentLoaded) is what gets it set before the door boots and before wasm instantiates.
+    const ZX_DEBUG_KEY = 'zx:debug';
+    const ZX_DOM_PREFIX = '[zx:dom]';
+
+    function zxDebugStore(on) {
+        try {
+            if (on) localStorage.setItem(ZX_DEBUG_KEY, '1');
+            else localStorage.removeItem(ZX_DEBUG_KEY);
+        } catch (_) { /* private mode: the flag still holds for this session, it just will not survive */ }
+    }
+
+    function zxDebugResolve() {
+        let param = null;
+        try { param = new URLSearchParams(window.location.search).get('zxdebug'); } catch (_) { /* opaque location */ }
+        if (param === '1' || param === '0') {
+            const on = param === '1';
+            // The operator flips this on the LIVE deployed site, where he cannot rebuild to set a
+            // flag. The param therefore writes through to storage: the next plain load keeps it on,
+            // and ?zxdebug=0 is the way back off.
+            zxDebugStore(on);
+            return on;
+        }
+        try { return localStorage.getItem(ZX_DEBUG_KEY) === '1'; } catch (_) { return false; }
+    }
+
+    globalThis.__zx_debug = zxDebugResolve();
+
+    // Mid-session switch: no reload, no redeploy. Reports the state it just set.
+    window.__st_debug = function (on) {
+        const next = !!on;
+        globalThis.__zx_debug = next;
+        zxDebugStore(next);
+        // eslint-disable-next-line no-console -- the debug channel is a deliberate second console sink
+        console.info(ZX_DOM_PREFIX, 'debug', next ? 'ON' : 'OFF', '- filter the console on ' + ZX_DOM_PREFIX);
+        return next;
+    };
+
+    // The gate here is the contract (a trace never escapes with the flag off, whoever calls it).
+    // The gate at each call site is the cost guard (it stops the argument strings being built).
+    // Both are deliberate; neither is redundant with the other.
+    function zxDomTrace(op, target, detail) {
+        if (!globalThis.__zx_debug) return;
+        const line = [ZX_DOM_PREFIX, op, target];
+        if (detail !== undefined) line.push(detail);
+        // eslint-disable-next-line no-console -- the debug channel is a deliberate second console sink
+        console.debug.apply(console, line);
+    }
+
+    // Name an element the way the door names a vnode, so app writes and framework patches read the
+    // same in one filtered console.
+    function zxDomName(el) {
+        if (!el) return '<null>';
+        return (el.tagName ? el.tagName.toLowerCase() : '?') + (el.id ? '#' + el.id : '');
+    }
+
+    if (globalThis.__zx_debug) {
+        // eslint-disable-next-line no-console -- the debug channel is a deliberate second console sink
+        console.info(ZX_DOM_PREFIX, 'debug ON - DOM tracing live. Filter the console on '
+            + ZX_DOM_PREFIX + '; window.__st_debug(false) turns it off.');
+    }
+
     const PURIFY_URL = '/client/glue/vendor/purify.es.mjs';
     const HLJS_URL = '/client/glue/vendor/hljs.mjs';
 
@@ -170,7 +236,14 @@
 
         const hit = highlightCache.get(key);
         if (hit !== undefined) {
+            // allow-raw-html-sink: pre-existing write, unchanged. hljs output over el.textContent; env.sanitize already DOMPurified the source markup.
             el.innerHTML = hit;
+            // live=false is the highlightBlocks path (a detached <template>, cannot drift the page);
+            // live=true is highlightSealedBlocks writing into the framework's own tree.
+            if (globalThis.__zx_debug) {
+                zxDomTrace('app.innerHTML', zxDomName(el), 'highlight cache-hit lang=' + (lang || 'auto')
+                    + ' live=' + document.contains(el) + ' bytes=' + hit.length);
+            }
             return;
         }
 
@@ -180,7 +253,12 @@
             ? hljs.highlight(source, { language: lang, ignoreIllegals: true })
             : hljs.highlightAuto(source);
         cacheHighlight(key, out.value);
+        // allow-raw-html-sink: pre-existing write, unchanged. See the cache-hit branch above.
         el.innerHTML = out.value;
+        if (globalThis.__zx_debug) {
+            zxDomTrace('app.innerHTML', zxDomName(el), 'highlight computed lang=' + (lang || 'auto')
+                + ' live=' + document.contains(el) + ' bytes=' + out.value.length);
+        }
     }
 
     function highlightBlocks(html) {
@@ -198,7 +276,11 @@
 
     function highlightSealedBlocks(root) {
         if (!root || !hljs) return;
-        root.querySelectorAll('pre > code').forEach(function (el) {
+        const blocks = root.querySelectorAll('pre > code');
+        if (globalThis.__zx_debug) {
+            zxDomTrace('app.highlightSealed', zxDomName(root), blocks.length + ' block(s) live=' + document.contains(root));
+        }
+        blocks.forEach(function (el) {
             highlightElement(el, false);
         });
     }
@@ -249,6 +331,9 @@
     function setSendStatus(text) {
         const el = document.getElementById('send-status');
         if (el) el.textContent = text;
+        if (globalThis.__zx_debug) {
+            zxDomTrace('app.textContent', el ? zxDomName(el) : 'span#send-status <absent>', JSON.stringify(text));
+        }
     }
 
     async function startStream(url, name, avatar, opts) {
@@ -361,7 +446,11 @@
                     stats.tokens = wasm.__st_stream_tokens();
                     window.__stStats = stats;
                     const el = document.getElementById('probe-metrics');
-                    if (el) el.textContent = JSON.stringify(stats);
+                    const json = JSON.stringify(stats);
+                    if (el) el.textContent = json;
+                    if (globalThis.__zx_debug) {
+                        zxDomTrace('app.textContent', el ? zxDomName(el) : 'pre#probe-metrics <absent>', json);
+                    }
                 }
             }
         }
@@ -708,7 +797,11 @@
             readerHideChip();
             window.__st_reader_scroll_bottom();
         });
-        (document.getElementById('chat-root') || document.body).appendChild(readerChip);
+        const host = document.getElementById('chat-root') || document.body;
+        host.appendChild(readerChip);
+        if (globalThis.__zx_debug) {
+            zxDomTrace('app.appendChild', zxDomName(host), 'button.chat-newmsg-chip (app-created node into a framework-owned subtree)');
+        }
         return readerChip;
     }
     function readerShowChip() { readerEnsureChip().classList.add('is-visible'); }
