@@ -894,7 +894,10 @@ async function main() {
         })();
         const copyOk = copyMenuOpen && copied != null && copied.trim().length > 0 && msg0text.length > 0
             && (copied.includes(msg0text.slice(0, 10)) || msg0text.includes(copied.trim().slice(0, 10)));
-        row('must', copyOk, 'C-MSG copy writes the message text to the clipboard', `copied=${JSON.stringify((copied || '').slice(0, 24))} msg0=${JSON.stringify(msg0text.slice(0, 16))}`);
+        // null (writeText never ran) and "" (it ran with empty text) are different failures; the old
+        // report printed both as copied="", which is why this row read as a mystery when it flaked.
+        row('must', copyOk, 'C-MSG copy writes the message text to the clipboard',
+            `menuOpen=${copyMenuOpen} copied=${copied === null ? 'NEVER-CALLED' : JSON.stringify(copied.slice(0, 24))} msg0=${JSON.stringify(msg0text.slice(0, 16))}`);
 
         // The relocated history control: Earlier versions opens the version UI (undo.openVersionsFor).
         const verMenuOpen = await openMenu(1);

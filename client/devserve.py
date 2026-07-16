@@ -868,7 +868,11 @@ def main():
         sys.stderr.write(f"serving {dist} on http://127.0.0.1:{args.port} (api -> {args.backend})\n")
         sys.stderr.flush()
         serving.start()
-        stopping.wait()
+        # Wait in SLICES, never bare: a signal's Python callback runs on the main thread's eval loop,
+        # and an untimed wait parks that thread in a futex where it never gets there (SIGTERM ignored
+        # forever -> `timeout` blocks on it -> the orphan holds its port serving a STALE dist).
+        while not stopping.wait(0.25):
+            pass
         httpd.shutdown()
 
     return 0

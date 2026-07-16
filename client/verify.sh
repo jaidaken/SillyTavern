@@ -95,7 +95,7 @@ atleast "justify gate: short messages stay plain mes_text" "$(count 'class=\"mes
 
 # Start the server for every browser check. --dev exposes /dev/stream and /dev/hold. setsid so the
 # whole tree dies with the group kill in cleanup.
-setsid timeout 320 python3 devserve.py --port "$PORT" --dist dist --dev >"$PROFILE/srv.log" 2>&1 &
+setsid timeout -k 5 320 python3 devserve.py --port "$PORT" --dist dist --dev >"$PROFILE/srv.log" 2>&1 &
 SRV=$!
 # Poll readiness rather than sleep: a loaded box or an already-bound port must fail loudly, not race.
 ready=no
@@ -203,7 +203,7 @@ PY
 
 echo
 echo "== dev endpoints are opt-in =="
-setsid timeout 20 python3 devserve.py --port $((PORT + 1)) --dist dist >/dev/null 2>&1 &
+setsid timeout -k 5 20 python3 devserve.py --port $((PORT + 1)) --dist dist >/dev/null 2>&1 &
 NODEV=$!
 nodev_ready=no
 for _ in $(seq 1 50); do
@@ -335,7 +335,7 @@ echo "== reader history paging (mock 300-message chat) =="
 # Mock 300-message chat: open lands at the bottom, then scroll to the top and prove the prepend keeps
 # every existing .mes and holds the anchor within 2px (element-anchored correction, not scrollHeight-delta).
 HIST_PORT=$((PORT + 2))
-setsid timeout 90 python3 devserve.py --port "$HIST_PORT" --dist dist --mock-api >"$PROFILE/hist.log" 2>&1 &
+setsid timeout -k 5 90 python3 devserve.py --port "$HIST_PORT" --dist dist --mock-api >"$PROFILE/hist.log" 2>&1 &
 HISTSRV=$!
 hist_ready=no
 for _ in $(seq 1 100); do
