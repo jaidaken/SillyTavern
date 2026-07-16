@@ -1,0 +1,272 @@
+diff --git i/src/runtime/client/render.zig w/src/runtime/client/render.zig
+index 4419ef72..7b48d579 100644
+--- i/src/runtime/client/render.zig
++++ w/src/runtime/client/render.zig
+@@ -61,8 +61,7 @@ pub fn applyPatches(
+                 }
+ 
+                 if (client.getVElementById(data.parent_id)) |parent_vnode| {
+-                    const index = @min(data.index, parent_vnode.children.items.len);
+-                    try parent_vnode.children.insert(allocator, index, data.vnode);
++                    try parent_vnode.insertChildBefore(allocator, data.vnode, data.reference_id);
+                 }
+             },
+             .DELETION => {
+@@ -116,18 +115,7 @@ pub fn applyPatches(
+                 }
+ 
+                 if (client.getVElementById(data.parent_id)) |parent_vnode| {
+-                    var old_idx: ?usize = null;
+-                    for (parent_vnode.children.items, 0..) |child, i| {
+-                        if (child.id == data.vnode_id) {
+-                            old_idx = i;
+-                            break;
+-                        }
+-                    }
+-                    if (old_idx) |idx| {
+-                        const removed = parent_vnode.children.orderedRemove(idx);
+-                        const new_idx = @min(data.new_index, parent_vnode.children.items.len);
+-                        try parent_vnode.children.insert(allocator, new_idx, removed);
+-                    }
++                    try parent_vnode.moveChildBefore(allocator, data.vnode_id, data.reference_id);
+                 }
+             },
+         }
+@@ -291,8 +279,12 @@ pub fn createPlatformNodes(allocator: zx.Allocator, vnode: *VNode, client: anyty
+                     switch (resolved_child) {
+                         .text => |t| try aw.writer.writeAll(t),
+                         .none => {},
+-                        // Non-text children fall back to normal node creation below.
+-                        else => {},
++                        // A raw-HTML element takes exactly one text child; anything else gets no DOM
++                        // node here and no later pass creates one, so say so rather than drop it.
++                        else => std.log.err(
++                            "[zx:dom] <{s}> @escaping={{.none}}: child vnode {d} is {s}, not text; it gets no DOM node here and no later pass creates one",
++                            .{ @tagName(elem.tag), child.id, @tagName(resolved_child) },
++                        ),
+                     }
+                 }
+                 const raw = aw.written();
+diff --git i/src/runtime/core/vdom.zig w/src/runtime/core/vdom.zig
+index 119f44a4..3cd8cb7e 100644
+--- i/src/runtime/core/vdom.zig
++++ w/src/runtime/core/vdom.zig
+@@ -108,6 +108,35 @@ pub const VNode = struct {
+         return self;
+     }
+ 
++    fn childIndexOf(self: *const VNode, id: u64) ?usize {
++        for (self.children.items, 0..) |child, i| {
++            if (child.id == id) return i;
++        }
++        return null;
++    }
++
++    /// Position a child insert takes, derived from the reference node the DOM insert uses.
++    /// A null reference means append, matching appendChild; an unknown reference appends too,
++    /// because insertBefore has already failed by then and the vtree is the surviving record.
++    fn insertIndexFor(self: *const VNode, reference_id: ?u64) usize {
++        const ref_id = reference_id orelse return self.children.items.len;
++        return self.childIndexOf(ref_id) orelse self.children.items.len;
++    }
++
++    /// Insert `child` where `_ib`/`_ac` put its DOM node. Ordering both from the same
++    /// reference_id is what keeps the vtree and the DOM in the same order.
++    pub fn insertChildBefore(self: *VNode, allocator: zx.Allocator, child: *VNode, reference_id: ?u64) !void {
++        try self.children.insert(allocator, self.insertIndexFor(reference_id), child);
++    }
++
++    /// Move an existing child to where `_ib`/`_ac` moved its DOM node. The reference is resolved
++    /// after the removal, since removing shifts every later sibling down one.
++    pub fn moveChildBefore(self: *VNode, allocator: zx.Allocator, vnode_id: u64, reference_id: ?u64) !void {
++        const old_idx = self.childIndexOf(vnode_id) orelse return;
++        const moved = self.children.orderedRemove(old_idx);
++        try self.children.insert(allocator, self.insertIndexFor(reference_id), moved);
++    }
++
+     pub fn deinit(self: *VNode, allocator: zx.Allocator) void {
+         for (self.children.items) |child| {
+             child.deinit(allocator);
+@@ -139,7 +168,6 @@ pub const PatchData = union(PatchType) {
+         vnode: *VNode,
+         parent_id: u64,
+         reference_id: ?u64,
+-        index: usize,
+     },
+     DELETION: struct {
+         vnode_id: u64,
+@@ -154,7 +182,6 @@ pub const PatchData = union(PatchType) {
+         vnode_id: u64,
+         parent_id: u64,
+         reference_id: ?u64,
+-        new_index: usize,
+     },
+     TEXT: struct {
+         vnode_id: u64,
+@@ -580,7 +607,6 @@ fn reconcileChildren(
+                     .vnode = new_vnode,
+                     .parent_id = parent.id,
+                     .reference_id = null,
+-                    .index = new_idx,
+                 } },
+             });
+         }
+@@ -699,7 +725,6 @@ fn reconcileChildren(
+                     .vnode = new_vnode,
+                     .parent_id = parent.id,
+                     .reference_id = last_ref_id,
+-                    .index = new_idx + k,
+                 } },
+             });
+             last_ref_id = new_vnode.id;
+@@ -711,7 +736,6 @@ fn reconcileChildren(
+                     .vnode_id = old_children[oi].id,
+                     .parent_id = parent.id,
+                     .reference_id = last_ref_id,
+-                    .new_index = new_idx + k,
+                 } },
+             });
+             last_ref_id = old_children[oi].id;
+diff --git i/test/core/vdom.zig w/test/core/vdom.zig
+index 34ab2d30..1bb68bfa 100644
+--- i/test/core/vdom.zig
++++ w/test/core/vdom.zig
+@@ -177,3 +177,138 @@ test "deletion" {
+     try testing.expectEqual(@as(usize, 1), patches.items.len);
+     try testing.expectEqual(.DELETION, patches.items[0].type);
+ }
++
++const row_count = 50;
++
++const row_attrs: [row_count][1]zx.Element.Attribute = blk: {
++    @setEvalBranchQuota(row_count * 1000);
++    var a: [row_count][1]zx.Element.Attribute = undefined;
++    for (&a, 0..) |*e, i| e.* = .{.{ .name = "key", .value = std.fmt.comptimePrint("r{d}", .{i}) }};
++    break :blk a;
++};
++
++const rows: [row_count]zx.Component = blk: {
++    var r: [row_count]zx.Component = undefined;
++    for (&r, 0..) |*e, i| e.* = .{ .element = .{ .tag = .div, .attributes = &row_attrs[i] } };
++    break :blk r;
++};
++
++fn indexOfId(ids: []const u64, id: u64) ?usize {
++    for (ids, 0..) |v, i| if (v == id) return i;
++    return null;
++}
++
++// The browser's rule, written from insertBefore/appendChild rather than from the vtree helper, so
++// the two child orders under test are computed from independent sources.
++fn domInsert(allocator: std.mem.Allocator, dom: *std.ArrayListUnmanaged(u64), id: u64, reference_id: ?u64) !void {
++    const at = if (reference_id) |ref| indexOfId(dom.items, ref) orelse dom.items.len else dom.items.len;
++    try dom.insert(allocator, at, id);
++}
++
++fn applyToDom(allocator: std.mem.Allocator, dom: *std.ArrayListUnmanaged(u64), patches: []const Patch) !void {
++    for (patches) |patch| switch (patch.type) {
++        .PLACEMENT => try domInsert(allocator, dom, patch.data.PLACEMENT.vnode.id, patch.data.PLACEMENT.reference_id),
++        .MOVE => {
++            const data = patch.data.MOVE;
++            if (indexOfId(dom.items, data.vnode_id)) |i| _ = dom.orderedRemove(i);
++            try domInsert(allocator, dom, data.vnode_id, data.reference_id);
++        },
++        .DELETION => {
++            if (indexOfId(dom.items, patch.data.DELETION.vnode_id)) |i| _ = dom.orderedRemove(i);
++        },
++        else => {},
++    };
++}
++
++// Mirrors applyPatches' vtree half; render.zig itself cannot run natively (it calls the __zx externs).
++fn applyToVTree(allocator: std.mem.Allocator, parent: *VNode, patches: []const Patch) !void {
++    for (patches) |patch| switch (patch.type) {
++        .PLACEMENT => try parent.insertChildBefore(allocator, patch.data.PLACEMENT.vnode, patch.data.PLACEMENT.reference_id),
++        .MOVE => try parent.moveChildBefore(allocator, patch.data.MOVE.vnode_id, patch.data.MOVE.reference_id),
++        .DELETION => {
++            for (parent.children.items, 0..) |child, i| {
++                if (child.id == patch.data.DELETION.vnode_id) {
++                    parent.children.orderedRemove(i).deinit(allocator);
++                    break;
++                }
++            }
++        },
++        else => {},
++    };
++}
++
++test "replacing a placeholder with many rows leaves the vtree in the DOM's order" {
++    const allocator = testing.allocator;
++
++    const placeholder = [_]zx.Component{.{ .element = .{ .tag = .div } }};
++
++    var tree = VDOMTree.init(allocator, .{ .element = .{ .tag = .div, .children = &placeholder } });
++    defer tree.deinit(allocator);
++
++    var dom: std.ArrayListUnmanaged(u64) = .empty;
++    defer dom.deinit(allocator);
++    try dom.append(allocator, tree.vtree.children.items[0].id);
++
++    var patches = try tree.diffWithComponent(allocator, .{ .element = .{ .tag = .div, .children = &rows } });
++    defer patches.deinit(allocator);
++
++    try applyToDom(allocator, &dom, patches.items);
++    try applyToVTree(allocator, tree.vtree, patches.items);
++
++    try testing.expectEqual(@as(usize, row_count), dom.items.len);
++    try testing.expectEqual(@as(usize, row_count), tree.vtree.children.items.len);
++
++    for (tree.vtree.children.items, dom.items) |child, dom_id| {
++        try testing.expectEqual(dom_id, child.id);
++    }
++
++    // Rows are built front-to-back, so ids ascend with row order: this pins the shared order to the
++    // one the app asked for, catching a vtree and DOM that agree on the wrong order.
++    for (tree.vtree.children.items[1..], tree.vtree.children.items[0 .. row_count - 1]) |child, prev| {
++        try testing.expect(child.id > prev.id);
++    }
++}
++
++const reversed_rows: [row_count]zx.Component = blk: {
++    var r: [row_count]zx.Component = undefined;
++    for (&r, 0..) |*e, i| e.* = rows[row_count - 1 - i];
++    break :blk r;
++};
++
++test "reversing keyed rows leaves the vtree in the DOM's order" {
++    const allocator = testing.allocator;
++
++    var tree = VDOMTree.init(allocator, .{ .element = .{ .tag = .div, .children = &rows } });
++    defer tree.deinit(allocator);
++
++    var dom: std.ArrayListUnmanaged(u64) = .empty;
++    defer dom.deinit(allocator);
++    for (tree.vtree.children.items) |child| try dom.append(allocator, child.id);
++
++    const before = try allocator.dupe(u64, dom.items);
++    defer allocator.free(before);
++
++    var patches = try tree.diffWithComponent(allocator, .{ .element = .{ .tag = .div, .children = &reversed_rows } });
++    defer patches.deinit(allocator);
++
++    var moves: usize = 0;
++    for (patches.items) |patch| {
++        if (patch.type == .MOVE) moves += 1;
++    }
++    // Without this the test could pass by never reaching the MOVE arm at all.
++    try testing.expect(moves > 0);
++
++    try applyToDom(allocator, &dom, patches.items);
++    try applyToVTree(allocator, tree.vtree, patches.items);
++
++    try testing.expectEqual(@as(usize, row_count), tree.vtree.children.items.len);
++    for (tree.vtree.children.items, dom.items) |child, dom_id| {
++        try testing.expectEqual(dom_id, child.id);
++    }
++
++    // The same nodes, in the reverse order: proves MOVE reordered rather than rebuilt, and pins the
++    // order to the one asked for rather than merely to whatever the DOM also did.
++    for (tree.vtree.children.items, 0..) |child, i| {
++        try testing.expectEqual(before[row_count - 1 - i], child.id);
++    }
++}

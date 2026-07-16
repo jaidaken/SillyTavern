@@ -15,6 +15,11 @@ OPT="${OPT:-ReleaseSmall}"
 zig build check
 zig build test
 
+# zx is a separate module, so the suite above cannot see tests inside .ziex: an `expect(false)` in
+# .ziex/src/runtime/core/vdom.zig still reports 426/426 (verified 2026-07-16). Patch 12's regression
+# test only runs here.
+(cd .ziex && zig build test)
+
 zig build "-Doptimize=$OPT"
 zig build export "-Doptimize=$OPT"
 # Order is load-bearing: export writes dist, patch-door edits the door in place, prune trims the

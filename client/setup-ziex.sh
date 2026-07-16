@@ -30,9 +30,10 @@ fi
 # Apply the Zig-source patches (not the door: 03 is the upstream core.ts diff, applied to the
 # compiled door separately in patch-door.sh). 10 patches the tailwind plugin's class scanner.
 # 11 fixes a UAF in that plugin's dep-file writer (deps freed before writeDepFile reads them).
-for p in "$PATCHES"/01-*.patch "$PATCHES"/02-*.patch "$PATCHES"/04-*.patch "$PATCHES"/05-*.patch "$PATCHES"/06-*.patch "$PATCHES"/10-*.patch "$PATCHES"/11-*.patch; do
+# 12 orders PLACEMENT/MOVE by reference node so the vtree and the DOM cannot drift apart.
+for p in "$PATCHES"/01-*.patch "$PATCHES"/02-*.patch "$PATCHES"/04-*.patch "$PATCHES"/05-*.patch "$PATCHES"/06-*.patch "$PATCHES"/10-*.patch "$PATCHES"/11-*.patch "$PATCHES"/12-*.patch; do
     git -C "$ZIEX_DIR" apply "../$p"
     echo "setup-ziex: applied $(basename "$p")"
 done
 
-echo "setup-ziex: $ZIEX_DIR ready at $ZIEX_REV + 7 patches"
+echo "setup-ziex: $ZIEX_DIR ready at $ZIEX_REV + 8 patches"
