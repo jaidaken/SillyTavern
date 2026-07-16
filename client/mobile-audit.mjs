@@ -29,8 +29,8 @@ function parseArgs(argv) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const MOBILE = { width: 390, height: 844 };
 const DESKTOP = { width: 1400, height: 900 };
-// The nine top-bar panels, in bar order. Ids match the button element ids the markup emits.
-const PANEL_IDS = ['d-ai_config', 'd-connections', 'd-formatting', 'd-world_info', 'd-settings', 'd-backgrounds', 'd-extensions', 'd-persona', 'd-characters'];
+// The ten top-bar panels, in bar order. Ids match the button element ids the markup emits.
+const PANEL_IDS = ['d-ai_config', 'd-connections', 'd-formatting', 'd-world_info', 'd-settings', 'd-backgrounds', 'd-extensions', 'd-persona', 'd-characters', 'd-card_editor'];
 const TAP_MIN = 44;   // iOS minimum touch target, px
 const WIDTH_MIN = 80; // an open mobile panel must fill at least this % of the viewport width
 // verify.sh serves the static dist through devserve.py, which has no SillyTavern Express backend, so a

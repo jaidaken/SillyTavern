@@ -29,6 +29,8 @@ pub fn TopDrawer(allocator: zx.Allocator, props: DrawerProps) zx.Component {
                     <BackgroundsBody />
                 ) else if (p.id == .extensions) (
                     <ExtensionsBody />
+                ) else if (p.id == .card_editor) (
+                    <CardEditorBody />
                 ) else (
                     <PanelEmpty />
                 )}
@@ -47,3 +49,4 @@ const WorldInfoBody = @import("world_info_body.zx").WorldInfoBody;
 const SettingsBody = @import("settings_body.zx").SettingsBody;
 const BackgroundsBody = @import("backgrounds_body.zx").BackgroundsBody;
 const ExtensionsBody = @import("extensions_body.zx").ExtensionsBody;
+const CardEditorBody = @import("card_editor_body.zx").CardEditorBody;

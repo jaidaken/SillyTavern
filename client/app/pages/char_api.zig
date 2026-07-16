@@ -742,6 +742,15 @@ fn fetchDeepCard(avatar: []const u8) void {
     net.request("/api/characters/get", body, 0, onDeepCardDone, .{});
 }
 
+/// Drop the cached deep card and re-fetch it for the selected character. The card editor calls this
+/// after a save: fetchDeepCard early-returns while the avatar still matches, so without clearing the
+/// key first the send loop would keep prompting from the fields as they were before the edit.
+pub fn refreshDeepCard() void {
+    if (zx.platform.role != .client) return;
+    setOwned(&deep_avatar, "");
+    if (char_store.selected()) |c| fetchDeepCard(c.avatar);
+}
+
 fn onDeepCardDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     _ = tag;
     deep_in_flight = false;

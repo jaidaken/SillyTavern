@@ -32,6 +32,7 @@ comptime {
     // character_view's tests never reached the runner: the module was absent here.
     _ = @import("character_view.zig");
     _ = @import("character_row.zig");
+    _ = @import("card_form.zig");
 }
 
 const sink_call = "html.sink(";

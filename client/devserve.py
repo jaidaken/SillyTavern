@@ -221,6 +221,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     append_token = None
     # Counters the 409 gate reads back as observable state (a returned 409, and the resync's refetch).
     append_409_count = 0
+    # C-CARD: the last /characters/edit body, and the card /characters/get serves once one is saved.
+    saved_edit = None
+    saved_card = None
     get_count = 0
     # History-prefetch 409: armed once via /dev/arm-get-409, fires on the next prepend GET only, so the
     # scroll-preservation gate can drive the real resync path the mock append 409 cannot reach.
@@ -338,6 +341,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "persona_settings": Handler.persona_settings,  # C-PERS
                     "secrets": Handler.secrets,  # C-CONN
                     "duplicated_avatar": Handler.duplicated_avatar,  # C-CHAR
+                    "card_edit": Handler.saved_edit,  # C-CARD
                     "full_token": Handler.full_token,
                     "reader_total": len(Handler.reader_current()),
                     "reader_above_probe": Handler.reader_current()[0]["mes"],
@@ -500,12 +504,75 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             Handler.duplicated_avatar = req.get("avatar_url")
             return self.mock_json({"path": "duplicated.png"})
         if path == "/api/characters/get":
+            # C-CARD: the three original keys are what char_api's DeepCard reads for the prompt and
+            # must keep their values; everything below is the rest of the deep card the editor loads,
+            # shaped as processCharacter returns it (top-level v1 mirror + data.* + json_data).
+            avatar = req.get("avatar_url", "char")
+            if Handler.saved_card is not None:
+                return self.mock_json(Handler.saved_card)
             return self.mock_json({
-                "name": req.get("avatar_url", "char"),
+                "name": avatar,
                 "personality": "curious and warm",
                 "scenario": "a quiet harbor at dusk",
                 "mes_example": "<START>\n{{user}}: hello\n{{char}}: well met",
+                "description": "a lighthouse keeper who reads the weather",
+                "first_mes": "The lamp is lit. You are late.",
+                "fav": True,
+                "talkativeness": 0.7,
+                "tags": ["keeper", "coastal"],
+                "chat": f"{avatar} - 2026-01-01",
+                "create_date": "2026-01-01T00:00:00.000Z",
+                "json_data": json.dumps({"name": avatar, "data": {"character_book": {"entries": []}}}),
+                "data": {
+                    "creator_notes": "for the harbour arc",
+                    "system_prompt": "",
+                    "post_history_instructions": "",
+                    "creator": "jaidaken",
+                    "character_version": "1.2",
+                    "alternate_greetings": ["The fog is in.", "Mind the step."],
+                    "extensions": {
+                        "world": "",
+                        "depth_prompt": {"prompt": "keep the lamp burning", "depth": 4, "role": "system"},
+                    },
+                },
             })
+        if path == "/api/characters/edit":
+            # C-CARD: store the posted body and serve it back from /get, so the gate proves a real
+            # round-trip (edit -> save -> reload shows the saved text) rather than a local echo.
+            Handler.saved_edit = req
+            saved = dict(Handler.saved_card or {})
+            saved.update({
+                "name": req.get("ch_name", ""),
+                "description": req.get("description", ""),
+                "personality": req.get("personality", ""),
+                "scenario": req.get("scenario", ""),
+                "first_mes": req.get("first_mes", ""),
+                "mes_example": req.get("mes_example", ""),
+                "fav": req.get("fav") == "true",
+                "talkativeness": req.get("talkativeness", 0.5),
+                "tags": [t.strip() for t in str(req.get("tags", "")).split(",") if t.strip()],
+                "chat": req.get("chat", ""),
+                "create_date": req.get("create_date", ""),
+                "json_data": req.get("json_data", ""),
+                "data": {
+                    "creator_notes": req.get("creator_notes", ""),
+                    "system_prompt": req.get("system_prompt", ""),
+                    "post_history_instructions": req.get("post_history_instructions", ""),
+                    "creator": req.get("creator", ""),
+                    "character_version": req.get("character_version", ""),
+                    "alternate_greetings": req.get("alternate_greetings", []),
+                    "extensions": {
+                        "world": req.get("world", ""),
+                        "depth_prompt": {
+                            "prompt": req.get("depth_prompt_prompt", ""),
+                            "depth": req.get("depth_prompt_depth", 4),
+                            "role": req.get("depth_prompt_role", "system"),
+                        },
+                    },
+                },
+            })
+            Handler.saved_card = saved
+            return self.mock_json({"ok": True})
         if path == "/api/backends/text-completions/status":
             return self.mock_json({"result": "mock-model", "data": [{"id": "mock-model"}]})
         if path == "/api/settings/set-connection":

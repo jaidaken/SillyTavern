@@ -16,6 +16,8 @@ pub const PanelId = enum {
     extensions,
     persona,
     characters,
+    // C-CARD
+    card_editor,
 };
 
 pub const Side = enum { left, right };
@@ -48,6 +50,8 @@ pub const panels = [_]Panel{
     .{ .id = .extensions, .dom_id = "d-extensions", .icon = "cubes", .title = "Extensions", .side = .right },
     .{ .id = .persona, .dom_id = "d-persona", .icon = "user", .title = "Persona Management", .side = .right, .kind = .dock },
     .{ .id = .characters, .dom_id = "d-characters", .icon = "card", .title = "Character Management", .side = .right, .kind = .dock },
+    // C-CARD
+    .{ .id = .card_editor, .dom_id = "d-card_editor", .icon = "pencil", .title = "Character Card", .side = .left },
 };
 
 pub const min_width: f32 = 240;

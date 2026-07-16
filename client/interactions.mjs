@@ -1423,6 +1423,93 @@ async function main() {
         row('must', servedRaw && maskedShown && !leaked,
             'C-CONN-10 allowKeysExposure=true: the raw key the server returns never reaches the DOM',
             `servedRaw=${servedRaw} masked=${maskedShown} leaked=${leaked}`);
+        /* C-CARD */
+        {
+            console.log('== card editor: full-card fetch + save round-trip (3e) ==');
+            await page.click('#d-card_editor');
+            // The form only mounts once the deep card lands, so its presence IS the fetch assertion.
+            const cardLoaded = await page.waitFor(
+                "!!document.querySelector('#card-description') && document.querySelector('#card-description').value.indexOf('lighthouse keeper') >= 0", 8000);
+            const deepFields = await page.eval(
+                "(function(){var g=function(id){var e=document.getElementById(id);return e?e.value:null;};return JSON.stringify({pers:g('card-personality'),ver:g('card-character_version'),tags:g('card-tags'),depth:g('card-depth_prompt_depth')});})()");
+            const deep = JSON.parse(deepFields || '{}');
+            // The shallow /characters/all form carries none of these; only the deep /get fetch can fill them.
+            const deepOk = deep.pers === 'curious and warm' && deep.ver === '1.2' && deep.tags === 'keeper, coastal' && deep.depth === '4';
+            row('must', cardLoaded && deepOk, 'C-CARD-1 opening the panel fetches the FULL card into the form', `loaded=${cardLoaded} ${deepFields}`);
+
+            await page.eval("(function(){var t=document.getElementById('card-description'); t.value='a keeper who reads the weather and the tide'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            await page.click('#card-save');
+            const pollCard = async (pred) => {
+                const deadline = Date.now() + 8000;
+                while (Date.now() < deadline) {
+                    const st = await (await fetch(`${args.base}/dev/state`)).json();
+                    if (st.card_edit && pred(st.card_edit)) return st.card_edit;
+                    await sleep(150);
+                }
+                return null;
+            };
+            const saved = await pollCard((c) => c.description === 'a keeper who reads the weather and the tide');
+            row('must', !!saved, 'C-CARD-2 an edit saves through /characters/edit', `saved=${!!saved}`);
+
+            // THE CONTRACT TRAPS. charaFormatData _.sets every field it knows unconditionally, so a key
+            // the body omits is written back as its default: the card silently loses it. fav is worse -
+            // the server compares `data.fav == 'true'`, so a JSON boolean reads as false and clears it.
+            const card = saved || {};
+            const favOk = card.fav === 'true';
+            const bookOk = typeof card.json_data === 'string' && card.json_data.indexOf('character_book') >= 0;
+            const talkOk = card.talkativeness === 0.7;
+            const greetOk = Array.isArray(card.alternate_greetings) && card.alternate_greetings.length === 2;
+            const metaOk = !!card.avatar_url && card.chat === `${card.avatar_url} - 2026-01-01` && card.create_date === '2026-01-01T00:00:00.000Z';
+            const depthOk = card.depth_prompt_depth === 4 && card.depth_prompt_role === 'system';
+            row('must', favOk && bookOk && talkOk && greetOk && metaOk && depthOk,
+                'C-CARD-3 the save echoes every field charaFormatData would default away',
+                `fav=${card.fav} book=${bookOk} talk=${card.talkativeness} greets=${greetOk} meta=${metaOk} depth=${card.depth_prompt_depth}/${card.depth_prompt_role}`);
+
+            // A full page load, not a Revert click: this gate TYPED into the textarea, which sets its
+            // dirty-value flag, so the browser keeps showing that text whatever the VDOM patches into
+            // the text child. Only a fresh mount proves the text came back from the server.
+            await page.navigate(`${args.base}/`);
+            await openRecentChat();
+            await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+            await page.click('#d-card_editor');
+            const persisted = await page.waitFor(
+                "!!document.querySelector('#card-description') && document.querySelector('#card-description').value === 'a keeper who reads the weather and the tide'", 8000);
+            row('must', persisted, 'C-CARD-4 the saved text comes back on a fresh load', `persisted=${persisted}`);
+
+            // The one enumerated field rides the shared dropdown, delegated from the panel root (ZX11).
+            await page.click('#dd-btn-depth_prompt_role');
+            const menuOpen = await page.waitFor("!!document.querySelector('[role=\"listbox\"]')", 3000);
+            await page.click('[role="option"][data-dd-value="user"]');
+            const rolePicked = await page.waitFor(
+                "document.querySelector('#dd-btn-depth_prompt_role').textContent.indexOf('User') >= 0", 3000);
+            // Non-vacuous: this click also proves the panel SURVIVES it. The menu closing re-renders
+            // synchronously and orphans the clicked option, which the page-click dismiss used to read
+            // as a click outside the panel and close the whole drawer (fixed in ui.onPageClick).
+            const panelAlive = await page.eval("!!document.querySelector('#card-editor')");
+            row('must', menuOpen && rolePicked && panelAlive, 'C-CARD-5 the note-role dropdown opens and stores the pick', `open=${menuOpen} picked=${rolePicked} panelAlive=${panelAlive}`);
+
+            // Escape rides the same delegated keydown to ui.onPageKey, which closes the active panel
+            // without reading the target: a handler that does not CONSUME the key it handled loses the
+            // whole drawer to a menu dismiss. Non-vacuous only if it asserts the panel survived.
+            const escape = async () => {
+                const k = { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, modifiers: 0 };
+                await page.cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...k }, page.sessionId);
+                await page.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...k }, page.sessionId);
+            };
+            await page.click('#dd-btn-depth_prompt_role');
+            await page.waitFor("!!document.querySelector('[role=\"listbox\"]')", 3000);
+            await escape();
+            const escClosedMenu = await page.waitFor("!document.querySelector('[role=\"listbox\"]')", 3000);
+            const escKeptPanel = await page.eval("!!document.querySelector('#card-editor')");
+            row('must', escClosedMenu && escKeptPanel, 'C-CARD-6 Escape closes the menu and the panel survives it', `menuClosed=${escClosedMenu} panelAlive=${escKeptPanel}`);
+
+            // The same Escape with no menu open still dismisses the panel: consuming the key must not
+            // cost the drawer its own Escape.
+            await escape();
+            const escClosedPanel = await page.waitFor("!document.querySelector('#card-editor')", 3000);
+            row('must', escClosedPanel, 'C-CARD-7 Escape with no menu open still closes the panel', `closed=${escClosedPanel}`);
+        }
+
     } finally {
         clearTimeout(watchdog);
         cleanup();
