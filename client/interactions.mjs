@@ -563,6 +563,19 @@ async function main() {
         // 24 tokens ("lantern" first, "FIN" only on completion) so a stop can land mid-stream.
         console.log('== send loop (mock textgen backend) ==');
         const idle = "!document.querySelector('#chat .mes[aria-busy=\\'true\\']')";
+
+        // One send, proven to be THIS send: clear the recorded generate first, and key the wait on the
+        // message COUNT, since a predicate looking for "FIN" matches the PREVIOUS send's and returns
+        // before this one lands. Hoisted; two blocks held identical copies.
+        const sendProbe = async (text) => {
+            await (await fetch(`${args.base}/dev/clear-generate`)).json();
+            const before = await page.eval("document.querySelectorAll('#chat .mes').length");
+            await page.focus('#send_textarea');
+            await page.insertText(text);
+            await page.click('#composer button[aria-label="Send"]');
+            const grew = await page.waitFor(`document.querySelectorAll('#chat .mes').length >= ${before} + 2 && ${idle}`, 15000);
+            if (!grew) throw new Error(`sendProbe: no reply after "${text}"`);
+        };
         await page.navigate(`${args.base}/`);
         await openRecentChat();
         row('must', await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000),
@@ -1926,19 +1939,6 @@ async function main() {
                 await page.navigate(`${args.base}/`);
                 await openRecentChat();
             };
-            // One send, proven to be THIS send. The recorded generate is cleared first and the wait
-            // keys on the message COUNT growing, because the log already contains a previous send's
-            // "FIN": a predicate that only looked for FIN would match instantly, skip the send, and
-            // let the rows below read a body this gate never caused.
-            const sendProbe = async (text) => {
-                await (await fetch(`${args.base}/dev/clear-generate`)).json();
-                const before = await page.eval("document.querySelectorAll('#chat .mes').length");
-                await page.focus('#send_textarea');
-                await page.insertText(text);
-                await page.click('#composer button[aria-label="Send"]');
-                const grew = await page.waitFor(`document.querySelectorAll('#chat .mes').length >= ${before} + 2 && ${idle}`, 15000);
-                if (!grew) throw new Error(`sendProbe: no reply after "${text}"`);
-            };
 
             // 2a SAMPLERS. The panel must open on the LIVE value from the settings blob (temp 0.8),
             // not on the spec default (1.0), or it would silently rewrite the user's sampler on the
@@ -2119,20 +2119,6 @@ async function main() {
         // in a way a user cannot diagnose. These rows prove the pick reaches the PROMPT, not the panel.
         console.log('== template presets ==');
         {
-            // The C-CFG sendProbe, re-declared because that one is block-scoped next door. Same
-            // discipline and for the same reason: the recorded generate is cleared first and the wait
-            // keys on the message COUNT, because a previous send's FIN is still in the log and a
-            // predicate that only looked for FIN would match instantly, skip the send, and let the
-            // rows below read a body they never caused.
-            const sendProbe = async (text) => {
-                await (await fetch(`${args.base}/dev/clear-generate`)).json();
-                const before = await page.eval("document.querySelectorAll('#chat .mes').length");
-                await page.focus('#send_textarea');
-                await page.insertText(text);
-                await page.click('#composer button[aria-label="Send"]');
-                const grew = await page.waitFor(`document.querySelectorAll('#chat .mes').length >= ${before} + 2 && ${idle}`, 15000);
-                if (!grew) throw new Error(`sendProbe: no reply after "${text}"`);
-            };
             const pick = async (dd, value) => {
                 await page.click(`[data-dd-toggle="${dd}"]`);
                 await page.waitFor(`document.getElementById('dd-list-${dd}')`, 3000);
