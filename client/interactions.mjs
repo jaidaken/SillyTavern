@@ -1324,6 +1324,19 @@ async function main() {
         row('must', (await ddFace()) === 'TabbyAPI',
             'C-CONN-1 selector reflects the mined type from the settings blob', await ddFace());
 
+        // A SECOND panel's Escape, because the guard must hold for every panel rather than for the one
+        // whose author remembered to consume the key. C9 is the character-list twin of this row.
+        await page.click('[data-dd-toggle="conn-type"]');
+        await page.waitFor("document.getElementById('dd-list-conn-type')", 2500);
+        for (const type of ['rawKeyDown', 'keyUp']) {
+            await page.cdp.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }, page.sessionId);
+        }
+        const connMenuClosed = await page.waitFor("!document.getElementById('dd-list-conn-type')", 2500);
+        const connPanelAlive = await page.eval("!!document.querySelector('#panel-view') && !!document.getElementById('dd-btn-conn-type')");
+        row('must', connMenuClosed && connPanelAlive,
+            'C-CONN-11 Escape closes the type dropdown without dismissing the connections panel',
+            `menuClosed=${connMenuClosed} panelAlive=${connPanelAlive}`);
+
         // tabby is seeded with a key, so presence shows without a write, masked to a 3-char tail.
         const keyState = await page.waitFor("document.getElementById('conn-key-state').textContent.includes('Key set')", 4000)
             && await page.eval("document.getElementById('conn-key-state').textContent");

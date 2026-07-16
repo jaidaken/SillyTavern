@@ -81,15 +81,18 @@ pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
     );
 }
 
+// An event the dropdown CONSUMED stops here. ziex delegates at <body> and hands one event to every
+// ancestor handler, and #shell's dismiss handlers sit further up that walk: without this, an Escape
+// aimed at the open menu reaches ui.onPageKey and takes the whole dock with it (gate row C-CONN-11).
 fn onBodyClick(ev: zx.client.Event) void {
     if (zx.platform.role != .client) return;
     const target = dom_event.plainTarget(ev) orelse return;
-    _ = dropdown.onClick(target);
+    if (dropdown.onClick(target)) ev.stopPropagation();
 }
 
 fn onBodyKey(ev: zx.client.Event) void {
     if (zx.platform.role != .client) return;
-    _ = dropdown.onKey(ev);
+    if (dropdown.onKey(ev)) ev.stopPropagation();
 }
 
 fn onConnect(_: zx.client.Event) void {

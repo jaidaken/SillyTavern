@@ -11,6 +11,15 @@
 // delegates the undo controls to undo.onLogClick. onClick/onKey return true when they handled the
 // event, so the consumer short-circuits its own logic.
 //
+// CONSUMER CONTRACT, and the KEY half is load-bearing: an event these return true for MUST be
+// stopped (`if (dropdown.onKey(ev)) ev.stopPropagation();`). ziex hands one delegated event to every
+// ancestor handler, and #shell's ui.onPageKey closes the open panel on ANY Escape without reading
+// the target, so a panel that does not consume the menu's Escape loses the WHOLE DOCK when a user
+// dismisses a dropdown: empty dock, no console output, nothing to point at the cause. Both current
+// consumers pin it with a gate row (C9, C-CONN-11); a new panel needs one too. This cannot live in
+// ui.zig today because a .zig module cannot import a .zx one, so the guard cannot ask whether a menu
+// is open; see the ledger's dropdown-escape follow-up.
+//
 // The panel is position:fixed off the button's viewport rect (captureAnchor, mirrors undo.zig), so it
 // escapes a dock/panel overflow-y:auto clip. A transparent fixed backdrop (data-dd-dismiss) catches an
 // outside click and closes the menu, keeping dismissal in the same delegated path. NOTE: fixed escapes
