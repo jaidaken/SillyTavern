@@ -55,7 +55,11 @@ pub fn CardEditorBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                 <div class="flex flex-col gap-3">
                     {for (spec_list) |s| (
                         <div class={field_col}>
-                            <label class={field_label} for={card_editor.domId(ctx.allocator, s.field)}>{s.label}</label>
+                            {if (s.kind == .choice) (
+                                <span class={field_label}>{s.label}</span>
+                            ) else (
+                                <label class={field_label} for={card_editor.domId(ctx.allocator, s.field)}>{s.label}</label>
+                            )}
                             {if (s.kind == .area) (
                                 <textarea
                                     id={card_editor.domId(ctx.allocator, s.field)}
@@ -74,6 +78,7 @@ pub fn CardEditorBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                                     value={card_editor.value(s.field)}
                                     name={card_editor.fieldKey(s.field)}
                                     label={s.label}
+                                    describedby={card_editor.hintId(ctx.allocator, s.field)}
                                     onchange={&card_editor.setRole}
                                 />
                             ) else (

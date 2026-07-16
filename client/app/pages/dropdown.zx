@@ -43,6 +43,10 @@ pub const Props = struct {
     name: []const u8,
     // The accessible name (aria-label on the button and the listbox). A human phrase, not the key.
     label: []const u8,
+    // Optional id of the element describing this control (a hint paragraph). Empty drops the
+    // attribute. The component names itself via `label`, so a consumer must not wrap it in a
+    // <label for=>: the face is a composite widget, not a field with an id to point at.
+    describedby: []const u8 = "",
     // Fires with the chosen option value on select. The value is BORROWED for the call only; copy it
     // to retain (it is freed when the handler returns). The consumer mutates its own state here.
     onchange: *const fn ([]const u8) void,
@@ -90,6 +94,7 @@ pub fn Dropdown(allocator: zx.Allocator, props: Props) zx.Component {
                 aria-expanded={boolStr(open)}
                 aria-controls={list_id}
                 aria-label={props.label}
+                aria-describedby={props.describedby}
                 aria-activedescendant={activeDesc(allocator, props.name, open)}
                 data-dd-toggle={props.name}
                 class={button_cls}
