@@ -116,10 +116,12 @@ async function openWs(url) {
 
 // Driver context bound to one attached page session.
 class Page {
-    constructor(cdp, sessionId, consoleLines) {
+    constructor(cdp, sessionId, consoleLines, navState) {
         this.cdp = cdp;
         this.sessionId = sessionId;
         this.consoleLines = consoleLines;
+        // Shared with the console handler so a captured line can name the page it came from.
+        this.navState = navState || { url: 'about:blank' };
     }
     async eval(expr) {
         const r = await this.cdp.send('Runtime.evaluate',
@@ -138,6 +140,7 @@ class Page {
     }
     async navigate(url) {
         this.consoleLines.length = 0;
+        this.navState.url = url;
         await this.cdp.send('Page.navigate', { url }, this.sessionId);
     }
     // Center of the element's VISIBLE portion: a full-height handle's raw center sits far below the
@@ -211,14 +214,18 @@ async function main() {
         process.on(sig, () => { cleanup(); process.exit(130); });
     }
 
+    let mustRows = 0;
     let mustFails = 0;
+    let pendingRows = 0;
     let pendingPasses = 0;
     const row = (kind, ok, label, detail) => {
         let tag;
         if (kind === 'must') {
+            mustRows += 1;
             tag = ok ? 'ok      ' : 'FAIL    ';
             if (!ok) mustFails += 1;
         } else {
+            pendingRows += 1;
             tag = ok ? 'PENDPASS' : 'pending ';
             if (ok) pendingPasses += 1;
         }
@@ -235,6 +242,24 @@ async function main() {
         await cdp.send('Page.enable', {}, sessionId);
         await cdp.send('Runtime.enable', {}, sessionId);
 
+        // The [zx:dom] channel (the ziex door and the glue). ANOMALIES are emitted whatever the flag
+        // says (console.error); TRACES only while __zx_debug is on (console.debug). Both logs are
+        // run-wide and are never cleared, unlike consoleLines: C-DBG-8 is a tripwire over the WHOLE
+        // run, and the rows that need one load's worth take a window by index. navState stamps each
+        // entry with the page that was loaded, so a future anomaly names the load that produced it.
+        const navState = { url: 'about:blank' };
+        const zxAnomalies = [];
+        const zxTraces = [];
+        // Uncaught exceptions arrive on their own CDP channel, not as console output, so every row
+        // that reads consoleAPICalled is blind to them. The crash this whole channel exists to catch
+        // arrived exactly that way: a NotFoundError off a promise, which reaches no console.error and
+        // carries no prefix. Watching only what the door chooses to say makes the door the sole
+        // witness to its own failure.
+        const pageExceptions = [];
+        const ZX_PREFIX = '[zx:dom]';
+        // This driver's own sensor self-test lines (C-DBG-1, C-DBG-2), never the product's. Every
+        // product row below excludes them by this marker.
+        const ZX_PROBE = 'ST-SENSOR-PROBE';
         const consoleLines = [];
         cdp.onEvent = (msg) => {
             if (msg.method === 'Runtime.consoleAPICalled' && msg.sessionId === sessionId) {
@@ -242,9 +267,25 @@ async function main() {
                     .map((a) => (a.value !== undefined ? String(a.value) : (a.description || '')))
                     .join(' ');
                 consoleLines.push(line);
+                // Sorted by CDP type, not by the emitter's intent: anything carrying the prefix that
+                // is NOT an error is treated as a trace, so a trace mistakenly sent to console.log or
+                // console.warn still trips the leak row instead of slipping past a debug-only filter.
+                if (line.includes(ZX_PREFIX)) {
+                    const entry = { type: msg.params.type, text: line, url: navState.url };
+                    (msg.params.type === 'error' ? zxAnomalies : zxTraces).push(entry);
+                }
+            }
+            // Both flavours land here: a synchronous throw nobody caught, and a promise that rejected
+            // with no handler ("Uncaught (in promise)"). The description carries the stack, so the row
+            // can name the site rather than only the message.
+            if (msg.method === 'Runtime.exceptionThrown' && msg.sessionId === sessionId) {
+                const d = msg.params.exceptionDetails || {};
+                const ex = d.exception || {};
+                const text = [d.text, ex.description || ex.value].filter((s) => s !== undefined && s !== '').join(' ');
+                pageExceptions.push({ text, url: navState.url });
             }
         };
-        const page = new Page(cdp, sessionId, consoleLines);
+        const page = new Page(cdp, sessionId, consoleLines, navState);
         const hydrated = "document.querySelector('#chat-root.hydrated')";
         // Boot shows the home landing now, not an auto-opened chat, so flows needing an open chat resume
         // first. Retry the click: resume-last needs the character store, which races the recent-list load.
@@ -3178,6 +3219,161 @@ async function main() {
                 `wide=${wideW} now=${await page.eval('window.innerWidth')}`);
         }
 
+        /* C-DBG */
+        // The [zx:dom] channel. A live crash (removeChild NotFoundError) came out of the door with the
+        // framework's tree and the real DOM already drifted apart, and no reproduction was ever found,
+        // so the framework says what it is doing and these rows hold that saying honest.
+        // KEEP THIS BLOCK LAST: C-DBG-8 reads the anomalies of the WHOLE run, and a block appended
+        // after it would go unwatched.
+        console.log('== C-DBG the [zx:dom] debug channel ==');
+        {
+            // A log grows only from the socket callback, so awaiting a sleep is what lets it arrive.
+            const grewBy = async (log, from, ms = 3000) => {
+                const deadline = Date.now() + ms;
+                while (Date.now() < deadline) {
+                    if (log.length > from) return true;
+                    await sleep(50);
+                }
+                return false;
+            };
+            const product = (log, from = 0) => log.slice(from).filter((e) => !e.text.includes(ZX_PROBE));
+            // The glue announces the flag twice at console.info (custom.js:44 the __st_debug ack,
+            // custom.js:68 the flag-on banner). Neither names an op, a vnode or a tag, so neither is
+            // a trace, and counting them as one makes "tracing happens" true whenever the switch is
+            // merely acknowledged, with every real trace dead. The per-op traces are the debug ones.
+            const traced = (log, from = 0) => product(log, from).filter((e) => e.type === 'debug');
+            // console.log and console.warn are declared by neither the door nor the glue. A prefixed
+            // line arriving on one is a sink nobody chose and a console filter on debug would miss.
+            const strayed = (log, from = 0) => product(log, from).filter((e) => e.type !== 'debug' && e.type !== 'info');
+
+            await page.navigate(`${args.base}/`);
+            await page.waitFor(hydrated, 15000);
+            await page.eval("localStorage.removeItem('zx:debug')");
+
+            // The sensors go first. Every row under them claims console output was ABSENT, and an
+            // absence row proves nothing until the capture that would have seen it is shown working:
+            // a cut pipe, a renamed CDP type, a swallowed prefix all read as a clean run. The probes
+            // are emitted from the page and carry ST-SENSOR-PROBE, so no product row counts them.
+            const errFrom = zxAnomalies.length;
+            await page.eval(`console.error('${ZX_PREFIX} ${ZX_PROBE} removeChild vnode=7 tag=div')`);
+            const errSeen = await grewBy(zxAnomalies, errFrom);
+            const errProbes = zxAnomalies.slice(errFrom).filter((e) => e.text.includes(ZX_PROBE));
+            row('must', errSeen && errProbes.length === 1 && errProbes[0].type === 'error',
+                'C-DBG-1 the anomaly sensor sees a [zx:dom] console.error',
+                `seen=${errSeen} type=${errProbes[0] ? errProbes[0].type : 'none'} text=${JSON.stringify(errProbes[0] ? errProbes[0].text : '')}`);
+
+            const dbgFrom = zxTraces.length;
+            await page.eval(`console.debug('${ZX_PREFIX} ${ZX_PROBE} patch vnode=7 tag=div')`);
+            const dbgSeen = await grewBy(zxTraces, dbgFrom);
+            const dbgProbes = zxTraces.slice(dbgFrom).filter((e) => e.text.includes(ZX_PROBE));
+            row('must', dbgSeen && dbgProbes.length === 1 && dbgProbes[0].type === 'debug',
+                'C-DBG-2 the trace sensor sees a [zx:dom] console.debug',
+                `seen=${dbgSeen} type=${dbgProbes[0] ? dbgProbes[0].type : 'none'} text=${JSON.stringify(dbgProbes[0] ? dbgProbes[0].text : '')}`);
+
+            // Position is the window here: every load of this run so far ran with the flag off, and
+            // the rows that turn it on are all below. So this reads the whole run, not one page.
+            const leaked = product(zxTraces);
+            row('must', leaked.length === 0,
+                'C-DBG-3 debug output does not leak into a default load (whole run, flag off)',
+                `traces=${leaked.length}${leaked.length ? ` first=${JSON.stringify(leaked[0].text)} type=${leaked[0].type} at=${leaked[0].url}` : ''}`);
+
+            // C-DBG-4 to C-DBG-7 are pending: nothing emits a trace until the door and the glue land,
+            // so they are RED by construction today and their PENDPASS is the promotion signal.
+            const onFrom = zxTraces.length;
+            await page.navigate(`${args.base}/?zxdebug=1`);
+            await page.waitFor(hydrated, 15000);
+            // Wait for the trace rather than sample the instant hydration reports done: the door's
+            // console line is not part of the hydrated signal, so a sample here is a wall clock, and
+            // a wall clock read on a box running five members is a different test than on a quiet one.
+            await grewBy(zxTraces, onFrom, 5000);
+            const onTraces = traced(zxTraces, onFrom);
+            const onStrays = strayed(zxTraces, onFrom);
+            const onStored = await page.eval("localStorage.getItem('zx:debug')");
+            row('must', onTraces.length > 0 && onStrays.length === 0 && onStored !== null,
+                'C-DBG-4 ?zxdebug=1 traces the render and remembers the choice',
+                `traces=${onTraces.length} types=${JSON.stringify([...new Set(product(zxTraces, onFrom).map((e) => e.type))])} strays=${onStrays.length} stored=${JSON.stringify(onStored)}`);
+
+            const backFrom = zxTraces.length;
+            await page.navigate(`${args.base}/`);
+            await page.waitFor(hydrated, 15000);
+            await grewBy(zxTraces, backFrom, 5000);
+            const backTraces = traced(zxTraces, backFrom);
+            row('must', backTraces.length > 0,
+                'C-DBG-5 a plain reload still traces, so the choice outlived the query string',
+                `traces=${backTraces.length} stored=${JSON.stringify(await page.eval("localStorage.getItem('zx:debug')"))}`);
+
+            const offFrom = zxTraces.length;
+            await page.navigate(`${args.base}/?zxdebug=0`);
+            await page.waitFor(hydrated, 15000);
+            // An absence has no completion signal to wait on, so this one settle is unavoidable: it
+            // gives a trace that WOULD have come the same room the rows above wait 5000ms for.
+            await sleep(1000);
+            const offTraces = product(zxTraces, offFrom);
+            const offStored = await page.eval("localStorage.getItem('zx:debug')");
+            // The tracedBefore term is the point of the row. "No traces and no key" is TRUE on a build
+            // where tracing was never possible and the key never existed, so without it the row is
+            // satisfied by the default and proves nothing stopped.
+            row('must', backTraces.length > 0 && offTraces.length === 0 && offStored === null,
+                'C-DBG-6 ?zxdebug=0 stops the tracing it was actually doing, and forgets it',
+                `tracedBefore=${backTraces.length} tracesAfter=${offTraces.length} stored=${JSON.stringify(offStored)}`);
+
+            const liveFrom = zxTraces.length;
+            const hasSwitch = await page.eval("typeof window.__st_debug === 'function'");
+            if (hasSwitch) await page.eval('window.__st_debug(true)');
+            // A trace needs the door to patch something. Boot is the only other churn and it is over,
+            // so the panel open is what gives the switch something to say, with no reload.
+            const drawer = await page.waitFor("document.getElementById('d-characters')", 5000);
+            if (drawer) {
+                await page.click('#d-characters');
+                await page.waitFor("document.querySelector('#chat-root .char-item, #chat-root .panel-empty')", 5000);
+                await grewBy(zxTraces, liveFrom, 5000);
+            }
+            // Counts the per-op traces only. __st_debug ALWAYS prints its own acknowledgement, so a
+            // row counting every prefixed line would be satisfied by the switch reporting itself,
+            // which is the one thing it does whether or not it turned anything on.
+            const liveTraces = traced(zxTraces, liveFrom);
+            const liveAck = product(zxTraces, liveFrom).some((e) => e.type === 'info');
+            row('must', hasSwitch && drawer && liveTraces.length > 0,
+                'C-DBG-7 __st_debug(true) starts tracing mid-session, with no reload',
+                `switch=${hasSwitch} panelOpened=${drawer} traces=${liveTraces.length} ack=${liveAck}`);
+
+            // Last row of the gate on purpose. Every load any row above has driven, flag on or off,
+            // has been watched for an anomaly, so the drift names itself the moment it returns and
+            // nobody has to reproduce it first.
+            const anomalies = product(zxAnomalies);
+            row('must', anomalies.length === 0,
+                'C-DBG-8 no [zx:dom] anomaly in the whole run',
+                anomalies.length === 0
+                    ? 'clean'
+                    : `${anomalies.length} anomalies, first at ${anomalies[0].url}: ${JSON.stringify(anomalies[0].text)}`);
+            for (const a of anomalies) console.log(`          anomaly at ${a.url}: ${a.text}`);
+
+            // Both flavours, because they are not one mechanism: a throw out of an event handler and
+            // a rejected promise nobody awaited reach the page by different paths, and the crash we
+            // are hunting took the second. A sensor proven on one would leave the other unwatched.
+            const exFrom = pageExceptions.length;
+            await page.eval(`setTimeout(function(){ throw new Error('${ZX_PROBE} sync: removeChild on a node that moved'); }, 0)`);
+            await page.eval(`Promise.reject(new Error('${ZX_PROBE} async: NotFoundError off a promise'))`);
+            await grewBy(pageExceptions, exFrom + 1, 5000);
+            const exProbes = pageExceptions.slice(exFrom).filter((e) => e.text.includes(ZX_PROBE));
+            const sawSync = exProbes.some((e) => e.text.includes('sync:'));
+            const sawAsync = exProbes.some((e) => e.text.includes('async:'));
+            row('must', sawSync && sawAsync,
+                'C-DBG-9 the exception sensor sees an uncaught throw and a rejected promise',
+                `sync=${sawSync} async=${sawAsync} captured=${exProbes.length}`);
+
+            // Strictly broader than every prefix row above, and the only one that would have caught
+            // the crash this channel was built for: an exception reaches no console.error, so the
+            // door cannot be the witness to a failure that stops it from speaking.
+            const uncaught = pageExceptions.filter((e) => !e.text.includes(ZX_PROBE));
+            row('must', uncaught.length === 0,
+                'C-DBG-10 no uncaught exception in the whole run',
+                uncaught.length === 0
+                    ? 'clean'
+                    : `${uncaught.length} uncaught, first at ${uncaught[0].url}: ${JSON.stringify(uncaught[0].text.slice(0, 160))}`);
+            for (const e of uncaught) console.log(`          uncaught at ${e.url}: ${e.text.split('\n')[0]}`);
+        }
+
     } finally {
         clearTimeout(watchdog);
         cleanup();
@@ -3187,9 +3383,11 @@ async function main() {
     if (pendingPasses > 0) {
         console.log(`interactions: ${pendingPasses} pending row(s) now PASS - promote them to must`);
     }
-    console.log(mustFails === 0
-        ? 'interactions: all must rows passed'
-        : `interactions: ${mustFails} must row(s) FAILED`);
+    // The count comes from the counter row() keeps, not from grepping this output back. A bare
+    // "all must rows passed" says the same thing when every row passed and when a crash before the
+    // first row meant none ran, and those are opposite facts.
+    const pend = pendingRows > 0 ? ` (+${pendingRows} pending, not counted)` : '';
+    console.log(`interactions: ${mustRows - mustFails} of ${mustRows} must rows passed, ${mustFails} failed${pend}`);
     process.exit(mustFails === 0 ? 0 : 1);
 }
 
