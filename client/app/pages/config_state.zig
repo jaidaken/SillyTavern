@@ -207,10 +207,6 @@ pub fn presetsLoadFailed() bool {
     return presets_load_failed;
 }
 
-pub fn unreadablePresets() usize {
-    return unreadable_presets;
-}
-
 /// Re-arm and refetch once, from the panel's Retry control.
 pub fn retryPresets() void {
     if (!presets_load_failed) return;
@@ -335,6 +331,7 @@ pub fn savePreset(name: []const u8) void {
     const trimmed = std.mem.trim(u8, name, " \t\r\n");
     if (trimmed.len == 0) {
         setPresetStatus("Name the preset first.");
+        zx.client.rerender();
         return;
     }
     const base = if (selected_preset) |sel| blk: {
@@ -346,6 +343,7 @@ pub fn savePreset(name: []const u8) void {
     defer arena.deinit();
     const body = sampler_presets.buildSaveBody(arena.allocator(), trimmed, base, sampler_values) catch {
         setPresetStatus("Could not build the preset.");
+        zx.client.rerender();
         return;
     };
     // Stashed, not committed: the picker adopts this name only once the server has taken the file.
@@ -353,6 +351,9 @@ pub fn savePreset(name: []const u8) void {
     if (pending_save_name) |old| alloc.free(old);
     pending_save_name = pending;
     setPresetStatus("Saving...");
+    // Painted BEFORE the request goes: the reply's own rerender is the next one this line gets, so
+    // without this the user watches a dead button for the whole round trip.
+    zx.client.rerender();
     net.request("/api/presets/save", body, 0, onPresetSaved, .{});
 }
 
@@ -392,6 +393,8 @@ pub fn presetStatus() []const u8 {
     return preset_status;
 }
 
+/// A pure setter, and it stays one: every caller rerenders ONCE at the end of its own mutation, so
+/// rendering from in here would paint the panel mid-mutation and then paint it again (ZX4).
 fn setPresetStatus(text: []const u8) void {
     const copy = alloc.dupe(u8, text) catch return;
     if (preset_status.len > 0) alloc.free(preset_status);

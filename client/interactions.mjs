@@ -2470,6 +2470,23 @@ async function main() {
                 'C-PRE-SAM-14 the panel says how many preset files it could not read',
                 `notice=${JSON.stringify(notice)}`);
 
+            // AND IT MUST BE SAID OUT LOUD. The notice arrives with a fetch, long after the panel
+            // renders, so a reader who is not looking at it is told by the live region or not at
+            // all. Read the ATTRIBUTES that make it announce rather than the text C-PRE-SAM-14
+            // already owns: a row that only found the element passed with no announcement at all.
+            const live = await page.eval(`(function(){
+                const n=document.getElementById('preset-unreadable');
+                if(!n)return JSON.stringify({err:'no #preset-unreadable'});
+                const f=document.getElementById('preset-save-name');
+                return JSON.stringify({role:n.getAttribute('role'),live:n.getAttribute('aria-live'),
+                    describedBy:f?f.getAttribute('aria-describedby'):null,
+                    saysSomething:n.textContent.trim().length>0});})()`);
+            const lv = JSON.parse(live);
+            row('must', lv.role === 'status' && lv.live === 'polite' && lv.saysSomething
+                && (lv.describedBy || '').split(/\s+/).includes('preset-unreadable'),
+                'C-PRE-SAM-19 the unreadable-files notice announces itself rather than waiting to be found',
+                `role=${lv.role} ariaLive=${lv.live} describedBy=${JSON.stringify(lv.describedBy)} hasText=${lv.saysSomething}`);
+
             // THE CONNECTION MUST SURVIVE A PICK. "Classic Saved" carries `type` and `server_urls`
             // pointing at a backend that is not the user's. A picker that applied a preset by
             // overwriting the textgen section would swap the user's backend out from under them the
@@ -2643,6 +2660,65 @@ async function main() {
             row('must', adopted && blobAdopted === '..x',
                 'C-PRE-SAM-18 the picker adopts the name the server actually wrote',
                 `face=${await faceOf()} blobPreset=${blobAdopted}`);
+
+            // THE DEAD BUTTON. An empty name is refused in memory and, until this row, the refusal
+            // was never painted: the click did NOTHING a user could see, and the only cue that the
+            // app had noticed at all was a status line still reporting the previous save. Assert the
+            // rendered TEXT moves to the refusal's own words; the line is never that by any other
+            // route, and asserting merely that the element exists passes on the dead build.
+            const statusOf = async () => page.eval("document.getElementById('preset-status').textContent");
+            const staleStatus = await statusOf();
+            await typeName('');
+            await page.click('.preset-save');
+            const refused = await page.waitFor(
+                "document.getElementById('preset-status').textContent === 'Name the preset first.'", 4000);
+            const afterEmpty = await statusOf();
+            row('must', refused && afterEmpty !== staleStatus,
+                'C-PRE-SAM-20 saving with no name says so on screen instead of doing nothing',
+                `before=${JSON.stringify(staleStatus)} after=${JSON.stringify(afterEmpty)} changed=${afterEmpty !== staleStatus}`);
+
+            // THE IN-FLIGHT LINE. It is set before the request and overwritten by the reply, so on a
+            // build that only paints at the reply it is a string that never reaches a screen. The
+            // mock answers instantly, which would make the pending state unobservable however
+            // broken it was, so hold the save open and watch for the line through a real paint.
+            await (await fetch(`${args.base}/dev/arm-preset-save-delay`)).json();
+            await typeName('Slow Save');
+            await page.click('.preset-save');
+            const sawSaving = await page.waitFor(
+                "document.getElementById('preset-status').textContent === 'Saving...'", 4000);
+            const savingText = await statusOf();
+            await (await fetch(`${args.base}/dev/disarm-preset-save-delay`)).json();
+            // And it must be TRANSIENT: a "Saving..." that never clears is its own defect.
+            const settled = await page.waitFor(
+                "document.getElementById('preset-status').textContent === 'Preset saved'", 6000);
+            row('must', sawSaving && settled,
+                'C-PRE-SAM-21 a save in flight says so, and stops saying so when it lands',
+                `sawSaving=${sawSaving} textWhileInFlight=${JSON.stringify(savingText)} settledToSaved=${settled}`);
+
+            // THE ONE COMMITTING WRITE ON THE PANEL. Save wore the same outline as its own Reset:
+            // same weight, so nothing said which button was the point. Measured through a PAINTED
+            // canvas: the theme is oklch and Chrome hands the string back verbatim, so a computed
+            // colour compared as RGB reads ~1:1 for every pair. The accent is read from the token
+            // itself rather than a hardcoded rgb, so a retheme moves the row with the theme.
+            const look = await page.eval(`(function(){${contrastFn}
+                const b=document.querySelector('.preset-save'), r=document.querySelector('.cfg-reset');
+                if(!b||!r)return JSON.stringify({err:'no .preset-save / .cfg-reset'});
+                const probe=document.createElement('div');
+                probe.style.cssText='background:var(--color-accent);color:var(--color-on-accent)';
+                document.body.appendChild(probe);
+                const p=getComputedStyle(probe), accent=p.backgroundColor, on=p.color;
+                probe.remove();
+                const s=getComputedStyle(b), rs=getComputedStyle(r), key=(c)=>rgb(c).join(',');
+                return JSON.stringify({
+                    fillIsAccent:key(s.backgroundColor)===key(accent),
+                    textIsOnAccent:key(s.color)===key(on),
+                    outweighsReset:key(s.backgroundColor)!==key(rs.backgroundColor),
+                    textOnFill:Math.round(contrast(s.color,s.backgroundColor)*100)/100,
+                    fill:s.backgroundColor,resetFill:rs.backgroundColor});})()`);
+            const lk = JSON.parse(look);
+            row('must', lk.fillIsAccent && lk.textIsOnAccent && lk.outweighsReset && lk.textOnFill >= 4.5,
+                'C-PRE-SAM-22 the Save control is the panel\'s filled accent, not a twin of its Reset',
+                `filledWithAccentToken=${lk.fillIsAccent} onAccentText=${lk.textIsOnAccent} differsFromReset=${lk.outweighsReset} textOnFill=${lk.textOnFill}:1 fill=${lk.fill} reset=${lk.resetFill}`);
         }
 
         // --- C-PRE-SAM-FAIL: the picker's load-failure state, its retry, and the loop it must not do ---
@@ -2669,6 +2745,44 @@ async function main() {
             row('must', c1 - c0 <= 1,
                 'C-PRE-SAM-12 a failed preset load retries on the user, not in a loop',
                 `settingsReadsWhileFailed=${c1 - c0}`);
+
+            // THE LIVE REGION MUST PRE-DATE THE NEWS. A region inserted already holding its text
+            // announces nothing: the reader had no region to be told about a change to. This is the
+            // panel with NOTHING to report (the list never loaded), so the notice must be here and
+            // empty, waiting. The C-PRE-SAM-19 attributes are asserted on the SILENT case too,
+            // because that is the render that has to already be right when the count lands.
+            const quiet = await page.eval(`(function(){
+                const n=document.getElementById('preset-unreadable');
+                if(!n)return JSON.stringify({present:false});
+                return JSON.stringify({present:true,text:n.textContent,
+                    role:n.getAttribute('role'),live:n.getAttribute('aria-live'),
+                    hidden:getComputedStyle(n).display==='none'});})()`);
+            const q = JSON.parse(quiet);
+            row('must', q.present && q.text === '' && q.role === 'status' && q.live === 'polite' && q.hidden,
+                'C-PRE-SAM-23 the notice\'s live region is already there, silent, before it has news',
+                `present=${q.present} text=${JSON.stringify(q.text)} role=${q.role} ariaLive=${q.live} hiddenWhileEmpty=${q.hidden}`);
+
+            // EVERY BUTTON ON THIS PANEL AT PHONE WIDTH. Measured, not asserted as a class: the
+            // convention is a class string, but what a thumb hits is a rendered box. Driven here
+            // rather than in the block above because Retry only exists in the failure state, and it
+            // is the same 30px control as the other two. Restored below before any later row runs.
+            const wideW = await page.eval('window.innerWidth');
+            await page.cdp.send('Emulation.setDeviceMetricsOverride',
+                { width: 390, height: 844, deviceScaleFactor: 1, mobile: false }, page.sessionId);
+            await page.waitFor('window.innerWidth === 390', 3000);
+            const taps = await page.eval(`(function(){
+                const h=function(s){const e=document.querySelector(s);
+                    return e?Math.round(e.getBoundingClientRect().height*10)/10:-1;};
+                return JSON.stringify({save:h('.preset-save'),reset:h('.cfg-reset'),retry:h('.preset-retry')});})()`);
+            const tp = JSON.parse(taps);
+            await page.cdp.send('Emulation.clearDeviceMetricsOverride', {}, page.sessionId);
+            const tapsRestored = await page.waitFor(`window.innerWidth === ${wideW}`, 5000);
+            row('must', tp.save >= 44 && tp.reset >= 44 && tp.retry >= 44,
+                'C-PRE-SAM-24 every control on the panel is thumb-sized at 390px',
+                `save=${tp.save}px reset=${tp.reset}px retry=${tp.retry}px`);
+            row('must', tapsRestored,
+                'C-PRE-SAM-25 the 390px override is fully restored before later rows run',
+                `wide=${wideW} now=${await page.eval('window.innerWidth')}`);
 
             // The retry must actually recover: the same panel, no reload. Assert the four fixture
             // presets are BACK rather than a count: an earlier row in this run saved a preset, and
@@ -2842,10 +2956,41 @@ async function main() {
             // readout frozen at "Connected" while the backend is down, so drive a real transition:
             // Connect persists, and onPersistDone calls updateSendStatus -> "Backend: <type>".
             const statusBefore = await page.eval("document.getElementById('send-status').textContent.trim()");
-            await page.click('#d-connections');
-            await page.waitFor("document.getElementById('dd-btn-conn-type')", 4000);
+            // #d-connections TOGGLES and five rows click it, so a blind click CLOSES a drawer a prior
+            // row left open. Ask, then open only if it is shut.
+            if (!await page.eval("!!document.querySelector('.conn-connect')")) {
+                await page.click('#d-connections');
+                if (!await page.waitFor("document.querySelector('.conn-connect')", 8000)) {
+                    throw new Error('W6-7: the connections drawer never opened');
+                }
+            }
+            // page.click dispatches at COORDINATES, and the drawer opens on a transition, so a click
+            // measured mid-animation lands on empty space. Wait for the button to stop moving.
+            await (async () => {
+                let last = null;
+                for (let i = 0; i < 80; i++) {
+                    const at = await page.eval(
+                        "(()=>{const e=document.querySelector('.conn-connect');if(!e)return '';const b=e.getBoundingClientRect();return b.top+','+b.left+','+b.width;})()");
+                    if (at && at === last) return;
+                    last = at;
+                    await sleep(50);
+                }
+                throw new Error('W6-7: the connect button never settled');
+            })();
+            // Wait on the persist's OWN signal, not a clock: a flat 6s budget read RED on an untouched
+            // baseline 2 runs in 4 under load. COUNT, not value: connect is clicked 3x, payloads repeat.
+            const connBefore = (await (await fetch(`${args.base}/dev/state`)).json()).set_connection_count;
             await page.click('.conn-connect');
-            const statusMoved = await page.waitFor(
+            const landed = await (async () => {
+                const deadline = Date.now() + 15000;
+                while (Date.now() < deadline) {
+                    const st = await (await fetch(`${args.base}/dev/state`)).json();
+                    if (st.set_connection_count > connBefore) return true;
+                    await sleep(100);
+                }
+                return false;
+            })();
+            const statusMoved = landed && await page.waitFor(
                 `document.getElementById('send-status').textContent.trim() !== ${JSON.stringify(statusBefore)}`, 6000);
             const statusAfter = await page.eval("document.getElementById('send-status').textContent.trim()");
             // Named for what it PROVES. It does NOT guard the detached-node trap: arming that two ways
@@ -2853,7 +2998,7 @@ async function main() {
             // needs the vdom to own text it can lose and the composer publishes no region handle.
             row('must', statusMoved && statusAfter.length > 0,
                 'W6-7 the backend readout tracks the backend it is reporting on',
-                `before=${JSON.stringify(statusBefore)} after=${JSON.stringify(statusAfter)} changed=${statusMoved}`);
+                `landed=${landed} before=${JSON.stringify(statusBefore)} after=${JSON.stringify(statusAfter)} changed=${statusMoved}`);
 
             // The readout is a fixture, not a toast: connection.zig writes a standing line at boot and
             // leaves it. Absolutely positioned over the log it was a permanent label on the

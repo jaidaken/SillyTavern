@@ -17,10 +17,22 @@ const label_cls = "setting-label text-base font-medium max-[768px]:text-[0.88rem
 const num_cls = "sampler-num w-[5.5rem] rounded-md border border-control-border bg-bg px-2 py-[0.25rem] text-right font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
 const range_cls = "sampler-range w-full accent-accent";
 const hint_cls = "setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]";
-const reset_cls = "cfg-reset cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text";
+// The unreadable-files line is RENDERED ALWAYS and empty until there is something to say, because a
+// live region only announces a change to a region the reader already had: inserted whole, with its
+// text, it says nothing (WD39). `empty:hidden` is what keeps the silent case out of the layout, and
+// is the shape connections_body.zx:76 and formatting_body.zx:78 already use.
+const notice_cls = hint_cls ++ " empty:hidden";
+// Every button in this panel clears the 44px touch target at phone width, the way the repo's own
+// action buttons do (character_actions.zx:28, persona_list.zx:82, character_list.zx:170).
+const tap_cls = " max-[768px]:min-h-11 max-[768px]:px-3 max-[768px]:py-2";
+const reset_cls = "cfg-reset cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text" ++ tap_cls;
 const save_name_cls = "preset-save-name min-w-0 flex-1 rounded-md border border-control-border bg-bg px-2 py-[0.25rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
-const retry_cls = "preset-retry self-start cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text";
-const save_btn_cls = "preset-save cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text";
+const retry_cls = "preset-retry self-start cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text" ++ tap_cls;
+// Save is the one committing write on this panel, so it wears the house primary: filled amber, the
+// theme's single active signal (app-input.css:12-13), exactly as the sibling preset row does
+// (formatting_body.zx:26) and card_editor/connections before it. As an outline beside an outline
+// Reset it read as the same weight as the button that throws the user's samplers away.
+const save_btn_cls = "preset-save cursor-pointer rounded-md border border-accent bg-accent px-[0.9rem] py-[0.45rem] font-mono text-sm text-on-accent transition-[background,filter] duration-120 ease-[ease] hover:brightness-[1.06]" ++ tap_cls;
 
 pub fn AiConfigBody(ctx: *zx.ComponentCtx(void)) zx.Component {
     // The list is fetched on this panel's first render rather than at boot: nothing needs it until
@@ -58,14 +70,12 @@ pub fn AiConfigBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         autocomplete="off"
                         placeholder="Name this preset"
                         aria-label="New preset name"
-                        aria-describedby="preset-status"
+                        aria-describedby="preset-status preset-unreadable"
                     />
                     <button type="button" class={save_btn_cls} onclick={onSavePreset}>Save</button>
                 </div>
-                <p id="preset-status" class={hint_cls} aria-live="polite">{presetHint()}</p>
-                {if (config_state.unreadablePresets() > 0) (
-                    <p id="preset-unreadable" class={hint_cls}>{config_state.unreadableNotice(ctx.allocator)}</p>
-                )}
+                <p id="preset-status" class={hint_cls} role="status" aria-live="polite">{presetHint()}</p>
+                <p id="preset-unreadable" class={notice_cls} role="status" aria-live="polite">{config_state.unreadableNotice(ctx.allocator)}</p>
             </div>
             {for (samplers.specs_slice) |spec| (
                 <div class={row_cls}>

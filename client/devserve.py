@@ -497,6 +497,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return {"filename": f, "isAnimated": f.endswith(".webp")}
     # Send-loop/connection gate readback: what the client persisted and what its last generate carried.
     recorded_connection = None
+    # Monotonic, because a row cannot key on the VALUE changing: connect is clicked three times and a
+    # second connect may carry an identical payload. W6-7 waits on this landing, not on a clock.
+    set_connection_count = 0
     last_generate_server = None
     # J1 invariant-2 gate: the prompt of the last generate, so a gate can prove it spans history
     # beyond the display window.
@@ -542,6 +545,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # and PERSISTENT: a one-shot failure ends the refetch loop it is meant to detect.
     settings_fail = False
     settings_get_count = 0
+    # C-PRE-SAM: seconds /api/presets/save holds before answering, armed via /dev/arm-preset-save-delay.
+    preset_save_delay = 0.0
     # C-CHAR: the avatar the last /api/characters/duplicate named, read back by /dev/duplicated.
     duplicated_avatar = None
     # C-CFG: the open chat's metadata, mutated by /api/chats/metadata so a note save round-trips.
@@ -673,6 +678,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if self.path.startswith("/dev/state"):
                 return self.mock_json({
                     "recorded_connection": Handler.recorded_connection,
+                    "set_connection_count": Handler.set_connection_count,
                     "last_generate_server": Handler.last_generate_server,
                     "last_generate_prompt": Handler.last_generate_prompt,  # J1 invariant-2
                     "last_generate_body": Handler.last_generate_body,  # C-CFG
@@ -712,6 +718,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.mock_json({"armed": True})
             if self.path.startswith("/dev/disarm-settings-fail"):
                 Handler.settings_fail = False
+                return self.mock_json({"armed": False})
+            # C-PRE-SAM: hold a save open so a row can watch the in-flight line paint. A mock that
+            # always answers within a millisecond makes the pending state unobservable, and a state
+            # no row can see is a state nothing proves renders.
+            if self.path.startswith("/dev/arm-preset-save-delay"):
+                Handler.preset_save_delay = 1.5
+                return self.mock_json({"armed": True, "seconds": Handler.preset_save_delay})
+            if self.path.startswith("/dev/disarm-preset-save-delay"):
+                Handler.preset_save_delay = 0.0
                 return self.mock_json({"armed": False})
             # C-CFG: drop the recorded generate so a gate can prove the NEXT body is the one its own
             # send produced. Without this a completion predicate can match a previous send's text and
@@ -876,6 +891,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             })
         # The real save route (src/endpoints/presets.js:44-60), serving both pickers.
         if path == "/api/presets/save":
+            if Handler.preset_save_delay:
+                time.sleep(Handler.preset_save_delay)
             # Mirrors presets.js:44-60: sanitize FIRST, 400 when the name empties or the preset is
             # missing, and hand back the name actually written.
             name = _sanitize_filename(req.get("name") if isinstance(req, dict) else None)
@@ -1032,6 +1049,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.mock_json({"result": "mock-model", "data": [{"id": "mock-model"}]})
         if path == "/api/settings/set-connection":
             Handler.recorded_connection = {"api_type": req.get("api_type"), "api_server": req.get("api_server")}
+            Handler.set_connection_count += 1
             return self.mock_json({"ok": True, "connection": Handler.recorded_connection})
         # --- C-CONN: secrets routes, contract-faithful to src/endpoints/secrets.js ---
         if path == "/api/secrets/read":
