@@ -773,12 +773,16 @@ async function main() {
 
         const stU2 = await (await fetch(`${args.base}/dev/state`)).json();
         await page.click("#undo-surface [data-undo-restore][data-undo-kind='snapshot']");
+        // "Resyncs the reader" must mean the READER came back, not that the server was asked: the
+        // resync empties the store before refilling it, so a request-count row returns mid-gap.
         const snapRestored = await (async () => {
             const deadline = Date.now() + 10000;
             while (Date.now() < deadline) {
                 const closed = await page.eval("document.querySelector('#undo-surface') === null");
                 const st = await (await fetch(`${args.base}/dev/state`)).json();
-                if (closed && st.get_count > stU2.get_count) return true;
+                const readerBack = await page.eval(
+                    "document.querySelectorAll('#chat .mes').length === 4 && !!document.querySelector('[data-msg-menu=\"0\"]')");
+                if (closed && st.get_count > stU2.get_count && readerBack) return true;
                 await sleep(150);
             }
             return false;
