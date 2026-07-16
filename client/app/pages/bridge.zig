@@ -9,6 +9,7 @@ const persona_store = @import("./persona_store.zig");
 const persona_actions = @import("./persona_actions.zig");
 const reading_prefs = @import("./reading_prefs.zig");
 const appearance = @import("./appearance.zig");
+const backgrounds = @import("./backgrounds.zig");
 const char_api = @import("./char_api.zig");
 const ui = @import("./ui.zig");
 const zx = @import("zx");
@@ -189,6 +190,7 @@ fn bootInit() callconv(.c) void {
     reading_prefs.syncAria();
     // Persisted chrome theme overrides and custom CSS land on the document root before first paint.
     appearance.applyAll();
+    backgrounds.applyAll();
     // Zig owns boot data orchestration (Z-BOOT): ?demo fixtures, characters + personas,
     // auto-open. The glue only calls __st_boot_init.
     char_api.boot();

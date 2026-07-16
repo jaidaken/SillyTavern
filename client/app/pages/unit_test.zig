@@ -26,6 +26,7 @@ comptime {
     _ = @import("generate.zig");
     _ = @import("log_spec.zig");
     _ = @import("dropdown_nav.zig");
+    _ = @import("background_store.zig");
 }
 
 const sink_call = "html.sink(";

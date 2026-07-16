@@ -181,6 +181,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     dev = False
     mock_api = False
     mock_favs = {}
+    # C-BG: the gallery /api/backgrounds/all serves. Mutable, so a delete or rename shows on the next
+    # load; "a b.jpg" carries the space that proves the url encode, "loop.webp" is the animated one.
+    mock_backgrounds = ["dusk harbor.jpg", "a b.jpg", "loop.webp", "study.png"]
     # Send-loop/connection gate readback: what the client persisted and what its last generate carried.
     recorded_connection = None
     last_generate_server = None
@@ -485,6 +488,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.mock_json({})
         if path.startswith("/api/chats/message/"):
             return self._mock_message_mutation(path.rsplit("/", 1)[-1], req)
+        # ===== C-BG: backgrounds (append-only zone) =====
+        # Stateful, so a delete/rename shows on the next /all and the gate's server-authoritative
+        # rows are non-vacuous. The real delete/rename answer the text "ok"; the client reads only
+        # the status, so a json body stands in for it here.
+        if path == "/api/backgrounds/all":
+            return self.mock_json({
+                "images": [{"filename": f, "isAnimated": f.endswith(".webp")} for f in Handler.mock_backgrounds],
+                "config": {"width": 160, "height": 90},
+            })
+        if path == "/api/backgrounds/delete":
+            name = req.get("bg")
+            if name not in Handler.mock_backgrounds:
+                return self.mock_status(400, {"error": "not found"})
+            Handler.mock_backgrounds.remove(name)
+            return self.mock_json({"ok": True})
+        if path == "/api/backgrounds/rename":
+            old, new = req.get("old_bg"), req.get("new_bg")
+            if old not in Handler.mock_backgrounds:
+                return self.mock_status(400, {"error": "not found"})
+            if new in Handler.mock_backgrounds:
+                return self.mock_status(400, {"error": "exists"})
+            Handler.mock_backgrounds[Handler.mock_backgrounds.index(old)] = new
+            return self.mock_json({"ok": True})
         # Every other API POST (create/rename/settings-save/...) acknowledges without state.
         return self.mock_json({})
 

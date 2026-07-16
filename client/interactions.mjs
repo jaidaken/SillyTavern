@@ -1090,6 +1090,109 @@ async function main() {
         const deletedRow = await page.waitFor(`document.querySelectorAll('#persona-list .char-item').length === ${before}`, 6000);
         const deletedSaved = await pollPersonas((p) => Object.keys(p).length === before && Object.values(p).indexOf('Zephyr II') < 0);
         row('must', deletedRow && deletedSaved, 'C-PERS-6 delete removes the persona and round-trips', `row=${deletedRow} saved=${deletedSaved}`);
+
+        // ===== C-BG (append-only): backgrounds gallery, apply, persist, file actions =====
+        // The mock gallery is mutable, so a delete/rename shows on the next /all: that is what makes
+        // the two server-authoritative rows non-vacuous.
+        console.log('== backgrounds: gallery, apply, persist, delete/rename ==');
+        await page.navigate(`${args.base}/`);
+        await page.waitFor(hydrated, 15000);
+        await page.click('#d-backgrounds');
+
+        const listed = await page.waitFor("document.querySelectorAll('#bg-gallery .bg-tile-wrap').length === 4", 8000);
+        row('must', listed, 'C-BG-1 the gallery lists every background the server serves', `tiles=${await page.eval("document.querySelectorAll('#bg-gallery .bg-tile-wrap').length")}`);
+
+        // The Wave-1 bug class: a space in a filename must reach the thumbnail url percent-encoded.
+        const thumbEnc = await page.eval(
+            "Array.from(document.querySelectorAll('#bg-gallery img')).some(function(i){return (i.getAttribute('src')||'').indexOf('file=a%20b.jpg')>=0;})");
+        const thumbRaw = await page.eval(
+            "Array.from(document.querySelectorAll('#bg-gallery img')).some(function(i){return (i.getAttribute('src')||'').indexOf('file=a b.jpg')>=0;})");
+        row('must', thumbEnc && !thumbRaw, 'C-BG-2 the tile thumbnail url percent-encodes a spaced filename', `enc=${thumbEnc} raw=${thumbRaw}`);
+
+        const gifBadge = await page.eval(
+            "!!document.querySelector('#bg-gallery [data-bg-file=\\'loop.webp\\']') && Array.from(document.querySelectorAll('#bg-gallery .bg-tile-wrap')).some(function(w){return w.querySelector('[data-bg-file=\\'loop.webp\\']') && /GIF/.test(w.textContent);})");
+        row('must', gifBadge, 'C-BG-3 the animated background is badged as animated', `badge=${gifBadge}`);
+
+        // Applying: the url rides a custom property on :root, encoded, and data-background gates the
+        // layer on. Asserting the property (not pixels) keeps this off the browser's image decoder.
+        await page.click("#bg-gallery [data-bg-file='a b.jpg']");
+        const applied = await page.waitFor(
+            "document.documentElement.getAttribute('data-background') === 'on' && document.documentElement.style.getPropertyValue('--chat-bg-image').indexOf('a%20b.jpg') >= 0", 4000);
+        const pressed = await page.eval("document.querySelector('#bg-gallery [data-bg-file=\\'a b.jpg\\']').getAttribute('aria-pressed') === 'true'");
+        row('must', applied && pressed, 'C-BG-4 selecting a background applies it and marks the tile pressed', `applied=${applied} pressed=${pressed}`);
+
+        // C-CONN's panel-dismiss defect: a control that rerenders its own node away on click leaves
+        // ui.onPageClick walking a detached target and dismissing the panel. A tile reselect only
+        // patches aria-pressed in place, so the node survives and this needs no isConnected guard.
+        const panelOpen = await page.eval("!!document.querySelector('#panel-view') && !!document.querySelector('#bg-gallery')");
+        row('must', panelOpen, 'C-BG-5 selecting a background does not dismiss the panel', `open=${panelOpen}`);
+
+        const stored = await page.eval("localStorage.getItem('st-background')");
+        row('must', stored === 'a b.jpg', 'C-BG-6 the choice persists to localStorage unencoded', `stored=${stored}`);
+
+        // The rule itself, not just the property: the layer must exist, sit behind the content, and
+        // carry the scrim over the photo. A property nothing paints would pass every row above.
+        const layer = await page.eval(
+            "JSON.stringify((function(){var s=getComputedStyle(document.body,'::before');" +
+            "return {c:s.content,z:s.zIndex,p:s.position,img:s.backgroundImage};})())");
+        const l = JSON.parse(layer);
+        const layerOk = l.c !== 'none' && l.z === '-1' && l.p === 'fixed'
+            && l.img.indexOf('a%20b.jpg') >= 0 && l.img.indexOf('gradient') >= 0;
+        row('must', layerOk, 'C-BG-7 the layer paints behind the content with its scrim', `z=${l.z} pos=${l.p} scrim=${l.img.indexOf('gradient') >= 0}`);
+
+        // None clears it: the property goes back to none and the layer's gate attribute is dropped,
+        // so an unset background costs no scrim over the chrome.
+        await page.click("#bg-gallery [data-bg-none]");
+        const cleared = await page.waitFor(
+            "!document.documentElement.hasAttribute('data-background') && !localStorage.getItem('st-background')", 4000);
+        row('must', cleared, 'C-BG-8 None clears the background and drops the layer', `cleared=${cleared}`);
+
+        // Server-authoritative delete: the tile goes only because the server took it, proven by the
+        // gallery re-serving one fewer on a fresh load.
+        await page.eval('window.confirm = function(){ return true; };');
+        await page.click("#bg-gallery [data-bg-delete='study.png']");
+        const tileGone = await page.waitFor("!document.querySelector('#bg-gallery [data-bg-file=\\'study.png\\']')", 6000);
+        const serverGone = await (async () => {
+            const res = await fetch(`${args.base}/api/backgrounds/all`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            const j = await res.json();
+            return !j.images.some((i) => i.filename === 'study.png');
+        })();
+        row('must', tileGone && serverGone, 'C-BG-9 delete removes the background on the server, not just the tile', `tile=${tileGone} server=${serverGone}`);
+
+        await page.eval("window.prompt = function(){ return 'dusk harbour.jpg'; };");
+        await page.click("#bg-gallery [data-bg-rename='dusk harbor.jpg']");
+        const renamedTile = await page.waitFor("!!document.querySelector('#bg-gallery [data-bg-file=\\'dusk harbour.jpg\\']')", 6000);
+        const renamedServer = await (async () => {
+            const res = await fetch(`${args.base}/api/backgrounds/all`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            const j = await res.json();
+            return j.images.some((i) => i.filename === 'dusk harbour.jpg') && !j.images.some((i) => i.filename === 'dusk harbor.jpg');
+        })();
+        row('must', renamedTile && renamedServer, 'C-BG-10 rename retitles the background and round-trips', `tile=${renamedTile} server=${renamedServer}`);
+
+        // The blob check runs BEFORE the reload: the saver debounces 3s, and a navigate would discard
+        // the pending timer and read as a save that never fired.
+        await page.click("#bg-gallery [data-bg-file='loop.webp']");
+        await page.waitFor("localStorage.getItem('st-background') === 'loop.webp'", 3000);
+
+        const blobSaved = await (async () => {
+            const deadline = Date.now() + 8000;
+            while (Date.now() < deadline) {
+                const res = await fetch(`${args.base}/api/settings/get`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                const j = await res.json();
+                try {
+                    if (JSON.parse(j.settings).clientBackground?.image === 'loop.webp') return true;
+                } catch (_) { /* blob not written yet */ }
+                await sleep(250);
+            }
+            return false;
+        })();
+        row('must', blobSaved, 'C-BG-11 the chosen background rides the account settings blob', `saved=${blobSaved}`);
+
+        await page.navigate(`${args.base}/`);
+        await page.waitFor(hydrated, 15000);
+        const bootApplied = await page.waitFor(
+            "document.documentElement.getAttribute('data-background') === 'on' && document.documentElement.style.getPropertyValue('--chat-bg-image').indexOf('loop.webp') >= 0", 5000);
+        row('must', bootApplied, 'C-BG-12 a chosen background is applied again at boot', `applied=${bootApplied}`);
     } finally {
         clearTimeout(watchdog);
         cleanup();
