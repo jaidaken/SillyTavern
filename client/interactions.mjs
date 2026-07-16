@@ -63,6 +63,9 @@ class CDP {
 function launchChrome(profile) {
     const child = spawn('google-chrome-stable', [
         '--headless', '--disable-gpu', '--no-sandbox',
+        // Headless answers `(hover: hover) and (pointer: fine)` FALSE, so every hover rule is INERT and
+        // a row asserting one passes without the rule applying. mobile-audit.mjs omits this on purpose.
+        '--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4',
         '--window-size=1400,1000',
         `--user-data-dir=${profile}`, '--remote-debugging-port=0', 'about:blank',
     ], { detached: true, stdio: 'ignore' });
@@ -456,9 +459,8 @@ async function main() {
 
         // Mirrors C-BG-5: pins the panel against the dismiss defect from the CLICK side (a row action
         // that ever rebuilt its own node would detach the target and read as an outside click).
-        // Focus, not hover, does the revealing here: headless Chrome answers `(hover: hover) and
-        // (pointer: fine)` with FALSE, so the WD25-gated hover rule is inert in this gate and only the
-        // focus-within twin is reachable. Both set opacity + pointer-events, so the click path is real.
+        // The focus twin of the reveal. Its hover twin is C11 below, reachable since the gate started
+        // declaring a fine, hover-capable pointer.
         await page.focus("#chat-root .char-item:nth-of-type(2) .char-row-act[data-char-action='duplicate']");
         await sleep(200);
         const revealed = await page.eval("(function(){const c=document.querySelectorAll('#chat-root .char-item')[1].querySelector('.char-row-actions');const s=getComputedStyle(c);return JSON.stringify({op:s.opacity, pe:s.pointerEvents})})()");
@@ -467,6 +469,20 @@ async function main() {
         const panelAliveClick = await page.eval("!!document.querySelector('#panel-view') && !!document.querySelector('.char-toolbar') && document.querySelectorAll('#chat-root .char-item').length > 0");
         row('must', JSON.parse(revealed).op === '1' && JSON.parse(revealed).pe === 'auto' && panelAliveClick,
             'C10 a revealed row action is clickable and the click keeps the panel open', `reveal=${revealed} panelAlive=${panelAliveClick}`);
+
+        // The POINTER half, unreachable until the gate declared a hover-capable pointer. Asserts hidden
+        // FIRST, so a rule that revealed unconditionally could not pass this.
+        await page.eval("document.activeElement && document.activeElement.blur()");
+        await sleep(200);
+        const clusterSel = "document.querySelectorAll('#chat-root .char-item')[2].querySelector('.char-row-actions')";
+        const hiddenBefore = await page.eval(`getComputedStyle(${clusterSel}).opacity === '0'`);
+        const box = await page.eval(`(function(){const r=document.querySelectorAll('#chat-root .char-item')[2].getBoundingClientRect();return JSON.stringify({x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)})})()`);
+        const { x, y } = JSON.parse(box);
+        await page.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, buttons: 0 }, page.sessionId);
+        const hoverRevealed = await page.waitFor(`getComputedStyle(${clusterSel}).opacity === '1'`, 3000);
+        row('must', hiddenBefore && hoverRevealed,
+            'C11 hovering a row reveals its actions (the pointer twin of C10)',
+            `hiddenBefore=${hiddenBefore} revealed=${hoverRevealed}`);
 
         await page.click('#d-persona');
         row('must', await page.waitFor("document.querySelectorAll('#persona-list .char-item').length >= 2", 5000),
