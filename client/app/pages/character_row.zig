@@ -8,7 +8,7 @@
 //! carries when you last spoke and how much history is behind it.
 
 const std = @import("std");
-const data = @import("./char_data.zig");
+const datetime = @import("./datetime.zig");
 
 /// A row-hover action. `id` is echoed as data-char-action and dispatched to the matching char_api
 /// entry point; `icon` names a mask in the stylesheet's C-CHAR zone.
@@ -29,24 +29,11 @@ pub const row_actions = [_]RowAction{
 };
 
 /// Recency phrase for a last-chat stamp (epoch ms), written into `buf`. 0 means the character has no
-/// chat directory at all, which reads as an invitation rather than a date. Past a week the exact date
-/// carries more than a widening "34d ago", so it switches to the ISO date (matching home.zig's ladder).
+/// chat directory at all, which reads as an invitation rather than a date; every other case is
+/// datetime.relativeText, the one ladder home.zig also uses (this file used to carry a second copy).
 pub fn lastChatText(buf: *[32]u8, date_last_chat_ms: u64, now_ms: f64) []const u8 {
     if (date_last_chat_ms == 0) return "No chats yet";
-    const then_ms: f64 = @floatFromInt(date_last_chat_ms);
-    const diff = now_ms - then_ms;
-    if (!std.math.isFinite(diff) or diff < 0) return "recently";
-    const secs: u64 = @intFromFloat(@trunc(diff / 1000.0));
-    if (secs < 60) return "just now";
-    const mins = secs / 60;
-    if (mins < 60) return std.fmt.bufPrint(buf, "{d}m ago", .{mins}) catch "recently";
-    const hours = mins / 60;
-    if (hours < 24) return std.fmt.bufPrint(buf, "{d}h ago", .{hours}) catch "recently";
-    const days = hours / 24;
-    if (days < 7) return std.fmt.bufPrint(buf, "{d}d ago", .{days}) catch "recently";
-    var date_buf: [10]u8 = undefined;
-    const iso = data.isoDateFromMs(then_ms, &date_buf);
-    return std.fmt.bufPrint(buf, "{s}", .{iso}) catch "recently";
+    return datetime.relativeText(buf, @floatFromInt(date_last_chat_ms), now_ms);
 }
 
 /// Chat volume for `bytes` (the server's chat_size: the summed size of the character's chat files),

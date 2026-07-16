@@ -12,6 +12,7 @@ const zx = @import("zx");
 
 const net = @import("./net.zig");
 const data = @import("./char_data.zig");
+const datetime = @import("./datetime.zig");
 const char_store = @import("./character_store.zig");
 const store = @import("./store.zig");
 const char_api = @import("./char_api.zig");
@@ -41,9 +42,11 @@ pub const RecentRow = struct {
 const RecentJson = struct {
     file_name: []const u8 = "",
     mes: []const u8 = "",
-    // The backend sends this as an ISO 8601 STRING (getChatInfo: send_date || mtime.toISOString()),
-    // not a number; parsed to epoch ms at render time (parseDateMs).
-    last_mes: []const u8 = "",
+    // {number|string}, and BOTH shapes are real (src/endpoints/chats.js:369,380 type it that way):
+    // a populated chat sends send_date (:403), an EMPTY one sends stats.mtimeMs, a bare number
+    // (:450). Typed []const u8 this field did not merely mis-date that row, it failed the whole
+    // array parse and dropped the landing into its error state. datetime.zig reads either.
+    last_mes: std.json.Value = .null,
     avatar: []const u8 = "",
     group: []const u8 = "",
 };
@@ -165,36 +168,23 @@ fn dupePreview(mes: []const u8) ![]u8 {
     return out;
 }
 
-fn formatWhen(last_mes: []const u8, now_ms: f64) ![]u8 {
-    const then_ms = parseDateMs(last_mes);
-    const diff = now_ms - then_ms;
-    if (!std.math.isFinite(diff) or diff < 0) return alloc.dupe(u8, "recently");
-    const secs: u64 = @intFromFloat(@trunc(diff / 1000.0));
-    if (secs < 60) return alloc.dupe(u8, "just now");
-    const mins = secs / 60;
-    if (mins < 60) return std.fmt.allocPrint(alloc, "{d}m ago", .{mins});
-    const hours = mins / 60;
-    if (hours < 24) return std.fmt.allocPrint(alloc, "{d}h ago", .{hours});
-    const days = hours / 24;
-    if (days < 7) return std.fmt.allocPrint(alloc, "{d}d ago", .{days});
-    var buf: [10]u8 = undefined;
-    return alloc.dupe(u8, data.isoDateFromMs(then_ms, &buf));
+fn formatWhen(last_mes: std.json.Value, now_ms: f64) ![]u8 {
+    const then_ms = datetime.timestampMsFromJson(last_mes) orelse std.math.nan(f64);
+    var buf: [32]u8 = undefined;
+    return alloc.dupe(u8, datetime.relativeText(&buf, then_ms, now_ms));
 }
 
-/// Parse the last-message date string (ISO 8601 from the backend) to epoch ms via JS Date.parse.
-/// Returns NaN for an empty or unparseable value, which formatWhen renders as "recently".
-fn parseDateMs(s: []const u8) f64 {
-    if (zx.platform.role != .client or s.len == 0) return std.math.nan(f64);
-    const date_ctor = zx.client.js.global.get(zx.client.js.Object, "Date") catch return std.math.nan(f64);
-    defer date_ctor.deinit();
-    return date_ctor.call(f64, "parse", .{zx.client.js.string(s)}) catch std.math.nan(f64);
-}
-
+/// Wall-clock epoch ms off `performance`, NOT `Date.now()`: jsz resolves a property by walking a js
+/// VALUE, and a static hanging off a function object does not resolve, so `Date.now()` answers
+/// error.InvalidType and every row here read "recently" forever. `performance` is a plain object, so
+/// its `now` IS reachable, and timeOrigin + now() is the same instant.
 fn nowMs() f64 {
     if (zx.platform.role != .client) return 0;
-    const date_ctor = zx.client.js.global.get(zx.client.js.Object, "Date") catch return 0;
-    defer date_ctor.deinit();
-    return date_ctor.call(f64, "now", .{}) catch 0;
+    const perf = zx.client.js.global.get(zx.client.js.Object, "performance") catch return 0;
+    defer perf.deinit();
+    const origin = perf.get(f64, "timeOrigin") catch return 0;
+    const since = perf.call(f64, "now", .{}) catch return 0;
+    return origin + since;
 }
 
 /// Display name for a row: the character store's name when the avatar matches a loaded character,

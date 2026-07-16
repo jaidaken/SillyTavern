@@ -965,6 +965,15 @@ async function main() {
             `${hydrated} && document.querySelector('#chat-home:not(.hidden)') && document.querySelectorAll('#chat-home .home-thread').length === 3`, 15000),
             'HOME-1 boot shows the home landing with three recent character chats (group filtered)');
 
+        // The fixture's chats are 5 minutes, 3 hours and 4 days old, so "recently" is the NaN fallback
+        // rather than a date, and a list whose parse fails for every row still looks populated.
+        const whenTexts = await page.eval(
+            "JSON.stringify(Array.from(document.querySelectorAll('#chat-home .home-thread time')).map(function(t){return t.textContent.trim();}))");
+        const whens = JSON.parse(whenTexts);
+        const datesReal = whens.length === 3 && whens.every((w) => /^(just now|\d+[mhd] ago|\d{4}-\d{2}-\d{2})$/.test(w));
+        row('must', datesReal, 'HOME-5 a recent row dates the chat instead of falling back to "recently"',
+            `when=${whenTexts}`);
+
         // A recent row opens that character's chat (loadCharacterChat) and the landing hides behind the log.
         consoleLines.length = 0;
         await page.click('#chat-home .home-thread');

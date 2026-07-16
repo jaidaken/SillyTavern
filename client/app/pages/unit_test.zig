@@ -33,6 +33,7 @@ comptime {
     _ = @import("character_view.zig");
     _ = @import("character_row.zig");
     _ = @import("card_form.zig");
+    _ = @import("datetime.zig");
 }
 
 const sink_call = "html.sink(";

@@ -143,21 +143,37 @@ def _mock_characters(favs):
 # ---- C-HOME recent-chats fixture: ChatInfo[] as /api/chats/recent returns. Character chats carry an
 # avatar; the group chat carries `group` and no avatar, so the client filters it out of the v1 list. ----
 def _mock_recent():
-    # last_mes is an ISO 8601 string, matching the real endpoint (getChatInfo: send_date ||
-    # mtime.toISOString()) -- NOT a number. The client parses it via JS Date.parse.
+    # last_mes is typed {number|string} (src/endpoints/chats.js:369,380) and ALL THREE shapes below
+    # are real, so the fixture serves all three: an ISO string (:403 send_date, every modern chat),
+    # SillyTavern's own humanized format (src/util.js:538, carried by legacy chat files' send_date),
+    # and a bare NUMBER (:450, the empty-chat path). Serving only ISO hid two live client bugs.
     def iso(ago_ms):
         dt = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(milliseconds=ago_ms)
         return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+    def humanized(ago_ms):
+        # util.js humanizedDateTime writes the WRITER's local clock with no zone; the fixture uses UTC
+        # so the gate's expectation matches the client, which reads a zone-less stamp as UTC.
+        dt = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(milliseconds=ago_ms)
+        return (f"{dt.year:04d}-{dt.month:02d}-{dt.day:02d}@{dt.hour:02d}h{dt.minute:02d}m"
+                f"{dt.second:02d}s{dt.microsecond // 1000:03d}ms")
+
+    def epoch_ms(ago_ms):
+        return int(time.time() * 1000) - ago_ms
+
     return [
         {"file_name": "Rita Recent - 2026-07-14.jsonl", "avatar": "char41.png",
          "mes": "The harbor lights are on again tonight.", "last_mes": iso(5 * 60 * 1000),
          "file_size": "4 kB", "chat_items": 12},
+        # Legacy chat file: send_date is util.js's humanized format, not ISO.
         {"file_name": "Char 05 Vex - 2026-07-13.jsonl", "avatar": "char05.png",
-         "mes": "Let us take the eastern road while the tide is low.", "last_mes": iso(3 * 60 * 60 * 1000),
+         "mes": "Let us take the eastern road while the tide is low.", "last_mes": humanized(3 * 60 * 60 * 1000),
          "file_size": "2 kB", "chat_items": 6},
+        # The empty-chat path (chats.js:450): last_mes is a NUMBER and the preview is the placeholder.
+        # Typed as a string on the client, this row alone failed the whole array parse.
         {"file_name": "Char 06 Vex - 2026-07-10.jsonl", "avatar": "char06.png",
-         "mes": "The lantern gutters in the wind and the door creaks open.", "last_mes": iso(4 * 24 * 60 * 60 * 1000),
-         "file_size": "1 kB", "chat_items": 4},
+         "mes": "[The chat is empty]", "last_mes": epoch_ms(4 * 24 * 60 * 60 * 1000),
+         "file_size": "0 kB", "chat_items": 0},
         {"file_name": "Party - 2026-07-09.jsonl", "group": "grp1",
          "mes": "We should make camp here before nightfall.", "last_mes": iso(6 * 24 * 60 * 60 * 1000),
          "file_size": "3 kB", "chat_items": 8},
