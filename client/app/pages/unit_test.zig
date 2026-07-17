@@ -31,6 +31,8 @@ comptime {
     _ = @import("group_store.zig");
     _ = @import("textgen_types.zig");
     _ = @import("secret_mask.zig");
+    // w3-grp
+    _ = @import("group_rotation.zig");
     // character_view's tests never reached the runner: the module was absent here.
     _ = @import("character_view.zig");
     _ = @import("character_row.zig");
