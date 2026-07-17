@@ -24,6 +24,7 @@ const backgrounds = @import("./backgrounds.zig");
 const character_prefs = @import("./character_prefs.zig");
 const config_state = @import("./config_state.zig");
 const persona_actions = @import("./persona_actions.zig");
+const wi_actions = @import("./world_info_actions.zig"); // w3-wi
 
 const alloc = char_store.page_gpa;
 const log = std.log.scoped(.panels);
@@ -288,6 +289,7 @@ fn mergedSettings(settings_str: []const u8) ![]u8 {
     try backgrounds.mergeState(a, &root.object); // C-BG background
     try character_prefs.mergeCharPrefs(a, &root.object); // C-CHAR character list
     try config_state.mergeConfig(a, &root.object); // C-CFG samplers + templates
+    try wi_actions.mergeWorldInfo(a, &root.object); // w3-wi globalSelect + budget
 
     return std.json.Stringify.valueAlloc(alloc, root, .{});
 }

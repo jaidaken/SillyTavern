@@ -49,6 +49,8 @@ comptime {
     _ = @import("preset_lib.zig");
     // w3-chatmgr: the zx-free half of the chat manager (suffix rules + name minting).
     _ = @import("chat_names.zig");
+    // w3-wi
+    _ = @import("world_info.zig");
 }
 
 const sink_call = "html.sink(";

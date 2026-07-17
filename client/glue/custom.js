@@ -542,6 +542,35 @@
         } catch (err) { log.chars.error('export failed:', err); }
     };
 
+    // w3-wi: lorebook import stays a JS helper (File/FormData cannot cross the wasm boundary).
+    window.__st_wi_import = async function () {
+        const input = document.getElementById('wi-import-input');
+        if (!input || !input.files || !input.files[0]) return;
+        const fd = new FormData();
+        fd.append('avatar', input.files[0]);
+        await ensureCsrfToken();
+        try {
+            const res = await loggedFetch('/api/worldinfo/import', { method: 'POST', headers: withCsrf({}), body: fd });
+            if (!res.ok) { log.net.warn('wi import failed:', res.status); window.alert('Import failed'); } else wasm.__st_refresh_wi();
+        } catch (err) { log.net.error('wi import failed:', err); }
+        input.value = '';
+    };
+
+    // w3-wi: lorebook export stays a JS helper (a blob download needs objectURL + a.click).
+    window.__st_wi_export = async function (name) {
+        await ensureCsrfToken();
+        try {
+            const res = await loggedFetch('/api/worldinfo/get', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: JSON.stringify({ name: name }) });
+            if (!res.ok) { log.net.warn('wi export failed:', res.status); return; }
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = name + '.json';
+            document.body.appendChild(a); a.click(); a.remove();
+            URL.revokeObjectURL(url);
+        } catch (err) { log.net.error('wi export failed:', err); }
+    };
+
     // Every upload rides the ONE global multer, `.single('avatar')` (server-main.js:292), so the file
     // field is named 'avatar' whatever the endpoint and each 400s on `!request.file`.
     // The `finally` is load-bearing: a caller that has drawn a wait state is released only by `done`,
