@@ -1,0 +1,300 @@
+diff --git i/test/boundary.zig w/test/boundary.zig
+new file mode 100644
+index 00000000..fef5d434
+--- /dev/null
++++ w/test/boundary.zig
+@@ -0,0 +1,294 @@
++//! Regression suite for the wasm/JS value boundary (HARDENING H1).
++//!
++//! Drives the real jsz ownership code against the mock host (`js.test_support`), which mirrors
++//! the live glue's handle discipline: a fresh handle per produced value, released exactly once.
++//! Three shipped defects anchor this suite: the callAlloc/getAlloc double free (patch 14), the
++//! empty-slice sentinel pointer handed to JS (patch 16), and the render gate latched by a throw
++//! through wasm (patch 15, the `recover` seam).
++
++const std = @import("std");
++const testing = std.testing;
++const js = @import("js");
++const mock = js.test_support;
++const RenderGate = @import("render_gate").RenderGate;
++
++fn newObject() js.Object {
++    return .{ .value = js.Value.init(js.Object{ .value = undefined }) };
++}
++
++test "a boolean property reads back through get without minting a handle" {
++    defer mock.deinit();
++    const o = newObject();
++    defer o.deinit();
++    try o.set("flag", true);
++
++    const start = mock.entryCount();
++    try testing.expectEqual(true, try o.get(bool, "flag"));
++    try testing.expectEqual(start, mock.entryCount());
++    try testing.expectEqual(@as(usize, 0), mock.doubleFrees());
++}
++
++test "number properties read back through the int and float paths" {
++    defer mock.deinit();
++    const o = newObject();
++    defer o.deinit();
++    try o.set("n", 42);
++
++    try testing.expectEqual(@as(u32, 42), try o.get(u32, "n"));
++    try testing.expectEqual(@as(f64, 42), try o.get(f64, "n"));
++    try testing.expectEqual(@as(usize, 0), mock.doubleFrees());
++}
++
++test "a string getAlloc copies the bytes and frees the handle exactly once" {
++    defer mock.deinit();
++    const o = newObject();
++    defer o.deinit();
++    try o.set("k", js.string("boundary"));
++
++    const start = mock.entryCount();
++    const copy = try o.getAlloc(js.String, testing.allocator, "k");
++    defer testing.allocator.free(copy);
++    try testing.expectEqualStrings("boundary", copy);
++
++    try testing.expectEqual(start + 1, mock.entryCount());
++    try testing.expectEqual(@as(u32, 1), mock.releasesAt(@intCast(start)));
++    try testing.expectEqual(@as(usize, 0), mock.doubleFrees());
++}
++
++test "an object get retains the handle and the caller releases it once" {
++    defer mock.deinit();
++    const o = newObject();
++    defer o.deinit();
++    const inner = js.Value.init(js.Object{ .value = undefined });
++    defer inner.deinit();
++    try o.set("child", inner);
++
++    const start = mock.entryCount();
++    const child = try o.get(js.Object, "child");
++    try testing.expectEqual(start + 1, mock.entryCount());
++    try testing.expectEqual(@as(u32, 0), mock.releasesAt(@intCast(start)));
++
++    child.deinit();
++    try testing.expectEqual(@as(u32, 1), mock.releasesAt(@intCast(start)));
++    try testing.expectEqual(@as(usize, 0), mock.doubleFrees());
++}
++
++test "a raw js.Value get retains the handle and the caller releases it once" {
++    defer mock.deinit();
++    const o = newObject();
++    defer o.deinit();
++    try o.set("k", js.string("held"));
++
++    const start = mock.entryCount();
++    const v = try o.get(js.Value, "k");
++    try testing.expectEqual(@as(u32, 0), mock.releasesOf(@intFromEnum(v)));
++
++    v.deinit();
++    try testing.expectEqual(@as(u32, 1), mock.releasesOf(@intFromEnum(v)));
++    try testing.expectEqual(@as(usize, 0), mock.unreleasedSince(start));
++    try testing.expectEqual(@as(usize, 0), mock.doubleFrees());
++}
++
++test "a type mismatch on the non-retaining path frees the handle exactly once" {
++    defer mock.deinit();
++    const o = newObject();
++    defer o.deinit();
++    try o.set("k", js.string("not a bool"));
++
++    const start = mock.entryCount();
++    try testing.expectError(js.Error.InvalidType, o.get(bool, "k"));
++    try testing.expectEqual(@as(u32, 1), mock.releasesAt(@intCast(start)));
++    try testing.expectEqual(@as(usize, 0), mock.doubleFrees());
++}
++
++test "a type mismatch on the retaining path frees the handle exactly once" {
++    defer mock.deinit();
++    const o = newObject();
++    defer o.deinit();
++    try o.set("k", js.string("not an object"));
++
++    const start = mock.entryCount();
++    try testing.expectError(js.Error.InvalidType, o.get(js.Object, "k"));
++    try testing.expectEqual(@as(u32, 1), mock.releasesAt(@intCast(start)));
++    try testing.expectEqual(@as(usize, 0), mock.doubleFrees());
++}
++
++test "a void get against a defined property errors and frees exactly once" {
++    defer mock.deinit();
++    const o = newObject();
++    defer o.deinit();
++    try o.set("k", js.string("defined"));
++
++    const start = mock.entryCount();
++    try testing.expectError(js.Error.InvalidType, o.get(void, "k"));
++    try testing.expectEqual(@as(u32, 1), mock.releasesAt(@intCast(start)));
++    try testing.expectEqual(@as(usize, 0), mock.doubleFrees());
++}
++
++test "call of void against a value-returning helper frees the result exactly once" {
++    // The shipped double free: a call(void, ...) against a helper that returns a value lands in
++    // convertValue's InvalidType, and the old callAlloc errdefer freed the same handle again.
++    defer mock.deinit();
++    const o = newObject();
++    defer o.deinit();
++    const ret = js.Value.init(js.string("payload"));
++    defer ret.deinit();
++    try o.set("helper", @as(js.Value, @enumFromInt(mock.addFunction(@intFromEnum(ret)))));
++
++    const start = mock.entryCount();
++    try testing.expectError(js.Error.InvalidType, o.call(void, "helper", .{}));
++
++    // Two handles minted by the call: the fetched function, then its returned value.
++    try testing.expectEqual(start + 2, mock.entryCount());
++    try testing.expectEqual(@as(u32, 1), mock.releasesAt(@intCast(start)));
++    try testing.expectEqual(@as(u32, 1), mock.releasesAt(@intCast(start + 1)));
++    try testing.expectEqual(@as(usize, 0), mock.doubleFrees());
++    try testing.expectEqual(@as(usize, 0), mock.unreleasedSince(start));
++}
++
++test "call of void against an undefined-returning helper succeeds" {
++    defer mock.deinit();
++    const o = newObject();
++    defer o.deinit();
++    const undef: u64 = @bitCast(js.Ref.undefined);
++    try o.set("helper", @as(js.Value, @enumFromInt(mock.addFunction(undef))));
++
++    const start = mock.entryCount();
++    try o.call(void, "helper", .{});
++    try testing.expectEqual(@as(usize, 0), mock.unreleasedSince(start));
++    try testing.expectEqual(@as(usize, 0), mock.doubleFrees());
++}
++
++test "a string argument to call is created and freed exactly once" {
++    defer mock.deinit();
++    const o = newObject();
++    defer o.deinit();
++    const undef: u64 = @bitCast(js.Ref.undefined);
++    try o.set("helper", @as(js.Value, @enumFromInt(mock.addFunction(undef))));
++
++    const start = mock.entryCount();
++    try o.call(void, "helper", .{js.string("argument")});
++    try testing.expectEqual(@as(usize, 0), mock.unreleasedSince(start));
++    try testing.expectEqual(@as(usize, 0), mock.doubleFrees());
++}
++
++test "an optional get maps null and undefined to null and a present value to itself" {
++    defer mock.deinit();
++    const o = newObject();
++    defer o.deinit();
++    try o.set("flag", true);
++
++    try testing.expectEqual(@as(?bool, true), try o.get(?bool, "flag"));
++    try testing.expectEqual(@as(?bool, null), try o.get(?bool, "absent"));
++    try testing.expectEqual(@as(usize, 0), mock.doubleFrees());
++}
++
++fn readStringProperty(allocator: std.mem.Allocator) !void {
++    defer mock.deinit();
++    defer std.debug.assert(mock.doubleFrees() == 0);
++    const o = newObject();
++    defer o.deinit();
++    try o.set("k", js.string("boundary"));
++
++    const start = mock.entryCount();
++    const copy = try o.getAlloc(js.String, allocator, "k");
++    defer allocator.free(copy);
++    try testing.expectEqualStrings("boundary", copy);
++    std.debug.assert(mock.unreleasedSince(start) == 0);
++}
++
++test "the string getAlloc frees its handle exactly once on every allocation failure" {
++    try testing.checkAllAllocationFailures(testing.allocator, readStringProperty, .{});
++}
++
++test "an empty string write never forwards the zero-length sentinel pointer" {
++    // The shipped RangeError: JS validates the OFFSET before the length, so an undefined
++    // sentinel pointer throws even though no byte is ever read.
++    defer mock.deinit();
++    const sentinel: [*]const u8 = @ptrFromInt(0x1000);
++    const v = js.Value.init(js.String{ .ptr = sentinel, .len = 0 });
++    defer v.deinit();
++
++    try testing.expect(mock.lastStringCreatePtr() != 0x1000);
++    const copy = try v.string(testing.allocator);
++    defer testing.allocator.free(copy);
++    try testing.expectEqualStrings("", copy);
++}
++
++test "an empty string read skips the copy call entirely" {
++    defer mock.deinit();
++    const v = js.Value.init(js.string(""));
++    defer v.deinit();
++
++    const copies = mock.stringCopyCalls();
++    const copy = try v.string(testing.allocator);
++    defer testing.allocator.free(copy);
++    try testing.expectEqual(@as(usize, 0), copy.len);
++    try testing.expectEqual(copies, mock.stringCopyCalls());
++}
++
++test "a non-empty string read copies exactly once" {
++    defer mock.deinit();
++    const v = js.Value.init(js.string("bytes"));
++    defer v.deinit();
++
++    const copies = mock.stringCopyCalls();
++    const copy = try v.string(testing.allocator);
++    defer testing.allocator.free(copy);
++    try testing.expectEqualStrings("bytes", copy);
++    try testing.expectEqual(copies + 1, mock.stringCopyCalls());
++}
++
++test "recover on an idle gate reports not held and changes nothing" {
++    const allocator = testing.allocator;
++    var gate: RenderGate = .empty;
++    defer gate.deinit(allocator);
++
++    try testing.expectEqual(RenderGate.Recovered.not_held, gate.recover());
++    try testing.expect(try gate.tryEnter(allocator, "shell"));
++}
++
++test "recover clears a held gate and names the pass that held it" {
++    const allocator = testing.allocator;
++    var gate: RenderGate = .empty;
++    defer gate.deinit(allocator);
++
++    try testing.expect(try gate.tryEnter(allocator, "shell"));
++    const recovered = gate.recover();
++    try testing.expectEqualStrings("shell", recovered.cleared.?);
++    try testing.expect(!gate.in_flight);
++
++    // The gate is cleared, not latched: the next pass enters where the pre-fix page froze.
++    try testing.expect(try gate.tryEnter(allocator, "composer"));
++}
++
++test "recover keeps the dirty set so the next drain still owes the refused renders" {
++    const allocator = testing.allocator;
++    var gate: RenderGate = .empty;
++    defer gate.deinit(allocator);
++
++    try testing.expect(try gate.tryEnter(allocator, "shell"));
++    try testing.expect(!try gate.tryEnter(allocator, "composer"));
++    _ = gate.recover();
++
++    try testing.expect(gate.isDirty());
++    var batch: std.ArrayList([]const u8) = .empty;
++    defer batch.deinit(allocator);
++    try gate.takeDirty(allocator, &batch);
++    try testing.expectEqual(@as(usize, 1), batch.items.len);
++    try testing.expectEqualStrings("composer", batch.items[0]);
++}
++
++test "a full pass runs cleanly after a recover" {
++    const allocator = testing.allocator;
++    var gate: RenderGate = .empty;
++    defer gate.deinit(allocator);
++
++    try testing.expect(try gate.tryEnter(allocator, "shell"));
++    _ = gate.recover();
++
++    try testing.expect(try gate.tryEnter(allocator, "shell"));
++    gate.exit();
++    try testing.expect(!gate.isDirty());
++    try testing.expectEqual(@as(?[]const u8, null), gate.owner);
++}

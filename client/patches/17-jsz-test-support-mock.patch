@@ -1,0 +1,249 @@
+diff --git i/vendor/jsz/src/extern/mock.zig w/vendor/jsz/src/extern/mock.zig
+index 777a8014..9f66638b 100644
+--- i/vendor/jsz/src/extern/mock.zig
++++ w/vendor/jsz/src/extern/mock.zig
+@@ -1,88 +1,166 @@
+-//! Mock API that emulates a well-behaving host environment
+-//! for use in tests.
++//! Mock API that emulates a well-behaving host environment for use in tests.
++//!
++//! Handle discipline mirrors the real glue: every value-producing call mints a FRESH id
++//! (the JS side stores each result with storeValue), so release accounting is per-handle.
++//! Payloads are owned by the store and freed in `deinit`, the way the JS heap outlives a
++//! released handle; exactly-once release is proven by the counters below, not by leaks.
+ 
+ const std = @import("std");
+-const builtin = @import("builtin");
+-const assert = std.debug.assert;
+ const js = @import("../main.zig");
+ const alloc = std.testing.allocator;
+ 
+-/// This is what we store in our array list so that we can manage
+-/// memory correctly even in tests.
+-const StoredValue = union(enum) {
++const Payload = union(enum) {
+     string: []const u8,
+     object: std.StringHashMapUnmanaged(u64),
++    /// A callable whose apply returns the canned ref (as a fresh handle).
++    function: u64,
++    /// A fresh handle sharing another entry's payload, as valueGet/funcApply mint them.
++    alias: u32,
+ 
+-    pub fn deinit(self: StoredValue) void {
+-        switch (self) {
++    fn deinit(self: *Payload) void {
++        switch (self.*) {
+             .string => |v| alloc.free(v),
+-            .object => |v| {
++            .object => |*v| {
+                 var it = v.iterator();
+-                while (it.next()) |entry| {
+-                    alloc.free(entry.key_ptr.*);
+-                }
+-
+-                // It doesn't matter that we copy this becaus we
+-                // should never reuse values.
+-                var copy = v;
+-                copy.deinit(alloc);
++                while (it.next()) |entry| alloc.free(entry.key_ptr.*);
++                v.deinit(alloc);
+             },
++            .function, .alias => {},
+         }
+     }
+ };
+ 
+-/// Mimics the JS style values array except we never reuse IDs
+-/// since we're testing and don't plan on overflowing 32-bits.
+-var values: std.ArrayList(StoredValue) = .empty;
++const Entry = struct {
++    payload: Payload,
++    releases: u32 = 0,
++};
+ 
++var entries: std.ArrayList(Entry) = .empty;
++var double_free_count: usize = 0;
++var string_copy_calls: usize = 0;
++var last_string_create_ptr: usize = 0;
++
++/// Reset the store between tests. Frees every payload regardless of release state; release
++/// accounting must be asserted through the counters before calling this.
+ pub fn deinit() void {
+-    // Note: we don't deinit the value items here so we can test
+-    // that we deinit properly in our tests.
++    for (entries.items) |*e| e.payload.deinit();
++    entries.deinit(alloc);
++    entries = .empty;
++    double_free_count = 0;
++    string_copy_calls = 0;
++    last_string_create_ptr = 0;
++}
+ 
+-    values.deinit(alloc);
+-    values = .empty;
++/// Number of handles minted so far; snapshot before an operation to inspect what it minted.
++pub fn entryCount() usize {
++    return entries.items.len;
++}
++
++/// How many times the handle with this id has been released.
++pub fn releasesAt(id: u32) u32 {
++    return entries.items[id].releases;
++}
++
++/// Releases seen for a handle whose bits the test holds (a retained js.Value).
++pub fn releasesOf(handle_bits: u64) u32 {
++    const ref: js.Ref = @bitCast(handle_bits);
++    return releasesAt(ref.id);
++}
++
++/// Count of releases that hit an already-released handle. The double-free defect made this 1.
++pub fn doubleFrees() usize {
++    return double_free_count;
++}
++
++/// Handles in [start, entryCount()) never released. 0 = the operation leaked nothing.
++pub fn unreleasedSince(start: usize) usize {
++    var n: usize = 0;
++    for (entries.items[start..]) |e| {
++        if (e.releases == 0) n += 1;
++    }
++    return n;
++}
++
++/// The address the last valueStringCreate received. The empty-slice guard must never forward
++/// a zero-length slice's undefined sentinel here.
++pub fn lastStringCreatePtr() usize {
++    return last_string_create_ptr;
++}
++
++pub fn stringCopyCalls() usize {
++    return string_copy_calls;
++}
++
++/// Register a callable returning `ret_bits` from every apply, as a function-typed ref.
++pub fn addFunction(ret_bits: u64) u64 {
++    entries.append(alloc, .{ .payload = .{ .function = ret_bits } }) catch unreachable;
++    const ref: js.Ref = .{ .type_id = .function, .id = @intCast(entries.items.len - 1) };
++    return @bitCast(ref);
++}
++
++fn resolve(id: u32) *Entry {
++    var cur = id;
++    while (true) {
++        const e = &entries.items[cur];
++        switch (e.payload) {
++            .alias => |target| cur = target,
++            else => return e,
++        }
++    }
++}
++
++/// Mint a fresh handle for a produced ref, as the real glue's storeValue does. Numbers and
++/// the predefined refs cross by value and get no table entry.
++fn mintResult(bits: u64) u64 {
++    const ref: js.Ref = @bitCast(bits);
++    if (!ref.isReleasable()) return bits;
++    entries.append(alloc, .{ .payload = .{ .alias = ref.id } }) catch unreachable;
++    const fresh: js.Ref = .{ .type_id = ref.type_id, .id = @intCast(entries.items.len - 1) };
++    return @bitCast(fresh);
+ }
+ 
+ pub fn valueGet(out: *u64, id: u32, addr: [*]const u8, len: usize) void {
+-    const obj = &values.items[id].object;
++    const obj = &resolve(id).payload.object;
+     const key = addr[0..len];
+-    out.* = obj.get(key) orelse @bitCast(js.Ref.null);
++    const stored = obj.get(key) orelse @as(u64, @bitCast(js.Ref.null));
++    out.* = mintResult(stored);
+ }
+ 
+ pub fn valueSet(id: u32, addr: [*]const u8, len: usize, ref_ptr: *const u64) void {
+-    const obj = &values.items[id].object;
++    const obj = &resolve(id).payload.object;
+     const key = alloc.dupe(u8, addr[0..len]) catch unreachable;
+-    obj.put(alloc, key, ref_ptr.*) catch unreachable;
++    const gop = obj.getOrPut(alloc, key) catch unreachable;
++    if (gop.found_existing) alloc.free(key);
++    gop.value_ptr.* = ref_ptr.*;
+ }
+ 
+ pub fn valueObjectCreate(out: *u64) void {
+-    values.append(alloc, .{ .object = .{} }) catch unreachable;
+-    const ref: js.Ref = .{ .type_id = .object, .id = @intCast(values.items.len - 1) };
++    entries.append(alloc, .{ .payload = .{ .object = .{} } }) catch unreachable;
++    const ref: js.Ref = .{ .type_id = .object, .id = @intCast(entries.items.len - 1) };
+     out.* = @bitCast(ref);
+ }
+ 
+ pub fn valueStringCreate(out: *u64, addr: [*]const u8, len: usize) void {
+-    // Copy the value
++    last_string_create_ptr = @intFromPtr(addr);
+     const copy = alloc.dupe(u8, addr[0..len]) catch unreachable;
+-
+-    // Write it
+-    values.append(alloc, .{ .string = copy }) catch unreachable;
+-
+-    // Create the ref
+-    const ref: js.Ref = .{ .type_id = .string, .id = @intCast(values.items.len - 1) };
++    entries.append(alloc, .{ .payload = .{ .string = copy } }) catch unreachable;
++    const ref: js.Ref = .{ .type_id = .string, .id = @intCast(entries.items.len - 1) };
+     out.* = @bitCast(ref);
+ }
+ 
+ pub fn valueStringLen(id: u32) u32 {
+-    return @intCast(values.items[id].string.len);
++    return @intCast(resolve(id).payload.string.len);
+ }
+ 
+ pub fn valueStringCopy(id: u32, addr: [*]u8, max: usize) void {
+-    @memcpy(addr[0..max], values.items[id].string);
++    string_copy_calls += 1;
++    @memcpy(addr[0..max], resolve(id).payload.string[0..max]);
+ }
+ 
+ pub fn valueDeinit(id: u32) void {
+-    values.items[id].deinit();
++    const e = &entries.items[id];
++    if (e.releases > 0) double_free_count += 1;
++    e.releases += 1;
+ }
+ 
+ pub fn valueNew(
+@@ -91,10 +169,10 @@ pub fn valueNew(
+     argsPtr: [*]const u64,
+     argsLen: usize,
+ ) void {
+-    _ = out;
+     _ = id;
+     _ = argsPtr;
+     _ = argsLen;
++    out.* = @bitCast(js.Ref.undefined);
+ }
+ 
+ pub fn funcApply(
+@@ -104,9 +182,8 @@ pub fn funcApply(
+     argsPtr: [*]const u64,
+     argsLen: usize,
+ ) void {
+-    _ = out;
+-    _ = func;
+     _ = thisPtr;
+     _ = argsPtr;
+     _ = argsLen;
++    out.* = mintResult(resolve(func).payload.function);
+ }
+diff --git i/vendor/jsz/src/main.zig w/vendor/jsz/src/main.zig
+index ef0b4b64..081c5c6c 100644
+--- i/vendor/jsz/src/main.zig
++++ w/vendor/jsz/src/main.zig
+@@ -48,6 +48,9 @@ pub inline fn string(v: anytype) String {
+     return String.init(v);
+ }
+ 
++/// Test-only view of the mock host, so an external suite can assert handle accounting.
++pub const test_support = if (@import("builtin").is_test) @import("extern/mock.zig") else struct {};
++
+ test {
+     @import("std").testing.refAllDecls(@This());
+ }

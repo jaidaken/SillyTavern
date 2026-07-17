@@ -1,0 +1,48 @@
+diff --git i/src/runtime/client/Client.zig w/src/runtime/client/Client.zig
+index 30ce1059..7c2c4399 100644
+--- i/src/runtime/client/Client.zig
++++ w/src/runtime/client/Client.zig
+@@ -554,10 +554,10 @@ const areComponentsSameType = vtree_mod.areComponentsSameType;
+ export fn __zx_render_recover() u32 {
+     if (comptime !is_wasm) return 0;
+     if (zx.platform.role != .client) return 0;
+-    if (!render_gate.in_flight) return 0;
+-
+-    const owner = render_gate.owner;
+-    render_gate.exit();
++    const owner = switch (render_gate.recover()) {
++        .not_held => return 0,
++        .cleared => |o| o,
++    };
+ 
+     const client = global_client orelse return 1;
+     const id = owner orelse return 1;
+diff --git i/src/runtime/core/render_gate.zig w/src/runtime/core/render_gate.zig
+index 8622b81e..36b4c057 100644
+--- i/src/runtime/core/render_gate.zig
++++ w/src/runtime/core/render_gate.zig
+@@ -40,6 +40,24 @@ pub const RenderGate = struct {
+         self.owner = null;
+     }
+ 
++    /// Outcome of a recovery attempt.
++    pub const Recovered = union(enum) {
++        /// The gate was not held; the recover call was spurious and changed nothing.
++        not_held,
++        /// The gate was held and is now cleared; the payload names the pass that held it. The
++        /// dirty set is deliberately kept: renders refused while the gate was stuck are still
++        /// owed to the next pass's drain.
++        cleared: ?[]const u8,
++    };
++
++    /// Clear a gate left held by a pass that threw out through wasm (a throw skips `exit`).
++    pub fn recover(self: *RenderGate) Recovered {
++        if (!self.in_flight) return .not_held;
++        const owner = self.owner;
++        self.exit();
++        return .{ .cleared = owner };
++    }
++
+     pub fn isDirty(self: *const RenderGate) bool {
+         return self.dirty.count() > 0;
+     }
