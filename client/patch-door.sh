@@ -204,6 +204,12 @@ glue_new = """        _ce: (id, vnodeId) => {
           }
         },
         _ac: (parentId, childId) => {
+          // Not on the named list but the same impossible data: appendChild(self) throws
+          // HierarchyRequestError, so acting here crashes rather than blanks.
+          if (parentId === childId) {
+            zxAnomaly("_ac INCOHERENT PATCH: parent and child are both " + zxWho(childId) + "; a node cannot be its own parent, so this patch cannot be true of any tree. REFUSED, nothing touched. Appending a node to itself would throw HierarchyRequestError");
+            return;
+          }
           const parent = domNodes.get(parentId);
           const child = domNodes.get(childId);
           if (parent && child) {
@@ -215,6 +221,12 @@ glue_new = """        _ce: (id, vnodeId) => {
           }
         },
         _ib: (parentId, childId, refId) => {
+          // _ib cannot blank the page the way _rc can, but the same data is impossible and acting
+          // on it would move a live node somewhere the vdom never meant.
+          if (parentId === childId) {
+            zxAnomaly("_ib INCOHERENT PATCH: parent and child are both " + zxWho(childId) + "; a node cannot be its own parent, so this patch cannot be true of any tree. REFUSED, nothing touched");
+            return;
+          }
           const parent = domNodes.get(parentId);
           const child = domNodes.get(childId);
           const ref = domNodes.get(refId) ?? null;
@@ -239,6 +251,13 @@ glue_new = """        _ce: (id, vnodeId) => {
           }
         },
         _rc: (parentId, childId) => {
+          // GARBAGE, not drift: drift is coherent data describing the wrong tree and is worth
+          // recovering; this is data that cannot be true under any tree, so the only safe act is
+          // none. Recovering here detached Shell's root and blanked the whole page.
+          if (parentId === childId) {
+            zxAnomaly("_rc INCOHERENT PATCH: parent and child are both " + zxWho(childId) + "; a node cannot be its own parent, so this patch cannot be true of any tree. REFUSED, nothing touched. Recovering from it would detach a live subtree and blank the page");
+            return;
+          }
           const parent = domNodes.get(parentId);
           const child = domNodes.get(childId);
           if (parent && child) {
@@ -262,6 +281,12 @@ glue_new = """        _ce: (id, vnodeId) => {
           }
         },
         _rpc: (parentId, newId, oldId) => {
+          // Same split as _rc: only the destructive branch is reachable with impossible data, and
+          // detaching on a patch that cannot be true is how a contained fault becomes a blank page.
+          if (parentId === oldId || parentId === newId) {
+            zxAnomaly("_rpc INCOHERENT PATCH: claimed parent " + zxWho(parentId) + " is also the " + (parentId === oldId ? "old" : "new") + " child; a node cannot be its own parent, so this patch cannot be true of any tree. REFUSED, nothing touched");
+            return;
+          }
           const parent = domNodes.get(parentId);
           const newChild = domNodes.get(newId);
           const oldChild = domNodes.get(oldId);
@@ -368,7 +393,28 @@ function zxAnomaly(msg) {
 }
 function zxTrace(msg) {
   console.debug("[zx:dom] " + msg);
-}"""
+}
+// Asks what the registry HOLDS, so drift is findable before it surfaces as a throw. Ungated: a
+// diagnostic you must switch on first is one you will not have when you need it. REPORTS ONLY;
+// pruning here would destroy the evidence it exists to measure.
+var ZX_AUDIT_CAP = 50;
+globalThis.__zx_audit = function () {
+  const orphans = [];
+  let orphanCount = 0;
+  domNodes.forEach(function (node, id) {
+    // A tracked node under an UNTRACKED parent is not drift: #shell, #chat-home and #composer all
+    // hang off SSR markup carrying no __zx_ref, so only isConnected separates stranded from fine.
+    if (node.isConnected !== false)
+      return;
+    orphanCount++;
+    if (orphans.length >= ZX_AUDIT_CAP)
+      return;
+    const parent = node.parentNode;
+    const parentRef = parent && parent.__zx_ref !== undefined ? parent.__zx_ref : null;
+    orphans.push({ id: Number(id), tag: zxTag(node), actualParent: parentRef, connected: false });
+  });
+  return { tracked: domNodes.size, orphanCount: orphanCount, orphans: orphans };
+};"""
 
 if D2_SENTINEL in s:
     notes.append("patch-door: D2 already patched, nothing to do")
