@@ -191,6 +191,10 @@ pub const WorldInfoStore = struct {
     chat_world: []const u8 = "",
     /// Stock world_info_budget: percent of the prompt budget the WI slice may take (probe 3 delta).
     budget: i64 = 25,
+    /// Stock world_info_depth: how many newest messages the engine's key scan reads.
+    scan_depth: i64 = 2,
+    /// Stock world_info_recursive: activated content re-enters the key scan. Off by default.
+    recursive: bool = false,
     /// False until the settings blob has hydrated us; mergeState skips until then, or a save fired
     /// before hydration would wipe the account's globalSelect (the persona_actions precedent).
     authoritative: bool = false,
@@ -541,6 +545,9 @@ pub const WorldInfoStore = struct {
             break :blk &root.object;
         };
         self.budget = std.math.clamp(getInt(ws, "world_info_budget", self.budget), 1, 100);
+        // 1000 = stock MAX_SCAN_DEPTH (world-info.js).
+        self.scan_depth = std.math.clamp(getInt(ws, "world_info_depth", self.scan_depth), 0, 1000);
+        self.recursive = getBool(ws, "world_info_recursive", self.recursive);
         const wi = ws.get("world_info") orelse return;
         if (wi != .object) return;
         const sel = wi.object.get("globalSelect") orelse return;
@@ -580,9 +587,72 @@ pub const WorldInfoStore = struct {
         try wi.put(a, "globalSelect", .{ .array = sel });
         try ws.put(a, "world_info", .{ .object = wi });
         try ws.put(a, "world_info_budget", .{ .integer = self.budget });
+        try ws.put(a, "world_info_depth", .{ .integer = self.scan_depth });
+        try ws.put(a, "world_info_recursive", .{ .bool = self.recursive });
         try root_obj.put(a, "world_info_settings", .{ .object = ws });
     }
+
+    // ---- engine candidates (w3-wi-engine) ------------------------------------------------------
+
+    /// A scope link resolved to a LOADED book. The link value is this client's file_id, or a stock
+    /// client's display name; both resolve, name via the /list rows.
+    pub fn resolveBookRef(self: *WorldInfoStore, ref: []const u8) ?*Book {
+        if (ref.len == 0) return null;
+        if (self.bookByFileId(ref)) |b| return b;
+        for (self.book_list.items) |m| {
+            if (std.mem.eql(u8, m.name, ref)) return self.bookByFileId(m.file_id);
+        }
+        return null;
+    }
+
+    /// The file_id a scope link should be fetched under (the link itself, or the /list row whose
+    /// display name matches). Null only for an empty link.
+    pub fn resolveRefFileId(self: *const WorldInfoStore, ref: []const u8) ?[]const u8 {
+        if (ref.len == 0) return null;
+        for (self.book_list.items) |m| {
+            if (std.mem.eql(u8, m.file_id, ref)) return m.file_id;
+        }
+        for (self.book_list.items) |m| {
+            if (std.mem.eql(u8, m.name, ref)) return m.file_id;
+        }
+        return ref;
+    }
+
+    /// Engine candidates in stock priority order: chat lore, then character lore (embedded book +
+    /// the card's linked world), then the global selection, each book's entries by order DESCENDING
+    /// (sortFn world-info.js:89 under the character_first default strategy). A book reachable
+    /// through two scopes contributes once. Entry views borrow the store's book arenas; only the
+    /// returned slice is caller-owned.
+    pub fn collectActive(self: *WorldInfoStore, a: Allocator) Allocator.Error![]Entry {
+        var out: std.ArrayList(Entry) = .empty;
+        errdefer out.deinit(a);
+        var seen: std.ArrayList(*const Book) = .empty;
+        defer seen.deinit(a);
+
+        if (self.resolveBookRef(self.chat_world)) |b| try appendBookSorted(&out, &seen, a, b);
+        if (self.char_book) |*cb| try appendBookSorted(&out, &seen, a, cb);
+        if (self.resolveBookRef(self.char_world)) |b| try appendBookSorted(&out, &seen, a, b);
+        for (self.global_selected.items) |fid| {
+            if (self.bookByFileId(fid)) |b| try appendBookSorted(&out, &seen, a, b);
+        }
+        return out.toOwnedSlice(a);
+    }
 };
+
+fn appendBookSorted(out: *std.ArrayList(Entry), seen: *std.ArrayList(*const Book), a: Allocator, book: *const Book) Allocator.Error!void {
+    for (seen.items) |s| {
+        if (s == book) return;
+    }
+    try seen.append(a, book);
+    const start = out.items.len;
+    try out.appendSlice(a, book.entries);
+    std.mem.sort(Entry, out.items[start..], {}, orderDesc);
+}
+
+fn orderDesc(_: void, lhs: Entry, rhs: Entry) bool {
+    if (lhs.order != rhs.order) return lhs.order > rhs.order;
+    return lhs.uid < rhs.uid;
+}
 
 /// One v2-spec entry to the WI shape (stock convertCharacterBook): extensions win, then the v2
 /// field, then the stock default. Unconverted extension keys are carried verbatim.
@@ -938,4 +1008,89 @@ fn loadForAllocTest(a: Allocator) !void {
 
 test "store cleans up on every allocation failure" {
     try std.testing.checkAllAllocationFailures(testing.allocator, loadForAllocTest, .{});
+}
+
+// ---- engine candidates (w3-wi-engine) ----------------------------------------------------------
+
+const tiny_book_a =
+    \\{"name":"Alpha Book","entries":{
+    \\"0":{"uid":0,"key":["a"],"content":"A-low","order":10},
+    \\"1":{"uid":1,"key":["b"],"content":"A-high","order":200}
+    \\}}
+;
+const tiny_book_b =
+    \\{"name":"Beta Book","entries":{"0":{"uid":0,"key":["c"],"content":"B-only","order":50}}}
+;
+
+test "setFromSettings reads scan depth and recursion beside the budget" {
+    var s = WorldInfoStore.init(testing.allocator);
+    defer s.deinit();
+    s.setFromSettings(
+        \\{"world_info_settings":{"world_info_budget":40,"world_info_depth":7,"world_info_recursive":true}}
+    );
+    try testing.expectEqual(@as(i64, 40), s.budget);
+    try testing.expectEqual(@as(i64, 7), s.scan_depth);
+    try testing.expect(s.recursive);
+}
+
+test "mergeState writes depth and recursion back under the classic keys" {
+    var s = WorldInfoStore.init(testing.allocator);
+    defer s.deinit();
+    s.setFromSettings("{}");
+    s.scan_depth = 5;
+    s.recursive = true;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var root: std.json.ObjectMap = .empty;
+    try s.mergeState(arena.allocator(), &root);
+    const ws = root.get("world_info_settings").?.object;
+    try testing.expectEqual(@as(i64, 5), ws.get("world_info_depth").?.integer);
+    try testing.expectEqual(true, ws.get("world_info_recursive").?.bool);
+}
+
+test "resolveBookRef finds a loaded book by file id or by display name" {
+    var s = WorldInfoStore.init(testing.allocator);
+    defer s.deinit();
+    try s.setBookListFromJson(
+        \\[{"file_id":"alpha-lore","name":"Alpha Book"}]
+    );
+    try s.loadBookFromJson("alpha-lore", tiny_book_a);
+    try testing.expect(s.resolveBookRef("alpha-lore") != null);
+    try testing.expect(s.resolveBookRef("Alpha Book") != null);
+    try testing.expect(s.resolveBookRef("missing") == null);
+    try testing.expect(s.resolveBookRef("") == null);
+    try testing.expectEqualStrings("alpha-lore", s.resolveRefFileId("Alpha Book").?);
+    try testing.expectEqualStrings("raw-ref", s.resolveRefFileId("raw-ref").?);
+}
+
+test "collectActive orders chat then char then global, order descending, without duplicates" {
+    var s = WorldInfoStore.init(testing.allocator);
+    defer s.deinit();
+    try s.loadBookFromJson("alpha-lore", tiny_book_a);
+    try s.loadBookFromJson("beta-lore", tiny_book_b);
+    s.setChatWorld("alpha-lore");
+    _ = try s.toggleGlobal("beta-lore");
+    _ = try s.toggleGlobal("alpha-lore");
+
+    const got = try s.collectActive(testing.allocator);
+    defer testing.allocator.free(got);
+    try testing.expectEqual(@as(usize, 3), got.len);
+    try testing.expectEqualStrings("A-high", got[0].content);
+    try testing.expectEqualStrings("A-low", got[1].content);
+    try testing.expectEqualStrings("B-only", got[2].content);
+}
+
+test "collectActive cleans up on every allocation failure" {
+    try std.testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn run(a: Allocator) !void {
+            var s = WorldInfoStore.init(a);
+            defer s.deinit();
+            try s.loadBookFromJson("alpha-lore", tiny_book_a);
+            // toggleGlobal, not setChatWorld: the latter is an infallible UI setter that swallows
+            // its own OOM by design, which this harness would flag.
+            _ = try s.toggleGlobal("alpha-lore");
+            const got = try s.collectActive(a);
+            a.free(got);
+        }
+    }.run, .{});
 }

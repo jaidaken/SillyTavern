@@ -22,6 +22,7 @@ const net = @import("./net.zig");
 const an = @import("./authors_note.zig");
 const char_store = @import("./character_store.zig");
 const dom_event = @import("./dom_event.zig");
+const pager = @import("./pager.zig"); // w3-wi-engine: the one full-token owner
 
 const alloc = char_store.page_gpa;
 const log = std.log.scoped(.panels);
@@ -32,13 +33,10 @@ var prompt_owned: []u8 = &.{};
 
 /// The chat the note belongs to, so a save targets the chat it was edited against even if the
 /// selection moved. Empty when no chat is open, which is what disables the panel's controls.
+/// The FULL change token the save gates on is pager's (w3-wi-engine): one owner, so a WI link and
+/// a note save can no longer stomp each other's copy into a 409 loop.
 var chat_avatar: []u8 = &.{};
 var chat_file: []u8 = &.{};
-
-/// The full change token from the last chat page. The mutation family gates on the FULL token (the
-/// SV design probe: a tail token hashes only the head, so two concurrent in-window edits would both
-/// pass it and one would be lost silently).
-var change_token: []u8 = &.{};
 
 var saving = false;
 var dirty = false;
@@ -79,9 +77,10 @@ pub fn role() an.Role {
 /// Adopt the note from a freshly loaded chat page. Called on chat open, so the panel and the next
 /// send both read the note that chat actually carries.
 pub fn setFromPage(avatar: []const u8, file_name: []const u8, chat_metadata: []const u8, full_token: []const u8) void {
+    // The token parameter stays for call-site stability; pager owns the live copy (w3-wi-engine).
+    _ = full_token;
     setOwned(&chat_avatar, avatar);
     setOwned(&chat_file, file_name);
-    setOwned(&change_token, full_token);
     dirty = false;
 
     note = .{};
@@ -104,7 +103,7 @@ pub fn setFromPage(avatar: []const u8, file_name: []const u8, chat_metadata: []c
 /// Refresh the token after another mutation moved it, so the next note save is not a stale 409.
 pub fn adoptToken(full_token: []const u8) void {
     if (full_token.len == 0) return;
-    setOwned(&change_token, full_token);
+    pager.setFullToken(full_token);
 }
 
 // ---- the panel's setters --------------------------------------------------------------------
@@ -173,7 +172,7 @@ pub fn save() void {
     const body = std.json.Stringify.valueAlloc(alloc, .{
         .avatar_url = chat_avatar,
         .file_name = chat_file,
-        .change_token = change_token,
+        .change_token = pager.fullToken(),
         .note_prompt = note.prompt,
         .note_interval = note.interval,
         .note_depth = note.depth,

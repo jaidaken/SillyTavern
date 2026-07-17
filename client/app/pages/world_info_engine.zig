@@ -1,0 +1,452 @@
+//! World-info activation engine (3b-B): which entries fire for a send, and the text each prompt
+//! slot receives. Pure and zx-free, proven under `zig build test`; generate.zig runs it inside
+//! `buildPromptBudgeted` and char_api supplies the store-owned candidate entries.
+//!
+//! Semantics follow the classic client (public/scripts/world-info.js, checked 2026-07-17):
+//! candidate PRIORITY (probability + budget) is the caller's list order (chat lore, then character,
+//! then global; each book by `order` descending, sortFn :89 + the character_first default strategy);
+//! the JOINED text runs order-ASCENDING (the :5080 unshift loop), so a higher order sits closer to
+//! the prompt tail. Matching is case-insensitive ASCII substring over the newest `scan_depth`
+//! message texts (probe#3: "ASCII substring"); recursion re-scans activated content when enabled
+//! (stock world_info_recursive, default off). The budget cap bounds the WI slice ONLY (probe#3
+//! delta 2): an entry that would reach the cap is dropped and activation stops, so the
+//! lowest-priority entries are what a tight budget sheds.
+
+const std = @import("std");
+
+const wi = @import("./world_info.zig");
+
+const Allocator = std.mem.Allocator;
+const log = std.log.scoped(.wi);
+
+pub const Entry = wi.Entry;
+
+/// Activation inputs. `entries` must already be in priority order (WorldInfoStore.collectActive).
+/// A null `rng` skips the probability roll entirely (every roll passes); the send path always
+/// supplies one, tests pass a seeded PRNG.
+pub const Params = struct {
+    entries: []const Entry = &.{},
+    scan_depth: usize = 2,
+    budget_chars: usize = std.math.maxInt(usize),
+    recursive: bool = false,
+    rng: ?std.Random = null,
+};
+
+/// One merged at-depth injection: every activated atDepth entry at this depth, joined.
+pub const DepthGroup = struct { depth: i64, content: []const u8 };
+
+/// The activated text per prompt slot. All slices live in the arena; free with `deinit`.
+pub const Activation = struct {
+    arena: std.heap.ArenaAllocator,
+    before: []const u8 = "",
+    after: []const u8 = "",
+    an_top: []const u8 = "",
+    an_bottom: []const u8 = "",
+    em_top: []const []const u8 = &.{},
+    em_bottom: []const []const u8 = &.{},
+    at_depth: []const DepthGroup = &.{},
+
+    pub fn deinit(self: *Activation) void {
+        self.arena.deinit();
+    }
+};
+
+/// Runs the scan-activate-budget loop over `history` (message texts, OLDEST first; the engine
+/// scans the newest `scan_depth` of them) and buckets the survivors by position. Owned result.
+pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) Allocator.Error!Activation {
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+
+    const scan_n = @min(params.scan_depth, history.len);
+    const scan_texts = history[history.len - scan_n ..];
+
+    const State = enum(u8) { idle, active, failed };
+    const flags = try a.alloc(State, params.entries.len);
+    @memset(flags, .idle);
+
+    var recurse: std.ArrayList([]const u8) = .empty;
+    var used_chars: usize = 0;
+    var overflow = false;
+
+    var scanning = params.entries.len > 0;
+    while (scanning) {
+        scanning = false;
+        var newly: std.ArrayList(usize) = .empty;
+        for (params.entries, 0..) |e, i| {
+            if (flags[i] != .idle) continue;
+            if (e.disable) continue;
+            if (e.constant) {
+                try newly.append(a, i);
+                continue;
+            }
+            if (e.keys.len == 0) continue;
+            if (!matchAnyKey(e.keys, scan_texts, recurse.items)) continue;
+            if (e.selective and e.keysecondary.len > 0 and !selectiveOk(e, scan_texts, recurse.items)) continue;
+            try newly.append(a, i);
+        }
+        var activated_this_pass = false;
+        for (newly.items) |i| {
+            if (overflow) break;
+            const e = params.entries[i];
+            if (e.use_probability and e.probability < 100) {
+                const roll: f64 = if (params.rng) |rng| rng.float(f64) * 100.0 else 0.0;
+                if (roll > @as(f64, @floatFromInt(e.probability))) {
+                    flags[i] = .failed;
+                    continue;
+                }
+            }
+            // Stock reaching the budget exactly also overflows (world-info.js:4940, `>=`).
+            if (used_chars +| e.content.len +| 1 >= params.budget_chars) {
+                overflow = true;
+                log.debug("wi budget {d} reached, activation stopped", .{params.budget_chars});
+                break;
+            }
+            used_chars += e.content.len + 1;
+            flags[i] = .active;
+            activated_this_pass = true;
+            if (params.recursive and e.content.len > 0) try recurse.append(a, e.content);
+        }
+        if (params.recursive and !overflow and activated_this_pass) scanning = true;
+    }
+
+    // Join ascending by order; ties keep candidate order (stock's unshift artifact reverses ties,
+    // a deliberate simplification).
+    var idx: std.ArrayList(usize) = .empty;
+    for (flags, 0..) |f, i| {
+        if (f == .active) try idx.append(a, i);
+    }
+    std.mem.sort(usize, idx.items, params.entries, orderAsc);
+
+    var before: std.ArrayList(u8) = .empty;
+    var after: std.ArrayList(u8) = .empty;
+    var an_top: std.ArrayList(u8) = .empty;
+    var an_bottom: std.ArrayList(u8) = .empty;
+    var em_top: std.ArrayList([]const u8) = .empty;
+    var em_bottom: std.ArrayList([]const u8) = .empty;
+    var groups: std.ArrayList(struct { depth: i64, buf: std.ArrayList(u8) }) = .empty;
+
+    for (idx.items) |i| {
+        const e = params.entries[i];
+        if (e.content.len == 0) continue;
+        switch (e.position) {
+            .before => try joinLine(a, &before, e.content),
+            .after => try joinLine(a, &after, e.content),
+            .an_top => try joinLine(a, &an_top, e.content),
+            .an_bottom => try joinLine(a, &an_bottom, e.content),
+            .em_top => try em_top.append(a, e.content),
+            .em_bottom => try em_bottom.append(a, e.content),
+            .at_depth => {
+                const depth = @max(0, e.depth);
+                const g = for (groups.items) |*g| {
+                    if (g.depth == depth) break g;
+                } else blk: {
+                    try groups.append(a, .{ .depth = depth, .buf = .empty });
+                    break :blk &groups.items[groups.items.len - 1];
+                };
+                try joinLine(a, &g.buf, e.content);
+            },
+            // The outlet position renders only where an {{outlet}} macro appears; this client's
+            // macro set has none, so the entry lands nowhere (same as stock without the macro).
+            .outlet => log.debug("wi entry {d} has the outlet position, unsupported, skipped", .{e.uid}),
+        }
+    }
+
+    const out_groups = try a.alloc(DepthGroup, groups.items.len);
+    for (groups.items, 0..) |g, i| out_groups[i] = .{ .depth = g.depth, .content = g.buf.items };
+
+    return .{
+        .arena = arena,
+        .before = before.items,
+        .after = after.items,
+        .an_top = an_top.items,
+        .an_bottom = an_bottom.items,
+        .em_top = em_top.items,
+        .em_bottom = em_bottom.items,
+        .at_depth = out_groups,
+    };
+}
+
+fn orderAsc(entries: []const Entry, lhs: usize, rhs: usize) bool {
+    if (entries[lhs].order != entries[rhs].order) return entries[lhs].order < entries[rhs].order;
+    return lhs < rhs;
+}
+
+fn joinLine(a: Allocator, buf: *std.ArrayList(u8), content: []const u8) Allocator.Error!void {
+    if (buf.items.len > 0) try buf.append(a, '\n');
+    try buf.appendSlice(a, content);
+}
+
+fn matchText(needle: []const u8, texts: []const []const u8) bool {
+    for (texts) |t| {
+        if (std.ascii.findIgnoreCase(t, needle) != null) return true;
+    }
+    return false;
+}
+
+fn matchKey(raw: []const u8, scan: []const []const u8, recurse: []const []const u8) bool {
+    const key = std.mem.trim(u8, raw, " \t\r\n");
+    if (key.len == 0) return false;
+    return matchText(key, scan) or matchText(key, recurse);
+}
+
+fn matchAnyKey(keys: []const []const u8, scan: []const []const u8, recurse: []const []const u8) bool {
+    for (keys) |k| {
+        if (matchKey(k, scan, recurse)) return true;
+    }
+    return false;
+}
+
+/// The four stock selective logics over the secondary keys (world-info.js:4829). An empty
+/// secondary key matches nothing, which fails and_all and never satisfies and_any, as stock.
+fn selectiveOk(e: Entry, scan: []const []const u8, recurse: []const []const u8) bool {
+    var any = false;
+    var all = true;
+    for (e.keysecondary) |k| {
+        if (matchKey(k, scan, recurse)) any = true else all = false;
+    }
+    return switch (e.selective_logic) {
+        .and_any => any,
+        .not_all => !all,
+        .not_any => !any,
+        .and_all => all,
+    };
+}
+
+const testing = std.testing;
+
+fn te(uid: i64, keys: []const []const u8, content: []const u8) Entry {
+    return .{
+        .uid_key = "",
+        .uid = uid,
+        .keys = keys,
+        .keysecondary = &.{},
+        .selective_logic = .and_any,
+        .content = content,
+        .comment = "",
+        .constant = false,
+        .selective = false,
+        .disable = false,
+        .order = 100,
+        .position = .before,
+        .depth = 4,
+        .probability = 100,
+        .use_probability = true,
+    };
+}
+
+test "a matching key activates its entry and a non-matching key does not" {
+    const entries = [_]Entry{
+        te(0, &.{ "dragon", "wyrm" }, "ALPHA"),
+        te(1, &.{"zebra"}, "NEVER"),
+    };
+    var act = try activate(testing.allocator, .{ .entries = &entries }, &.{"The DRAGON sleeps."});
+    defer act.deinit();
+    try testing.expectEqualStrings("ALPHA", act.before);
+    try testing.expect(std.mem.indexOf(u8, act.before, "NEVER") == null);
+}
+
+test "matching is case-insensitive ascii substring and trims key whitespace" {
+    const entries = [_]Entry{te(0, &.{" GateKey "}, "A")};
+    var hit = try activate(testing.allocator, .{ .entries = &entries }, &.{"found the gatekey today"});
+    defer hit.deinit();
+    try testing.expectEqualStrings("A", hit.before);
+    var miss = try activate(testing.allocator, .{ .entries = &entries }, &.{"found the gate key today"});
+    defer miss.deinit();
+    try testing.expectEqualStrings("", miss.before);
+}
+
+test "scan depth bounds the window from the newest message" {
+    const entries = [_]Entry{te(0, &.{"lighthouse"}, "A")};
+    const history = [_][]const u8{ "the lighthouse looms", "hello", "more talk" };
+    var out_of_window = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 2 }, &history);
+    defer out_of_window.deinit();
+    try testing.expectEqualStrings("", out_of_window.before);
+    var in_window = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 3 }, &history);
+    defer in_window.deinit();
+    try testing.expectEqualStrings("A", in_window.before);
+    var depth_zero = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 0 }, &history);
+    defer depth_zero.deinit();
+    try testing.expectEqualStrings("", depth_zero.before);
+}
+
+test "a constant entry fires with no key match and a disabled one never fires" {
+    var constant = te(0, &.{}, "ALWAYS");
+    constant.constant = true;
+    var disabled = te(1, &.{"hello"}, "OFF");
+    disabled.disable = true;
+    var disabled_constant = te(2, &.{}, "OFF2");
+    disabled_constant.constant = true;
+    disabled_constant.disable = true;
+    const entries = [_]Entry{ constant, disabled, disabled_constant };
+    var act = try activate(testing.allocator, .{ .entries = &entries }, &.{"hello"});
+    defer act.deinit();
+    try testing.expectEqualStrings("ALWAYS", act.before);
+}
+
+test "the four selective logics gate on the secondary keys" {
+    const Case = struct { logic: wi.Logic, expect_hit: bool };
+    // Scan text carries "red" but not "blue"; secondary = [red, blue] -> any=true, all=false.
+    const cases = [_]Case{
+        .{ .logic = .and_any, .expect_hit = true },
+        .{ .logic = .not_all, .expect_hit = true },
+        .{ .logic = .not_any, .expect_hit = false },
+        .{ .logic = .and_all, .expect_hit = false },
+    };
+    for (cases) |c| {
+        var e = te(0, &.{"dragon"}, "S");
+        e.selective = true;
+        e.keysecondary = &.{ "red", "blue" };
+        e.selective_logic = c.logic;
+        const entries = [_]Entry{e};
+        var act = try activate(testing.allocator, .{ .entries = &entries }, &.{"a red dragon"});
+        defer act.deinit();
+        try testing.expectEqualStrings(if (c.expect_hit) "S" else "", act.before);
+    }
+}
+
+test "recursion activates an entry keyed only by another entry's content, gated by the flag" {
+    const entries = [_]Entry{
+        te(0, &.{"dragon"}, "the ember hoard"),
+        te(1, &.{"ember"}, "SECOND"),
+    };
+    var on = try activate(testing.allocator, .{ .entries = &entries, .recursive = true }, &.{"a dragon"});
+    defer on.deinit();
+    try testing.expectEqualStrings("the ember hoard\nSECOND", on.before);
+    var off = try activate(testing.allocator, .{ .entries = &entries, .recursive = false }, &.{"a dragon"});
+    defer off.deinit();
+    try testing.expectEqualStrings("the ember hoard", off.before);
+}
+
+test "the budget cap drops the lowest-priority entries first and stops activation" {
+    // Priority = list order; join order = entry order ascending. keep2(order 50) joins before
+    // keep1(order 90) yet outranks nothing: the third candidate is what the cap sheds.
+    var keep1 = te(0, &.{}, "AAAAAAAAAA");
+    keep1.constant = true;
+    keep1.order = 90;
+    var keep2 = te(1, &.{}, "BBBBBBBBBB");
+    keep2.constant = true;
+    keep2.order = 50;
+    var drop = te(2, &.{}, "CCCCCCCCCC");
+    drop.constant = true;
+    drop.order = 10;
+    const entries = [_]Entry{ keep1, keep2, drop };
+    var act = try activate(testing.allocator, .{ .entries = &entries, .budget_chars = 25 }, &.{});
+    defer act.deinit();
+    try testing.expectEqualStrings("BBBBBBBBBB\nAAAAAAAAAA", act.before);
+    var roomy = try activate(testing.allocator, .{ .entries = &entries, .budget_chars = 1000 }, &.{});
+    defer roomy.deinit();
+    try testing.expectEqualStrings("CCCCCCCCCC\nBBBBBBBBBB\nAAAAAAAAAA", roomy.before);
+}
+
+test "reaching the budget exactly overflows, one char under it does not" {
+    var e = te(0, &.{}, "12345");
+    e.constant = true;
+    const entries = [_]Entry{e};
+    var exact = try activate(testing.allocator, .{ .entries = &entries, .budget_chars = 6 }, &.{});
+    defer exact.deinit();
+    try testing.expectEqualStrings("", exact.before);
+    var under = try activate(testing.allocator, .{ .entries = &entries, .budget_chars = 7 }, &.{});
+    defer under.deinit();
+    try testing.expectEqualStrings("12345", under.before);
+}
+
+test "probability entries roll the caller's rng with a fixed seed, once each" {
+    var gated = te(0, &.{}, "MAYBE");
+    gated.constant = true;
+    gated.probability = 50;
+    var sure = te(1, &.{}, "SURE");
+    sure.constant = true;
+    sure.probability = 50;
+    sure.use_probability = false;
+    const entries = [_]Entry{ gated, sure };
+
+    // The engine consumes one float roll for the gated entry; mirror it to know the verdict.
+    var mirror = std.Random.DefaultPrng.init(0x5eed);
+    const expect_gated = mirror.random().float(f64) * 100.0 <= 50.0;
+
+    var prng = std.Random.DefaultPrng.init(0x5eed);
+    var act = try activate(testing.allocator, .{ .entries = &entries, .rng = prng.random() }, &.{});
+    defer act.deinit();
+    const want = if (expect_gated) "MAYBE\nSURE" else "SURE";
+    try testing.expectEqualStrings(want, act.before);
+
+    var no_rng = try activate(testing.allocator, .{ .entries = &entries }, &.{});
+    defer no_rng.deinit();
+    try testing.expectEqualStrings("MAYBE\nSURE", no_rng.before);
+}
+
+test "every position lands in its own slot and at_depth groups merge per depth" {
+    const mk = struct {
+        fn e(uid: i64, pos: wi.Position, depth: i64, order: i64, content: []const u8) Entry {
+            var x = te(uid, &.{}, content);
+            x.constant = true;
+            x.position = pos;
+            x.depth = depth;
+            x.order = order;
+            return x;
+        }
+    };
+    const entries = [_]Entry{
+        mk.e(0, .before, 4, 100, "B"),
+        mk.e(1, .after, 4, 100, "A"),
+        mk.e(2, .an_top, 4, 100, "NT"),
+        mk.e(3, .an_bottom, 4, 100, "NB"),
+        mk.e(4, .em_top, 4, 100, "ET"),
+        mk.e(5, .em_bottom, 4, 100, "EB"),
+        mk.e(6, .at_depth, 2, 200, "D2-late"),
+        mk.e(7, .at_depth, 2, 100, "D2-early"),
+        mk.e(8, .at_depth, 0, 100, "D0"),
+        mk.e(9, .outlet, 4, 100, "OUT"),
+    };
+    var act = try activate(testing.allocator, .{ .entries = &entries }, &.{});
+    defer act.deinit();
+    try testing.expectEqualStrings("B", act.before);
+    try testing.expectEqualStrings("A", act.after);
+    try testing.expectEqualStrings("NT", act.an_top);
+    try testing.expectEqualStrings("NB", act.an_bottom);
+    try testing.expectEqual(@as(usize, 1), act.em_top.len);
+    try testing.expectEqualStrings("ET", act.em_top[0]);
+    try testing.expectEqualStrings("EB", act.em_bottom[0]);
+    try testing.expectEqual(@as(usize, 2), act.at_depth.len);
+    try testing.expectEqual(@as(i64, 2), act.at_depth[0].depth);
+    try testing.expectEqualStrings("D2-early\nD2-late", act.at_depth[0].content);
+    try testing.expectEqual(@as(i64, 0), act.at_depth[1].depth);
+    try testing.expectEqualStrings("D0", act.at_depth[1].content);
+}
+
+test "an entry without keys and without constant never fires" {
+    const entries = [_]Entry{te(0, &.{}, "GHOST")};
+    var act = try activate(testing.allocator, .{ .entries = &entries }, &.{"anything"});
+    defer act.deinit();
+    try testing.expectEqualStrings("", act.before);
+}
+
+test "activate cleans up on every allocation failure" {
+    try testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn run(alloc: Allocator) !void {
+            var recurse_a = te(0, &.{"dragon"}, "the ember hoard");
+            recurse_a.position = .at_depth;
+            var b = te(1, &.{"ember"}, "SECOND");
+            b.position = .em_top;
+            var c = te(2, &.{}, "CONST");
+            c.constant = true;
+            const entries = [_]Entry{ recurse_a, b, c };
+            var act = try activate(alloc, .{ .entries = &entries, .recursive = true }, &.{"a dragon"});
+            act.deinit();
+        }
+    }.run, .{});
+}
+
+test "activate never panics on arbitrary scan bytes" {
+    var prng = std.Random.DefaultPrng.init(0xacc07);
+    const rand = prng.random();
+    var buf: [64]u8 = undefined;
+    const entries = [_]Entry{ te(0, &.{"a"}, "X"), te(1, &.{"\x01"}, "Y") };
+    for (0..2000) |_| {
+        const len = rand.intRangeAtMost(usize, 0, buf.len);
+        rand.bytes(buf[0..len]);
+        var act = try activate(testing.allocator, .{ .entries = &entries }, &.{buf[0..len]});
+        act.deinit();
+    }
+}
