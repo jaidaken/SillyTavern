@@ -10,6 +10,7 @@ const data = @import("./char_data.zig");
 const regions = @import("./regions.zig");
 const char_store = @import("./character_store.zig"); // w3-chatref: group rows resolve avatars by name
 const group_store = @import("./group_store.zig"); // w3-chatref
+const doorpack = @import("./doorpack.zig");
 
 const alloc = @import("./character_store.zig").page_gpa;
 const log = std.log.scoped(.net);
@@ -153,7 +154,7 @@ pub fn nextBody() u64 {
     if (json.len > body_buf.len) return 0;
     @memcpy(body_buf[0..json.len], json);
     in_flight = true;
-    return (@as(u64, @intFromPtr(&body_buf[0])) << 32) | @as(u64, json.len);
+    return doorpack.pack(@intFromPtr(&body_buf[0]), json.len);
 }
 
 /// w3-chatref: the route the JS pump posts `nextBody` to (solo vs group), packed ptr<<32|len of a
@@ -161,7 +162,7 @@ pub fn nextBody() u64 {
 pub fn pageUrl() u64 {
     const ref = currentRef() orelse return 0;
     const url = ref.url();
-    return (@as(u64, @intFromPtr(url.ptr)) << 32) | @as(u64, url.len);
+    return doorpack.pack(@intFromPtr(url.ptr), url.len);
 }
 
 /// Parses a 200 page body and prepends its messages to the store head. Clears the in-flight guard,

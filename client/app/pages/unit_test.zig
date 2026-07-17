@@ -54,6 +54,9 @@ comptime {
     _ = @import("world_info.zig");
     // w3-wi-engine
     _ = @import("world_info_engine.zig");
+    // H1: the 64-bit crossing register + the door packing convention.
+    _ = @import("boundary_marshal.zig");
+    _ = @import("doorpack.zig");
 }
 
 const sink_call = "html.sink(";

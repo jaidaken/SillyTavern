@@ -35,9 +35,13 @@ fi
 # an error, so a type mismatch (eg call(void) on an async helper) freed one jsz slot twice.
 # 15 adds __zx_render_recover: a throw through wasm skips 13's `defer render_gate.exit()`, so the
 # gate stays held and the page never renders again. Must apply AFTER 13 (it edits 13's own files).
-for p in "$PATCHES"/01-*.patch "$PATCHES"/02-*.patch "$PATCHES"/04-*.patch "$PATCHES"/05-*.patch "$PATCHES"/06-*.patch "$PATCHES"/10-*.patch "$PATCHES"/11-*.patch "$PATCHES"/12-*.patch "$PATCHES"/13-*.patch "$PATCHES"/14-*.patch "$PATCHES"/15-*.patch "$PATCHES"/16-*.patch; do
+# 17 reworks the jsz test mock (fresh handle per produced value, release counters, funcApply) and
+# exposes it as js.test_support so the H1 boundary suite can assert handle accounting.
+# 18 extracts RenderGate.recover() (the pure half of 15's __zx_render_recover); applies AFTER 15.
+# 19 adds test/boundary.zig, the H1 suite; client/build.zig wires it into `zig build test`.
+for p in "$PATCHES"/01-*.patch "$PATCHES"/02-*.patch "$PATCHES"/04-*.patch "$PATCHES"/05-*.patch "$PATCHES"/06-*.patch "$PATCHES"/10-*.patch "$PATCHES"/11-*.patch "$PATCHES"/12-*.patch "$PATCHES"/13-*.patch "$PATCHES"/14-*.patch "$PATCHES"/15-*.patch "$PATCHES"/16-*.patch "$PATCHES"/17-*.patch "$PATCHES"/18-*.patch "$PATCHES"/19-*.patch; do
     git -C "$ZIEX_DIR" apply "../$p"
     echo "setup-ziex: applied $(basename "$p")"
 done
 
-echo "setup-ziex: $ZIEX_DIR ready at $ZIEX_REV + 12 patches"
+echo "setup-ziex: $ZIEX_DIR ready at $ZIEX_REV + 15 patches"

@@ -78,6 +78,37 @@ pub fn build(b: *std.Build) !void {
     shim_test_mod.link_libc = true;
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = shim_test_mod })).step);
 
+    // H1 boundary suite: named modules because a module rooted in .ziex/test cannot file-import
+    // outside its own root directory.
+    const jsz_mod = b.createModule(.{
+        .root_source_file = b.path(".ziex/vendor/jsz/src/main.zig"),
+        .target = target,
+        .optimize = .Debug,
+    });
+    const render_gate_mod = b.createModule(.{
+        .root_source_file = b.path(".ziex/src/runtime/core/render_gate.zig"),
+        .target = target,
+        .optimize = .Debug,
+    });
+    const boundary_test_mod = b.createModule(.{
+        .root_source_file = b.path(".ziex/test/boundary.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .imports = &.{
+            .{ .name = "js", .module = jsz_mod },
+            .{ .name = "render_gate", .module = render_gate_mod },
+        },
+    });
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = boundary_test_mod })).step);
+
+    // jsz's own inline tests (Value/Ref/String) ride the same gate; they never ran here before.
+    const jsz_test_mod = b.createModule(.{
+        .root_source_file = b.path(".ziex/vendor/jsz/src/main.zig"),
+        .target = target,
+        .optimize = .Debug,
+    });
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = jsz_test_mod })).step);
+
     const fmt_check = b.addFmt(.{ .paths = &.{ "app", "build.zig" }, .check = true });
     const check_step = b.step("check", "zig fmt --check");
     check_step.dependOn(&fmt_check.step);
