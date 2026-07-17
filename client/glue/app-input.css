@@ -934,3 +934,7 @@ html[data-background="on"] body::before {
 @media (hover: hover) and (pointer: fine) {
     .char-item:hover .char-row-actions { opacity: 1; pointer-events: auto; }
 }
+
+/* w3-chatmgr */
+/* Chat Management drawer glyph, same Feather line weight as the panel set above. */
+[data-icon="chats"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>'); }

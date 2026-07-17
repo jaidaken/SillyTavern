@@ -8,6 +8,7 @@ const character_view = @import("./character_view.zig");
 const persona_store = @import("./persona_store.zig");
 const persona_actions = @import("./persona_actions.zig");
 const card_editor = @import("./card_editor.zig");
+const chat_actions = @import("./chat_actions.zig");
 const reading_prefs = @import("./reading_prefs.zig");
 const appearance = @import("./appearance.zig");
 const backgrounds = @import("./backgrounds.zig");
@@ -225,6 +226,13 @@ fn backgroundUploaded(status: i32) callconv(.c) void {
     backgrounds.uploadDone(status);
 }
 
+/// w3-chatmgr: called by the __st_chat_import JS multipart helper once the chat upload settles
+/// either way (importFile has drawn "importing" and this is what clears it). Status 0 = never
+/// completed.
+fn chatImported(status: i32) callconv(.c) void {
+    chat_actions.importDone(status);
+}
+
 // Demo fixtures are opt-in (glue calls this on ?demo or when no backend answers), so a real
 // deployment shows honest state instead of roleplay prose masking a dead load path.
 fn seedDemo() callconv(.c) void {
@@ -307,6 +315,7 @@ comptime {
         @export(&personaAvatarUploaded, .{ .name = "__st_persona_avatar_done" });
         @export(&cardAvatarUploaded, .{ .name = "__st_card_avatar_done" });
         @export(&backgroundUploaded, .{ .name = "__st_bg_upload_done" });
+        @export(&chatImported, .{ .name = "__st_chat_import_done" });
         @export(&addPersona, .{ .name = "__st_add_persona" });
         @export(&clearPersonas, .{ .name = "__st_clear_personas" });
         @export(&selectPersona, .{ .name = "__st_select_persona" });

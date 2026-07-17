@@ -3296,6 +3296,188 @@ async function main() {
                 say(settled));
         }
 
+        // ===== w3-chatmgr (append-only): chat management panel (3a). Keep ABOVE C-DBG. =====
+        // Server-side truth for every mutation row comes from /dev/mgr-state (the fixture store the
+        // mock routes actually touched), never from the panel's own rendering alone: a list that
+        // repaints correctly over the wrong file is exactly the failure these rows exist to catch.
+        console.log('== w3-chatmgr: chat management ==');
+        {
+            const mgrState = async () => await (await fetch(`${args.base}/dev/mgr-state`)).json();
+            const mgrRowsQ = "document.querySelectorAll('#panel-view .chatmgr-row').length";
+            const mgrNamesArr = "Array.from(document.querySelectorAll('#panel-view .chatmgr-row .font-serif')).map(function(n){return n.textContent.trim();})";
+            const mgrNames = `JSON.stringify(${mgrNamesArr})`;
+            const openMgr = async () => {
+                if (!(await page.eval("!!document.querySelector('#panel-view .chatmgr')"))) {
+                    await page.click('#d-chat_manager');
+                }
+                await page.waitFor("document.querySelector('#panel-view .chatmgr')", 5000);
+            };
+            const rowActByName = async (name, act) => {
+                const clicked = await page.eval(`(function(){
+                    var act = ${JSON.stringify(act)};
+                    var rows = document.querySelectorAll('#panel-view .chatmgr-row');
+                    for (var i = 0; i < rows.length; i++) {
+                        if (rows[i].querySelector('.font-serif').textContent.trim() === ${JSON.stringify(name)}) {
+                            if (act === 'open') { rows[i].click(); return true; }
+                            var btn = rows[i].querySelector('[data-chat-act="' + act + '"]');
+                            if (btn) { btn.click(); return true; }
+                        }
+                    }
+                    return false;
+                })()`);
+                if (!clicked) throw new Error(`chatmgr: no row/button ${name}/${act}`);
+            };
+
+            // Land on char07's default chat: fresh load, characters dock, search, click the row.
+            await page.navigate(`${args.base}/`);
+            await page.waitFor(`${hydrated} && document.querySelector('#chat-home')`, 15000);
+            await page.click('#d-characters');
+            await page.waitFor("document.querySelectorAll('#chat-root .char-item').length > 0", 8000);
+            await page.eval("(function(){const s=document.querySelector('.char-search'); s.value='Char 07'; s.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            await page.waitFor("document.querySelectorAll('#chat-root .char-item').length === 1", 5000);
+            await page.click('#chat-root .char-item');
+            await page.waitFor("document.querySelectorAll('#chat .mes').length === 3 && document.body.textContent.includes('Default thread tail marker')", 8000);
+
+            // CM-1: the manager lists the character's chats with count, size and date per row.
+            await openMgr();
+            const listed = await page.waitFor(`${mgrRowsQ} === 3`, 6000);
+            const names = JSON.parse(await page.eval(mgrNames));
+            const metaOk = await page.eval(
+                "document.querySelector('#panel-view .chatmgr-row') && document.querySelector('#panel-view .chatmgr-row').textContent.includes('messages')");
+            row('must', listed && names.includes('old adventure') && names.includes('keep me') && metaOk,
+                'CM-1 the manager lists all three of the character\'s chats with metadata',
+                `names=${JSON.stringify(names)}`);
+
+            // CM-2: switching to an older chat renders that chat and closes the drawer.
+            await rowActByName('old adventure', 'open');
+            const switched = await page.waitFor(
+                "document.querySelectorAll('#chat .mes').length === 2 && document.body.textContent.includes('peppermint dragon') && !document.querySelector('#panel-view')", 8000);
+            row('must', switched, 'CM-2 switching to an older chat renders it and closes the drawer');
+
+            // CM-3 (the wrong-file hazard): a send AFTER the switch persists into the SWITCHED file.
+            // char_api re-derives the file per send, so without the override this lands in the default.
+            await page.focus('#send_textarea');
+            await page.insertText('AFTER SWITCH PROBE');
+            await page.click('#composer button[aria-label="Send"]');
+            await page.waitFor("document.body.textContent.includes('FIN') && !document.querySelector('#chat .mes[aria-busy=\\'true\\']')", 15000);
+            const afterSend = await (async () => {
+                const deadline = Date.now() + 6000;
+                while (Date.now() < deadline) {
+                    const st = await mgrState();
+                    if ((st.files['old adventure'] || []).length >= 4) return st;
+                    await sleep(150);
+                }
+                return await mgrState();
+            })();
+            row('must',
+                (afterSend.files['old adventure'] || []).some((m) => m.includes('AFTER SWITCH PROBE'))
+                && (afterSend.files['Char 07 Vex - 2026-07-14'] || []).length === 3,
+                'CM-3 a send after switching persists into the switched file, never the card default',
+                `switched=${(afterSend.files['old adventure'] || []).length} default=${(afterSend.files['Char 07 Vex - 2026-07-14'] || []).length}`);
+
+            // CM-4: search narrows server-side; clearing restores the full list.
+            await openMgr();
+            await page.eval("(function(){const s=document.getElementById('chat-mgr-search'); s.value='peppermint'; s.dispatchEvent(new Event('change',{bubbles:true}));})()");
+            const narrowed = await page.waitFor(`${mgrRowsQ} === 1`, 6000);
+            const narrowedName = JSON.parse(await page.eval(mgrNames));
+            await page.eval("(function(){const s=document.getElementById('chat-mgr-search'); s.value=''; s.dispatchEvent(new Event('change',{bubbles:true}));})()");
+            const restored = await page.waitFor(`${mgrRowsQ} === 3`, 6000);
+            row('must', narrowed && narrowedName[0] === 'old adventure' && restored,
+                'CM-4 search narrows to the matching chat and clearing restores the list',
+                `narrowed=${JSON.stringify(narrowedName)}`);
+
+            // CM-5: rename round-trips. The renamed chat is OPEN, so the reader must follow the new
+            // name; the store must hold the same bytes under the new key and nothing under the old.
+            await page.eval("window.prompt = function(){ return 'renamed quest'; };");
+            await rowActByName('old adventure', 'rename');
+            const renamedListed = await page.waitFor(`(${mgrNamesArr}).includes('renamed quest') && !(${mgrNamesArr}).includes('old adventure')`, 8000);
+            const stRename = await mgrState();
+            const renamedIntact = (stRename.files['renamed quest'] || []).length >= 4
+                && !('old adventure' in stRename.files)
+                && stRename.files['renamed quest'][1].includes('candy caves');
+            const readerFollowed = await page.waitFor("document.body.textContent.includes('peppermint dragon')", 6000);
+            row('must', renamedListed && renamedIntact && readerFollowed,
+                'CM-5 rename round-trips: new name listed, bytes intact, open reader follows',
+                `files=${JSON.stringify(Object.keys(stRename.files))}`);
+
+            // CM-6: duplicate creates a byte-equal sibling and leaves the original alone.
+            await openMgr();
+            await rowActByName('keep me', 'duplicate');
+            const dupListed = await page.waitFor(`(${mgrNamesArr}).includes('keep me copy')`, 8000);
+            const stDup = await mgrState();
+            const dupEqual = JSON.stringify(stDup.files['keep me copy']) === JSON.stringify(stDup.files['keep me'])
+                && (stDup.files['keep me'] || []).length === 2;
+            row('must', dupListed && dupEqual,
+                'CM-6 duplicate creates a byte-equal copy and the original is untouched');
+
+            // CM-7: branch at message 1 creates a one-message prefix copy and opens it.
+            await page.eval("window.prompt = function(){ return '1'; };");
+            await rowActByName('keep me', 'branch');
+            const branchOpened = await page.waitFor(
+                "document.querySelectorAll('#chat .mes').length === 1 && document.body.textContent.includes('Sibling canary line one') && !document.querySelector('#panel-view')", 8000);
+            const stBranch = await mgrState();
+            const branchRight = (stBranch.files['keep me branch 1'] || []).length === 1
+                && (stBranch.files['keep me'] || []).length === 2;
+            row('must', branchOpened && branchRight,
+                'CM-7 branch at message 1 creates the prefix copy and the reader opens it');
+
+            // CM-8 (T1 dangerous property): delete removes EXACTLY the target; the sibling canary
+            // keeps its two lines byte-for-byte.
+            await page.eval("window.confirm = function(){ return true; };");
+            await openMgr();
+            await rowActByName('keep me copy', 'delete');
+            const delGone = await page.waitFor(`!(${mgrNamesArr}).includes('keep me copy')`, 8000);
+            const stDel = await mgrState();
+            const canaryIntact = JSON.stringify(stDel.files['keep me'])
+                === JSON.stringify(['Sibling canary line one.', 'Sibling canary line two.']);
+            row('must', delGone && !('keep me copy' in stDel.files) && canaryIntact,
+                'CM-8 delete removes exactly the target and the sibling chat is byte-intact',
+                `files=${JSON.stringify(Object.keys(stDel.files))}`);
+
+            // CM-9: deleting the OPEN chat (the branch) falls back to the card's default chat.
+            await rowActByName('keep me branch 1', 'delete');
+            const fellBack = await page.waitFor(
+                "document.querySelectorAll('#chat .mes').length === 3 && document.body.textContent.includes('Default thread tail marker')", 8000);
+            const stDel2 = await mgrState();
+            row('must', fellBack && !('keep me branch 1' in stDel2.files),
+                'CM-9 deleting the open chat falls back to the default chat');
+
+            // CM-10: export fetches the file and hands a non-empty blob to a download click.
+            await openMgr();
+            await page.eval("window.__dlCount = 0; window.__dlSize = -1; (function(){ var orig = URL.createObjectURL.bind(URL); URL.createObjectURL = function(b){ window.__dlCount++; window.__dlSize = b.size; return orig(b); }; })();");
+            await rowActByName('keep me', 'export');
+            const dlHit = await page.waitFor('window.__dlCount === 1 && window.__dlSize > 0', 8000);
+            const stExp = await mgrState();
+            row('must', dlHit && stExp.exported === 'keep me',
+                'CM-10 export downloads the requested chat as a non-empty jsonl blob',
+                `size=${await page.eval('window.__dlSize')}`);
+
+            // CM-11: import round-trips a stock jsonl: header line + two turns in, a listed chat with
+            // the same two message bodies out. Drives the REAL file input (DataTransfer + change).
+            const importedOk = await page.eval(`(function(){
+                var header = JSON.stringify({ user_name: 'You', character_name: 'Char 07 Vex', create_date: '2026-01-01', chat_metadata: {} });
+                var m1 = JSON.stringify({ name: 'You', is_user: true, send_date: 1, mes: 'imported line alpha', extra: {} });
+                var m2 = JSON.stringify({ name: 'Char 07 Vex', is_user: false, send_date: 2, mes: 'imported line beta', extra: {} });
+                var file = new File([header + '\\n' + m1 + '\\n' + m2], 'stock export.jsonl', { type: '' });
+                var input = document.getElementById('chat-import-input');
+                if (!input) return false;
+                var dt = new DataTransfer();
+                dt.items.add(file);
+                input.files = dt.files;
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+            })()`);
+            const importListed = await page.waitFor(`(${mgrNamesArr}).some(function(n){return n.indexOf('imported') !== -1;})`, 10000);
+            const stImp = await mgrState();
+            const impKey = Object.keys(stImp.files).find((k) => k.includes('imported'));
+            const impRound = impKey
+                && JSON.stringify(stImp.files[impKey]) === JSON.stringify(['imported line alpha', 'imported line beta']);
+            row('must', importedOk && importListed && !!impRound,
+                'CM-11 import round-trips a stock jsonl into a new listed chat',
+                `key=${impKey || 'none'}`);
+        }
+        // ===== end w3-chatmgr section =====
+
         /* C-DBG */
         // The [zx:dom] channel. A live crash (removeChild NotFoundError) came out of the door with the
         // framework's tree and the real DOM already drifted apart, and no reproduction was ever found,

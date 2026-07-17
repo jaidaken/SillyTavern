@@ -432,9 +432,38 @@ fn activePersona() ?persona_store.Persona {
 
 // ---- chat load ---------------------------------------------------------------------------
 
+// w3-chatmgr: the manager's switched chat file, keyed to its character's avatar. Sticky until the
+// next default open so send/append/resync all address the switched file, never the card default.
+var chat_file_override: []u8 = &.{};
+var override_avatar: []u8 = &.{};
+
 /// Open the chat for the character at `index` (store order) using the default tail window.
 pub fn loadCharacterChat(index: usize) void {
+    clearChatFileOverride();
     loadCharacterChatWindow(index, pager.TAIL_LIMIT, false);
+}
+
+/// w3-chatmgr: open a chosen chat file of the character at `index` (the manager's switch). Every
+/// later path that derives the file name (send capture, resync, pager identity) follows the override
+/// via chatFileName until a default open clears it.
+pub fn loadChatByName(index: usize, file_name: []const u8) void {
+    const chars = char_store.slice();
+    if (index >= chars.len or file_name.len == 0) return;
+    setOwned(&chat_file_override, file_name);
+    setOwned(&override_avatar, chars[index].avatar);
+    loadCharacterChatWindow(index, pager.TAIL_LIMIT, false);
+}
+
+/// w3-chatmgr: the switched file's stem, empty when the card default is active.
+pub fn activeChatFile() []const u8 {
+    return chat_file_override;
+}
+
+fn clearChatFileOverride() void {
+    if (chat_file_override.len > 0) alloc.free(chat_file_override);
+    chat_file_override = &.{};
+    if (override_avatar.len > 0) alloc.free(override_avatar);
+    override_avatar = &.{};
 }
 
 /// Open the chat for the character at `index` (store order) with an explicit tail-window `limit`.
@@ -475,6 +504,10 @@ fn loadCharacterChatWindow(index: usize, limit: usize, is_resync: bool) void {
 }
 
 fn chatFileName(c: char_store.Character) ?[]u8 {
+    // w3-chatmgr: a manager-chosen file overrides the card default, for its own character only.
+    if (chat_file_override.len > 0 and std.mem.eql(u8, override_avatar, c.avatar)) {
+        return alloc.dupe(u8, chat_file_override) catch null;
+    }
     if (c.chat.len > 0) return alloc.dupe(u8, c.chat) catch null;
     // Old-glue fallback: "<name> - <today>" with today's UTC date from Date.now via jsz.
     var buf: [10]u8 = undefined;
