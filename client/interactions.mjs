@@ -3781,8 +3781,12 @@ async function main() {
                 'W3WI-7 the budget knob and a global-select toggle persist under the classic world_info_settings keys',
                 `persisted=${wiPersisted}`);
 
-            // Chat link: REQUEST SHAPE only (the lead re-verifies persistence on the merged tree,
-            // where /api/chats/metadata accepts world_info since 9bc8ee713).
+            // Chat link, request shape only (merged-tree server accepts world_info since 9bc8ee713).
+            // Row 5's reload left no chat open and the chatlink needs a live chat identity: resume one first.
+            await page.eval("document.getElementById('d-world_info').click()");
+            await openRecentChat();
+            await page.eval("document.getElementById('d-world_info').click()");
+            await page.waitFor("!!document.querySelector(\"[data-wi-open='beta-lore']\")", 8000);
             await page.click("[data-wi-open='beta-lore']");
             await page.waitFor("!!document.querySelector('[data-wi-chatlink]')", 8000);
             await page.click('[data-wi-chatlink]');
