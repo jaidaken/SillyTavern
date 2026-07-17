@@ -691,6 +691,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     chat_meta = None
     metadata_stale_once = False
     last_metadata_body = None
+    # wi-polish: the GROUP chat's header metadata, its own store so a group write can never leak
+    # into the solo chat_meta (the dangerous property the gate rows assert).
+    group_meta = None
     # w3-wi: mutable mock lorebooks; gate-lore entry "0" = full stock shape + an unknown
     # futureField, which the T0 row deep-diffs after an editor save.
     wi_books = None
@@ -750,6 +753,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "world_info": "gate-lore",  # w3-wi chat-scope book link
             }
         return cls.chat_meta
+
+    @classmethod
+    def group_metadata(cls):
+        if cls.group_meta is None:
+            cls.group_meta = {}
+        return cls.group_meta
 
     @classmethod
     def settings_blob(cls):
@@ -908,6 +917,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "card_get_count": Handler.card_get_count,  # w3-wi
                     "last_card_get": Handler.last_card_get,  # w3-wi
                     "settings_world_info": Handler.settings_blob().get("world_info_settings"),  # w3-wi
+                    "chat_meta": Handler.chat_metadata(),  # wi-polish: solo header store
+                    "group_meta": Handler.group_metadata(),  # wi-polish: group header store
                 })
             # C-CONN: model allowKeysExposure=true, so /api/secrets/read hands back raw keys.
             # w3-wi: drop a card saved by an earlier section, so /api/characters/get serves the
@@ -1199,7 +1210,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 Handler.metadata_stale_once = False
                 Handler.bump_full_token()
                 return self.mock_status(409, {"error": "stale", "change_token": Handler.full_token})
-            meta = Handler.chat_metadata()
+            # wi-polish: a group_id body writes the GROUP header store, never the solo one
+            # (the real route resolves the ref the same way, chats.js resolveUndoRef).
+            is_group_write = isinstance(req, dict) and req.get("group_id")
+            meta = Handler.group_metadata() if is_group_write else Handler.chat_metadata()
             # world_info joined the allowlist on main (9bc8ee713); mirrored here for the w3-wi row.
             for key in ("note_prompt", "note_interval", "note_depth", "note_position", "note_role", "world_info"):
                 if key in req:
@@ -1529,7 +1543,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             gmsgs = [dict(m) for m in Handler.group_appended]
             return self.mock_json({
                 "messages": gmsgs,
-                "header": {"user_name": "You", "chat_metadata": {}},
+                "header": {"user_name": "You", "chat_metadata": Handler.group_metadata()},
                 "change_token": f"g1.{len(gmsgs)}.mock",
                 "full_token": "gfull.mock",
                 "has_more_before": False,

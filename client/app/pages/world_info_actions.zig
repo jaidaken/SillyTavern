@@ -559,6 +559,13 @@ pub fn setBudget(raw: []const u8) void {
     bump();
 }
 
+// wi-polish: the recursion flag rides the same settings saver as the budget knob.
+pub fn setRecursive(on: bool) void {
+    wi.global.recursive = on;
+    reading_prefs.scheduleSave();
+    bump();
+}
+
 // ---- scope-book loading for the engine (w3-wi-engine) --------------------------------------------
 
 /// File ids with a /get in flight, so a scope re-check does not spam duplicate fetches.
@@ -646,6 +653,8 @@ pub fn adoptCard(card_bytes: []const u8) void {
 /// and the message mutations, so no writer stomps another's copy. Empty file = no chat to link.
 var chat_avatar: []u8 = &.{};
 var chat_file: []u8 = &.{};
+// wi-polish: group chat identity for the same /metadata write path (group_id keys the header).
+var chat_group: []u8 = &.{};
 var chat_link_in_flight = false;
 
 /// Chat seam (chat open): adopt the chat's identity for the link write path, and its linked book
@@ -655,12 +664,23 @@ pub fn setChatContext(avatar: []const u8, file_name: []const u8, chat_metadata: 
     _ = full_token;
     setOwned(&chat_avatar, avatar);
     setOwned(&chat_file, file_name);
+    setOwned(&chat_group, "");
+    setChatWorldFromMetadata(chat_metadata);
+    ensureScopeBooksLoaded();
+}
+
+/// wi-polish: the group twin of setChatContext. Same metadata parse and scope load, group-id
+/// identity, so a group open activates its chat-linked book and can edit the link (invariant 5).
+pub fn setGroupChatContext(group_chat_id: []const u8, chat_metadata: []const u8) void {
+    setOwned(&chat_avatar, "");
+    setOwned(&chat_file, "");
+    setOwned(&chat_group, group_chat_id);
     setChatWorldFromMetadata(chat_metadata);
     ensureScopeBooksLoaded();
 }
 
 pub fn chatOpen() bool {
-    return chat_file.len > 0;
+    return chat_file.len > 0 or chat_group.len > 0;
 }
 
 /// Link (or with "" unlink) a book to the open chat: POST /api/chats/metadata {world_info}, the
@@ -668,20 +688,25 @@ pub fn chatOpen() bool {
 /// a 409 means another writer moved the file, so the user retries with the fresh token.
 pub fn setChatBook(file_id: []const u8) void {
     if (zx.platform.role != .client) return;
-    if (chat_file.len == 0 or chat_link_in_flight) return;
+    if ((chat_file.len == 0 and chat_group.len == 0) or chat_link_in_flight) return;
     const m = startMutation(file_id, "") orelse return;
-    const body = std.json.Stringify.valueAlloc(alloc, .{
+    const body = if (chat_group.len > 0) std.json.Stringify.valueAlloc(alloc, .{
+        .group_id = chat_group,
+        .change_token = pager.fullToken(),
+        .world_info = file_id,
+    }, .{}) else std.json.Stringify.valueAlloc(alloc, .{
         .avatar_url = chat_avatar,
         .file_name = chat_file,
         .change_token = pager.fullToken(),
         .world_info = file_id,
-    }, .{}) catch {
+    }, .{});
+    const owned = body catch {
         freeMutation(m);
         return;
     };
-    defer alloc.free(body);
+    defer alloc.free(owned);
     chat_link_in_flight = true;
-    net.request("/api/chats/metadata", body, @intFromPtr(m), onChatLinkDone, .{});
+    net.request("/api/chats/metadata", owned, @intFromPtr(m), onChatLinkDone, .{});
 }
 
 fn onChatLinkDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {

@@ -665,10 +665,11 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         fetchDeepCard(c.avatar);
         open_group_index = null; // w3-chatref
     } else {
-        // w3-chatref: a group chat has no single card. Notes + chat-linked books for group headers
-        // are 3b-B's seam; both contexts clear rather than carry the prior solo chat's identity.
-        an_state.setFromPage("", "", "", "");
-        wi_actions.setChatContext("", "", "", "");
+        // wi-polish: a group chat's note + chat-linked book live in the group chat file's header
+        // (the migrated stock home); same load path as solo, keyed by the group chat id (invariant 5).
+        const gid = group_store.chatFileId(&group.?);
+        an_state.setFromGroupPage(gid, page.chat_metadata);
+        wi_actions.setGroupChatContext(gid, page.chat_metadata);
         open_group_index = index;
     }
 

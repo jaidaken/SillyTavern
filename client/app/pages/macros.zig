@@ -32,6 +32,21 @@ pub const Ctx = struct {
     wi_after: []const u8 = "",
     anchor_before: []const u8 = "",
     anchor_after: []const u8 = "",
+    /// Named world-info outlets for `{{outlet::name}}` (stock macros.js:615), keyed by outletName.
+    outlets: []const Outlet = &.{},
+
+    fn outletByName(self: Ctx, name: []const u8) ?[]const u8 {
+        for (self.outlets) |o| {
+            if (std.mem.eql(u8, o.name, name)) return o.content;
+        }
+        return null;
+    }
+};
+
+/// One named outlet's joined content. Lives here because Ctx owns the field the story string reads.
+pub const Outlet = struct {
+    name: []const u8,
+    content: []const u8,
 };
 
 /// The resolvable macro name -> value, or null for a name this narrow resolver does not know (the
@@ -76,6 +91,12 @@ pub fn substituteMacros(alloc: Allocator, text: []const u8, ctx: Ctx) Allocator.
         if (i + 1 < text.len and text[i] == '{' and text[i + 1] == '{') {
             if (std.mem.indexOfPos(u8, text, i + 2, "}}")) |close| {
                 const inner = std.mem.trim(u8, text[i + 2 .. close], " \t");
+                if (outletKey(inner)) |key| {
+                    // Stock renders '' for a key no outlet feeds (macros.js:615 getOutletPrompt).
+                    try out.appendSlice(alloc, ctx.outletByName(key) orelse "");
+                    i = close + 2;
+                    continue;
+                }
                 const bare = std.mem.trim(u8, if (std.mem.indexOfScalar(u8, inner, ':')) |c| inner[0..c] else inner, " \t");
                 if (resolve(bare, ctx)) |val| {
                     try out.appendSlice(alloc, val);
@@ -90,6 +111,16 @@ pub fn substituteMacros(alloc: Allocator, text: []const u8, ctx: Ctx) Allocator.
         i += 1;
     }
     return out.toOwnedSlice(alloc);
+}
+
+/// The `{{outlet::name}}` key, or null when `inner` is not a named-outlet macro. Stock's regex
+/// (macros.js:615, /{{outlet::(.+?)}}/) needs the double colon and a nonempty key; anything else
+/// falls through to the generic resolver.
+fn outletKey(inner: []const u8) ?[]const u8 {
+    const prefix = "outlet::";
+    if (!std.mem.startsWith(u8, inner, prefix)) return null;
+    const key = std.mem.trim(u8, inner[prefix.len..], " \t");
+    return if (key.len == 0) null else key;
 }
 
 const testing = std.testing;
@@ -113,6 +144,25 @@ test "substituteMacros resolves the story-string field names and their lore alia
     const out = try substituteMacros(testing.allocator, "{{system}}|{{wiBefore}}|{{wiAfter}}|{{loreBefore}}|{{loreAfter}}|{{anchorBefore}}|{{anchorAfter}}", ctx);
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("Be terse.|WB|WA|WB|WA|AB|AA", out);
+}
+
+test "substituteMacros routes outlet macros per name and blanks an unfed key" {
+    const outlets = [_]Outlet{
+        .{ .name = "judge", .content = "J1\nJ2" },
+        .{ .name = "narrator", .content = "N" },
+    };
+    const ctx = Ctx{ .char = "Rita", .outlets = &outlets };
+    const out = try substituteMacros(testing.allocator, "a {{outlet::judge}} b {{outlet::narrator}} c {{outlet::nobody}} d", ctx);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("a J1\nJ2 b N c  d", out);
+}
+
+test "a bare or empty-keyed outlet macro stays verbatim like any unknown macro" {
+    const outlets = [_]Outlet{.{ .name = "judge", .content = "J" }};
+    const ctx = Ctx{ .outlets = &outlets };
+    const out = try substituteMacros(testing.allocator, "{{outlet}}|{{outlet::}}|{{outlet:judge}}", ctx);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("{{outlet}}|{{outlet::}}|{{outlet:judge}}", out);
 }
 
 test "substituteMacros does not recurse into a resolved value" {

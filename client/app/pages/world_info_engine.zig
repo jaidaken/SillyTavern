@@ -35,6 +35,10 @@ pub const Params = struct {
 /// One merged at-depth injection: every activated atDepth entry at this depth, joined.
 pub const DepthGroup = struct { depth: i64, content: []const u8 };
 
+/// One named outlet: every activated outlet entry with this outletName, joined. Feeds the
+/// {{outlet::name}} macro (stock world-info.js:5127); a nameless outlet entry is skipped as stock.
+pub const OutletGroup = struct { name: []const u8, content: []const u8 };
+
 /// The activated text per prompt slot. All slices live in the arena; free with `deinit`.
 pub const Activation = struct {
     arena: std.heap.ArenaAllocator,
@@ -45,6 +49,7 @@ pub const Activation = struct {
     em_top: []const []const u8 = &.{},
     em_bottom: []const []const u8 = &.{},
     at_depth: []const DepthGroup = &.{},
+    outlets: []const OutletGroup = &.{},
 
     pub fn deinit(self: *Activation) void {
         self.arena.deinit();
@@ -124,6 +129,7 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
     var an_bottom: std.ArrayList(u8) = .empty;
     var em_top: std.ArrayList([]const u8) = .empty;
     var em_bottom: std.ArrayList([]const u8) = .empty;
+    var outlets: std.ArrayList(struct { name: []const u8, buf: std.ArrayList(u8) }) = .empty;
     var groups: std.ArrayList(struct { depth: i64, buf: std.ArrayList(u8) }) = .empty;
 
     for (idx.items) |i| {
@@ -146,14 +152,27 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
                 };
                 try joinLine(a, &g.buf, e.content);
             },
-            // The outlet position renders only where an {{outlet}} macro appears; this client's
-            // macro set has none, so the entry lands nowhere (same as stock without the macro).
-            .outlet => log.debug("wi entry {d} has the outlet position, unsupported, skipped", .{e.uid}),
+            .outlet => {
+                if (e.outlet_name.len == 0) {
+                    // Stock skips a nameless outlet entry with a warn (world-info.js:5128).
+                    log.warn("wi entry {d} has the outlet position but no outlet name, skipped", .{e.uid});
+                    continue;
+                }
+                const g = for (outlets.items) |*g| {
+                    if (std.mem.eql(u8, g.name, e.outlet_name)) break g;
+                } else blk: {
+                    try outlets.append(a, .{ .name = e.outlet_name, .buf = .empty });
+                    break :blk &outlets.items[outlets.items.len - 1];
+                };
+                try joinLine(a, &g.buf, e.content);
+            },
         }
     }
 
     const out_groups = try a.alloc(DepthGroup, groups.items.len);
     for (groups.items, 0..) |g, i| out_groups[i] = .{ .depth = g.depth, .content = g.buf.items };
+    const out_outlets = try a.alloc(OutletGroup, outlets.items.len);
+    for (outlets.items, 0..) |g, i| out_outlets[i] = .{ .name = g.name, .content = g.buf.items };
 
     return .{
         .arena = arena,
@@ -164,6 +183,7 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
         .em_top = em_top.items,
         .em_bottom = em_bottom.items,
         .at_depth = out_groups,
+        .outlets = out_outlets,
     };
 }
 
@@ -232,6 +252,7 @@ fn te(uid: i64, keys: []const []const u8, content: []const u8) Entry {
         .depth = 4,
         .probability = 100,
         .use_probability = true,
+        .outlet_name = "",
     };
 }
 
@@ -387,6 +408,8 @@ test "every position lands in its own slot and at_depth groups merge per depth" 
             return x;
         }
     };
+    var named_out = mk.e(9, .outlet, 4, 100, "OUT");
+    named_out.outlet_name = "gate";
     const entries = [_]Entry{
         mk.e(0, .before, 4, 100, "B"),
         mk.e(1, .after, 4, 100, "A"),
@@ -397,7 +420,7 @@ test "every position lands in its own slot and at_depth groups merge per depth" 
         mk.e(6, .at_depth, 2, 200, "D2-late"),
         mk.e(7, .at_depth, 2, 100, "D2-early"),
         mk.e(8, .at_depth, 0, 100, "D0"),
-        mk.e(9, .outlet, 4, 100, "OUT"),
+        named_out,
     };
     var act = try activate(testing.allocator, .{ .entries = &entries }, &.{});
     defer act.deinit();
@@ -413,6 +436,36 @@ test "every position lands in its own slot and at_depth groups merge per depth" 
     try testing.expectEqualStrings("D2-early\nD2-late", act.at_depth[0].content);
     try testing.expectEqual(@as(i64, 0), act.at_depth[1].depth);
     try testing.expectEqualStrings("D0", act.at_depth[1].content);
+    try testing.expectEqual(@as(usize, 1), act.outlets.len);
+    try testing.expectEqualStrings("gate", act.outlets[0].name);
+    try testing.expectEqualStrings("OUT", act.outlets[0].content);
+}
+
+test "outlet entries group per name, join order-ascending, and a nameless one is skipped" {
+    const mk = struct {
+        fn e(uid: i64, name: []const u8, order: i64, content: []const u8) Entry {
+            var x = te(uid, &.{}, content);
+            x.constant = true;
+            x.position = .outlet;
+            x.outlet_name = name;
+            x.order = order;
+            return x;
+        }
+    };
+    const entries = [_]Entry{
+        mk.e(0, "judge", 200, "J-LATE"),
+        mk.e(1, "narrator", 100, "N"),
+        mk.e(2, "judge", 100, "J-EARLY"),
+        mk.e(3, "", 100, "NAMELESS"),
+    };
+    var act = try activate(testing.allocator, .{ .entries = &entries }, &.{});
+    defer act.deinit();
+    try testing.expectEqual(@as(usize, 2), act.outlets.len);
+    try testing.expectEqualStrings("narrator", act.outlets[0].name);
+    try testing.expectEqualStrings("N", act.outlets[0].content);
+    try testing.expectEqualStrings("judge", act.outlets[1].name);
+    try testing.expectEqualStrings("J-EARLY\nJ-LATE", act.outlets[1].content);
+    try testing.expectEqualStrings("", act.before);
 }
 
 test "an entry without keys and without constant never fires" {
@@ -431,7 +484,11 @@ test "activate cleans up on every allocation failure" {
             b.position = .em_top;
             var c = te(2, &.{}, "CONST");
             c.constant = true;
-            const entries = [_]Entry{ recurse_a, b, c };
+            var d = te(3, &.{}, "OUT");
+            d.constant = true;
+            d.position = .outlet;
+            d.outlet_name = "gate";
+            const entries = [_]Entry{ recurse_a, b, c, d };
             var act = try activate(alloc, .{ .entries = &entries, .recursive = true }, &.{"a dragon"});
             act.deinit();
         }

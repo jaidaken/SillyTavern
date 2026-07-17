@@ -4119,6 +4119,167 @@ async function main() {
         }
         // w3-wi-engine END
 
+        // wi-polish BEGIN (append-only): the recursion toggle (task#16 item 1). Rides the WI Slotted
+        // template + probe mechanics the w3-wi-engine block pinned; keep BELOW it, ABOVE C-DBG.
+        console.log('== wi-polish: recursion toggle persists and gates the engine ==');
+        {
+            const wpState = async () => (await fetch(`${args.base}/dev/state`)).json();
+            const wpPost = (path, obj) => fetch(`${args.base}${path}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj),
+            });
+            const wpEntry = (uid, over) => Object.assign({
+                uid, key: [], keysecondary: [], comment: '', content: '', constant: false,
+                selective: false, selectiveLogic: 0, order: 100, position: 0, disable: false,
+                probability: 100, useProbability: true, depth: 4,
+            }, over);
+
+            // A chain book: the second entry's key appears ONLY inside the first entry's content, so
+            // it can activate through recursion alone.
+            await wpPost('/api/worldinfo/edit', {
+                name: 'recurse-lore', data: {
+                    name: 'Recurse Lore', entries: {
+                        0: wpEntry(0, { key: ['recursegate'], content: 'WI-RECURSE-FIRST holds the embercode' }),
+                        1: wpEntry(1, { key: ['embercode'], content: 'WI-RECURSE-SECOND' }),
+                    },
+                },
+            });
+            await wpPost('/api/chats/metadata', { world_info: 'recurse-lore' });
+
+            // R1: the panel toggle persists under the classic world_info_recursive key and survives
+            // a reload back into a checked box.
+            await page.navigate(`${args.base}/`);
+            await page.waitFor(hydrated, 15000);
+            await page.click('#d-world_info');
+            await page.waitFor("!!document.querySelector('#wi-recursive')", 8000);
+            await page.eval("(function(){var t=document.querySelector('#wi-budget'); t.value='40'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            await page.eval("(function(){var c=document.querySelector('#wi-recursive'); c.checked=true; c.dispatchEvent(new Event('change',{bubbles:true}));})()");
+            const wpOnPersisted = await (async () => {
+                const deadline = Date.now() + 12000;
+                while (Date.now() < deadline) {
+                    const ws = (await wpState()).settings_world_info;
+                    if (ws && ws.world_info_recursive === true) return true;
+                    await sleep(300);
+                }
+                return false;
+            })();
+            await page.navigate(`${args.base}/`);
+            await page.waitFor(hydrated, 15000);
+            await page.click('#d-world_info');
+            await page.waitFor("!!document.querySelector('#wi-recursive')", 8000);
+            const wpReloadedChecked = await page.eval("document.querySelector('#wi-recursive').checked === true");
+            row('must', wpOnPersisted && wpReloadedChecked === true,
+                'WIPOL-R1 the recursion toggle persists under world_info_recursive and reloads checked',
+                `persisted=${wpOnPersisted} reloaded=${wpReloadedChecked}`);
+
+            // R2: with recursion ON a recursion-only entry reaches the payload. The drawer closes
+            // first so resume-last is clickable.
+            await page.click('#d-world_info');
+            await openRecentChat();
+            await sendProbe('the RECURSEGATE stands open');
+            const wpP1 = (await wpState()).last_generate_prompt || '';
+            row('must', wpP1.includes('WI-RECURSE-FIRST') && wpP1.includes('WI-RECURSE-SECOND'),
+                'WIPOL-R2 recursion on: an entry keyed only by activated lore content joins the payload',
+                `first=${wpP1.includes('WI-RECURSE-FIRST')} second=${wpP1.includes('WI-RECURSE-SECOND')}`);
+
+            // R3: toggled OFF the chained entry stays out while the keyed one still lands.
+            await page.click('#d-world_info');
+            await page.waitFor("!!document.querySelector('#wi-recursive')", 8000);
+            await page.eval("(function(){var c=document.querySelector('#wi-recursive'); c.checked=false; c.dispatchEvent(new Event('change',{bubbles:true}));})()");
+            const wpOffPersisted = await (async () => {
+                const deadline = Date.now() + 12000;
+                while (Date.now() < deadline) {
+                    const ws = (await wpState()).settings_world_info;
+                    if (ws && ws.world_info_recursive === false) return true;
+                    await sleep(300);
+                }
+                return false;
+            })();
+            await page.click('#send_textarea');
+            await sendProbe('the RECURSEGATE once more');
+            const wpP2 = (await wpState()).last_generate_prompt || '';
+            row('must', wpOffPersisted && wpP2.includes('WI-RECURSE-FIRST') && !wpP2.includes('WI-RECURSE-SECOND'),
+                'WIPOL-R3 recursion off: the chained entry stays out of the payload',
+                `persisted=${wpOffPersisted} first=${wpP2.includes('WI-RECURSE-FIRST')} second=${wpP2.includes('WI-RECURSE-SECOND')}`);
+
+            // ---- group AN/WI headers (task#16 item 2): the group chat's note + linked book live in
+            // the group chat file's header; the same panels edit them; the solo header holds still.
+            const wpSoloSnap = JSON.stringify((await wpState()).chat_meta);
+            const wpOpenGroup = async () => {
+                await page.navigate(`${args.base}/`);
+                await page.waitFor(hydrated, 15000);
+                await page.click('#d-groups');
+                await page.waitFor("!!document.querySelector(\"#group-list [data-group-index='0']\")", 8000);
+                await page.click("#group-list [data-group-index='0']");
+                await page.waitFor(`document.getElementById('chat').textContent.includes('GROUP ROTATION PROBE') && ${idle}`, 10000);
+            };
+
+            // G1: the note panel is live in a group chat and its save carries group_id, not a solo ref.
+            await wpOpenGroup();
+            await page.click('#d-formatting');
+            const wpNoteLive = await page.waitFor("!!document.getElementById('an-prompt')", 8000);
+            await page.eval("(function(){const n=document.getElementById('an-prompt');n.value='GROUP NOTE HOLDS';n.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            await page.click('.an-save');
+            const wpNoteBody = await (async () => {
+                const deadline = Date.now() + 8000;
+                while (Date.now() < deadline) {
+                    const b = await (await fetch(`${args.base}/dev/note-save`)).json();
+                    if (b && b.note_prompt === 'GROUP NOTE HOLDS') return b;
+                    await sleep(250);
+                }
+                return null;
+            })();
+            const wpNoteShape = !!wpNoteBody && typeof wpNoteBody.group_id === 'string' && wpNoteBody.group_id.length > 0
+                && wpNoteBody.avatar_url === undefined && wpNoteBody.file_name === undefined;
+            const wpGroupMeta1 = (await wpState()).group_meta || {};
+            row('must', wpNoteLive && wpNoteShape && wpGroupMeta1.note_prompt === 'GROUP NOTE HOLDS',
+                'WIPOL-G1 a group chat note edits through the same panel and saves by group_id into the group header',
+                `live=${wpNoteLive} shape=${wpNoteShape} body=${JSON.stringify(wpNoteBody || {}).slice(0, 120)} stored=${wpGroupMeta1.note_prompt}`);
+
+            // G2: the group note survives a full reload of the group chat (loaded from the header).
+            await wpOpenGroup();
+            await page.click('#d-formatting');
+            await page.waitFor("!!document.getElementById('an-prompt')", 8000);
+            const wpNoteReloaded = await page.eval("document.getElementById('an-prompt').value");
+            row('must', wpNoteReloaded === 'GROUP NOTE HOLDS',
+                'WIPOL-G2 the group note reloads from the group header on reopen',
+                `value=${JSON.stringify(wpNoteReloaded)}`);
+
+            // G3: linking a book to the OPEN GROUP writes world_info by group_id, the engine's chat
+            // scope activates it in the group rotation payload, and the solo header never moved.
+            await page.click('#d-formatting');
+            await page.click('#d-world_info');
+            await page.waitFor("!!document.querySelector(\"[data-wi-open='engine-lore']\")", 8000);
+            await page.click("[data-wi-open='engine-lore']");
+            await page.waitFor("!!document.querySelector('[data-wi-chatlink]')", 8000);
+            await page.click('[data-wi-chatlink]');
+            const wpLinkBody = await (async () => {
+                const deadline = Date.now() + 8000;
+                while (Date.now() < deadline) {
+                    const b = await (await fetch(`${args.base}/dev/note-save`)).json();
+                    if (b && b.world_info === 'engine-lore') return b;
+                    await sleep(250);
+                }
+                return null;
+            })();
+            const wpLinkShape = !!wpLinkBody && typeof wpLinkBody.group_id === 'string' && wpLinkBody.group_id.length > 0
+                && wpLinkBody.avatar_url === undefined;
+            await page.click('#d-world_info');
+            await page.click('#send_textarea');
+            await (await fetch(`${args.base}/dev/clear-generate`)).json();
+            const wpGrpMsgs = await page.eval("document.querySelectorAll('#chat .mes').length");
+            await page.focus('#send_textarea');
+            await page.insertText('Moon, the GATEKEY glows');
+            await page.click('#composer button[aria-label="Send"]');
+            await page.waitFor(`document.querySelectorAll('#chat .mes').length >= ${wpGrpMsgs} + 2 && ${idle}`, 30000);
+            const wpSt = await wpState();
+            const wpGrpPrompt = wpSt.last_generate_prompt || '';
+            const wpSoloHeld = JSON.stringify(wpSt.chat_meta) === wpSoloSnap;
+            row('must', wpLinkShape && (wpSt.group_meta || {}).world_info === 'engine-lore' && wpGrpPrompt.includes('WI-ENGINE-ALPHA') && wpSoloHeld,
+                'WIPOL-G3 a group-linked book saves by group_id, activates in the group rotation payload, and the solo header holds still',
+                `shape=${wpLinkShape} stored=${(wpSt.group_meta || {}).world_info} alpha=${wpGrpPrompt.includes('WI-ENGINE-ALPHA')} soloHeld=${wpSoloHeld}`);
+        }
+        // wi-polish END
+
         /* C-DBG */
         // The [zx:dom] channel. A live crash (removeChild NotFoundError) came out of the door with the
         // framework's tree and the real DOM already drifted apart, and no reproduction was ever found,

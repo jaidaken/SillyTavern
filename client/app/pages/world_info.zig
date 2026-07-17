@@ -41,6 +41,9 @@ pub const Entry = struct {
     depth: i64,
     probability: i64,
     use_probability: bool,
+    /// Stock outletName: which {{outlet::name}} macro an outlet-position entry feeds. Empty = none;
+    /// stock skips such an entry (world-info.js:5128) and the engine mirrors that.
+    outlet_name: []const u8,
 };
 
 /// One row of POST /api/worldinfo/list.
@@ -50,7 +53,7 @@ pub const BookMeta = struct {
 };
 
 /// String entry fields the editor writes. Tag names are the exact JSON keys.
-pub const StrField = enum { content, comment };
+pub const StrField = enum { content, comment, outletName };
 /// Numeric entry fields. Tag names are the exact JSON keys.
 pub const NumField = enum { order, depth, probability, position, selectiveLogic };
 /// Boolean entry fields. Tag names are the exact JSON keys.
@@ -173,6 +176,7 @@ fn entryFromObj(a: Allocator, uid_key: []const u8, obj: *const std.json.ObjectMa
         .depth = getInt(obj, "depth", 4),
         .probability = clampNum(.probability, getInt(obj, "probability", 100)),
         .use_probability = getBool(obj, "useProbability", true),
+        .outlet_name = getStr(obj, "outletName", ""),
     };
 }
 
@@ -711,7 +715,7 @@ const testing = std.testing;
 
 const fixture_book =
     \\{"name":"Test Lore","entries":{
-    \\"0":{"uid":0,"key":["dragon","wyrm"],"keysecondary":["red"],"comment":"the dragon","content":"Dragons breathe fire.","constant":false,"vectorized":false,"selective":true,"selectiveLogic":1,"addMemo":true,"order":90,"position":4,"disable":false,"ignoreBudget":false,"excludeRecursion":true,"preventRecursion":false,"matchPersonaDescription":false,"matchCharacterDescription":false,"matchCharacterPersonality":false,"matchCharacterDepthPrompt":false,"matchScenario":false,"matchCreatorNotes":false,"delayUntilRecursion":0,"probability":75,"useProbability":true,"depth":6,"outletName":"","group":"beasts","groupOverride":false,"groupWeight":100,"scanDepth":null,"caseSensitive":null,"matchWholeWords":null,"useGroupScoring":null,"automationId":"","role":0,"sticky":2,"cooldown":0,"delay":0,"displayIndex":0,"triggers":[],"futureField":{"nested":[1,2,3]}},
+    \\"0":{"uid":0,"key":["dragon","wyrm"],"keysecondary":["red"],"comment":"the dragon","content":"Dragons breathe fire.","constant":false,"vectorized":false,"selective":true,"selectiveLogic":1,"addMemo":true,"order":90,"position":4,"disable":false,"ignoreBudget":false,"excludeRecursion":true,"preventRecursion":false,"matchPersonaDescription":false,"matchCharacterDescription":false,"matchCharacterPersonality":false,"matchCharacterDepthPrompt":false,"matchScenario":false,"matchCreatorNotes":false,"delayUntilRecursion":0,"probability":75,"useProbability":true,"depth":6,"outletName":"beast-notes","group":"beasts","groupOverride":false,"groupWeight":100,"scanDepth":null,"caseSensitive":null,"matchWholeWords":null,"useGroupScoring":null,"automationId":"","role":0,"sticky":2,"cooldown":0,"delay":0,"displayIndex":0,"triggers":[],"futureField":{"nested":[1,2,3]}},
     \\"3":{"uid":3,"key":["castle"],"keysecondary":[],"comment":"","content":"The castle stands.","constant":true,"selective":false,"selectiveLogic":0,"order":100,"position":0,"disable":true,"probability":100,"useProbability":false,"depth":4}
     \\},"extensions":{"custom":"kept"}}
 ;
@@ -774,6 +778,7 @@ test "load parses the MUST fields of a stock book" {
     try testing.expectEqual(@as(i64, 75), e.probability);
     try testing.expectEqual(@as(i64, 90), e.order);
     try testing.expect(e.selective and e.use_probability and !e.constant and !e.disable);
+    try testing.expectEqualStrings("beast-notes", e.outlet_name);
     const c = b.entryByKey("3").?;
     try testing.expect(c.constant and c.disable and !c.use_probability);
 }
