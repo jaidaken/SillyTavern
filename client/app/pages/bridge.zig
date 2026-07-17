@@ -12,6 +12,7 @@ const reading_prefs = @import("./reading_prefs.zig");
 const appearance = @import("./appearance.zig");
 const backgrounds = @import("./backgrounds.zig");
 const char_api = @import("./char_api.zig");
+const group_send = @import("./group_send.zig"); // w3-grp
 const ui = @import("./ui.zig");
 const zx = @import("zx");
 const regions = @import("./regions.zig");
@@ -291,6 +292,16 @@ fn composerRenders() callconv(.c) usize {
     return instrument.composerRenders();
 }
 
+// w3-grp: a JSON group definition + user text starts a member rotation (group_send.zig).
+fn groupSend(ptr: usize, len: usize) callconv(.c) u32 {
+    return group_send.beginSendJson(doorBuf(ptr, len));
+}
+
+// w3-grp: the glue's stream-failure path, so a rotation cannot wedge on a dead backend.
+fn groupStreamFailed() callconv(.c) void {
+    group_send.onStreamFailed();
+}
+
 comptime {
     if (is_wasm) {
         // Zig owns the data layer (char_api.zig); the append/clear/select/meta exports
@@ -321,6 +332,9 @@ comptime {
         @export(&readerCanPrepend, .{ .name = "__st_reader_can_prepend" });
         @export(&readerResync, .{ .name = "__st_reader_resync" });
         @export(&readerAbort, .{ .name = "__st_reader_abort" });
+        // w3-grp
+        @export(&groupSend, .{ .name = "__st_group_send" });
+        @export(&groupStreamFailed, .{ .name = "__st_group_stream_failed" });
         if (instrument.enabled) {
             @export(&messageViewRenders, .{ .name = "__st_mv_renders" });
             @export(&shellRenders, .{ .name = "__st_shell_renders" });

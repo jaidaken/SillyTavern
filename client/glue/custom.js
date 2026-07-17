@@ -464,7 +464,20 @@
             if (wasm.__st_persist_turns) wasm.__st_persist_turns();
         }).catch(function (err) {
             log.stream.error('send stream failed:', err);
+            /* w3-grp: a failed stream never seals, so tell the rotation or it wedges. */
+            if (wasm.__st_group_stream_failed) wasm.__st_group_stream_failed();
         });
+    };
+
+    /* w3-grp: start a group member rotation from a JSON definition (gate driver + roster UI). */
+    window.__st_group_send = function (json) {
+        if (!wasm.__st_group_send) return 0;
+        const buf = writeBytes(json);
+        try {
+            return wasm.__st_group_send(buf.ptr, buf.len);
+        } finally {
+            freeRaw(buf);
+        }
     };
 
     // Stop: cancel the reader so the fetch loop ends and the finally seals what already arrived.

@@ -526,6 +526,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # Turns the client appended via /api/chats/append; the mock /get echoes them so a reload shows them.
     appended_messages = []
     append_token = None
+    # ===== w3-grp: turns appended with a group_id, kept apart from the solo list so the gate can
+    # prove a rotation never cross-writes the solo chat. =====
+    group_appended = []
     # Counters the 409 gate reads back as observable state (a returned 409, and the resync's refetch).
     append_409_count = 0
     # C-CARD: the last /characters/edit body, and the card /characters/get serves once one is saved.
@@ -714,6 +717,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "full_token": Handler.full_token,
                     "reader_total": len(Handler.reader_current()),
                     "reader_above_probe": Handler.reader_current()[0]["mes"],
+                    "group_appended": Handler.group_appended,  # w3-grp
                 })
             # C-CONN: model allowKeysExposure=true, so /api/secrets/read hands back raw keys.
             if self.path.startswith("/dev/arm-keys-exposed"):
@@ -1113,6 +1117,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         if path == "/api/chats/append":
             msgs = req.get("messages") or []
+            # ===== w3-grp: group appends (group_id) land in the group list, never the solo one =====
+            if req.get("group_id"):
+                Handler.group_appended.extend(msgs)
+                return self.mock_json({"ok": True, "appended": len(msgs), "change_token": f"g1.{len(Handler.group_appended)}.mock"})
             # Deterministic resync trigger: a message whose text starts with "409:" forces a mismatch.
             if any(str(m.get("mes", "")).startswith("409:") for m in msgs):
                 Handler.append_409_count += 1
@@ -1125,6 +1133,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             Handler.last_generate_prompt = req.get("prompt")  # J1 invariant-2
             Handler.last_generate_body = json.dumps(req)  # C-CFG
             return self._mock_generate_stream()
+        # ===== w3-grp: the group prompt window, same page shape as solo /get, fed from the group
+        # appends so member N's prompt can prove it saw member N-1's reply. =====
+        if path == "/api/chats/group/get":
+            gmsgs = [dict(m) for m in Handler.group_appended]
+            return self.mock_json({
+                "messages": gmsgs,
+                "header": {"user_name": "You", "chat_metadata": {}},
+                "change_token": f"g1.{len(gmsgs)}.mock",
+                "full_token": "gfull.mock",
+                "has_more_before": False,
+                "has_more_after": False,
+                "total_items": len(gmsgs),
+                "anchor_index": None,
+                "anchor_found": True,
+            })
         if path == "/api/chats/get":
             # The client always sends paged:true (reader tail window + scroll-up prepend).
             Handler.get_count += 1

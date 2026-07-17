@@ -26,6 +26,7 @@ const persona_store = @import("./persona_store.zig");
 const persona_actions = @import("./persona_actions.zig");
 const store = @import("./store.zig");
 const pager = @import("./pager.zig");
+const group_send = @import("./group_send.zig"); // w3-grp
 const regions = @import("./regions.zig");
 const dom_event = @import("./dom_event.zig");
 const fixtures = @import("./fixtures.zig");
@@ -423,7 +424,7 @@ fn appendPersona(p: data.PersonaJson) !void {
 /// Persona used for the user side of a chat: the explicit selection when there is one,
 /// else the first persona (the deleted glue always used the first; preferring a live
 /// selection is the Zig-ownership improvement over that).
-fn activePersona() ?persona_store.Persona {
+pub fn activePersona() ?persona_store.Persona { // w3-grp: pub for group_send's user turn
     if (persona_store.selected()) |p| return p;
     const s = persona_store.slice();
     if (s.len > 0) return s[0];
@@ -482,7 +483,7 @@ fn chatFileName(c: char_store.Character) ?[]u8 {
     return std.fmt.allocPrint(alloc, "{s} - {s}", .{ c.name, iso }) catch null;
 }
 
-fn nowMs() f64 {
+pub fn nowMs() f64 { // w3-grp: pub for group_send's append timestamps
     if (zx.platform.role != .client) return 0;
     const date_ctor = js.global.get(js.Object, "Date") catch return 0;
     defer date_ctor.deinit();
@@ -815,14 +816,37 @@ const DeepCard = struct {
 };
 
 fn fetchDeepCard(avatar: []const u8) void {
-    if (zx.platform.role != .client) return;
-    if (avatar.len == 0 or deep_in_flight) return;
-    if (std.mem.eql(u8, avatar, deep_avatar)) return;
-    const body = std.json.Stringify.valueAlloc(alloc, .{ .avatar_url = avatar }, .{}) catch return;
+    _ = requestDeepCard(avatar);
+}
+
+// w3-grp: the group rotation launches a member only after its deep card settles, so the fetch
+// reports whether a completion (and the settle hook) will fire at all.
+pub const DeepReq = enum { pending, unavailable };
+
+/// Request the deep card for `avatar`. `.pending` = a fetch is in flight (this one, or another
+/// whose completion will still fire the settle hook); `.unavailable` = nothing will fire, the
+/// caller proceeds with whatever depth the cache has.
+pub fn requestDeepCard(avatar: []const u8) DeepReq {
+    if (zx.platform.role != .client) return .unavailable;
+    if (avatar.len == 0) return .unavailable;
+    if (std.mem.eql(u8, avatar, deep_avatar)) return .unavailable;
+    if (deep_in_flight) return .pending;
+    const body = std.json.Stringify.valueAlloc(alloc, .{ .avatar_url = avatar }, .{}) catch return .unavailable;
     defer alloc.free(body);
     setOwned(&deep_pending, avatar);
     deep_in_flight = true;
     net.request("/api/characters/get", body, 0, onDeepCardDone, .{});
+    return .pending;
+}
+
+// w3-grp
+pub fn deepCardReady(avatar: []const u8) bool {
+    return avatar.len > 0 and std.mem.eql(u8, deep_avatar, avatar);
+}
+
+// w3-grp
+pub fn chatLoadSeq() u32 {
+    return chat_load_seq;
 }
 
 /// Drop the cached deep card and re-fetch it for the selected character. The card editor calls this
@@ -837,6 +861,8 @@ pub fn refreshDeepCard() void {
 fn onDeepCardDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     _ = tag;
     deep_in_flight = false;
+    // w3-grp: fires on success AND failure so a parked member launch can never hang.
+    defer group_send.onDeepCardSettled();
     if (res == null or status < 200 or status >= 300) {
         chars_log.warn("deep card fetch failed: {d} - prompt uses the shallow form", .{status});
         return;
@@ -1029,7 +1055,8 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
             user_turn_present = last.is_user and std.mem.eql(u8, last.mes, pend_user_text);
         }
     }
-    if (!user_turn_present) try history.append(alloc, .{ .name = pend_user_name, .mes = pend_user_text, .role = .user });
+    // w3-grp: a group member launch stashes no user text (the turn is already in the window).
+    if (!user_turn_present and pend_user_text.len > 0) try history.append(alloc, .{ .name = pend_user_name, .mes = pend_user_text, .role = .user });
 
     // The note's anchor positions render through the story string; the in_chat position is inserted
     // into the history by the builder. Both read the same note, so only one of them ever fires.
@@ -1067,6 +1094,8 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
 /// fires when the stream actually began (startStream rejects before .then otherwise).
 pub fn persistNewTurns() void {
     if (zx.platform.role != .client) return;
+    // w3-grp: a group rotation owns this seal (member append + advance); solo must not double-append.
+    if (group_send.sealCurrent()) return;
     if (send_file.len == 0) return;
     // A resync (a 409 append, or the user opening another chat) replaced the store mid-generation, so
     // the last message is no longer this send's reply. Skip rather than append a stale message.
@@ -1135,9 +1164,67 @@ fn onAppendDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
 /// the stream to its seal (bridge.streamEnd) in the fetch finally.
 pub fn stopStream() void {
     if (zx.platform.role != .client) return;
+    // w3-grp: clear the rotation queue FIRST so the current member's seal launches nobody else.
+    group_send.cancel();
     js.global.call(void, "__st_send_stop", .{}) catch {
         net_log.warn("send: __st_send_stop helper missing", .{});
     };
+}
+
+// w3-grp ---- group member launch ----
+
+/// Launch one rotation member: stash THIS member's card into the pending-send slot and fetch
+/// the GROUP prompt window; onPromptWindowDone/dispatchGenerate then run unchanged, so the
+/// member's prompt is budgeted exactly like a solo send (invariant 2) and streams under the
+/// member's own name+avatar. False = could not start; the caller aborts the queue.
+pub fn launchGroupMember(m: @import("./group_rotation.zig").Member) bool {
+    if (zx.platform.role != .client) return false;
+    const gid = group_send.chatId() orelse return false;
+    const conn = conn_mod.active() orelse {
+        net_log.warn("group launch: no backend configured", .{});
+        return false;
+    };
+    if (conn.api_server.len == 0) return false;
+    if (pend_active) {
+        net_log.warn("group launch: pending slot busy", .{});
+        return false;
+    }
+    const c = charByAvatar(m.avatar) orelse {
+        chars_log.warn("group launch: member {s} is not in the character store", .{m.avatar});
+        return false;
+    };
+    const persona = activePersona();
+    const user_name = if (persona) |p| p.name else "You";
+    const char_avatar: ?[]u8 = if (c.avatar.len > 0) data.thumbUrl(alloc, "avatar", c.avatar) catch null else null;
+    defer if (char_avatar) |u| alloc.free(u);
+    send_seq = chat_load_seq;
+    if (!stashSend(conn, c, persona, user_name, "", char_avatar orelse "")) {
+        chars_log.err("group launch: could not stash the member send context", .{});
+        return false;
+    }
+    // No solo greeting reconstruction and no forced user-turn append for a member launch: the
+    // group window already carries every persisted turn, including the user's.
+    setOwned(&pend_first_mes, "");
+    setOwned(&pend_user_text, "");
+    const win_body = std.json.Stringify.valueAlloc(alloc, .{
+        .id = gid,
+        .paged = true,
+        .limit = pager.PROMPT_LIMIT,
+    }, .{}) catch {
+        freePending();
+        return false;
+    };
+    defer alloc.free(win_body);
+    net.request("/api/chats/group/get", win_body, 0, onPromptWindowDone, .{});
+    return true;
+}
+
+// w3-grp
+fn charByAvatar(avatar: []const u8) ?char_store.Character {
+    for (char_store.slice()) |c| {
+        if (std.mem.eql(u8, c.avatar, avatar)) return c;
+    }
+    return null;
 }
 
 fn readComposer() ?[]u8 {

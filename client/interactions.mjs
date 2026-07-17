@@ -689,6 +689,80 @@ async function main() {
         row('must', gotUser && gotAsst && survived,
             'SL-send persists across a reload (user + assistant appended)', `user=${gotUser} asst=${gotAsst} reload=${survived}`);
 
+        // ===== w3-grp: group send rotation (T0) =====
+        // Real glue end to end: door export -> group_send -> per-member launches -> SSE -> group
+        // appends; the mock's group window feeds member N the replies of members before it.
+        console.log('== group send rotation (w3-grp, T0) ==');
+        await page.waitFor(`${idle}`, 8000);
+        const grpMembers = [
+            { avatar: 'char01.png', name: 'Char 01 Vex' },
+            { avatar: 'char02.png', name: 'Char 02 Vex' },
+            { avatar: 'char03.png', name: 'Char 03 Moon' },
+        ];
+        const grpState0 = await (await fetch(`${args.base}/dev/state`)).json();
+        const grpBase = (grpState0.group_appended || []).length;
+        const grpDef = JSON.stringify({ chat_id: 'grp-gate', strategy: 1, members: grpMembers, text: 'GROUP ROTATION PROBE' });
+        const beforeGrp = await page.eval("document.querySelectorAll('#chat .mes').length");
+        const grpBegan = await page.eval(`window.__st_group_send(${JSON.stringify(grpDef)})`);
+        row('must', grpBegan === 1, 'GRP-rotation begins via the door export', `ret=${grpBegan}`);
+        const grpDone = await page.waitFor(`document.querySelectorAll('#chat .mes').length >= ${beforeGrp} + 4 && ${idle}`, 30000);
+        row('must', grpDone, 'GRP-user turn + three member replies land in the log');
+
+        // T0 exact sequence: the group file got user + Vex01 + Vex02 + Moon03 in order, correct
+        // is_user flags, nothing dropped, nothing interleaved, and the solo append list untouched.
+        let grpState = {};
+        for (let i = 0; i < 60; i++) {
+            grpState = await (await fetch(`${args.base}/dev/state`)).json();
+            if ((grpState.group_appended || []).length >= grpBase + 4) break;
+            await sleep(150);
+        }
+        const ga = (grpState.group_appended || []).slice(grpBase);
+        const gaShape = ga.map(m => ({ n: m.name, u: m.is_user }));
+        const grpExact = ga.length === 4
+            && ga[0].is_user === true && ga[0].mes === 'GROUP ROTATION PROBE'
+            && ga[1].is_user === false && ga[1].name === 'Char 01 Vex' && ga[1].mes.includes('FIN')
+            && ga[2].is_user === false && ga[2].name === 'Char 02 Vex' && ga[2].mes.includes('FIN')
+            && ga[3].is_user === false && ga[3].name === 'Char 03 Moon' && ga[3].mes.includes('FIN');
+        const soloUntouched = (grpState.appended || []).every(m => m.mes !== 'GROUP ROTATION PROBE');
+        row('must', grpExact && soloUntouched,
+            'GRP-T0 exact persisted sequence: user + 3 replies in order, correct attribution, solo file untouched',
+            JSON.stringify(gaShape));
+
+        // Display attribution: the last three rows carry each member's own name and avatar.
+        const grpDom = JSON.parse(await page.eval(
+            "JSON.stringify([...document.querySelectorAll('#chat .mes')].slice(-3).map(e => ({ n: e.querySelector('.mes_name').textContent, a: (e.querySelector('.mes_avatar') || { src: '' }).src })))"));
+        const grpDomOk = grpDom.length === 3
+            && grpDom[0].n === 'Char 01 Vex' && grpDom[0].a.includes('char01')
+            && grpDom[1].n === 'Char 02 Vex' && grpDom[1].a.includes('char02')
+            && grpDom[2].n === 'Char 03 Moon' && grpDom[2].a.includes('char03');
+        row('must', grpDomOk, 'GRP-each reply renders under its own member name + avatar', JSON.stringify(grpDom));
+
+        // Invariant 2 + sequencing: the LAST generate (member 3) fetched the group window, so its
+        // prompt must carry the user probe AND an earlier member's streamed reply.
+        const grpPrompt = grpState.last_generate_prompt || '';
+        row('must', grpPrompt.includes('GROUP ROTATION PROBE') && grpPrompt.includes('lantern'),
+            'GRP-member 3 prompt spans the group window (user turn + earlier member replies)');
+
+        // STOP: begin another rotation, stop mid-member-1; the partial seals with attribution, the
+        // queue clears (append count settles at exactly user + 1 partial, no FIN, no member 2).
+        await page.waitFor(`${idle}`, 8000);
+        const grpStopBase = grpBase + 4;
+        const grpDef2 = JSON.stringify({ chat_id: 'grp-gate', strategy: 1, members: grpMembers, text: 'GROUP STOP PROBE' });
+        await page.eval(`window.__st_group_send(${JSON.stringify(grpDef2)})`);
+        await page.waitFor("(function(){var m=document.querySelectorAll('#chat .mes');return m.length && m[m.length-1].textContent.includes('w2')})()", 8000);
+        await page.click('#composer button[aria-label="Stop"]');
+        const grpStopped = await page.waitFor(`${idle}`, 8000);
+        await sleep(2000);
+        const grpState2 = await (await fetch(`${args.base}/dev/state`)).json();
+        const ga2 = (grpState2.group_appended || []).slice(grpStopBase);
+        const grpStopExact = ga2.length === 2
+            && ga2[0].is_user === true && ga2[0].mes === 'GROUP STOP PROBE'
+            && ga2[1].is_user === false && ga2[1].name === 'Char 01 Vex' && !ga2[1].mes.includes('FIN');
+        row('must', grpStopped && grpStopExact,
+            'GRP-stop seals the current member partial and clears the queue (no member 2 launch)',
+            JSON.stringify(ga2.map(m => ({ n: m.name, u: m.is_user, fin: String(m.mes).includes('FIN') }))));
+        // ===== end w3-grp =====
+
         // --- connection ---
         // /dev/state is the mock's node-side readback of what the client persisted and last generated with.
         console.log('== connection setup (server-persisted) ==');
