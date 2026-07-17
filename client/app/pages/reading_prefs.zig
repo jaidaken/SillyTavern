@@ -180,7 +180,10 @@ pub fn handleClick(key: []const u8, val: []const u8) void {
 fn clearMeasureOverride(root: zx.client.Document.HTMLElement) void {
     const style = root.ref.get(js.Object, "style") catch return;
     defer style.deinit();
-    style.call(void, "removeProperty", .{js.string("--reading-measure")}) catch {};
+    // removeProperty hands back the old value, so `void` made every call error into this catch (see
+    // appearance.removeProp). The removal itself always landed; the double-free on the way out did not.
+    const ret = style.call(?js.Value, "removeProperty", .{js.string("--reading-measure")}) catch null;
+    if (ret) |r| r.deinit();
     removeItem(measure_px_key);
 }
 

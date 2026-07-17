@@ -31,9 +31,13 @@ fi
 # compiled door separately in patch-door.sh). 10 patches the tailwind plugin's class scanner.
 # 11 fixes a UAF in that plugin's dep-file writer (deps freed before writeDepFile reads them).
 # 12 orders PLACEMENT/MOVE by reference node so the vtree and the DOM cannot drift apart.
-for p in "$PATCHES"/01-*.patch "$PATCHES"/02-*.patch "$PATCHES"/04-*.patch "$PATCHES"/05-*.patch "$PATCHES"/06-*.patch "$PATCHES"/10-*.patch "$PATCHES"/11-*.patch "$PATCHES"/12-*.patch; do
+# 14 gives convertValue sole ownership of the returned handle: callAlloc/getAlloc also freed it on
+# an error, so a type mismatch (eg call(void) on an async helper) freed one jsz slot twice.
+# 15 adds __zx_render_recover: a throw through wasm skips 13's `defer render_gate.exit()`, so the
+# gate stays held and the page never renders again. Must apply AFTER 13 (it edits 13's own files).
+for p in "$PATCHES"/01-*.patch "$PATCHES"/02-*.patch "$PATCHES"/04-*.patch "$PATCHES"/05-*.patch "$PATCHES"/06-*.patch "$PATCHES"/10-*.patch "$PATCHES"/11-*.patch "$PATCHES"/12-*.patch "$PATCHES"/13-*.patch "$PATCHES"/14-*.patch "$PATCHES"/15-*.patch "$PATCHES"/16-*.patch; do
     git -C "$ZIEX_DIR" apply "../$p"
     echo "setup-ziex: applied $(basename "$p")"
 done
 
-echo "setup-ziex: $ZIEX_DIR ready at $ZIEX_REV + 8 patches"
+echo "setup-ziex: $ZIEX_DIR ready at $ZIEX_REV + 12 patches"

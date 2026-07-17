@@ -1,0 +1,35 @@
+diff --git i/vendor/jsz/src/Object.zig w/vendor/jsz/src/Object.zig
+index 1425d248..14398603 100644
+--- i/vendor/jsz/src/Object.zig
++++ w/vendor/jsz/src/Object.zig
+@@ -44,7 +44,8 @@ pub fn getAlloc(
+     n: []const u8,
+ ) !Get(T).result {
+     const v = try self.value.get(n);
+-    errdefer v.deinit();
++    // No errdefer: convertValue owns v on every path, including its own errors. Freeing it here too
++    // pushed one slot into the JS free list twice whenever convertValue errored.
+     return convertValue(T, alloc, v);
+ }
+ 
+@@ -100,7 +101,9 @@ pub fn callAlloc(
+     const f = try self.value.get(n);
+     defer f.deinit();
+     const v = try f.apply(self.value, &js_args);
+-    errdefer v.deinit();
++    // No errdefer: convertValue owns v on every path (see getAlloc). A `call(void, ...)` against a
++    // helper that returns anything non-undefined lands in convertValue's InvalidType, and the old
++    // errdefer freed the handle a second time there, aliasing the next two handles onto one slot.
+     return try convertValue(T, alloc, v);
+ }
+ 
+@@ -139,6 +142,9 @@ fn convertValue(comptime T: type, alloc: Allocator, v: js.Value) !Get(T).result
+ 
+     // Get the value no matter what type it is.
+     defer if (!info.retains) v.deinit();
++    // A retaining type hands v to the caller on success, so it cannot be freed above; on an error
++    // there is no caller to own it. Between the two, v is freed exactly once on all four paths.
++    errdefer if (info.retains) v.deinit();
+ 
+     // If the return type is optional, then handle null/undefined
+     const vt = v.typeOf();

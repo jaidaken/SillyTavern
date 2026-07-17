@@ -434,6 +434,110 @@ else:
         notes.append("patch-door: D2 DOM glue instrumented "
                      "(anomalies always on, traces behind __zx_debug)")
 
+# ---------------------------------------------------------------------------
+# D3: a throw out of wasm strands the render gate -> recover
+# ---------------------------------------------------------------------------
+# A render that throws through the wasm frames skips every Zig `defer` on the way out, including the
+# render gate's `exit`. The gate then stays held by a pass that no longer exists, every later render
+# is refused, and the page freezes with no error of its own (measured: all four render counters
+# frozen, `uncaught exceptions: 0`). This is the ONLY seam that sees those throws: the sync ones come
+# straight out of `fn(...args)`, and the promising-wrapped ones arrive as a REJECTION, which is why
+# every instrument reported zero exceptions.
+
+seam_old = """function invokeWasmExport(fn, ...args) {
+  if (!fn)
+    return;
+  const result = fn(...args);
+  if (result && typeof result.then === "function") {
+    result.then(undefined, (error) => {
+      console.error(error);
+    });
+  }
+}"""
+
+seam_new = """var zxRecoverExport = null;
+function zxRenderRecover(error) {
+  // The STACK, not String(error): concatenating an Error yields its message alone, which names the
+  // failure and not the site. That cost a localization pass on a live RangeError.
+  const where = (error && error.stack) ? error.stack : String(error);
+  zxAnomaly("a render threw out through the wasm frames: " + where + " -- every Zig defer on that " +
+    "path was skipped, including the render gate's exit, so the gate is held and NOTHING renders again");
+  if (!zxRecoverExport) {
+    zxAnomaly("no __zx_render_recover export in this build: the gate stays held and the page is dead until reload");
+    return;
+  }
+  const code = zxRecoverExport();
+  if (code === 0) {
+    zxAnomaly("render recover: the gate was NOT held, so this throw stranded nothing and nothing was dropped (0)");
+  } else if (code === 2) {
+    zxAnomaly("render recover: gate cleared and the throwing component's vtree DROPPED (2); the next " +
+      "render rebuilds that component from itself, so expect one visible rebuild of that subtree");
+  } else {
+    zxAnomaly("render recover: gate cleared but NO vtree was dropped (" + code + "); the throwing " +
+      "component could not be named, so its vtree may still describe a DOM that never happened");
+  }
+}
+function invokeWasmExport(fn, ...args) {
+  if (!fn)
+    return;
+  let result;
+  try {
+    result = fn(...args);
+  } catch (error) {
+    zxRenderRecover(error);
+    throw error;
+  }
+  if (result && typeof result.then === "function") {
+    result.then(undefined, (error) => {
+      zxRenderRecover(error);
+    });
+  }
+  return result;
+}"""
+
+memory_old = """  wasmMemory = instance.exports.memory;"""
+
+memory_new = """  wasmMemory = instance.exports.memory;
+  zxRecoverExport = instance.exports.__zx_render_recover ?? null;"""
+
+# The import half of patch 15's `_forgetNode`. Zig calls it from unregisterVElement; a recovery
+# rebuild detaches the old tree via clearContent's RAW removeChild, which the tracked glue never
+# sees, so without this the door keeps a registry entry per node forever (measured: 178).
+# NOT optional: a declared-but-unsupplied import is a LinkError, so 15 and D3 ship together.
+forget_old = """        _clearEventHandlerModes: (vnodeId) => {
+          bridgeRef.current?.clearEventHandlerModes(vnodeId);
+        },"""
+
+forget_new = """        _clearEventHandlerModes: (vnodeId) => {
+          bridgeRef.current?.clearEventHandlerModes(vnodeId);
+        },
+        _forgetNode: (vnodeId) => {
+          domNodes.delete(vnodeId);
+        },"""
+
+D3_SENTINEL = "zxRenderRecover"
+
+if D3_SENTINEL in s:
+    notes.append("patch-door: D3 already patched, nothing to do")
+else:
+    missing = []
+    if s.count(seam_old) != 1:
+        missing.append("invokeWasmExport (found %d, want 1)" % s.count(seam_old))
+    if s.count(memory_old) != 1:
+        missing.append("the wasmMemory assignment in init (found %d, want 1)" % s.count(memory_old))
+    if s.count(forget_old) != 1:
+        missing.append("the _clearEventHandlerModes import (found %d, want 1)" % s.count(forget_old))
+    if missing:
+        errors.append("patch-door: D3 could not find " + " and ".join(missing) +
+                      " verbatim; door version changed, update patch-door.sh")
+    else:
+        s = s.replace(seam_old, seam_new, 1)
+        s = s.replace(memory_old, memory_new, 1)
+        s = s.replace(forget_old, forget_new, 1)
+        changed = True
+        notes.append("patch-door: D3 wasm entrypoints recover the render gate on a throw, "
+                     "and _forgetNode prunes the registry the rebuild strands")
+
 # All-or-nothing: any stale expectation aborts before the write, so a door bump can never ship a
 # half-patched door.
 if errors:

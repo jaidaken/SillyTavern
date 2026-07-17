@@ -737,32 +737,43 @@ fn crudRefresh(action: []const u8, status: u16) void {
 }
 
 // ---- browser-forced adapters (thin JS helpers) ----------------------------------------------
+//
+// All three helpers below are `async`, so they hand back a Promise and the return type must name it.
+// Asking for `void` made a SUCCESSFUL call return InvalidType, which fired the catch branch (logging
+// a missing helper that is right there) and double-freed a jsz slot on the way out. The full
+// mechanism is in card_editor.uploadAvatar's header.
 
 /// Export stays a JS helper: a blob download needs objectURL + a.click. Zig hands it the
 /// avatar and the display name (the old helper looked both up in the deleted jsCharacters).
 pub fn exportCharacter(index: usize) void {
     if (zx.platform.role != .client) return;
     const c = charAt(index) orelse return;
-    js.global.call(void, "__st_char_export", .{ js.string(c.avatar), js.string(c.name) }) catch {
+    const ret = js.global.call(?js.Value, "__st_char_export", .{ js.string(c.avatar), js.string(c.name) }) catch {
         chars_log.warn("export helper missing", .{});
+        return;
     };
+    if (ret) |r| r.deinit();
 }
 
 /// Import stays a JS helper: File/FormData cannot cross the wasm boundary.
 pub fn importCharacterFile() void {
     if (zx.platform.role != .client) return;
-    js.global.call(void, "__st_char_import", .{}) catch {
+    const ret = js.global.call(?js.Value, "__st_char_import", .{}) catch {
         chars_log.warn("import helper missing", .{});
+        return;
     };
+    if (ret) |r| r.deinit();
 }
 
 /// Avatar replacement stays a JS helper for the same multipart reason.
 pub fn replaceAvatarFile(index: usize) void {
     if (zx.platform.role != .client) return;
     const c = charAt(index) orelse return;
-    js.global.call(void, "__st_char_avatar", .{js.string(c.avatar)}) catch {
+    const ret = js.global.call(?js.Value, "__st_char_avatar", .{js.string(c.avatar)}) catch {
         chars_log.warn("avatar helper missing", .{});
+        return;
     };
+    if (ret) |r| r.deinit();
 }
 
 // ---- dialogs (Z-DIALOG, jsz reflection) ------------------------------------------------------

@@ -370,14 +370,28 @@ pub fn avatarAlt(arena: std.mem.Allocator) []const u8 {
 
 /// The chosen file rides a FormData, which cannot cross the wasm boundary, so the POST hops to a JS
 /// helper (the same reason char_api and the persona panel do).
+///
+/// THE RETURN TYPE IS LOAD-BEARING. The helper is `async`, so it hands back a Promise, and jsz builds
+/// `void` only out of null/undefined: asking for void made a good pick return InvalidType, so this
+/// fn logged "helper missing" and drew "The server refused the image." while the POST was in flight.
+/// The error path then freed the return handle TWICE (Object.callAlloc's errdefer and convertValue's
+/// defer both fire), which pushes one jsz slot into the free list twice; the next two handles alias
+/// it, so the first render after a pick read a freed TreeWalker and threw a TypeError out through
+/// wasm. That throw skips every Zig defer on the way out, including the RenderGate's exit, which
+/// leaves the gate held and the whole page unable to render again. Name the type the helper actually
+/// returns and none of it happens.
 pub fn uploadAvatar() void {
     if (zx.platform.role != .client) return;
     if (owned_avatar.len == 0) return;
-    js.global.call(void, "__st_card_avatar", .{js.string(owned_avatar)}) catch {
+    // Takes the Promise the async helper returns and drops it: jsz converts void only from
+    // null/undefined, so asking for void made every successful pick an InvalidType (see the header).
+    const ret = js.global.call(?js.Value, "__st_card_avatar", .{js.string(owned_avatar)}) catch {
         log.warn("card avatar helper missing", .{});
         notice = .avatar_failed;
         regions.bumpShell();
+        return;
     };
+    if (ret) |r| r.deinit();
 }
 
 /// Called from the bridge when the JS helper's upload settles. Takes the HTTP status rather than a

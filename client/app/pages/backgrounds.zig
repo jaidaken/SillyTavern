@@ -361,17 +361,25 @@ pub fn uploadErrorText() []const u8 {
 /// Post the file the user just picked. A FormData cannot cross the wasm boundary, so the glue's
 /// `__st_bg_upload` reads the file input and posts it; this only starts it and draws the wait.
 /// Driven by the input's change event, so a file is always present by the time it runs.
+///
+/// THE RETURN TYPE IS LOAD-BEARING, for the reason card_editor.uploadAvatar spells out in full: the
+/// helper is `async`, so asking for `void` made a SUCCESSFUL pick return InvalidType. Measured on the
+/// unpatched build: a POST that reached the server with the file intact still logged "helper missing"
+/// twice and latched .failed, and the error path double-freed two jsz slots on the way out.
 pub fn uploadPick() void {
     if (zx.platform.role != .client) return;
     if (upload_state == .sending) return;
     upload_state = .sending;
     clearErrorOn(&upload_error);
     bump();
-    js.global.call(void, "__st_bg_upload", .{}) catch {
+    // Takes the Promise the async helper returns and drops it; uploadDone reports the real outcome.
+    const ret = js.global.call(?js.Value, "__st_bg_upload", .{}) catch {
         upload_state = .failed;
         setErrorOn(&upload_error, "This build cannot upload: its upload helper is missing.", .{});
         bump();
+        return;
     };
+    if (ret) |r| r.deinit();
 }
 
 /// The glue's answer, exported to JS as `__st_bg_upload_done` by bridge.zig. A 2xx means the file

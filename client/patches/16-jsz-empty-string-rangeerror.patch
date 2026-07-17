@@ -1,0 +1,16 @@
+diff --git i/vendor/jsz/src/value.zig w/vendor/jsz/src/value.zig
+index 6e8efad1..5a63bcff 100644
+--- i/vendor/jsz/src/value.zig
++++ w/vendor/jsz/src/value.zig
+@@ -120,7 +120,10 @@ pub const Value = enum(u64) {
+                 },
+                 String => blk: {
+                     var result: u64 = undefined;
+-                    ext.valueStringCreate(&result, x.ptr, x.len);
++                    // A zero-length slice's ptr is an undefined sentinel and JS validates the OFFSET
++                    // before the length, so it throws though no byte is read. Value.string guards this.
++                    const ptr: [*]const u8 = if (x.len == 0) "" else x.ptr;
++                    ext.valueStringCreate(&result, ptr, x.len);
+                     break :blk @enumFromInt(result);
+                 },
+                 else => unreachable,

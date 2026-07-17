@@ -114,11 +114,15 @@ fn setProp(prop: []const u8, value: []const u8) void {
     };
 }
 
+/// removeProperty answers with the OLD value, so `void` made every call return InvalidType into that
+/// empty catch. The property still went (the JS ran; only the return conversion failed), which is why
+/// nothing looked wrong: measured, one Reset click pushed jsz slot 378 into the free list five times.
 fn removeProp(prop: []const u8) void {
     if (zx.platform.role != .client) return;
     const style = rootStyle() orelse return;
     defer style.deinit();
-    style.call(void, "removeProperty", .{js.string(prop)}) catch {};
+    const ret = style.call(?js.Value, "removeProperty", .{js.string(prop)}) catch return;
+    if (ret) |r| r.deinit();
 }
 
 fn propFor(name: []const u8) ?[]const u8 {

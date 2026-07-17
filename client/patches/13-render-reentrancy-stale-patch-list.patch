@@ -1,0 +1,247 @@
+diff --git c/src/runtime/client/Client.zig w/src/runtime/client/Client.zig
+index 708a34f3..280e140f 100644
+--- c/src/runtime/client/Client.zig
++++ w/src/runtime/client/Client.zig
+@@ -310,7 +310,55 @@ pub fn renderAll(self: *Client) void {
+     }
+ }
+ 
++/// A component that dirties itself on every render would spin the drain forever; stop and say so
++/// rather than hang the page.
++const max_drain_passes: u32 = 32;
++
++var render_gate: RenderGate = .empty;
++
++/// Render `cmp`, then flush anything its own component functions dirtied while it ran.
++///
++/// The gate is held across the diff AND the apply, so a component function that mutates state
++/// mid-diff cannot start a second pass on the same vtree: it is recorded dirty and rendered here,
++/// against the tree this pass leaves behind. Without that, the nested pass frees vnodes the outer
++/// pass's already-computed list still names (`_rc(0,0)`, a freed vnode read back as zeros).
+ pub fn render(self: *Client, cmp: ComponentMeta) !void {
++    if (!try render_gate.tryEnter(self.allocator, cmp.id)) return;
++    defer render_gate.exit();
++
++    const result = self.renderOnce(cmp);
++    self.drainDirty();
++    return result;
++}
++
++fn drainDirty(self: *Client) void {
++    var passes: u32 = 0;
++    while (render_gate.isDirty()) {
++        if (passes >= max_drain_passes) {
++            render_gate.clearDirty();
++            const console = Console.init();
++            defer console.deinit();
++            console.log(.{js.string("[zx:render] ANOMALY drain hit the pass cap; a component dirties itself every render, so its updates are dropped rather than spun on. Not on the [zx:dom] channel: that one is the door glue, and a non-error carrying its prefix reads as a leaked trace")});
++            return;
++        }
++        passes += 1;
++
++        var batch: std.ArrayList([]const u8) = .empty;
++        defer batch.deinit(self.allocator);
++        render_gate.takeDirty(self.allocator, &batch) catch return;
++
++        for (batch.items) |id| {
++            for (self.components) |c| {
++                if (std.mem.eql(u8, c.id, id)) {
++                    self.renderOnce(c) catch {};
++                    break;
++                }
++            }
++        }
++    }
++}
++
++fn renderOnce(self: *Client, cmp: ComponentMeta) !void {
+     const allocator = self.allocator;
+ 
+     const document = Document.init(allocator);
+@@ -461,6 +509,7 @@ pub const js = if (builtin.cpu.arch == .wasm32) @import("js") else struct {
+ const zx = @import("../../root.zig");
+ const zx_meta = @import("zx_meta");
+ const vtree_mod = @import("render.zig");
++const RenderGate = @import("../core/render_gate.zig").RenderGate;
+ const core_vdom = @import("../core/vdom.zig");
+ 
+ const std = @import("std");
+diff --git c/src/runtime/core/render_gate.zig w/src/runtime/core/render_gate.zig
+new file mode 100644
+index 00000000..e75be0de
+--- /dev/null
++++ w/src/runtime/core/render_gate.zig
+@@ -0,0 +1,53 @@
++//! Serialises render passes so a patch list can never be applied to a tree it was not diffed against.
++
++const std = @import("std");
++
++/// One pass owns the gate from the start of its diff to the end of its apply.
++///
++/// A component function runs during the diff (`resolveComponent` calls it), so it can mutate state
++/// and re-enter `render` for a component whose diff is already in flight. Ungated, that nested pass
++/// diffs and applies the SAME vtree; the outer pass then applies a list describing a tree that no
++/// longer exists, naming vnodes the inner pass freed. Refusing the nested pass BEFORE it can reach a
++/// vtree is what makes the stale list unrepresentable rather than unlikely.
++pub const RenderGate = struct {
++    in_flight: bool = false,
++    dirty: std.StringHashMapUnmanaged(void) = .empty,
++
++    pub const empty: RenderGate = .{};
++
++    pub fn deinit(self: *RenderGate, allocator: std.mem.Allocator) void {
++        self.dirty.deinit(allocator);
++    }
++
++    /// True when the caller owns the pass and may diff. False means the request was deferred: the
++    /// id is recorded dirty and the owning pass will render it once its own apply has finished.
++    /// A caller handed false must not touch a vtree.
++    pub fn tryEnter(self: *RenderGate, allocator: std.mem.Allocator, id: []const u8) !bool {
++        if (self.in_flight) {
++            try self.dirty.put(allocator, id, {});
++            return false;
++        }
++        self.in_flight = true;
++        return true;
++    }
++
++    pub fn exit(self: *RenderGate) void {
++        self.in_flight = false;
++    }
++
++    pub fn isDirty(self: *const RenderGate) bool {
++        return self.dirty.count() > 0;
++    }
++
++    pub fn clearDirty(self: *RenderGate) void {
++        self.dirty.clearRetainingCapacity();
++    }
++
++    /// Move the pending ids out. Anything dirtied while the caller renders them lands in the NEXT
++    /// batch rather than mutating the set being walked.
++    pub fn takeDirty(self: *RenderGate, allocator: std.mem.Allocator, out: *std.ArrayList([]const u8)) !void {
++        var it = self.dirty.keyIterator();
++        while (it.next()) |k| try out.append(allocator, k.*);
++        self.dirty.clearRetainingCapacity();
++    }
++};
+diff --git c/src/util.zig w/src/util.zig
+index ae7d6442..29b0bb3b 100644
+--- c/src/util.zig
++++ w/src/util.zig
+@@ -2,3 +2,4 @@ pub const zxon = @import("util/zxon.zig");
+ pub const html = @import("util/html.zig");
+ pub const devtool = @import("devtool.zig");
+ pub const vdom = @import("runtime/core/vdom.zig");
++pub const render_gate = @import("runtime/core/render_gate.zig");
+diff --git c/test/core/render_gate.zig w/test/core/render_gate.zig
+new file mode 100644
+index 00000000..2374cd0c
+--- /dev/null
++++ w/test/core/render_gate.zig
+@@ -0,0 +1,93 @@
++const std = @import("std");
++const zx = @import("zx");
++
++const testing = std.testing;
++const RenderGate = zx.util.render_gate.RenderGate;
++
++test "a pass entered during another is refused, so two diffs cannot share one vtree" {
++    const allocator = testing.allocator;
++    var gate: RenderGate = .empty;
++    defer gate.deinit(allocator);
++
++    try testing.expect(try gate.tryEnter(allocator, "shell"));
++    // The re-entrant call is the one that used to diff and apply the same vtree mid-flight, then
++    // let the outer pass apply a list naming the vnodes it had just freed.
++    try testing.expect(!try gate.tryEnter(allocator, "shell"));
++    try testing.expect(!try gate.tryEnter(allocator, "composer"));
++}
++
++test "a refused pass is recorded dirty rather than dropped" {
++    const allocator = testing.allocator;
++    var gate: RenderGate = .empty;
++    defer gate.deinit(allocator);
++
++    try testing.expect(try gate.tryEnter(allocator, "shell"));
++    try testing.expect(!gate.isDirty());
++
++    try testing.expect(!try gate.tryEnter(allocator, "shell"));
++    try testing.expect(gate.isDirty());
++
++    var batch: std.ArrayList([]const u8) = .empty;
++    defer batch.deinit(allocator);
++    try gate.takeDirty(allocator, &batch);
++    try testing.expectEqual(@as(usize, 1), batch.items.len);
++    try testing.expectEqualStrings("shell", batch.items[0]);
++}
++
++test "an id dirtied repeatedly drains once" {
++    const allocator = testing.allocator;
++    var gate: RenderGate = .empty;
++    defer gate.deinit(allocator);
++
++    try testing.expect(try gate.tryEnter(allocator, "shell"));
++    try testing.expect(!try gate.tryEnter(allocator, "shell"));
++    try testing.expect(!try gate.tryEnter(allocator, "shell"));
++
++    var batch: std.ArrayList([]const u8) = .empty;
++    defer batch.deinit(allocator);
++    try gate.takeDirty(allocator, &batch);
++    try testing.expectEqual(@as(usize, 1), batch.items.len);
++}
++
++test "taking the dirty set empties it, so the drain loop can reach an exit condition" {
++    const allocator = testing.allocator;
++    var gate: RenderGate = .empty;
++    defer gate.deinit(allocator);
++
++    try testing.expect(try gate.tryEnter(allocator, "shell"));
++    try testing.expect(!try gate.tryEnter(allocator, "shell"));
++
++    var batch: std.ArrayList([]const u8) = .empty;
++    defer batch.deinit(allocator);
++    try gate.takeDirty(allocator, &batch);
++    try testing.expect(!gate.isDirty());
++}
++
++test "exit hands the gate to the next pass" {
++    const allocator = testing.allocator;
++    var gate: RenderGate = .empty;
++    defer gate.deinit(allocator);
++
++    try testing.expect(try gate.tryEnter(allocator, "shell"));
++    gate.exit();
++    // The next top-level render owns the gate outright and diffs a tree nothing else is touching.
++    try testing.expect(try gate.tryEnter(allocator, "shell"));
++    try testing.expect(!gate.isDirty());
++}
++
++fn enterRefuseAndDrain(allocator: std.mem.Allocator) !void {
++    var gate: RenderGate = .empty;
++    defer gate.deinit(allocator);
++
++    _ = try gate.tryEnter(allocator, "shell");
++    _ = try gate.tryEnter(allocator, "shell");
++    _ = try gate.tryEnter(allocator, "composer");
++
++    var batch: std.ArrayList([]const u8) = .empty;
++    defer batch.deinit(allocator);
++    try gate.takeDirty(allocator, &batch);
++}
++
++test "the gate leaks nothing on any allocation failure" {
++    try testing.checkAllAllocationFailures(testing.allocator, enterRefuseAndDrain, .{});
++}
+diff --git c/test/main.zig w/test/main.zig
+index 5686b139..024f9040 100644
+--- c/test/main.zig
++++ w/test/main.zig
+@@ -10,6 +10,7 @@ test {
+     _ = @import("core/html.zig");
+     _ = @import("core/routing.zig");
+     _ = @import("core/vdom.zig");
++    _ = @import("core/render_gate.zig");
+     _ = @import("core/dx.zig");
+     _ = @import("core/db.zig");
+     _ = @import("core/cache.zig");

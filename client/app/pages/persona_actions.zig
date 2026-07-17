@@ -232,11 +232,15 @@ fn onAvatarDeleted(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
 /// Replace the selected persona's avatar image. Multipart upload is browser-forced (FormData cannot
 /// cross the wasm boundary), so it hops through a JS helper that reads #persona-avatar-input and, on
 /// success, calls back into onAvatarUploaded.
+/// The helper is `async`, so `void` made a good upload return InvalidType: the catch fired on success
+/// and the error path double-freed a jsz slot (see card_editor.uploadAvatar for the whole mechanism).
 pub fn replaceAvatar(avatar: []const u8) void {
     if (zx.platform.role != .client) return;
-    js.global.call(void, "__st_persona_avatar", .{js.string(avatar)}) catch {
+    const ret = js.global.call(?js.Value, "__st_persona_avatar", .{js.string(avatar)}) catch {
         log.warn("persona avatar helper missing", .{});
+        return;
     };
+    if (ret) |r| r.deinit();
 }
 
 /// Called by the JS avatar helper on a successful upload (via the bridge export): re-render so the

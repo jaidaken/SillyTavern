@@ -257,6 +257,10 @@ async function main() {
         // witness to its own failure.
         const pageExceptions = [];
         const ZX_PREFIX = '[zx:dom]';
+        // The renderer's own channel. Watched because an anomaly channel with no listener is a diary
+        // entry, not an announcement: the drain's pass-cap anomaly went here and NOTHING read it, so a
+        // capped drain could drop a component's update and pass every row in this file.
+        const ZX_RENDER_PREFIX = '[zx:render]';
         // This driver's own sensor self-test lines (C-DBG-1, C-DBG-2), never the product's. Every
         // product row below excludes them by this marker.
         const ZX_PROBE = 'ST-SENSOR-PROBE';
@@ -270,9 +274,13 @@ async function main() {
                 // Sorted by CDP type, not by the emitter's intent: anything carrying the prefix that
                 // is NOT an error is treated as a trace, so a trace mistakenly sent to console.log or
                 // console.warn still trips the leak row instead of slipping past a debug-only filter.
-                if (line.includes(ZX_PREFIX)) {
+                if (line.includes(ZX_PREFIX) || line.includes(ZX_RENDER_PREFIX)) {
                     const entry = { type: msg.params.type, text: line, url: navState.url };
-                    (msg.params.type === 'error' ? zxAnomalies : zxTraces).push(entry);
+                    // ...EXCEPT a line that calls itself an ANOMALY, which is one whatever level it
+                    // came out at: the drain's pass-cap anomaly is emitted at log level, so type alone
+                    // would file the loudest thing the renderer can say as a leaked trace.
+                    const isAnomaly = msg.params.type === 'error' || line.includes('ANOMALY');
+                    (isAnomaly ? zxAnomalies : zxTraces).push(entry);
                 }
             }
             // Both flavours land here: a synchronous throw nobody caught, and a promise that rejected
@@ -3219,6 +3227,75 @@ async function main() {
                 `wide=${wideW} now=${await page.eval('window.innerWidth')}`);
         }
 
+        /* C-SWAP */
+        // THE ROUTE IS THIS BLOCK'S VALUE, NOT THE ASSERTION. C-DBG-8 has watched every load of this
+        // run for a [zx:dom] anomaly since it was written, and it stayed green over a live crash the
+        // operator hit twice: no row ever drove the sequence below. The operator swaps STRAIGHT from
+        // the characters panel into the card editor. C-CFG-SEL-2 looks like it does the same and does
+        // not: it opens the card editor at 2988 FIRST, so the editor is warm by 3017 and its
+        // ensureLoaded() (card_editor_body.zx:31) fetches nothing during the diff. A cold mount does,
+        // which re-enters render for a component whose diff is in flight.
+        // Measured at 7e180f05b, 3 loads per cell: this route 3/3 anomalies + orphanCount 9; the warm
+        // route 3/3 clean; drawer-closed-first 3/3 clean. With patch 13, 12/12 cells clean, orphans 0.
+        console.log('== C-SWAP the straight swap into a cold card editor ==');
+        {
+            // Cold is half the trigger, so the route navigates every time: a page that already opened
+            // the card editor takes the warm path, where every assertion below is vacuous.
+            const swapRoute = async (clickSelect) => {
+                await page.navigate(`${args.base}/`);
+                await openRecentChat();
+                await page.click('#d-characters');
+                const listed = await page.waitFor("document.querySelectorAll('#chat-root .char-item').length > 0", 8000);
+                if (clickSelect) {
+                    await page.click('#chat-root .char-item .char-name');
+                    await page.waitFor("!!document.querySelector('#chat-root .char-item.is-selected')", 8000);
+                }
+                const selected = await page.eval("!!document.querySelector('#chat-root .char-item.is-selected')");
+                const cold = await page.eval("!document.querySelector('#card-name')");
+                const from = zxAnomalies.length;
+                // Straight in, drawer still open. Closing it first is the route that never drifts.
+                await page.click('#d-card_editor');
+                // The form mounting is the swap's own completion signal (W6-7: never a wall clock).
+                const mounted = await page.waitFor("!!document.querySelector('#card-name')", 8000);
+                // An anomaly has no completion signal to wait on, so one bounded settle gives a late
+                // one the same room C-DBG-6 gives an absent trace.
+                await sleep(1000);
+                return {
+                    drove: listed && selected && cold && mounted,
+                    listed, selected, cold, mounted,
+                    anomalies: zxAnomalies.slice(from).filter((e) => !e.text.includes(ZX_PROBE)),
+                    shellAlive: await page.eval("document.getElementById('shell') !== null"),
+                    // -1, never a skip: an audit that is gone cannot prove zero orphans.
+                    orphans: await page.eval(
+                        "(typeof globalThis.__zx_audit === 'function') ? globalThis.__zx_audit().orphanCount : -1"),
+                };
+            };
+            const say = (r) => `drove=${r.drove} (listed=${r.listed} selected=${r.selected}`
+                + ` coldBefore=${r.cold} mounted=${r.mounted}) anomalies=${r.anomalies.length}`
+                + ` shellAlive=${r.shellAlive} orphanCount=${r.orphans}`
+                + (r.anomalies.length ? ` first=${JSON.stringify(r.anomalies[0].text.slice(0, 150))}` : '');
+
+            // Three assertions in one row on purpose, because they are blind in different places. The
+            // audit reads its registry against the DOM; the door REFUSING a garbage patch (f245755e6)
+            // leaves #shell alive and can leave that registry coherent, so either alone can go green
+            // one patch from the crash. #shell is the blast radius: the refused patch named parent and
+            // child BOTH #0, and id 0 is Shell's root. The drove= terms are IN the conjunction: a swap
+            // that silently fails to drive reports no anomaly, a live #shell and no orphan, and that
+            // is this row's green (F12).
+            const fresh = await swapRoute(true);
+            row('must', fresh.drove && fresh.anomalies.length === 0 && fresh.shellAlive && fresh.orphans === 0,
+                'C-SWAP-1 picking a character then opening its card from the panel drifts nothing',
+                say(fresh));
+
+            // The same swap with a SETTLED selection (resume-last, no click in the list): red 3/3 at
+            // 7e180f05b as well, so the click is not the trigger and this is a second real entry, the
+            // user who resumes a chat, opens the panel to browse, then opens the card.
+            const settled = await swapRoute(false);
+            row('must', settled.drove && settled.anomalies.length === 0 && settled.shellAlive && settled.orphans === 0,
+                'C-SWAP-2 the same swap with a settled selection drifts nothing either',
+                say(settled));
+        }
+
         /* C-DBG */
         // The [zx:dom] channel. A live crash (removeChild NotFoundError) came out of the door with the
         // framework's tree and the real DOM already drifted apart, and no reproduction was ever found,
@@ -3342,7 +3419,7 @@ async function main() {
             // nobody has to reproduce it first.
             const anomalies = product(zxAnomalies);
             row('must', anomalies.length === 0,
-                'C-DBG-8 no [zx:dom] anomaly in the whole run',
+                'C-DBG-8 no [zx:dom] or [zx:render] anomaly in the whole run',
                 anomalies.length === 0
                     ? 'clean'
                     : `${anomalies.length} anomalies, first at ${anomalies[0].url}: ${JSON.stringify(anomalies[0].text)}`);

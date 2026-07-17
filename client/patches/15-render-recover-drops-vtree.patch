@@ -1,0 +1,117 @@
+diff --git i/src/runtime/client/Client.zig w/src/runtime/client/Client.zig
+index 542be37b..30ce1059 100644
+--- i/src/runtime/client/Client.zig
++++ w/src/runtime/client/Client.zig
+@@ -253,6 +253,10 @@ pub fn unregisterVElement(self: *Client, velement: *vtree_mod.VElement) void {
+     _ = self.id_to_velement.remove(velement.id);
+     if (zx.platform.role == .client) {
+         window.ext._clearEventHandlerModes(velement.id);
++        // The door prunes its own registry when IT removes a node, so this is a no-op on the diff's
++        // removal paths. It is load-bearing only for a recovery rebuild, where `clearContent` detaches
++        // the old tree with a raw removeChild the door never sees: measured 178 stranded entries.
++        window.ext._forgetNode(velement.id);
+     }
+ 
+     // Recursively unregister children
+@@ -350,7 +354,15 @@ fn drainDirty(self: *Client) void {
+         for (batch.items) |id| {
+             for (self.components) |c| {
+                 if (std.mem.eql(u8, c.id, id)) {
+-                    self.renderOnce(c) catch {};
++                    // Error level is what lets this ride the [zx:dom] channel: the cap above avoids
++                    // that prefix only because a NON-error carrying it reads as a leaked trace.
++                    self.renderOnce(c) catch |err| {
++                        const console = Console.init();
++                        defer console.deinit();
++                        var buf: [320]u8 = undefined;
++                        const msg = std.fmt.bufPrint(&buf, "[zx:dom] ANOMALY a deferred render of '{s}' failed with {s} and was DROPPED; it was refused while another pass held the gate and this drain owed it, so that component is now showing state its vtree does not describe", .{ id, @errorName(err) }) catch "[zx:dom] ANOMALY a deferred render failed and was DROPPED; the message could not be formatted";
++                        console.strLevel(.err, msg);
++                    };
+                     break;
+                 }
+             }
+@@ -525,6 +537,41 @@ const Document = window.Document;
+ const Console = window.Console;
+ const areComponentsSameType = vtree_mod.areComponentsSameType;
+ 
++/// Called by the door when a render throws out through the wasm frames.
++///
++/// A throw skips every Zig `defer` on the way out, including `render`'s `defer render_gate.exit()`,
++/// so the gate stays held by a pass that no longer exists and every later render is refused: the
++/// page freezes with no error of its own. Clearing the gate alone is not enough. `diffWithComponent`
++/// takes a `*VDOMTree` and reconciles IN PLACE before `applyPatches` runs, so a throw mid-apply
++/// leaves the vtree already describing a DOM that never happened; the next diff would compare vtree
++/// to vtree and never re-emit the patches that failed to land. Dropping the vtree makes the next
++/// render take the `existing_vtree == null` branch and rebuild that component from the component
++/// itself, which is the source of truth. That is a rebuild from truth, not a recovery from garbage.
++///
++/// The dirty set is deliberately kept: renders refused while the gate was stuck are still pending,
++/// and the next pass's drain owes them. Returns a count rather than a verdict: 0 = the gate was not
++/// held, 1 = gate cleared but no vtree was dropped, 2 = gate cleared and the owner's vtree dropped.
++export fn __zx_render_recover() u32 {
++    if (comptime !is_wasm) return 0;
++    if (zx.platform.role != .client) return 0;
++    if (!render_gate.in_flight) return 0;
++
++    const owner = render_gate.owner;
++    render_gate.exit();
++
++    const client = global_client orelse return 1;
++    const id = owner orelse return 1;
++    if (client.vtrees.getPtr(id)) |vtree| {
++        // Unregister BEFORE the deinit frees the nodes it walks. The rebuild's `clearContent` detaches
++        // the old DOM with a raw removeChild, so nothing else ever prunes these registrations.
++        client.unregisterVElement(vtree.vtree);
++        vtree.deinit(client.allocator);
++        _ = client.vtrees.remove(id);
++        return 2;
++    }
++    return 1;
++}
++
+ export fn __zx_eventbridge(velement_id: u64, event_type_id: u8, event_ref: u64) void {
+     if (zx.platform.role != .client) return;
+     if (global_client) |client| {
+diff --git i/src/runtime/client/window/extern.zig w/src/runtime/client/window/extern.zig
+index 475b1001..32ecf5dd 100644
+--- i/src/runtime/client/window/extern.zig
++++ w/src/runtime/client/window/extern.zig
+@@ -89,6 +89,10 @@ pub extern "__zx" fn _setEventHandlerMode(vnode_id: u64, event_type_id: u8, may_
+ /// Clear all delegated event handler metadata for a vnode.
+ pub extern "__zx" fn _clearEventHandlerModes(vnode_id: u64) void;
+ 
++/// Drop the door's node-registry entry for a vnode whose DOM node it will never see removed.
++/// `clearContent` detaches nodes with a RAW removeChild, so the tracked glue never prunes them.
++pub extern "__zx" fn _forgetNode(vnode_id: u64) void;
++
+ // Fetch
+ pub extern "__zx" fn _fetchAsync(
+     url_ptr: [*]const u8,
+diff --git i/src/runtime/core/render_gate.zig w/src/runtime/core/render_gate.zig
+index e75be0de..8622b81e 100644
+--- i/src/runtime/core/render_gate.zig
++++ w/src/runtime/core/render_gate.zig
+@@ -11,6 +11,9 @@ const std = @import("std");
+ /// vtree is what makes the stale list unrepresentable rather than unlikely.
+ pub const RenderGate = struct {
+     in_flight: bool = false,
++    /// The id of the pass that holds the gate. A throw through wasm skips `exit`, so the gate stays
++    /// held by a pass that is already gone; recovery needs to name that pass to drop its vtree.
++    owner: ?[]const u8 = null,
+     dirty: std.StringHashMapUnmanaged(void) = .empty,
+ 
+     pub const empty: RenderGate = .{};
+@@ -28,11 +31,13 @@ pub const RenderGate = struct {
+             return false;
+         }
+         self.in_flight = true;
++        self.owner = id;
+         return true;
+     }
+ 
+     pub fn exit(self: *RenderGate) void {
+         self.in_flight = false;
++        self.owner = null;
+     }
+ 
+     pub fn isDirty(self: *const RenderGate) bool {
