@@ -241,9 +241,14 @@ pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMs
     var wctx = ctx;
     wctx.wi_before = wi_act.before;
     wctx.wi_after = wi_act.after;
+    const outlet_map = try alloc.alloc(macros.Outlet, wi_act.outlets.len);
+    defer alloc.free(outlet_map);
+    for (wi_act.outlets, 0..) |g, i| outlet_map[i] = .{ .name = g.name, .content = g.content };
+    wctx.outlets = outlet_map;
     // Stock drops wi content a story string has no slot for, warn-only (power-user.js:2294).
     if ((wi_act.before.len > 0 and !storyHasSlot(shape.tpl.context.story_string, "{{wiBefore}}", "{{loreBefore}}")) or
-        (wi_act.after.len > 0 and !storyHasSlot(shape.tpl.context.story_string, "{{wiAfter}}", "{{loreAfter}}")))
+        (wi_act.after.len > 0 and !storyHasSlot(shape.tpl.context.story_string, "{{wiAfter}}", "{{loreAfter}}")) or
+        (wi_act.outlets.len > 0 and std.mem.indexOf(u8, shape.tpl.context.story_string, "{{outlet::") == null))
     {
         std.log.scoped(.wi).warn("the story string has no wi slot; activated world info is dropped", .{});
     }
@@ -774,6 +779,7 @@ fn wiTestEntry(uid: i64, position: @import("./world_info.zig").Position, content
         .depth = 4,
         .probability = 100,
         .use_probability = true,
+        .outlet_name = "",
     };
 }
 
@@ -814,6 +820,50 @@ test "a non-matching wi entry stays out of the prompt" {
     const out = try buildPrompt(testing.allocator, ctx, &history, shape);
     defer testing.allocator.free(out);
     try testing.expect(std.mem.indexOf(u8, out, "NEVER") == null);
+}
+
+test "outlet entries render at their named outlet macros in the story string" {
+    const ctx = Ctx{ .char = "Rita", .description = "A diver." };
+    var j_late = wiTestEntry(0, .outlet, "J-LATE for {{char}}");
+    j_late.outlet_name = "judge";
+    j_late.order = 200;
+    var j_early = wiTestEntry(1, .outlet, "J-EARLY");
+    j_early.outlet_name = "judge";
+    var narrator = wiTestEntry(2, .outlet, "N-VOICE");
+    narrator.outlet_name = "narrator";
+    const entries = [_]wi_engine.Entry{ j_late, j_early, narrator };
+    const history = [_]PromptMsg{.{ .name = "Jamie", .mes = "hello", .role = .user }};
+    const shape = Shape{
+        .tpl = .{ .context = .{ .story_string = "{{#if description}}{{description}}\n{{/if}}{{outlet::narrator}}\n{{outlet::judge}}\n{{outlet::unfed}}{{trim}}" } },
+        .wi_entries = &entries,
+    };
+    const out = try buildPrompt(testing.allocator, ctx, &history, shape);
+    defer testing.allocator.free(out);
+    const want =
+        "A diver.\n" ++
+        "N-VOICE\n" ++
+        "J-EARLY\nJ-LATE for Rita\n" ++
+        "Jamie: hello\n" ++
+        "Rita:";
+    try testing.expectEqualStrings(want, out);
+}
+
+test "outlet entries drop without their macro and a nameless outlet entry always drops" {
+    const ctx = Ctx{ .char = "Rita", .description = "A diver." };
+    var named = wiTestEntry(0, .outlet, "OUT-NEVER");
+    named.outlet_name = "judge";
+    const nameless = wiTestEntry(1, .outlet, "OUT-NAMELESS");
+    const entries = [_]wi_engine.Entry{ named, nameless };
+    const history = [_]PromptMsg{.{ .name = "Jamie", .mes = "hello", .role = .user }};
+    const shape = Shape{
+        .tpl = .{ .context = .{ .story_string = templates.default_story_string } },
+        .wi_entries = &entries,
+    };
+    const out = try buildPrompt(testing.allocator, ctx, &history, shape);
+    defer testing.allocator.free(out);
+    try testing.expect(std.mem.indexOf(u8, out, "OUT-NEVER") == null);
+    try testing.expect(std.mem.indexOf(u8, out, "OUT-NAMELESS") == null);
+    try testing.expect(std.mem.indexOf(u8, out, "A diver.") != null);
 }
 
 test "an atDepth entry injects at its depth and survives a tight budget" {

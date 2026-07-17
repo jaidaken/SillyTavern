@@ -37,6 +37,9 @@ var prompt_owned: []u8 = &.{};
 /// a note save can no longer stomp each other's copy into a 409 loop.
 var chat_avatar: []u8 = &.{};
 var chat_file: []u8 = &.{};
+// wi-polish: a group chat's note keys on the group chat id instead of avatar+file; the /metadata
+// route resolves group_id to groupChats/<id>.jsonl, whose header is the stock metadata home.
+var chat_group: []u8 = &.{};
 
 var saving = false;
 var dirty = false;
@@ -51,7 +54,7 @@ pub fn active() an.Note {
 }
 
 pub fn hasChat() bool {
-    return chat_file.len > 0;
+    return chat_file.len > 0 or chat_group.len > 0;
 }
 
 pub fn prompt() []const u8 {
@@ -81,8 +84,20 @@ pub fn setFromPage(avatar: []const u8, file_name: []const u8, chat_metadata: []c
     _ = full_token;
     setOwned(&chat_avatar, avatar);
     setOwned(&chat_file, file_name);
-    dirty = false;
+    setOwned(&chat_group, "");
+    adoptMetadata(chat_metadata);
+}
 
+/// wi-polish: the group twin of setFromPage. Same metadata parse, group-id identity.
+pub fn setFromGroupPage(group_chat_id: []const u8, chat_metadata: []const u8) void {
+    setOwned(&chat_avatar, "");
+    setOwned(&chat_file, "");
+    setOwned(&chat_group, group_chat_id);
+    adoptMetadata(chat_metadata);
+}
+
+fn adoptMetadata(chat_metadata: []const u8) void {
+    dirty = false;
     note = .{};
     if (prompt_owned.len > 0) {
         alloc.free(prompt_owned);
@@ -161,7 +176,7 @@ pub fn isDirty() bool {
 /// or a save already in flight (the response carries the next token; firing twice would 409).
 pub fn save() void {
     if (zx.platform.role != .client) return;
-    if (chat_file.len == 0) {
+    if (chat_file.len == 0 and chat_group.len == 0) {
         setStatus("Open a chat first");
         return;
     }
@@ -169,7 +184,15 @@ pub fn save() void {
     saving = true;
     setStatus("Saving note...");
 
-    const body = std.json.Stringify.valueAlloc(alloc, .{
+    const body = if (chat_group.len > 0) std.json.Stringify.valueAlloc(alloc, .{
+        .group_id = chat_group,
+        .change_token = pager.fullToken(),
+        .note_prompt = note.prompt,
+        .note_interval = note.interval,
+        .note_depth = note.depth,
+        .note_position = @intFromEnum(note.position),
+        .note_role = @intFromEnum(note.role),
+    }, .{}) else std.json.Stringify.valueAlloc(alloc, .{
         .avatar_url = chat_avatar,
         .file_name = chat_file,
         .change_token = pager.fullToken(),
@@ -178,12 +201,13 @@ pub fn save() void {
         .note_depth = note.depth,
         .note_position = @intFromEnum(note.position),
         .note_role = @intFromEnum(note.role),
-    }, .{}) catch {
+    }, .{});
+    const owned = body catch {
         saving = false;
         return;
     };
-    defer alloc.free(body);
-    net.request("/api/chats/metadata", body, 0, onSaveDone, .{});
+    defer alloc.free(owned);
+    net.request("/api/chats/metadata", owned, 0, onSaveDone, .{});
 }
 
 fn onSaveDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {

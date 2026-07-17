@@ -470,6 +470,50 @@ describe('chat mutation family (cf_id ON, steady-state chats)', () => {
         expect((await delRes.json()).total_items).toBe(7);
     }, CASE_TIMEOUT_MS);
 
+    test('group_metadata_write_touches_only_the_group_header_never_messages_nor_solo_files', async () => {
+        const groupPath = groupChatPath(server, 'group-meta');
+        writeChatFile(groupPath, chatHeader('Group Meta'), buildMinted(6));
+        const soloPath = soloChatPath(server, 'CardHold', 'chatHold');
+        writeChatFile(soloPath, chatHeader('CardHold'), buildMinted(4));
+        const groupBefore = readRawLines(groupPath);
+        const soloBefore = fs.readFileSync(soloPath, 'utf8');
+
+        const res = await client.postJson('/api/chats/metadata', {
+            group_id: 'group-meta', note_prompt: 'group note', note_depth: 3, world_info: 'Group Lore',
+        });
+        expect(res.status).toBe(200);
+        expect((await res.json()).ok).toBe(true);
+
+        const after = readRawLines(groupPath);
+        const header = JSON.parse(after[0]);
+        expect(header.chat_metadata.note_prompt).toBe('group note');
+        expect(header.chat_metadata.note_depth).toBe(3);
+        expect(header.chat_metadata.world_info).toBe('Group Lore');
+        expect(header.chat_metadata.integrity).toBe('mut-test');
+        expect(after.length).toBe(groupBefore.length);
+        // Every message line of the group file byte-identical: the write is header-only.
+        for (let line = 1; line < groupBefore.length; line++) {
+            expect(after[line]).toBe(groupBefore[line]);
+        }
+        // The solo chat file never moved at all.
+        expect(fs.readFileSync(soloPath, 'utf8')).toBe(soloBefore);
+    }, CASE_TIMEOUT_MS);
+
+    test('group_metadata_write_refuses_a_headerless_legacy_group_file', async () => {
+        const filePath = groupChatPath(server, 'group-noheader');
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, buildMinted(3).map(m => JSON.stringify(m)).join('\n'), 'utf8');
+        const before = fs.readFileSync(filePath, 'utf8');
+
+        const res = await client.postJson('/api/chats/metadata', {
+            group_id: 'group-noheader', note_prompt: 'never lands',
+        });
+        expect(res.status).toBe(400);
+        expect((await res.json()).error).toBe('no_header');
+        // Fail-closed: the refused write leaves the legacy file byte-identical.
+        expect(fs.readFileSync(filePath, 'utf8')).toBe(before);
+    }, CASE_TIMEOUT_MS);
+
     test('branch_prefix_is_byte_identical_and_source_unchanged', async () => {
         const filePath = soloChatPath(server, 'CardBranch', 'chatBranch');
         writeChatFile(filePath, chatHeader('CardBranch'), buildMinted(10));

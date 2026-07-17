@@ -86,6 +86,15 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                             <p id="wi-depth-hint" class={hint_cls}>Messages up from the newest.</p>
                         </div>
                     )}
+                    {if (e.position == .outlet) (
+                        <div class="setting-row flex flex-col gap-1">
+                            <label class={label_cls} for="wi-outletname">Outlet name</label>
+                            <input id="wi-outletname" name="wi-outletname" type="text" autocomplete="off" spellcheck="false" class={input_cls}
+                                value={e.outlet_name} disabled={boolAttr(readOnly())} data-wi-str="outletName" oninput={ctx.bind(onStrInput)}
+                                aria-describedby="wi-outletname-hint" />
+                            <p id="wi-outletname-hint" class={hint_cls}>Lands where the template says its name. Nameless outlet lore goes nowhere.</p>
+                        </div>
+                    )}
 
                     <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
                         <label class={label_cls} for="wi-order">Order</label>
@@ -194,6 +203,13 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                             class={num_cls} value={budgetValue(ctx.allocator)} aria-describedby="wi-budget-hint" oninput={ctx.bind(onBudgetInput)} />
                     </div>
                     <p id="wi-budget-hint" class={hint_cls}>The most of the prompt, in percent, that triggered lore may take before history wins.</p>
+
+                    <div class="setting-row flex items-center justify-between gap-3">
+                        <label class={label_cls} for="wi-recursive">Recursive scanning</label>
+                        <input id="wi-recursive" name="wi-recursive" type="checkbox" class={check_cls}
+                            checked={boolAttr(wi.global.recursive)} aria-describedby="wi-recursive-hint" onchange={ctx.bind(onRecursiveChange)} />
+                    </div>
+                    <p id="wi-recursive-hint" class={hint_cls}>Triggered lore can pull in more lore by its own words.</p>
 
                     <h3 class={head_cls}>Lorebooks</h3>
                     {if (actions.listState() == .failed) (
@@ -308,6 +324,7 @@ const blank_entry: wi.Entry = .{
     .depth = 4,
     .probability = 100,
     .use_probability = true,
+    .outlet_name = "",
 };
 
 fn openTitle() []const u8 {
@@ -525,6 +542,13 @@ fn onBudgetInput(e: *zx.client.Event.Stateful) void {
     const value = readValue(target) orelse return;
     defer zx.allocator.free(value);
     actions.setBudget(value);
+}
+
+fn onRecursiveChange(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const on = target.get(bool, "checked") catch return;
+    actions.setRecursive(on);
 }
 
 fn setPositionStr(value: []const u8) void {
