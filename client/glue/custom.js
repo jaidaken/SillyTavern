@@ -965,7 +965,13 @@
         const body = readString(Number(packed >> 32n), Number(packed & 0xffffffffn));
         try {
             await ensureCsrfToken();
-            const res = await loggedFetch('/api/chats/get', {
+            // w3-chatref: an open group pages over its own route; Zig owns the choice per open chat.
+            let pageUrl = '/api/chats/get';
+            if (wasm.__st_reader_page_url) {
+                const up = wasm.__st_reader_page_url();
+                if (up) pageUrl = readString(Number(up >> 32n), Number(up & 0xffffffffn));
+            }
+            const res = await loggedFetch(pageUrl, {
                 method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: body,
             });
             if (res.status === 409) {

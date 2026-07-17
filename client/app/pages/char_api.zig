@@ -29,6 +29,8 @@ const store = @import("./store.zig");
 const wi_actions = @import("./world_info_actions.zig"); // w3-wi
 const pager = @import("./pager.zig");
 const group_send = @import("./group_send.zig"); // w3-grp
+const group_store = @import("./group_store.zig"); // w3-chatref
+const group_actions = @import("./group_actions.zig"); // w3-chatref: panel bump on deselect
 const regions = @import("./regions.zig");
 const dom_event = @import("./dom_event.zig");
 const fixtures = @import("./fixtures.zig");
@@ -50,6 +52,13 @@ var chat_load_seq: u32 = 0;
 /// bool leaks across an interleaved normal open (it cannot tell which load is the re-sync); keying to the
 /// seq means a normal open never inherits the marker and a second re-sync overwrites it.
 var resync_seq: ?u32 = null;
+
+// w3-chatref: bit 63 of the chat-load tag marks a group load; the low halves stay index+seq.
+const GROUP_TAG_BIT: u64 = 1 << 63;
+
+/// w3-chatref: the group whose chat the display currently shows; null = solo. Set on a group open's
+/// completion, cleared by any solo open, read by the reader's 409 re-sync.
+var open_group_index: ?usize = null;
 
 // ---- send-loop state ------------------------------------------------------------------
 
@@ -182,6 +191,7 @@ var chars_outcome: BootOutcome = .err;
 /// user avatar.
 pub fn boot() void {
     if (zx.platform.role != .client) return;
+    group_store.on_group_open = &onGroupOpen; // w3-chatref: the reader half the roster hook expects
     boot_demo = readDemoFlag();
     if (boot_demo) {
         seedDemoFixtures();
@@ -451,6 +461,7 @@ var override_avatar: []u8 = &.{};
 
 /// Open the chat for the character at `index` (store order) using the default tail window.
 pub fn loadCharacterChat(index: usize) void {
+    leaveGroupMode(); // w3-chatref
     clearChatFileOverride();
     loadCharacterChatWindow(index, pager.TAIL_LIMIT, false);
 }
@@ -461,9 +472,19 @@ pub fn loadCharacterChat(index: usize) void {
 pub fn loadChatByName(index: usize, file_name: []const u8) void {
     const chars = char_store.slice();
     if (index >= chars.len or file_name.len == 0) return;
+    leaveGroupMode(); // w3-chatref
     setOwned(&chat_file_override, file_name);
     setOwned(&override_avatar, chars[index].avatar);
     loadCharacterChatWindow(index, pager.TAIL_LIMIT, false);
+}
+
+// w3-chatref: a solo open ends group mode, so the composer routes solo again and the roster row
+// unhighlights. Also the group-load failure fallback: the view kept the solo chat, state follows it.
+fn leaveGroupMode() void {
+    if (group_store.selectedIndex() == null and open_group_index == null) return;
+    group_store.deselect();
+    open_group_index = null;
+    group_actions.bumpPanel();
 }
 
 /// w3-chatmgr: the switched file's stem, empty when the card default is active.
@@ -499,12 +520,8 @@ fn loadCharacterChatWindow(index: usize, limit: usize, is_resync: bool) void {
     defer alloc.free(file_name);
     // Paged tail window (invariant 2 + 4): the reader loads the newest slice, not the whole chat,
     // and grows upward from there. Index-anchored, cf_id flag dark.
-    const body = std.json.Stringify.valueAlloc(alloc, .{
-        .avatar_url = c.avatar,
-        .file_name = file_name,
-        .paged = true,
-        .limit = limit,
-    }, .{}) catch return;
+    const ref = data.ChatRef{ .solo = .{ .avatar = c.avatar, .file = file_name } }; // w3-chatref
+    const body = data.pageBody(alloc, ref, .{ .limit = limit }) catch return;
     defer alloc.free(body);
     // Busy only once the request actually dispatches, so an alloc-failure return above
     // cannot leave #chat stuck aria-busy.
@@ -512,7 +529,36 @@ fn loadCharacterChatWindow(index: usize, limit: usize, is_resync: bool) void {
     // The tag carries both the ticket and the index, so the completion knows exactly which
     // request it answers even with two loads in flight.
     const tag: u64 = (@as(u64, index) << 32) | chat_load_seq;
-    net.request("/api/chats/get", body, tag, onChatDone, .{});
+    net.request(ref.url(), body, tag, onChatDone, .{});
+}
+
+/// w3-chatref: open the group at `index` (group_store order) with an explicit tail-window `limit`,
+/// through the same ticket/busy/completion mechanics as a solo open (invariant 5: one reader path).
+fn openGroupChatWindow(index: usize, limit: usize, is_resync: bool) void {
+    if (zx.platform.role != .client) return;
+    const groups = group_store.slice();
+    if (index >= groups.len) {
+        chars_log.warn("load group chat: no group at index {d} of {d}", .{ index, groups.len });
+        return;
+    }
+    const g = groups[index];
+    const cid = group_store.chatFileId(&g);
+    if (cid.len == 0) return;
+    chars_log.debug("load group chat request: index {d} {s}", .{ index, g.name });
+    clearChatFileOverride();
+    chat_load_seq +%= 1;
+    resync_seq = if (is_resync) chat_load_seq else null;
+    const ref = data.ChatRef{ .group = .{ .id = cid } };
+    const body = data.pageBody(alloc, ref, .{ .limit = limit }) catch return;
+    defer alloc.free(body);
+    setChatBusy(true);
+    const tag: u64 = GROUP_TAG_BIT | (@as(u64, index) << 32) | chat_load_seq;
+    net.request(ref.url(), body, tag, onChatDone, .{});
+}
+
+// w3-chatref: roster row activation (group_store.on_group_open) opens the group's chat.
+fn onGroupOpen(index: usize) void {
+    openGroupChatWindow(index, pager.TAIL_LIMIT, false);
 }
 
 fn chatFileName(c: char_store.Character) ?[]u8 {
@@ -535,8 +581,9 @@ pub fn nowMs() f64 { // w3-grp: pub for group_send's append timestamps
 }
 
 fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
+    const is_group = (tag & GROUP_TAG_BIT) != 0; // w3-chatref
     const seq: u32 = @truncate(tag);
-    const index: usize = @intCast(tag >> 32);
+    const index: usize = @intCast((tag >> 32) & 0x7fff_ffff);
     // Clear the re-sync marker on the matching seq whether this load is current OR superseded, so a later
     // normal open can never inherit it; a second back-to-back re-sync already overwrote resync_seq.
     const was_resync = resync_seq == seq;
@@ -550,29 +597,48 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     // guard whether the load below succeeds or keeps the current view on error.
     pager.clearResync();
     defer setChatBusy(false);
-    const chars = char_store.slice();
-    if (index >= chars.len) {
-        chars_log.warn("load chat: character index {d} vanished", .{index});
-        return;
+    // w3-chatref: resolve the display identity per ref kind; everything below that names a card
+    // branches on `char`, the shared reader mechanics run once for both (invariant 5).
+    var char: ?char_store.Character = null;
+    var group: ?group_store.Group = null;
+    if (is_group) {
+        const groups = group_store.slice();
+        if (index >= groups.len) {
+            chars_log.warn("load group chat: group index {d} vanished", .{index});
+            return;
+        }
+        group = groups[index];
+    } else {
+        const chars = char_store.slice();
+        if (index >= chars.len) {
+            chars_log.warn("load chat: character index {d} vanished", .{index});
+            return;
+        }
+        char = chars[index];
     }
-    const c = chars[index];
     if (res == null or status == 0) {
         chars_log.err("chat load failed: network error", .{});
+        // w3-chatref: a failed GROUP open keeps the solo view, so group mode must not stick (the
+        // composer would silently target the group file behind a solo-looking chat).
+        if (is_group) leaveGroupMode();
         return;
     }
     // Server contract: 200 [] / 200 {} = no chat yet (seed the greeting below); any error
     // status = the chat may exist but could not be read - keep the current view.
     if (status < 200 or status >= 300) {
         chars_log.err("chat fetch failed: {d} - keeping current chat", .{status});
+        if (is_group) leaveGroupMode(); // w3-chatref
         return;
     }
     const parsed = res.?.json(std.json.Value) catch {
         chars_log.err("chat load failed: malformed body - keeping current chat", .{});
+        if (is_group) leaveGroupMode(); // w3-chatref
         return;
     };
     defer parsed.deinit();
     const page = data.parseChatPage(alloc, parsed.value) catch {
         chars_log.err("chat load failed: out of memory - keeping current chat", .{});
+        if (is_group) leaveGroupMode(); // w3-chatref
         return;
     };
     defer data.freeChatPage(alloc, page);
@@ -581,22 +647,34 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     // w3-reason: absolute indices repeat across chats, so open reasoning blocks must not carry over.
     store.reasoning.clearAll();
     pager.reset();
-    char_store.global.select(index);
-    // The author's note belongs to THIS chat's header, so it loads with the chat and is replaced
-    // wholesale on every open. The full token gates its save (C-CFG).
-    // The chat-linked lorebook + link identity live in the same header (w3-wi).
-    if (chatFileName(c)) |fname| {
-        defer alloc.free(fname);
-        an_state.setFromPage(c.avatar, fname, page.chat_metadata, page.full_token);
-        wi_actions.setChatContext(c.avatar, fname, page.chat_metadata, page.full_token);
+    if (char) |c| {
+        char_store.global.select(index);
+        // The author's note belongs to THIS chat's header, so it loads with the chat and is replaced
+        // wholesale on every open. The full token gates its save (C-CFG).
+        // The chat-linked lorebook + link identity live in the same header (w3-wi).
+        if (chatFileName(c)) |fname| {
+            defer alloc.free(fname);
+            an_state.setFromPage(c.avatar, fname, page.chat_metadata, page.full_token);
+            wi_actions.setChatContext(c.avatar, fname, page.chat_metadata, page.full_token);
+        } else {
+            wi_actions.setChatContext("", "", "", "");
+        }
+        // Deep-load the card's personality/scenario/mesExamples once, so the send prompt is not the
+        // degraded shallow form. Reused for every send against this card.
+        fetchDeepCard(c.avatar);
+        open_group_index = null; // w3-chatref
     } else {
+        // w3-chatref: a group chat has no single card. Notes + chat-linked books for group headers
+        // are 3b-B's seam; both contexts clear rather than carry the prior solo chat's identity.
+        an_state.setFromPage("", "", "", "");
         wi_actions.setChatContext("", "", "", "");
+        open_group_index = index;
     }
-    // Deep-load the card's personality/scenario/mesExamples once, so the send prompt is not the
-    // degraded shallow form. Reused for every send against this card.
-    fetchDeepCard(c.avatar);
 
-    const char_avatar: ?[]u8 = if (c.avatar.len > 0) data.thumbUrl(alloc, "avatar", c.avatar) catch null else null;
+    const char_avatar: ?[]u8 = if (char) |c|
+        (if (c.avatar.len > 0) data.thumbUrl(alloc, "avatar", c.avatar) catch null else null)
+    else
+        null;
     defer if (char_avatar) |u| alloc.free(u);
     const persona = activePersona();
     const persona_avatar: ?[]u8 = if (persona) |p|
@@ -605,33 +683,51 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         null;
     defer if (persona_avatar) |u| alloc.free(u);
 
+    // w3-chatref: group thumbs live only until appendCopyFull copies them into the store.
+    var member_thumbs: std.ArrayList([]u8) = .empty;
+    defer {
+        for (member_thumbs.items) |t| alloc.free(t);
+        member_thumbs.deinit(alloc);
+    }
     if (page.messages.len > 0) {
         for (page.messages) |m| {
-            const sender = if (m.name.len > 0) m.name else if (m.is_user) "You" else c.name;
-            const avatar = if (m.is_user) (persona_avatar orelse "") else (char_avatar orelse "");
+            const fallback = if (char) |c| c.name else ""; // w3-chatref
+            const sender = if (m.name.len > 0) m.name else if (m.is_user) "You" else fallback;
+            const avatar = if (m.is_user)
+                (persona_avatar orelse "")
+            else if (char != null)
+                (char_avatar orelse "")
+            else
+                (groupMemberThumb(m.name, &member_thumbs) orelse ""); // w3-chatref
             store.global.appendCopyFull(sender, m.mes, avatar, m.reasoning) catch |err| {
                 chars_log.err("append message: {s}, message dropped", .{@errorName(err)});
             };
         }
-    } else if (c.first_mes.len > 0) {
-        const user_name = if (persona) |p| p.name else "You";
-        if (data.renderGreeting(alloc, c.first_mes, c.name, user_name)) |greeting| {
-            defer alloc.free(greeting);
-            store.global.appendCopy(c.name, greeting, char_avatar orelse "") catch |err| {
-                chars_log.err("append greeting: {s}", .{@errorName(err)});
-            };
-            chars_log.debug("seeded greeting for {s}", .{c.name});
-        } else |err| {
-            chars_log.err("greeting render failed: {s}", .{@errorName(err)});
+    } else if (char) |c| {
+        if (c.first_mes.len > 0) {
+            const user_name = if (persona) |p| p.name else "You";
+            if (data.renderGreeting(alloc, c.first_mes, c.name, user_name)) |greeting| {
+                defer alloc.free(greeting);
+                store.global.appendCopy(c.name, greeting, char_avatar orelse "") catch |err| {
+                    chars_log.err("append greeting: {s}", .{@errorName(err)});
+                };
+                chars_log.debug("seeded greeting for {s}", .{c.name});
+            } else |err| {
+                chars_log.err("greeting render failed: {s}", .{@errorName(err)});
+            }
         }
     }
     // window_offset = absolute index of the window's first message. Saturating: total_items vs slice
     // length is an untrusted server relation and must not underflow to a huge usize (silent in ReleaseSmall).
     store.global.markAllHistory();
     store.global.window_offset = page.total_items -| page.messages.len;
-    if (chatFileName(c)) |fname| {
-        defer alloc.free(fname);
-        pager.open(c.avatar, fname, c.name, char_avatar orelse "", persona_avatar orelse "", page.total_items, page.has_more_before, page.change_token);
+    if (char) |c| {
+        if (chatFileName(c)) |fname| {
+            defer alloc.free(fname);
+            pager.open(.{ .solo = .{ .avatar = c.avatar, .file = fname } }, c.name, char_avatar orelse "", persona_avatar orelse "", page.total_items, page.has_more_before, page.change_token);
+        }
+    } else if (group) |g| { // w3-chatref: the reader pages the group file by the same mechanics
+        pager.open(.{ .group = .{ .id = group_store.chatFileId(&g) } }, g.name, "", persona_avatar orelse "", page.total_items, page.has_more_before, page.change_token);
     }
     // The whole-file token rides alongside the tail token; a message mutation must present it (the tail
     // token 409s by design). Set here on every open/resync so the next mutation carries a current one.
@@ -644,7 +740,8 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     }
     regions.bumpMessageLog();
     regions.bumpShell();
-    chars_log.info("opened chat: {s} ({d} of {d} messages)", .{ c.name, page.messages.len, page.total_items });
+    const opened_name = if (char) |c| c.name else group.?.name; // w3-chatref
+    chars_log.info("opened chat: {s} ({d} of {d} messages)", .{ opened_name, page.messages.len, page.total_items });
     // The bumps above re-rendered synchronously (S1 probe finding d), so the whole window is in the
     // DOM. A re-sync restores the prior anchor (near-bottom tail-jumps); a normal open lands newest.
     if (was_resync) {
@@ -658,6 +755,13 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
 /// __st_reader_resync door export) when a prepend returns 409: the file changed above the window,
 /// so history state is dropped and the reader re-syncs to the newest slice.
 pub fn reloadCurrentChat() void {
+    // w3-chatref: a group chat re-syncs through its own window loader, same anchor mechanics.
+    if (open_group_index) |gidx| {
+        chars_log.info("reader re-sync: reloading current group chat after a stale prepend", .{});
+        js.global.call(void, "__st_reader_capture_anchor", .{}) catch {};
+        openGroupChatWindow(gidx, store.global.slice().len + pager.BATCH, true);
+        return;
+    }
     const idx = char_store.global.selected_index orelse {
         // No open chat: nothing to reload, so release the re-sync guard the caller set.
         pager.clearResync();
@@ -672,6 +776,20 @@ pub fn reloadCurrentChat() void {
     const loaded = store.global.slice().len;
     const resync_limit = loaded + pager.BATCH;
     loadCharacterChatWindow(idx, resync_limit, true);
+}
+
+// w3-chatref: a group row is attributed by its message name (former members still resolve; the
+// lookup spans the whole character store). The owned thumb parks on `thumbs` until the store copy.
+fn groupMemberThumb(name: []const u8, thumbs: *std.ArrayList([]u8)) ?[]const u8 {
+    const ci = group_store.characterIndexByName(name) orelse return null;
+    const c = char_store.slice()[ci];
+    if (c.avatar.len == 0) return null;
+    const t = data.thumbUrl(alloc, "avatar", c.avatar) catch return null;
+    thumbs.append(alloc, t) catch {
+        alloc.free(t);
+        return null;
+    };
+    return t;
 }
 
 fn setChatBusy(busy: bool) void {
@@ -954,6 +1072,12 @@ fn deepField(c: char_store.Character, shallow: []const u8, deep: []const u8) []c
 /// bounds what the model sees (invariant 2); onPromptWindowDone assembles + dispatches once it lands.
 pub fn sendMessage() void {
     if (zx.platform.role != .client) return;
+    // w3-chatref: an open group routes the composer into the rotation; the solo path below is
+    // untouched when no group is active.
+    if (group_store.activeGroupId() != null) {
+        sendGroupMessage();
+        return;
+    }
     const conn = conn_mod.active() orelse {
         net_log.warn("send: no backend configured (textgen only this phase)", .{});
         return;
@@ -1012,17 +1136,43 @@ pub fn sendMessage() void {
         onPromptWindowDone(0, 0, null);
         return;
     }
-    const win_body = std.json.Stringify.valueAlloc(alloc, .{
-        .avatar_url = c.avatar,
-        .file_name = send_file,
-        .paged = true,
-        .limit = pager.PROMPT_LIMIT,
-    }, .{}) catch {
+    const ref = data.ChatRef{ .solo = .{ .avatar = c.avatar, .file = send_file } }; // w3-chatref: one page-body path
+    const win_body = data.pageBody(alloc, ref, .{ .limit = pager.PROMPT_LIMIT }) catch {
         freePending();
         return;
     };
     defer alloc.free(win_body);
-    net.request("/api/chats/get", win_body, 0, onPromptWindowDone, .{});
+    net.request(ref.url(), win_body, 0, onPromptWindowDone, .{});
+}
+
+/// w3-chatref: the composer's group branch. Builds the rotation definition from the open group and
+/// hands it to group_send.beginSend; display append, persistence and member launches all ride the
+/// 3c-B driver. The user turn persists even with no backend configured (stock parity); each member
+/// launch checks the connection itself.
+fn sendGroupMessage() void {
+    const g = group_store.selected() orelse return;
+    if (group_send.isActive()) {
+        net_log.warn("group send: a rotation is already running", .{});
+        return;
+    }
+    if (pend_active) {
+        net_log.warn("group send: previous send still assembling its prompt", .{});
+        return;
+    }
+    const text = readComposer() orelse return;
+    defer alloc.free(text);
+    const members = group_store.sendRoster(alloc, &g, char_store.slice()) catch {
+        chars_log.err("group send: could not build the roster", .{});
+        return;
+    };
+    defer alloc.free(members);
+    const ok = group_send.beginSend(.{
+        .chat_id = group_store.chatFileId(&g),
+        .strategy = @enumFromInt(@intFromEnum(g.activation_strategy)),
+        .allow_self_responses = g.allow_self_responses,
+        .members = members,
+    }, text, null);
+    if (ok) clearComposer();
 }
 
 /// Dupes everything the deferred prompt build needs into pending ownership: the connection, the card
@@ -1272,16 +1422,13 @@ pub fn launchGroupMember(m: @import("./group_rotation.zig").Member) bool {
     // group window already carries every persisted turn, including the user's.
     setOwned(&pend_first_mes, "");
     setOwned(&pend_user_text, "");
-    const win_body = std.json.Stringify.valueAlloc(alloc, .{
-        .id = gid,
-        .paged = true,
-        .limit = pager.PROMPT_LIMIT,
-    }, .{}) catch {
+    const ref = data.ChatRef{ .group = .{ .id = gid } }; // w3-chatref: one page-body path
+    const win_body = data.pageBody(alloc, ref, .{ .limit = pager.PROMPT_LIMIT }) catch {
         freePending();
         return false;
     };
     defer alloc.free(win_body);
-    net.request("/api/chats/group/get", win_body, 0, onPromptWindowDone, .{});
+    net.request(ref.url(), win_body, 0, onPromptWindowDone, .{});
     return true;
 }
 

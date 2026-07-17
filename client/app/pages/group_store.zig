@@ -20,6 +20,7 @@ const builtin = @import("builtin");
 
 const character_store = @import("./character_store.zig");
 const data = @import("./char_data.zig");
+const rotation = @import("./group_rotation.zig"); // w3-chatref: sendRoster's Member type
 
 const Allocator = std.mem.Allocator;
 
@@ -528,6 +529,12 @@ pub fn activeGroupId() ?[]const u8 {
 pub fn activeChatId() ?[]const u8 {
     const g = selected() orelse return null;
     if (g.id.len == 0) return null;
+    return chatFileId(&g);
+}
+
+/// w3-chatref: the chat file id a group's reader and sends address (groupChats/<id>.jsonl): the
+/// active chat_id, else the group id (replaceAll backfills chat_id, drafts have neither).
+pub fn chatFileId(g: *const Group) []const u8 {
     return if (g.chat_id.len > 0) g.chat_id else g.id;
 }
 
@@ -559,6 +566,38 @@ pub fn memberCharacterIndexIn(chars: []const character_store.Character, member_a
         if (std.mem.eql(u8, c.avatar, member_avatar)) return i;
     }
     return null;
+}
+
+/// w3-chatref: resolve a chat line's speaker name to its character row (the reader's per-message
+/// attribution: a group file names its speaker per line, and a FORMER member's rows must still
+/// resolve, so this scans the whole character store, not the group's member list).
+pub fn characterIndexByName(name: []const u8) ?usize {
+    return characterIndexByNameIn(character_store.slice(), name);
+}
+
+pub fn characterIndexByNameIn(chars: []const character_store.Character, name: []const u8) ?usize {
+    if (name.len == 0) return null;
+    for (chars, 0..) |c, i| {
+        if (std.mem.eql(u8, c.name, name)) return i;
+    }
+    return null;
+}
+
+/// w3-chatref: the rotation roster a composer send builds from the open group: members minus
+/// muted, each resolved to its character's display name; a member whose character is gone is
+/// skipped (it cannot generate). Caller frees the slice; the strings borrow the stores.
+pub fn sendRoster(a: Allocator, g: *const Group, chars: []const character_store.Character) Allocator.Error![]rotation.Member {
+    var out: std.ArrayList(rotation.Member) = .empty;
+    errdefer out.deinit(a);
+    for (g.members.items) |m| {
+        if (isMuted(g, m)) continue;
+        const ci = memberCharacterIndexIn(chars, m) orelse {
+            log.warn("send roster: member {s} has no loaded character, skipped", .{m});
+            continue;
+        };
+        try out.append(a, .{ .avatar = m, .name = chars[ci].name });
+    }
+    return try out.toOwnedSlice(a);
 }
 
 // ---- panel view state (list vs editor; pure so the transitions are testable) ------------------
@@ -742,6 +781,50 @@ test "memberCharacterIndexIn resolves an avatar to its character row and misses 
     try testing.expectEqual(@as(?usize, 1), memberCharacterIndexIn(&chars, "bob.png"));
     try testing.expectEqual(@as(?usize, null), memberCharacterIndexIn(&chars, "gone.png"));
     try testing.expectEqual(@as(?usize, null), memberCharacterIndexIn(&chars, ""));
+}
+
+// w3-chatref: the reader/send helpers over the group model.
+
+test "characterIndexByNameIn resolves a speaker name and misses cleanly on gone or empty" {
+    const chars = [_]character_store.Character{
+        .{ .name = "Alice", .avatar = "alice.png", .description = "", .personality = "", .first_mes = "", .scenario = "", .mes_example = "", .chat = "", .fav = false, .tags = &.{} },
+        .{ .name = "Bob", .avatar = "bob.png", .description = "", .personality = "", .first_mes = "", .scenario = "", .mes_example = "", .chat = "", .fav = false, .tags = &.{} },
+    };
+    try testing.expectEqual(@as(?usize, 0), characterIndexByNameIn(&chars, "Alice"));
+    try testing.expectEqual(@as(?usize, 1), characterIndexByNameIn(&chars, "Bob"));
+    try testing.expectEqual(@as(?usize, null), characterIndexByNameIn(&chars, "Renamed"));
+    try testing.expectEqual(@as(?usize, null), characterIndexByNameIn(&chars, ""));
+}
+
+test "sendRoster excludes muted members, skips gone characters, resolves names in order" {
+    var store = GroupStore.init(testing.allocator);
+    defer store.deinit();
+    const parsed = try parseValue(testing.allocator, all_fixture);
+    defer parsed.deinit();
+    try store.replaceAll(parsed.value);
+    try store.addMember(0, "carol.png");
+    // Group 0: members alice, bob(muted), carol; carol has no character row.
+    const chars = [_]character_store.Character{
+        .{ .name = "Alice", .avatar = "alice.png", .description = "", .personality = "", .first_mes = "", .scenario = "", .mes_example = "", .chat = "", .fav = false, .tags = &.{} },
+        .{ .name = "Bob", .avatar = "bob.png", .description = "", .personality = "", .first_mes = "", .scenario = "", .mes_example = "", .chat = "", .fav = false, .tags = &.{} },
+    };
+    const roster = try sendRoster(testing.allocator, &store.groups.items[0], &chars);
+    defer testing.allocator.free(roster);
+    try testing.expectEqual(@as(usize, 1), roster.len);
+    try testing.expectEqualStrings("alice.png", roster[0].avatar);
+    try testing.expectEqualStrings("Alice", roster[0].name);
+}
+
+test "chatFileId prefers the active chat_id and falls back to the group id" {
+    var store = GroupStore.init(testing.allocator);
+    defer store.deinit();
+    const parsed = try parseValue(testing.allocator,
+        \\[{"id":"g1","members":[],"chat_id":"c9"},{"id":"g2","members":[]}]
+    );
+    defer parsed.deinit();
+    try store.replaceAll(parsed.value);
+    try testing.expectEqualStrings("c9", chatFileId(&store.groups.items[0]));
+    try testing.expectEqualStrings("g2", chatFileId(&store.groups.items[1]));
 }
 
 test "draft: appendDraft is local-only, activeGroupId stays solo, promoteDraft adopts the response" {

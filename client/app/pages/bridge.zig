@@ -74,6 +74,11 @@ fn readerAbort() callconv(.c) void {
     pager.abort();
 }
 
+// w3-chatref: the route the reader pump posts pages to (solo vs group), ptr<<32|len; 0 = no chat.
+fn readerPageUrl() callconv(.c) u64 {
+    return pager.pageUrl();
+}
+
 fn addCharacter(
     name_ptr: usize,
     name_len: usize,
@@ -348,6 +353,7 @@ comptime {
         @export(&readerCanPrepend, .{ .name = "__st_reader_can_prepend" });
         @export(&readerResync, .{ .name = "__st_reader_resync" });
         @export(&readerAbort, .{ .name = "__st_reader_abort" });
+        @export(&readerPageUrl, .{ .name = "__st_reader_page_url" }); // w3-chatref
         // w3-grp
         @export(&groupSend, .{ .name = "__st_group_send" });
         @export(&groupStreamFailed, .{ .name = "__st_group_stream_failed" });

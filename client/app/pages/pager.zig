@@ -8,6 +8,8 @@ const std = @import("std");
 const store = @import("./store.zig");
 const data = @import("./char_data.zig");
 const regions = @import("./regions.zig");
+const char_store = @import("./character_store.zig"); // w3-chatref: group rows resolve avatars by name
+const group_store = @import("./group_store.zig"); // w3-chatref
 
 const alloc = @import("./character_store.zig").page_gpa;
 const log = std.log.scoped(.net);
@@ -23,6 +25,8 @@ pub const PROMPT_LIMIT: usize = 300;
 
 var avatar_url: []u8 = &.{};
 var file_name: []u8 = &.{};
+// w3-chatref: the open GROUP chat's file id; group mode iff non-empty (solo fields then empty).
+var group_chat_id: []u8 = &.{};
 var char_name: []u8 = &.{};
 var char_avatar: []u8 = &.{};
 var persona_avatar: []u8 = &.{};
@@ -44,12 +48,13 @@ fn setOwned(dst: *[]u8, src: []const u8) void {
     dst.* = alloc.dupe(u8, src) catch &.{};
 }
 
-/// Records the paging state for a freshly opened chat: the identity to page against, the avatars a
-/// prepended batch wears, and the token/total/has-more from the tail response. Clears the in-flight
-/// guard. Called by `char_api` once the tail window is seeded into the store.
+/// Records the paging state for a freshly opened chat: the ref to page against (solo or group,
+/// invariant 5: one reader path), the avatars a prepended batch wears, and the token/total/has-more
+/// from the tail response. Clears the in-flight guard. Called by `char_api` once the tail window is
+/// seeded into the store. For a group ref `char_name`/`char_avatar` are the roster fallbacks (a row
+/// resolves its own member's avatar by name).
 pub fn open(
-    avatar_url_src: []const u8,
-    file_name_src: []const u8,
+    ref: data.ChatRef,
     char_name_src: []const u8,
     char_avatar_src: []const u8,
     persona_avatar_src: []const u8,
@@ -57,8 +62,18 @@ pub fn open(
     more: bool,
     token: []const u8,
 ) void {
-    setOwned(&avatar_url, avatar_url_src);
-    setOwned(&file_name, file_name_src);
+    switch (ref) { // w3-chatref
+        .solo => |s| {
+            setOwned(&avatar_url, s.avatar);
+            setOwned(&file_name, s.file);
+            setOwned(&group_chat_id, "");
+        },
+        .group => |g| {
+            setOwned(&avatar_url, "");
+            setOwned(&file_name, "");
+            setOwned(&group_chat_id, g.id);
+        },
+    }
     setOwned(&char_name, char_name_src);
     setOwned(&char_avatar, char_avatar_src);
     setOwned(&persona_avatar, persona_avatar_src);
@@ -68,10 +83,17 @@ pub fn open(
     in_flight = false;
 }
 
+/// w3-chatref: the open chat's ref, rebuilt from the owned identity fields; null = no open chat.
+fn currentRef() ?data.ChatRef {
+    if (group_chat_id.len > 0) return .{ .group = .{ .id = group_chat_id } };
+    const ref = data.ChatRef{ .solo = .{ .avatar = avatar_url, .file = file_name } };
+    return if (ref.valid()) ref else null;
+}
+
 /// Drops all paging state (chat closed or store cleared), so a stray late completion no longer
 /// prepends into the wrong chat.
 pub fn reset() void {
-    inline for (.{ &avatar_url, &file_name, &char_name, &char_avatar, &persona_avatar, &change_token, &full_token }) |field| {
+    inline for (.{ &avatar_url, &file_name, &group_chat_id, &char_name, &char_avatar, &persona_avatar, &change_token, &full_token }) |field| {
         if (field.len > 0) alloc.free(field.*);
         field.* = &.{};
     }
@@ -120,20 +142,26 @@ pub fn setFullToken(new_token: []const u8) void {
 /// page is already in flight. On success sets the in-flight guard and returns `ptr << 32 | len`
 /// into a reused static buffer the JS pump reads synchronously before its next call.
 pub fn nextBody() u64 {
-    if (in_flight or !has_more_before or avatar_url.len == 0 or file_name.len == 0) return 0;
-    const json = std.json.Stringify.valueAlloc(alloc, .{
-        .avatar_url = avatar_url,
-        .file_name = file_name,
-        .paged = true,
-        .before_index = store.global.window_offset,
+    if (in_flight or !has_more_before) return 0;
+    const ref = currentRef() orelse return 0; // w3-chatref: ref-agnostic body (invariant 5)
+    const json = data.pageBody(alloc, ref, .{
         .limit = BATCH,
+        .before_index = store.global.window_offset,
         .change_token = change_token,
-    }, .{}) catch return 0;
+    }) catch return 0;
     defer alloc.free(json);
     if (json.len > body_buf.len) return 0;
     @memcpy(body_buf[0..json.len], json);
     in_flight = true;
     return (@as(u64, @intFromPtr(&body_buf[0])) << 32) | @as(u64, json.len);
+}
+
+/// w3-chatref: the route the JS pump posts `nextBody` to (solo vs group), packed ptr<<32|len of a
+/// static string. 0 = no open chat.
+pub fn pageUrl() u64 {
+    const ref = currentRef() orelse return 0;
+    const url = ref.url();
+    return (@as(u64, @intFromPtr(url.ptr)) << 32) | @as(u64, url.len);
 }
 
 /// Parses a 200 page body and prepends its messages to the store head. Clears the in-flight guard,
@@ -166,9 +194,20 @@ pub fn applyPage(bytes: []const u8) u32 {
 
     const items = alloc.alloc(store.Incoming, page.messages.len) catch return 0;
     defer alloc.free(items);
+    // w3-chatref: group thumbs live only until prependSealed copies them into the store.
+    var member_thumbs: std.ArrayList([]u8) = .empty;
+    defer {
+        for (member_thumbs.items) |t| alloc.free(t);
+        member_thumbs.deinit(alloc);
+    }
     for (page.messages, 0..) |m, i| {
         const sender = if (m.name.len > 0) m.name else if (m.is_user) "You" else char_name;
-        const avatar = if (m.is_user) persona_avatar else char_avatar;
+        const avatar = if (m.is_user)
+            persona_avatar
+        else if (group_chat_id.len > 0)
+            (memberThumb(m.name, &member_thumbs) orelse char_avatar) // w3-chatref
+        else
+            char_avatar;
         items[i] = .{ .name = sender, .body = m.mes, .avatar = avatar, .reasoning = m.reasoning }; // w3-reason
     }
     store.global.prependSealed(items) catch |err| {
@@ -183,7 +222,21 @@ pub fn applyPage(bytes: []const u8) u32 {
 /// True while a chat with older history above the window is open and no page is in flight; the JS
 /// pump gates a prefetch on this before reading `nextBody`.
 pub fn canPrepend() bool {
-    return has_more_before and !in_flight and !resyncing and avatar_url.len > 0;
+    return has_more_before and !in_flight and !resyncing and currentRef() != null;
+}
+
+// w3-chatref: a prepended group row is attributed per message name (a former member's rows must
+// still resolve, so the lookup spans the whole character store). Owned thumb parked on `thumbs`.
+fn memberThumb(name: []const u8, thumbs: *std.ArrayList([]u8)) ?[]const u8 {
+    const ci = group_store.characterIndexByName(name) orelse return null;
+    const c = char_store.slice()[ci];
+    if (c.avatar.len == 0) return null;
+    const t = data.thumbUrl(alloc, "avatar", c.avatar) catch return null;
+    thumbs.append(alloc, t) catch {
+        alloc.free(t);
+        return null;
+    };
+    return t;
 }
 
 /// Clears the in-flight guard without applying a page. The JS pump calls this when it drops a
