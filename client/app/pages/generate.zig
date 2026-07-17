@@ -220,8 +220,6 @@ pub fn buildPrompt(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, shape
 /// so neither can be silently trimmed: they are control instructions, and losing one would change
 /// the reply with nothing to point at. The remaining budget bounds the history alone. Owned result.
 pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, budget_chars: usize, shape: Shape) Allocator.Error![]u8 {
-    const instruct = shape.tpl.instruct;
-
     // The world-info scan reads the PROMPT window tail, so the display window never bounds what
     // can activate (invariant 2).
     const scan_texts = try alloc.alloc([]const u8, history.len);
@@ -245,6 +243,12 @@ pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMs
     defer alloc.free(outlet_map);
     for (wi_act.outlets, 0..) |g, i| outlet_map[i] = .{ .name = g.name, .content = g.content };
     wctx.outlets = outlet_map;
+
+    // Stock substitutes macros in the instruct wrap sequences when instruct.macro is on
+    // (instruct-mode.js); else an output_sequence "<|im_start|>assistant {{char}}:" ships literal.
+    const instruct = try resolveInstructMacros(alloc, shape.tpl.instruct, wctx);
+    defer freeInstructMacros(alloc, shape.tpl.instruct, instruct);
+
     // Stock drops wi content a story string has no slot for, warn-only (power-user.js:2294).
     if ((wi_act.before.len > 0 and !storyHasSlot(shape.tpl.context.story_string, "{{wiBefore}}", "{{loreBefore}}")) or
         (wi_act.after.len > 0 and !storyHasSlot(shape.tpl.context.story_string, "{{wiAfter}}", "{{loreAfter}}")) or
@@ -330,6 +334,75 @@ pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMs
     defer alloc.free(prefix);
     try out.appendSlice(alloc, prefix);
     return out.toOwnedSlice(alloc);
+}
+
+/// An owned macro-resolved copy of the value, or the value itself when empty (no macro possible, no
+/// allocation). Pairs with freeSeq, which frees iff the original was non-empty.
+fn subSeq(alloc: Allocator, s: []const u8, ctx: Ctx) Allocator.Error![]const u8 {
+    if (s.len == 0) return s;
+    return substituteMacros(alloc, s, ctx);
+}
+
+fn freeSeq(alloc: Allocator, orig: []const u8, resolved: []const u8) void {
+    if (orig.len > 0) alloc.free(resolved);
+}
+
+/// Resolves macros in the instruct wrap sequences, honoring the template's own `macro` toggle. When
+/// off, returns the template unchanged with nothing allocated; else every sequence field is an owned
+/// copy (free with freeInstructMacros). See the call site in buildPromptBudgeted for the why.
+fn resolveInstructMacros(alloc: Allocator, tpl: templates.Instruct, ctx: Ctx) Allocator.Error!templates.Instruct {
+    if (!tpl.macro) return tpl;
+    const in_seq = try subSeq(alloc, tpl.input_sequence, ctx);
+    errdefer freeSeq(alloc, tpl.input_sequence, in_seq);
+    const in_suf = try subSeq(alloc, tpl.input_suffix, ctx);
+    errdefer freeSeq(alloc, tpl.input_suffix, in_suf);
+    const out_seq = try subSeq(alloc, tpl.output_sequence, ctx);
+    errdefer freeSeq(alloc, tpl.output_sequence, out_seq);
+    const out_suf = try subSeq(alloc, tpl.output_suffix, ctx);
+    errdefer freeSeq(alloc, tpl.output_suffix, out_suf);
+    const sys_seq = try subSeq(alloc, tpl.system_sequence, ctx);
+    errdefer freeSeq(alloc, tpl.system_sequence, sys_seq);
+    const sys_suf = try subSeq(alloc, tpl.system_suffix, ctx);
+    errdefer freeSeq(alloc, tpl.system_suffix, sys_suf);
+    const first_out = try subSeq(alloc, tpl.first_output_sequence, ctx);
+    errdefer freeSeq(alloc, tpl.first_output_sequence, first_out);
+    const last_out = try subSeq(alloc, tpl.last_output_sequence, ctx);
+    errdefer freeSeq(alloc, tpl.last_output_sequence, last_out);
+    const stop = try subSeq(alloc, tpl.stop_sequence, ctx);
+    errdefer freeSeq(alloc, tpl.stop_sequence, stop);
+    const ss_pre = try subSeq(alloc, tpl.story_string_prefix, ctx);
+    errdefer freeSeq(alloc, tpl.story_string_prefix, ss_pre);
+    const ss_suf = try subSeq(alloc, tpl.story_string_suffix, ctx);
+    errdefer freeSeq(alloc, tpl.story_string_suffix, ss_suf);
+
+    var r = tpl;
+    r.input_sequence = in_seq;
+    r.input_suffix = in_suf;
+    r.output_sequence = out_seq;
+    r.output_suffix = out_suf;
+    r.system_sequence = sys_seq;
+    r.system_suffix = sys_suf;
+    r.first_output_sequence = first_out;
+    r.last_output_sequence = last_out;
+    r.stop_sequence = stop;
+    r.story_string_prefix = ss_pre;
+    r.story_string_suffix = ss_suf;
+    return r;
+}
+
+fn freeInstructMacros(alloc: Allocator, orig: templates.Instruct, r: templates.Instruct) void {
+    if (!orig.macro) return;
+    freeSeq(alloc, orig.input_sequence, r.input_sequence);
+    freeSeq(alloc, orig.input_suffix, r.input_suffix);
+    freeSeq(alloc, orig.output_sequence, r.output_sequence);
+    freeSeq(alloc, orig.output_suffix, r.output_suffix);
+    freeSeq(alloc, orig.system_sequence, r.system_sequence);
+    freeSeq(alloc, orig.system_suffix, r.system_suffix);
+    freeSeq(alloc, orig.first_output_sequence, r.first_output_sequence);
+    freeSeq(alloc, orig.last_output_sequence, r.last_output_sequence);
+    freeSeq(alloc, orig.stop_sequence, r.stop_sequence);
+    freeSeq(alloc, orig.story_string_prefix, r.story_string_prefix);
+    freeSeq(alloc, orig.story_string_suffix, r.story_string_suffix);
 }
 
 /// One in-chat control insertion: the author's note, or a merged WI atDepth group. `depth` counts
@@ -588,6 +661,19 @@ test "buildPrompt renders the story string rather than emitting literal handleba
     try testing.expect(std.mem.indexOf(u8, out, "{{#if") == null);
     try testing.expect(std.mem.indexOf(u8, out, "{{char}}") == null);
     try testing.expect(std.mem.indexOf(u8, out, "You are Rita.") != null);
+}
+
+test "buildPrompt resolves macros in the instruct wrap sequences" {
+    // A template whose output_sequence carries {{char}} must reach the model resolved, not literal:
+    // live prompts showed the char prefix as "<|im_start|>assistant {{char}}:".
+    var tpl = chatml;
+    tpl.output_sequence = "<|im_start|>assistant {{char}}:";
+    const shape = Shape{ .tpl = .{ .instruct = tpl, .context = .{ .story_string = templates.default_story_string } } };
+    const ctx = Ctx{ .char = "Lena", .description = "A diver." };
+    const out = try buildPrompt(testing.allocator, ctx, &.{}, shape);
+    defer testing.allocator.free(out);
+    try testing.expect(std.mem.indexOf(u8, out, "{{char}}") == null);
+    try testing.expect(std.mem.indexOf(u8, out, "<|im_start|>assistant Lena:") != null);
 }
 
 test "buildPrompt gives each example block the context separator" {
