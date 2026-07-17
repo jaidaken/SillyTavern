@@ -22,6 +22,7 @@ const config_state = @import("./config_state.zig");
 const conn_mod = @import("./connection.zig");
 const char_store = @import("./character_store.zig");
 const character_view = @import("./character_view.zig");
+const tag_store = @import("./tag_store.zig"); // w3-reason 3d tags
 const persona_store = @import("./persona_store.zig");
 const persona_actions = @import("./persona_actions.zig");
 const store = @import("./store.zig");
@@ -317,6 +318,8 @@ fn appendCharacter(cj: data.CharacterJson) !void {
     errdefer alloc.free(first_mes);
     const create_date = try alloc.dupe(u8, data.jsonStr(cj.create_date));
     errdefer alloc.free(create_date);
+    const tags = try data.tagsAlloc(alloc, cj.tags);
+    errdefer data.freeTags(alloc, tags);
     try char_store.global.append(.{
         .name = name,
         .avatar = avatar,
@@ -327,7 +330,7 @@ fn appendCharacter(cj: data.CharacterJson) !void {
         .chat = chat,
         .first_mes = first_mes,
         .fav = data.favTruthy(cj.fav),
-        .tags = &.{},
+        .tags = tags,
         .create_date = create_date,
         .date_last_chat = data.metaU64(cj.date_last_chat),
         .chat_size = data.metaU64(cj.chat_size),
@@ -337,6 +340,7 @@ fn appendCharacter(cj: data.CharacterJson) !void {
         .description_owned = if (desc.len > 0) desc else null,
         .chat_owned = if (chat.len > 0) chat else null,
         .first_mes_owned = if (first_mes.len > 0) first_mes else null,
+        .tags_owned = if (tags.len > 0) tags else null,
         .create_date_owned = if (create_date.len > 0) create_date else null,
     });
 }
@@ -378,6 +382,10 @@ fn loadPersonas(status: u16, res: ?*zx.Fetch.Response) void {
     const settings_str = parsed.value.settings orelse {
         personas_log.warn("settings.settings is not a string", .{});
         return;
+    };
+    // w3-reason 3d tags: mine tags + tag_map off the same settings fetch, no second round-trip.
+    tag_store.global.mine(settings_str) catch |err| {
+        personas_log.warn("tag mine failed: {s}", .{@errorName(err)});
     };
     const list = data.extractPersonas(alloc, settings_str) catch |err| {
         switch (err) {
@@ -570,6 +578,8 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     defer data.freeChatPage(alloc, page);
 
     store.global.clear();
+    // w3-reason: absolute indices repeat across chats, so open reasoning blocks must not carry over.
+    store.reasoning.clearAll();
     pager.reset();
     char_store.global.select(index);
     // The author's note belongs to THIS chat's header, so it loads with the chat and is replaced
@@ -599,7 +609,7 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         for (page.messages) |m| {
             const sender = if (m.name.len > 0) m.name else if (m.is_user) "You" else c.name;
             const avatar = if (m.is_user) (persona_avatar orelse "") else (char_avatar orelse "");
-            store.global.appendCopy(sender, m.mes, avatar) catch |err| {
+            store.global.appendCopyFull(sender, m.mes, avatar, m.reasoning) catch |err| {
                 chars_log.err("append message: {s}, message dropped", .{@errorName(err)});
             };
         }
@@ -991,7 +1001,7 @@ pub fn sendMessage() void {
         alloc.free(fname);
     }
     send_seq = chat_load_seq;
-    appendTurn(user_name, text, true);
+    appendTurn(user_name, text, true, "");
 
     if (!stashSend(conn, c, persona, user_name, text, char_avatar orelse "")) {
         chars_log.err("send: could not stash the send context", .{});
@@ -1160,16 +1170,18 @@ pub fn persistNewTurns() void {
     const msgs = store.slice();
     if (msgs.len == 0) return;
     const last = msgs[msgs.len - 1];
-    appendTurn(last.name, last.body, false);
+    appendTurn(last.name, last.body, false, last.reasoning);
 }
 
 /// Persist one turn to the open chat via the server append route, never a whole-file save, so history
 /// above the display window is preserved (invariant 2). The user turn goes on send, the assistant
 /// turn on seal. The change token is the reader's, shared for optimistic concurrency.
-fn appendTurn(name: []const u8, mes: []const u8, is_user: bool) void {
+fn appendTurn(name: []const u8, mes: []const u8, is_user: bool, reasoning_text: []const u8) void {
     if (zx.platform.role != .client) return;
     if (send_file.len == 0 or send_avatar.len == 0) return;
     const send_date: i64 = @intFromFloat(nowMs());
+    // w3-reason: the sealed reply's thinking persists as extra.reasoning (the classic client's key);
+    // a user turn carries "" and loads back as no block.
     const body = std.json.Stringify.valueAlloc(alloc, .{
         .avatar_url = send_avatar,
         .file_name = send_file,
@@ -1182,7 +1194,7 @@ fn appendTurn(name: []const u8, mes: []const u8, is_user: bool) void {
                 .is_system = false,
                 .send_date = send_date,
                 .mes = mes,
-                .extra = .{},
+                .extra = .{ .reasoning = reasoning_text },
             },
         },
     }, .{}) catch return;

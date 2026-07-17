@@ -31,7 +31,7 @@ pub const Character = struct {
     scenario_owned: ?[]const u8 = null,
     mes_example_owned: ?[]const u8 = null,
     chat_owned: ?[]const u8 = null,
-    tags_owned: ?[]const u8 = null,
+    tags_owned: ?[]const []const u8 = null,
     create_date_owned: ?[]const u8 = null,
 };
 
@@ -59,7 +59,10 @@ pub const CharacterStore = struct {
         if (c.scenario_owned) |b| self.allocator.free(b);
         if (c.mes_example_owned) |b| self.allocator.free(b);
         if (c.chat_owned) |b| self.allocator.free(b);
-        if (c.tags_owned) |b| self.allocator.free(b);
+        if (c.tags_owned) |b| {
+            for (b) |t| self.allocator.free(t);
+            self.allocator.free(b);
+        }
         if (c.create_date_owned) |b| self.allocator.free(b);
     }
 

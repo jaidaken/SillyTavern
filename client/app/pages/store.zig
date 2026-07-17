@@ -33,12 +33,19 @@ pub const Message = struct {
     /// Earlier generations of this turn, newest last. Empty until the swipe action lands; borrowed,
     /// never owned by the store this phase (no construction path allocates it yet).
     swipes: []const []const u8 = &.{},
+    /// The model's thinking text for this turn (extra.reasoning in the chat file), owned like the
+    /// body. Empty for a turn without one; rendered as collapsed chrome outside the sanitized body.
+    reasoning: []const u8 = "",
+    reasoning_owned: ?[]u8 = null,
 };
 
 pub const Store = struct {
     allocator: Allocator,
     messages: std.ArrayList(Message) = .empty,
     tail: std.ArrayList(u8) = .empty,
+    /// The streaming message's thinking text, accumulated apart from `tail` (a think-tag split in
+    /// generate routes each chunk to one or the other) and sealed alongside it in `endStream`.
+    reasoning_tail: std.ArrayList(u8) = .empty,
     /// Index of the message currently receiving tokens. An index, not a pointer: `messages` moves
     /// when it grows, and a message may be appended behind the streaming one.
     stream_index: ?usize = null,
@@ -59,9 +66,11 @@ pub const Store = struct {
             if (m.name_owned) |b| self.allocator.free(b);
             if (m.body_owned) |b| self.allocator.free(b);
             if (m.avatar_owned) |b| self.allocator.free(b);
+            if (m.reasoning_owned) |b| self.allocator.free(b);
         }
         self.messages.deinit(self.allocator);
         self.tail.deinit(self.allocator);
+        self.reasoning_tail.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -70,10 +79,13 @@ pub const Store = struct {
             if (m.name_owned) |b| self.allocator.free(b);
             if (m.body_owned) |b| self.allocator.free(b);
             if (m.avatar_owned) |b| self.allocator.free(b);
+            if (m.reasoning_owned) |b| self.allocator.free(b);
         }
         self.messages.clearRetainingCapacity();
         self.tail.deinit(self.allocator);
         self.tail = .empty;
+        self.reasoning_tail.deinit(self.allocator);
+        self.reasoning_tail = .empty;
         self.stream_index = null;
         self.window_offset = 0;
         self.session_start = 0;
@@ -113,6 +125,29 @@ pub const Store = struct {
         try self.append(n, b, a);
     }
 
+    /// Copies every field including the thinking text. The chat loader's path for a stored turn
+    /// that carries extra.reasoning; `appendCopy` stays the reasoning-free path and is untouched.
+    pub fn appendCopyFull(self: *Store, name: []const u8, body: []const u8, avatar: []const u8, reasoning_text: []const u8) Allocator.Error!void {
+        const n = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(n);
+        const b = try self.allocator.dupe(u8, body);
+        errdefer self.allocator.free(b);
+        const a = try self.allocator.dupe(u8, avatar);
+        errdefer self.allocator.free(a);
+        const r: ?[]u8 = if (reasoning_text.len > 0) try self.allocator.dupe(u8, reasoning_text) else null;
+        errdefer if (r) |x| self.allocator.free(x);
+        try self.messages.append(self.allocator, .{
+            .name = n,
+            .body = b,
+            .avatar = a,
+            .name_owned = n,
+            .body_owned = b,
+            .avatar_owned = a,
+            .reasoning = if (r) |x| x else "",
+            .reasoning_owned = r,
+        });
+    }
+
     /// Takes ownership of `name` and `avatar` on success. Any in-flight stream is sealed first, so a second
     /// stream can never alias the first message's body.
     pub fn beginStream(self: *Store, name: []u8, avatar: []u8) Allocator.Error!void {
@@ -130,32 +165,61 @@ pub const Store = struct {
         self.messages.items[index].body = self.tail.items;
     }
 
-    /// Seals the tail into the streaming message, which owns it from here on. After this the body
-    /// never moves and is never freed until `deinit`.
+    /// Grows the streaming message's thinking text. Same safety story as `appendTail`: the buffer
+    /// may move, and nothing outside the store retains a streaming pointer across a render.
+    pub fn appendReasoningTail(self: *Store, bytes: []const u8) Allocator.Error!void {
+        const index = self.stream_index orelse return;
+        try self.reasoning_tail.appendSlice(self.allocator, bytes);
+        self.messages.items[index].reasoning = self.reasoning_tail.items;
+    }
+
+    /// Reserves room for `body_n` body bytes and `reason_n` reasoning bytes, so a caller can stage
+    /// one token's two appends with no failure point between them splitting the token.
+    pub fn reserveTails(self: *Store, body_n: usize, reason_n: usize) Allocator.Error!void {
+        try self.tail.ensureUnusedCapacity(self.allocator, body_n);
+        try self.reasoning_tail.ensureUnusedCapacity(self.allocator, reason_n);
+    }
+
+    /// Drops trailing whitespace from the streaming reasoning text. The stream splitter calls this
+    /// at the close tag, so the sealed reasoning matches the non-stream parse's trimmed capture.
+    pub fn trimReasoningTail(self: *Store) void {
+        const index = self.stream_index orelse return;
+        const trimmed = std.mem.trimEnd(u8, self.reasoning_tail.items, &std.ascii.whitespace);
+        self.reasoning_tail.shrinkRetainingCapacity(trimmed.len);
+        self.messages.items[index].reasoning = self.reasoning_tail.items;
+    }
+
+    /// Seals both tails into the streaming message, which owns them from here on. After this the
+    /// body and reasoning never move and are never freed until `deinit`.
     pub fn endStream(self: *Store) void {
         const index = self.stream_index orelse return;
         self.stream_index = null;
 
         const msg = &self.messages.items[index];
-        if (self.tail.items.len == 0) {
-            self.tail.deinit(self.allocator);
-            self.tail = .empty;
-            msg.body = "";
+        self.seal(&self.tail, &msg.body, &msg.body_owned);
+        self.seal(&self.reasoning_tail, &msg.reasoning, &msg.reasoning_owned);
+    }
+
+    fn seal(self: *Store, buf: *std.ArrayList(u8), text: *[]const u8, owned: *?[]u8) void {
+        if (buf.items.len == 0) {
+            buf.deinit(self.allocator);
+            buf.* = .empty;
+            text.* = "";
             return;
         }
 
-        const full = self.tail.allocatedSlice();
-        const len = self.tail.items.len;
-        self.tail = .empty;
+        const full = buf.allocatedSlice();
+        const len = buf.items.len;
+        buf.* = .empty;
 
         // remap may relocate rather than shrink in place, and nothing retains the pre-seal pointer,
         // so either outcome is correct. Its refusal keeps the spare capacity, freed at deinit.
         if (self.allocator.remap(full, len)) |shrunk| {
-            msg.body = shrunk;
-            msg.body_owned = shrunk;
+            text.* = shrunk;
+            owned.* = shrunk;
         } else {
-            msg.body = full[0..len];
-            msg.body_owned = full;
+            text.* = full[0..len];
+            owned.* = full;
         }
     }
 
@@ -178,6 +242,7 @@ pub const Store = struct {
                 if (m.name_owned) |b| self.allocator.free(b);
                 if (m.body_owned) |b| self.allocator.free(b);
                 if (m.avatar_owned) |b| self.allocator.free(b);
+                if (m.reasoning_owned) |b| self.allocator.free(b);
             }
             self.allocator.free(batch);
         }
@@ -188,7 +253,9 @@ pub const Store = struct {
             errdefer self.allocator.free(b);
             const a = try self.allocator.dupe(u8, it.avatar);
             errdefer self.allocator.free(a);
-            batch[k] = .{ .name = n, .body = b, .avatar = a, .name_owned = n, .body_owned = b, .avatar_owned = a };
+            const r: ?[]u8 = if (it.reasoning.len > 0) try self.allocator.dupe(u8, it.reasoning) else null;
+            errdefer if (r) |x| self.allocator.free(x);
+            batch[k] = .{ .name = n, .body = b, .avatar = a, .name_owned = n, .body_owned = b, .avatar_owned = a, .reasoning = if (r) |x| x else "", .reasoning_owned = r };
             filled = k + 1;
         }
         try self.messages.insertSlice(self.allocator, 0, batch);
@@ -223,6 +290,7 @@ pub const Store = struct {
         if (m.name_owned) |b| self.allocator.free(b);
         if (m.body_owned) |b| self.allocator.free(b);
         if (m.avatar_owned) |b| self.allocator.free(b);
+        if (m.reasoning_owned) |b| self.allocator.free(b);
         _ = self.messages.orderedRemove(i);
         if (i < self.session_start) self.session_start -= 1;
         if (self.stream_index) |si| {
@@ -255,6 +323,7 @@ pub const Incoming = struct {
     name: []const u8,
     body: []const u8,
     avatar: []const u8,
+    reasoning: []const u8 = "",
 };
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
@@ -279,7 +348,7 @@ pub fn isStreaming(index: usize) bool {
 /// the reconciler "no signal, always resolve".
 pub fn signal(m: Message) u64 {
     var h: u64 = 0xcbf29ce484222325;
-    inline for (.{ @intFromPtr(m.name.ptr), m.name.len, @intFromPtr(m.body.ptr), m.body.len, @intFromPtr(m.avatar.ptr), m.avatar.len }) |v| {
+    inline for (.{ @intFromPtr(m.name.ptr), m.name.len, @intFromPtr(m.body.ptr), m.body.len, @intFromPtr(m.avatar.ptr), m.avatar.len, @intFromPtr(m.reasoning.ptr), m.reasoning.len }) |v| {
         h = (h ^ @as(u64, v)) *% 0x100000001b3;
     }
     return h | 1;
@@ -299,11 +368,19 @@ pub fn signalFor(index: usize, m: Message) u64 {
     // The action menu opens on ONE message. Fold its epoch for that message so its trigger's
     // aria-expanded flips even though the sealed body never moves (memo would otherwise skip it).
     if (menu.isOpenFor(global.window_offset + index)) base = ((base ^ 0x2545f4914f6cdd1d) *% (menu.epoch | 1)) | 1;
+    // The reasoning block toggles per message. Fold its epoch for an open one so expand/collapse
+    // re-renders that message even though its sealed body and reasoning never move (memo would skip).
+    if (reasoning.isOpenFor(global.window_offset + index)) base = ((base ^ 0x94d049bb133111eb) *% (reasoning.epoch | 1)) | 1;
     return base;
 }
 
 pub fn clearStore() void {
+    reasoning.clearAll();
     return global.clear();
+}
+
+pub fn appendCopyFull(name: []const u8, body: []const u8, avatar: []const u8, reasoning_text: []const u8) Allocator.Error!void {
+    return global.appendCopyFull(name, body, avatar, reasoning_text);
 }
 
 pub fn appendCopy(name: []const u8, body: []const u8, avatar: []const u8) Allocator.Error!void {
@@ -541,6 +618,47 @@ pub var menu: MenuState = .{};
 /// True when the action menu is open for the message at absolute index `abs`.
 pub fn menuOpenFor(abs: usize) bool {
     return menu.isOpenFor(abs);
+}
+
+// ---- reasoning-block UI state (3f) --------------------------------------------------------
+// Pure Zig; `message_actions.zig` drives it, `message.zx` reads it. Open set per absolute index.
+
+pub const ReasoningUiState = struct {
+    allocator: Allocator,
+    open: std.AutoHashMapUnmanaged(usize, void) = .empty,
+    /// Bumped on every toggle so `signalFor` re-renders the affected message; see signalFor.
+    epoch: u64 = 0,
+
+    pub fn deinit(self: *ReasoningUiState) void {
+        self.open.deinit(self.allocator);
+        self.* = undefined;
+    }
+
+    /// Expand or collapse the block for the message at absolute index `abs`. On OOM the toggle is
+    /// dropped and the block stays collapsed, which the next click retries.
+    pub fn toggle(self: *ReasoningUiState, abs: usize) void {
+        if (!self.open.remove(abs)) self.open.put(self.allocator, abs, {}) catch return;
+        self.epoch +%= 1;
+    }
+
+    pub fn isOpenFor(self: *const ReasoningUiState, abs: usize) bool {
+        return self.open.contains(abs);
+    }
+
+    /// Collapse every block. A chat open resets this: absolute indices repeat across chats, so a
+    /// stale entry would render the next chat's block expanded.
+    pub fn clearAll(self: *ReasoningUiState) void {
+        self.open.clearRetainingCapacity();
+        self.epoch +%= 1;
+    }
+};
+
+/// The one reasoning-block state the message chrome renders.
+pub var reasoning: ReasoningUiState = .{ .allocator = page_gpa };
+
+/// True when the reasoning block is expanded for the message at absolute index `abs`.
+pub fn reasoningOpenFor(abs: usize) bool {
+    return reasoning.isOpenFor(abs);
 }
 
 const testing = std.testing;
@@ -1247,4 +1365,144 @@ test "signalFor perturbs only the message whose action menu is open" {
     menu.toggle(0);
     try testing.expect(signalFor(0, m0) != base0);
     try testing.expectEqual(base1, signalFor(1, m1));
+}
+
+test "message defaults to empty reasoning" {
+    const m: Message = .{ .name = "You", .body = "hi" };
+    try testing.expectEqual(@as(usize, 0), m.reasoning.len);
+    try testing.expectEqual(@as(?[]u8, null), m.reasoning_owned);
+}
+
+test "append_copy_full_carries_reasoning_and_append_copy_leaves_it_empty" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+    try s.appendCopyFull("Seraphina", "the answer", "", "let me think");
+    try s.appendCopy("You", "plain", "");
+    try testing.expectEqualStrings("let me think", s.slice()[0].reasoning);
+    try testing.expectEqualStrings("the answer", s.slice()[0].body);
+    try testing.expectEqual(@as(usize, 0), s.slice()[1].reasoning.len);
+}
+
+test "edit_body_leaves_reasoning_untouched" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+    try s.appendCopyFull("Seraphina", "old body", "", "kept reasoning");
+    const kept = s.slice()[0].reasoning.ptr;
+    try s.editBody(0, "new body");
+    try testing.expectEqualStrings("new body", s.slice()[0].body);
+    try testing.expectEqualStrings("kept reasoning", s.slice()[0].reasoning);
+    try testing.expectEqual(kept, s.slice()[0].reasoning.ptr);
+}
+
+test "streamed_reasoning_accumulates_and_seals_apart_from_the_body" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+    try s.beginStream(try testing.allocator.dupe(u8, "Seraphina"), try testing.allocator.dupe(u8, ""));
+    try s.appendReasoningTail("thinking ");
+    try s.appendTail("body ");
+    try s.appendReasoningTail("more");
+    try s.appendTail("text");
+    s.endStream();
+    try testing.expectEqualStrings("thinking more", s.slice()[0].reasoning);
+    try testing.expectEqualStrings("body text", s.slice()[0].body);
+    // Sealed reasoning holds its address across later appends, like the body.
+    const ptr = s.slice()[0].reasoning.ptr;
+    for (0..32) |_| try s.appendCopy("You", "filler", "");
+    try testing.expectEqual(ptr, s.slice()[0].reasoning.ptr);
+}
+
+test "append_reasoning_tail_without_a_stream_is_silent" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+    try s.appendCopy("You", "hello", "");
+    try s.appendReasoningTail("dropped");
+    try testing.expectEqual(@as(usize, 0), s.slice()[0].reasoning.len);
+}
+
+test "a_second_stream_never_inherits_the_first_streams_reasoning" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+    try s.beginStream(try testing.allocator.dupe(u8, "First"), try testing.allocator.dupe(u8, ""));
+    try s.appendReasoningTail("first thoughts");
+    try s.appendTail("first body");
+    try s.beginStream(try testing.allocator.dupe(u8, "Second"), try testing.allocator.dupe(u8, ""));
+    try s.appendTail("second body");
+    s.endStream();
+    try testing.expectEqualStrings("first thoughts", s.slice()[0].reasoning);
+    try testing.expectEqual(@as(usize, 0), s.slice()[1].reasoning.len);
+}
+
+test "signal_changes_when_reasoning_streams_in" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+    try s.beginStream(try testing.allocator.dupe(u8, "Seraphina"), try testing.allocator.dupe(u8, ""));
+    const before = signal(s.slice()[0]);
+    try s.appendReasoningTail("t");
+    try testing.expect(signal(s.slice()[0]) != before);
+    s.endStream();
+}
+
+fn reasoningScenario(gpa: Allocator) !void {
+    var s = Store.init(gpa);
+    defer s.deinit();
+    s.window_offset = 100;
+    try s.appendCopyFull("A", "body", "av", "seed reasoning");
+    const name = try gpa.dupe(u8, "Seraphina");
+    const av = try gpa.dupe(u8, "");
+    // Scoped to this call: past it the store owns `name`, and an errdefer would double-free.
+    s.beginStream(name, av) catch |err| {
+        gpa.free(name);
+        gpa.free(av);
+        return err;
+    };
+    for (0..8) |_| try s.appendReasoningTail("r");
+    for (0..8) |_| try s.appendTail("b");
+    s.endStream();
+    const batch = [_]Incoming{.{ .name = "Old", .body = "old body", .avatar = "", .reasoning = "older r" }};
+    try s.prependSealed(&batch);
+    try testing.expectEqualStrings("older r", s.slice()[0].reasoning);
+    try testing.expectEqualStrings("seed reasoning", s.slice()[1].reasoning);
+    try testing.expectEqualStrings("r" ** 8, s.slice()[2].reasoning);
+    try testing.expectEqualStrings("b" ** 8, s.slice()[2].body);
+}
+
+test "reasoning_paths_release_everything_on_any_allocation_failure" {
+    try testing.checkAllAllocationFailures(testing.allocator, reasoningScenario, .{});
+}
+
+test "reasoning_toggle_opens_independent_targets" {
+    var r = ReasoningUiState{ .allocator = testing.allocator };
+    defer r.deinit();
+    try testing.expect(!r.isOpenFor(3));
+    r.toggle(3);
+    r.toggle(5);
+    try testing.expect(r.isOpenFor(3));
+    try testing.expect(r.isOpenFor(5));
+    r.toggle(3);
+    try testing.expect(!r.isOpenFor(3));
+    try testing.expect(r.isOpenFor(5));
+    r.clearAll();
+    try testing.expect(!r.isOpenFor(5));
+}
+
+test "signalFor perturbs only the message whose reasoning is open" {
+    defer reasoning.clearAll();
+    const m0: Message = .{ .name = "You", .body = "one" };
+    const m1: Message = .{ .name = "You", .body = "two" };
+    const base0 = signalFor(0, m0);
+    const base1 = signalFor(1, m1);
+    reasoning.toggle(0);
+    try testing.expect(signalFor(0, m0) != base0);
+    try testing.expectEqual(base1, signalFor(1, m1));
+    // Collapsing returns the signal to base, so the close itself re-renders the message.
+    reasoning.toggle(0);
+    try testing.expectEqual(base0, signalFor(0, m0));
+}
+
+test "clear_store_collapses_every_reasoning_block" {
+    defer reasoning.clearAll();
+    reasoning.toggle(2);
+    try testing.expect(reasoningOpenFor(2));
+    clearStore();
+    try testing.expect(!reasoningOpenFor(2));
 }

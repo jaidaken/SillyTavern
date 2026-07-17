@@ -35,6 +35,15 @@ pub fn onLogClick(ev: zx.client.Event) void {
         return;
     };
 
+    // w3-reason: the reasoning-block header toggles its collapsed state.
+    if (dom_event.datasetUp(target, "reasonToggle")) |idx_str| {
+        defer zx.allocator.free(idx_str);
+        const abs = std.fmt.parseInt(usize, idx_str, 10) catch return;
+        store.reasoning.toggle(abs);
+        regions.bumpMessageLog();
+        return;
+    }
+
     // The trigger toggles the popped action list, anchored under it.
     if (dom_event.datasetUp(target, "msgMenu")) |idx_str| {
         defer zx.allocator.free(idx_str);

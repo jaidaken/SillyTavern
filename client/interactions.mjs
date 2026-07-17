@@ -664,6 +664,93 @@ async function main() {
         row('must', enterSent && afterShift === beforeEnter,
             'SL-Enter sends; Shift+Enter does not', `shift+enter=${afterShift} enter=${beforeEnter}->${enterSent}`);
 
+        /* w3-reason BEGIN reasoning-block rows (3f) */
+        console.log('== reasoning blocks (w3-reason) ==');
+        // The mock reply streams "<th|ink>mull the tides|</th|ink>|lantern ..." so these rows prove
+        // the mid-tag boundary split end to end, not just in the native unit tests.
+        // The elements always exist (stable-diff shape); PRESENCE = wrapper not .mes_reasoning-empty,
+        // OPEN = body not .mes_reasoning-closed.
+        const lastReason = "#chat .chat-live .mes:last-child .mes_reasoning:not(.mes_reasoning-empty)";
+        const lastReasonToggle = `${lastReason} .mes_reasoning_toggle`;
+        const lastReasonOpenBody = `${lastReason} .mes_reasoning_body:not(.mes_reasoning-closed)`;
+        const t1 = await page.waitFor(`document.querySelector('${lastReason}')`, 6000);
+        const t2 = await page.eval(`!document.querySelector('${lastReasonOpenBody}')`);
+        const t3 = await page.eval("!document.body.textContent.includes('mull the tides')");
+        const r1ok = t1 && t2 && t3;
+        row('must', r1ok, 'R1 streamed reply renders a collapsed reasoning block, body split clean', `shown=${t1} collapsed=${t2} noleak=${t3}`);
+        if (r1ok) {
+            await page.click(lastReasonToggle);
+            row('must', await page.waitFor(`document.querySelector('${lastReasonOpenBody}') && document.querySelector('${lastReasonOpenBody}').textContent.includes('mull the tides') && document.querySelector('${lastReasonToggle}').getAttribute('aria-expanded')==='true'`, 3000),
+                'R2 toggle expands the block and shows the split-out thinking');
+            await page.click(lastReasonToggle);
+            row('must', await page.waitFor(`!document.querySelector('${lastReasonOpenBody}') && document.querySelector('${lastReasonToggle}').getAttribute('aria-expanded')==='false'`, 3000),
+                'R3 second toggle collapses the block again');
+        } else {
+            row('must', false, 'R2 toggle expands the block and shows the split-out thinking', 'skipped: R1 failed');
+            row('must', false, 'R3 second toggle collapses the block again', 'skipped: R1 failed');
+        }
+
+        // Fresh load: the fixture's newest assistant HISTORY turn carries extra.reasoning.
+        await page.navigate(`${args.base}/`);
+        await openRecentChat();
+        row('must', await page.waitFor("document.querySelector('#chat .chat-history .mes .mes_reasoning:not(.mes_reasoning-empty)')", 6000),
+            'R4 chat-load lifts extra.reasoning into a collapsed block');
+
+        // Edit the reasoning-carrying message; the block must survive the save round-trip.
+        await page.eval("window.prompt = function(){ return 'Edited body, reasoning kept.'; }");
+        const reasonTrigger = "#chat .mes:has(.mes_reasoning:not(.mes_reasoning-empty)) .msg-menu-trigger";
+        let menuOpen = false;
+        for (let attempt = 0; attempt < 2 && !menuOpen; attempt += 1) {
+            try { await page.click(reasonTrigger); } catch (_) { /* retried below */ }
+            menuOpen = await page.waitFor("document.querySelector('#msg-menu')", 3000);
+        }
+        let r5ok = false;
+        if (menuOpen) {
+            try { await page.click('#msg-menu [data-msg-action="edit"]'); } catch (_) { /* row fails below */ }
+            r5ok = await page.waitFor("(function(){var w=document.querySelector('#chat .mes .mes_reasoning:not(.mes_reasoning-empty)'); if(!w) return false; var mes=w.closest('.mes'); return mes.textContent.includes('Edited body, reasoning kept.')})()", 8000);
+        }
+        const r5dump = r5ok ? '' : await page.eval(`(function(){var t=document.querySelector('${reasonTrigger}');return 'menu=${menuOpen} trigger='+(t?'yes':'no')+' edited='+document.body.textContent.includes('Edited body')})()`);
+        row('must', r5ok, 'R5 edit/save round-trip keeps the reasoning block on the edited message', r5dump);
+
+        // --- tags (w3-reason 3d): manager create/assign persists via the settings blob; chips
+        // filter on the card tags the 3d data fix made live. Rita Recent = char41.png.
+        console.log('== tags (w3-reason 3d) ==');
+        await page.click('#d-characters');
+        await page.waitFor("document.querySelector('.char-toolbar')", 4000);
+        await page.click('.char-toolbar button[aria-label="Manage tags"]');
+        await page.waitFor("document.querySelector('.tag-manager')", 3000);
+        await page.focus('#tag-create-name');
+        await page.insertText('gatetag');
+        await page.click('.tag-manager [data-tag-create]');
+        row('must', await page.waitFor("Array.from(document.querySelectorAll('.tag-row-name')).some(function(n){return n.textContent==='gatetag'})", 3000),
+            'T1 tag create adds a manager row');
+        await page.click('.tag-manager [data-tag-assign="t-gatetag"]');
+        row('must', await page.waitFor("(function(){var b=document.querySelector('.tag-manager [data-tag-assign=\\'t-gatetag\\']');return !!b && b.getAttribute('aria-pressed')==='true'})()", 3000),
+            'T2 assign toggles pressed for the open character');
+        let tagSaved = false;
+        for (let i = 0; i < 20 && !tagSaved; i += 1) {
+            await sleep(500);
+            const st = await (await fetch(`${args.base}/dev/state`)).json();
+            const ps = st.persona_settings || {};
+            tagSaved = Array.isArray(ps.tags) && ps.tags.some((t) => t.name === 'gatetag')
+                && ps.tag_map && Array.isArray(ps.tag_map['char41.png']) && ps.tag_map['char41.png'].includes('t-gatetag');
+        }
+        row('must', tagSaved, 'T3 tags + tag_map land in the settings blob via the one saver');
+        await page.navigate(`${args.base}/`);
+        await openRecentChat();
+        await page.click('#d-characters');
+        await page.waitFor("document.querySelector('.char-toolbar')", 4000);
+        await page.click('.char-toolbar button[aria-label="Manage tags"]');
+        row('must', await page.waitFor("(function(){var b=document.querySelector('.tag-manager [data-tag-assign=\\'t-gatetag\\']');return !!b && b.getAttribute('aria-pressed')==='true'})()", 6000),
+            'T4 created tag and assignment survive a reload (mined from the blob)');
+        const chipRowsBefore = await page.eval("document.querySelectorAll('#chat-root .char-item').length");
+        await page.click('.char-tags [data-tag="night"]');
+        row('must', await page.waitFor("document.querySelectorAll('#chat-root .char-item').length === 6", 3000),
+            'T5 filter chip narrows the list to the tagged cards', `before=${chipRowsBefore}`);
+        await page.click('.char-tags [data-tag="night"]');
+        await page.waitFor(`document.querySelectorAll('#chat-root .char-item').length === ${chipRowsBefore}`, 3000);
+        /* w3-reason END reasoning + tag rows */
+
         // PERSIST: send, let the reply seal (user append on send + assistant append on seal), then
         // reload and prove both turns survive (the mock /get echoes the appended messages). Wait for
         // the ENTER-probe stream to seal first: Send is hidden while a reply streams (C-COMP toggle).

@@ -43,9 +43,12 @@ pub const Stream = struct {
     /// Set by `emit` on `[DONE]`, acted on by `feed` once `drain` has stopped reading `line`.
     /// Sealing from inside `emit` would free the buffer `drain` is iterating.
     saw_done: bool = false,
+    /// w3-reason: routes token bytes into the body or the reasoning tail off the think tags.
+    think: ThinkSplit = .{},
 
     pub fn deinit(self: *Stream) void {
         self.line.deinit(self.allocator);
+        self.think.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -58,6 +61,7 @@ pub const Stream = struct {
         self.line.clearRetainingCapacity();
         self.tokens = 0;
         self.saw_done = false;
+        self.think.reset();
 
         try self.store.beginStream(name, avatar);
         self.state = .streaming;
@@ -139,6 +143,7 @@ pub const Stream = struct {
     /// token.
     fn seal(self: *Stream) void {
         self.line.clearAndFree(self.allocator);
+        self.think.finish(self.store);
         self.store.endStream();
         self.state = .done;
     }
@@ -177,7 +182,7 @@ pub const Stream = struct {
         switch (try completion.parsePayload(self.allocator, line[data_prefix.len..])) {
             .token => |tok| {
                 defer self.allocator.free(tok);
-                try self.store.appendTail(tok);
+                try self.think.push(self.allocator, self.store, tok);
                 self.tokens += 1;
             },
             // Only flagged: `drain` is iterating `line`, which `end` frees.
@@ -186,6 +191,143 @@ pub const Stream = struct {
         }
     }
 };
+
+// w3-reason BEGIN think-tag stream split (3f)
+
+const think_prefix = "<think>";
+const think_suffix = "</think>";
+
+/// Splits a token stream into reasoning and body off the think tags, mirroring the classic
+/// client's strict parse (`^\s*?<think>(.*?)</think>`, both captures trimmed) incrementally.
+///
+/// A tag can arrive cut across tokens, so ambiguous bytes are held: in `.probe` while they could
+/// still become leading whitespace plus `<think>`, in `.reasoning` while they could still become
+/// `</think>`. A held run that diverges is flushed to wherever it belonged. One deliberate
+/// divergence from the regex: a stream that opens a think block and never closes it keeps the text
+/// as reasoning (the user watched it stream there), where the regex would re-read it all as body.
+const ThinkSplit = struct {
+    state: enum { probe, reasoning_lead, reasoning, body_lead, body } = .probe,
+    /// Bytes that may yet complete the tag the state is scanning for. Bounded in `.reasoning` by
+    /// the tag length; bounded in `.probe` by the leading-whitespace run plus the tag length.
+    hold: std.ArrayList(u8) = .empty,
+
+    fn deinit(self: *ThinkSplit, gpa: Allocator) void {
+        self.hold.deinit(gpa);
+    }
+
+    fn reset(self: *ThinkSplit) void {
+        self.hold.clearRetainingCapacity();
+        self.state = .probe;
+    }
+
+    /// Routes one token's bytes. All-or-nothing like the plain appendTail it replaces: a failed
+    /// push restores the splitter and leaves the store untouched, so the door's retry of the same
+    /// line cannot duplicate bytes. Reasoning bytes always precede body bytes over a stream's life,
+    /// so the two batched store appends never interleave wrongly.
+    fn push(self: *ThinkSplit, gpa: Allocator, s: *Store, bytes: []const u8) Allocator.Error!void {
+        const entry_state = self.state;
+        const entry_hold = try gpa.dupe(u8, self.hold.items);
+        defer gpa.free(entry_hold);
+        // Refilling from the snapshot stays within `hold`'s existing capacity.
+        errdefer {
+            self.state = entry_state;
+            self.hold.clearRetainingCapacity();
+            self.hold.appendSliceAssumeCapacity(entry_hold);
+        }
+
+        var body_out: std.ArrayList(u8) = .empty;
+        defer body_out.deinit(gpa);
+        var reason_out: std.ArrayList(u8) = .empty;
+        defer reason_out.deinit(gpa);
+        var matched_suffix = false;
+
+        for (bytes) |b| switch (self.state) {
+            .probe => {
+                try self.hold.append(gpa, b);
+                const h = self.hold.items;
+                const ws = leadingWs(h);
+                const rest = h[ws..];
+                if (rest.len == 0) continue;
+                if (rest.len <= think_prefix.len and std.mem.eql(u8, rest, think_prefix[0..rest.len])) {
+                    if (rest.len == think_prefix.len) {
+                        self.hold.clearRetainingCapacity();
+                        self.state = .reasoning_lead;
+                    }
+                    continue;
+                }
+                try body_out.appendSlice(gpa, h);
+                self.hold.clearRetainingCapacity();
+                self.state = .body;
+            },
+            .reasoning_lead => {
+                if (std.ascii.isWhitespace(b)) continue;
+                self.state = .reasoning;
+                if (try self.reasonByte(gpa, b, &reason_out)) matched_suffix = true;
+            },
+            .reasoning => if (try self.reasonByte(gpa, b, &reason_out)) {
+                matched_suffix = true;
+            },
+            .body_lead => {
+                if (std.ascii.isWhitespace(b)) continue;
+                self.state = .body;
+                try body_out.append(gpa, b);
+            },
+            .body => try body_out.append(gpa, b),
+        };
+
+        // Reserve first: past this point neither append can fail, so the token commits whole.
+        try s.reserveTails(body_out.items.len, reason_out.items.len);
+        if (reason_out.items.len > 0) try s.appendReasoningTail(reason_out.items);
+        if (matched_suffix) s.trimReasoningTail();
+        if (body_out.items.len > 0) try s.appendTail(body_out.items);
+    }
+
+    /// One byte inside the think block. Returns true when it completes `</think>`.
+    fn reasonByte(self: *ThinkSplit, gpa: Allocator, b: u8, reason_out: *std.ArrayList(u8)) Allocator.Error!bool {
+        try self.hold.append(gpa, b);
+        var start: usize = 0;
+        while (true) {
+            const cand = self.hold.items[start..];
+            if (cand.len <= think_suffix.len and std.mem.eql(u8, cand, think_suffix[0..cand.len])) break;
+            try reason_out.append(gpa, self.hold.items[start]);
+            start += 1;
+        }
+        if (start > 0) {
+            const rest = self.hold.items.len - start;
+            std.mem.copyForwards(u8, self.hold.items[0..rest], self.hold.items[start..]);
+            self.hold.shrinkRetainingCapacity(rest);
+        }
+        if (self.hold.items.len == think_suffix.len) {
+            self.hold.clearRetainingCapacity();
+            self.state = .body_lead;
+            return true;
+        }
+        return false;
+    }
+
+    /// Flushes bytes still held at stream end: an unfinished `<think` probe was never a tag, so it
+    /// is body; an unfinished `</think` inside the block stays reasoning. Loss on OOM matches the
+    /// end-path policy above (losing bytes beats stranding the stream).
+    fn finish(self: *ThinkSplit, s: *Store) void {
+        const h = self.hold.items;
+        if (h.len > 0) {
+            switch (self.state) {
+                .probe => s.appendTail(h) catch {},
+                .reasoning => s.appendReasoningTail(h) catch {},
+                else => {},
+            }
+            self.hold.clearRetainingCapacity();
+        }
+    }
+
+    fn leadingWs(bytes: []const u8) usize {
+        var i: usize = 0;
+        while (i < bytes.len and std.ascii.isWhitespace(bytes[i])) i += 1;
+        return i;
+    }
+};
+
+// w3-reason END think-tag stream split
 
 const testing = std.testing;
 
@@ -584,3 +726,132 @@ test "begin_resets_the_token_count_when_the_store_refuses_the_new_stream" {
     try testing.expectEqual(State.done, f.stream.state);
     try testing.expectEqual(sealed, f.store.slice().len);
 }
+
+// w3-reason BEGIN think-split tests
+
+fn msgReasoning(f: *const Fixture, index: usize) []const u8 {
+    return f.store.slice()[index].reasoning;
+}
+
+test "stream_splits_a_think_block_into_reasoning_and_body" {
+    var f: Fixture = undefined;
+    f.init(testing.allocator);
+    defer f.deinit();
+
+    try f.open(testing.allocator, "Seraphina");
+    try f.stream.feed(dl("<think>plan") ++ dl(" the shoals") ++ dl("</think> The") ++ dl(" answer."));
+    f.stream.end();
+
+    try testing.expectEqualStrings("plan the shoals", msgReasoning(&f, 0));
+    try testing.expectEqualStrings("The answer.", f.body(0));
+}
+
+test "stream_splits_think_tags_cut_across_separate_feeds" {
+    var f: Fixture = undefined;
+    f.init(testing.allocator);
+    defer f.deinit();
+
+    try f.open(testing.allocator, "Seraphina");
+    try f.stream.feed(dl("<th"));
+    try f.stream.feed(dl("ink>hidden</th"));
+    try f.stream.feed(dl("ink>shown"));
+    f.stream.end();
+
+    try testing.expectEqualStrings("hidden", msgReasoning(&f, 0));
+    try testing.expectEqualStrings("shown", f.body(0));
+}
+
+test "stream_without_think_tags_keeps_the_body_verbatim_and_no_reasoning" {
+    var f: Fixture = undefined;
+    f.init(testing.allocator);
+    defer f.deinit();
+
+    try f.open(testing.allocator, "Seraphina");
+    try f.stream.feed(dl("hello ") ++ dl("world <b>x</b>"));
+    f.stream.end();
+
+    try testing.expectEqualStrings("hello world <b>x</b>", f.body(0));
+    try testing.expectEqual(@as(usize, 0), msgReasoning(&f, 0).len);
+}
+
+test "leading_whitespace_before_the_think_tag_is_consumed_like_the_strict_parse" {
+    var f: Fixture = undefined;
+    f.init(testing.allocator);
+    defer f.deinit();
+
+    try f.open(testing.allocator, "Seraphina");
+    try f.stream.feed(dl(" \\n<think> deep  ") ++ dl("thought\\n</think>\\nanswer"));
+    f.stream.end();
+
+    try testing.expectEqualStrings("deep  thought", msgReasoning(&f, 0));
+    try testing.expectEqualStrings("answer", f.body(0));
+}
+
+test "unterminated_think_block_stays_reasoning_at_stream_end" {
+    var f: Fixture = undefined;
+    f.init(testing.allocator);
+    defer f.deinit();
+
+    try f.open(testing.allocator, "Seraphina");
+    try f.stream.feed(dl("<think>lost thought") ++ dl(" mid-sentence</th"));
+    f.stream.end();
+
+    try testing.expectEqualStrings("lost thought mid-sentence</th", msgReasoning(&f, 0));
+    try testing.expectEqual(@as(usize, 0), f.body(0).len);
+}
+
+test "a_probe_that_never_becomes_a_tag_is_flushed_to_the_body_at_stream_end" {
+    var f: Fixture = undefined;
+    f.init(testing.allocator);
+    defer f.deinit();
+
+    try f.open(testing.allocator, "Seraphina");
+    try f.stream.feed(dl("<thi"));
+    f.stream.end();
+
+    try testing.expectEqualStrings("<thi", f.body(0));
+    try testing.expectEqual(@as(usize, 0), msgReasoning(&f, 0).len);
+}
+
+fn thinkSplitScenario(gpa: Allocator) !void {
+    var f: Fixture = undefined;
+    f.init(gpa);
+    defer f.deinit();
+
+    try f.open(gpa, "Seraphina");
+    // [DONE] seals via the feed path, which propagates OOM cleanly (end() deliberately swallows).
+    try f.stream.feed(dl("<think>a plan") ++ dl("</think>the body") ++ "data: [DONE]\n");
+
+    try testing.expectEqual(State.done, f.stream.state);
+    try testing.expectEqualStrings("a plan", f.store.slice()[0].reasoning);
+    try testing.expectEqualStrings("the body", f.store.slice()[0].body);
+}
+
+test "think_split_releases_everything_on_any_allocation_failure" {
+    try testing.checkAllAllocationFailures(testing.allocator, thinkSplitScenario, .{});
+}
+
+test "think_split_handles_the_devserve_openai_wire_shape_verbatim" {
+    var f: Fixture = undefined;
+    f.init(testing.allocator);
+    defer f.deinit();
+
+    try f.open(testing.allocator, "Rita");
+    // Byte-for-byte what devserve._mock_generate_stream sends (OpenAI completions lines, blank
+    // separators, tags cut mid-token), fed in one chunk like a coalesced first flush.
+    const wire =
+        "data: {\"choices\": [{\"text\": \"<th\"}]}\n\n" ++
+        "data: {\"choices\": [{\"text\": \"ink>mull the tides\"}]}\n\n" ++
+        "data: {\"choices\": [{\"text\": \"</th\"}]}\n\n" ++
+        "data: {\"choices\": [{\"text\": \"ink>\"}]}\n\n" ++
+        "data: {\"choices\": [{\"text\": \"lantern \"}]}\n\n" ++
+        "data: {\"choices\": [{\"text\": \"w0 \"}]}\n\n" ++
+        "data: [DONE]\n\n";
+    try f.stream.feed(wire);
+
+    try testing.expectEqual(State.done, f.stream.state);
+    try testing.expectEqualStrings("mull the tides", f.store.slice()[0].reasoning);
+    try testing.expectEqualStrings("lantern w0 ", f.body(0));
+}
+
+// w3-reason END think-split tests

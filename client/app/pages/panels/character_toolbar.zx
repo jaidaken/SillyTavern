@@ -19,6 +19,9 @@ const regions = @import("../regions.zig");
 const dom_event = @import("../dom_event.zig");
 const dropdown = @import("../dropdown.zx");
 const Dropdown = dropdown.Dropdown;
+// w3-reason 3d tags
+const tag_manager = @import("./tag_manager.zx");
+const TagManager = tag_manager.TagManager;
 
 // The pressed state of a toggle (favourites-only, grid, a tag chip) is aria-pressed, which these
 // buttons carry for assistive tech anyway, so the highlight is declared off tailwind's built-in
@@ -77,7 +80,18 @@ pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
                     aria-label="Toggle grid view"
                     onclick={ctx.bind(onGridToggle)}
                 >Grid</button>
+                <button
+                    type="button"
+                    class={tool_class}
+                    aria-pressed={if (tag_manager.open) "true" else "false"}
+                    aria-label="Manage tags"
+                    aria-expanded={if (tag_manager.open) "true" else "false"}
+                    onclick={&tag_manager.onOpenToggle}
+                >Tags</button>
             </div>
+            { if (tag_manager.open) (
+                <TagManager />
+            ) }
             <div class="char-tags flex flex-wrap gap-1" role="group" aria-label="Filter by tag">
                 {for (view.tags_all.items) |tag| (
                     <button

@@ -19,6 +19,16 @@ pub const MessageProps = struct {
 pub fn MessageView(allocator: zx.Allocator, props: MessageProps) zx.Component {
     instrument.bump();
     const body: html.SanitizedHtml = sanitized.renderMessage(allocator, props.msg.body, props.cacheable);
+    // Collapsed by default; the reasoning is only sanitized while open, so a collapsed block costs
+    // no markdown pass per streamed token. It gets its OWN renderMessage call (invariant 6): the
+    // toggle chrome stays outside the sanitized body and the two texts never string-merge.
+    const reasoning_open = props.msg.reasoning.len > 0 and store.reasoningOpenFor(props.abs_index);
+    const reasoning_html: html.SanitizedHtml = sanitized.renderMessage(allocator, if (reasoning_open) props.msg.reasoning else "", props.cacheable);
+    // The block's elements ALWAYS render, hidden by class when absent/closed: appearing mid-stream
+    // as a structural insert trips the vdom's positional diff ("_rpc replace dropped" anomalies),
+    // so the child list stays fixed and only classes and text change.
+    const reasoning_class: []const u8 = if (props.msg.reasoning.len > 0) "mes_reasoning" else "mes_reasoning mes_reasoning-empty";
+    const reasoning_body_class: []const u8 = if (reasoning_open) "mes_reasoning_body" else "mes_reasoning_body mes_reasoning-closed";
     // Only long messages carry mes-justify: a justified one or two line body opens ugly word gaps, so
     // short roleplay turns stay ragged. ~180 source bytes is a rough three-line floor at the reading measure.
     const text_class: []const u8 = if (props.msg.body.len > 180) "mes_text mes-justify" else "mes_text";
@@ -34,6 +44,15 @@ pub fn MessageView(allocator: zx.Allocator, props: MessageProps) zx.Component {
                 <img class="mes_avatar row-span-full mt-[0.15em] size-[1.8rem] flex-none cursor-pointer rounded-[4px] object-cover hover:brightness-110 max-[640px]:size-[1.5rem]" src={props.msg.avatar} alt={props.msg.name} loading="lazy" />
             ) }
             <div class="mes_name">{props.msg.name}</div>
+            <div class={reasoning_class}>
+                <button
+                    type="button"
+                    class="mes_reasoning_toggle"
+                    data-reason-toggle={props.abs_index}
+                    aria-expanded={if (reasoning_open) "true" else "false"}
+                >Thinking</button>
+                <div class={reasoning_body_class} @escaping={.none}>{html.sink(reasoning_html)}</div>
+            </div>
             <div class={text_class} style={speakerVar(allocator, props.msg.name)} @escaping={.none}>{html.sink(body)}</div>
             <MessageMenuTrigger abs={props.abs_index} />
         </div>
