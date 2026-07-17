@@ -11,6 +11,7 @@ Usage: python3 devserve.py [--port 8080] [--dist dist] [--backend http://127.0.0
 import argparse
 import base64
 import datetime
+import hashlib  # w3-grp
 import http.server
 import json
 import os
@@ -728,6 +729,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # between a live key and the DOM, so the gate has to drive this path to test that guard at all.
     keys_exposed = False
 
+    # ===== w3-grp: groups roster state (append-only zone) =====
+    # Mutable so create/edit/delete round-trip on the next /all. Group ids come from a sequence,
+    # not the clock: two creates inside one gate run must never collide the way String(Date.now())
+    # can. chat_write_count is the T0 sensor: every POST that can write chat-file state bumps it,
+    # and the group gate rows assert it holds still across the whole create/edit/delete cycle.
+    mock_groups = []
+    group_seq = 0
+    chat_write_count = 0
+
+    @classmethod
+    def grp_t0_state(cls):
+        fp = hashlib.sha1(json.dumps(cls.appended_messages, sort_keys=True).encode()).hexdigest()
+        return {"chat_writes": cls.chat_write_count, "fingerprint": fp, "groups": len(cls.mock_groups)}
+
     @classmethod
     def secrets_store(cls):
         if cls.secrets is None:
@@ -870,6 +885,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if self.path.startswith("/dev/arm-recent-empty"):
                 Handler.recent_empty = True
                 return self.mock_json({"armed": True})
+            # w3-grp: the T0 snapshot the group rows compare before/after the create/edit/delete cycle.
+            if self.path.startswith("/dev/grp-t0"):
+                return self.mock_json(Handler.grp_t0_state())
             # C-CARD2: serve a card written by another tool from /characters/get. A fixture that only
             # ever serves the shape we expect tests our own reading of the server, not the server.
             if self.path.startswith("/dev/arm-hostile-card"):
@@ -1005,6 +1023,57 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except ValueError:
             req = {}
         path = urllib.parse.urlparse(self.path).path
+
+        # ===== w3-grp: T0 sensor + groups routes (append-only zone) =====
+        # The sensor sits BEFORE route matching so even a chat write the mock only generic-acks
+        # still counts as an attempted write.
+        if any(path.startswith(p) for p in (
+                "/api/chats/append", "/api/chats/save", "/api/chats/message/",
+                "/api/chats/rename", "/api/chats/delete", "/api/chats/import",
+                "/api/chats/group/save", "/api/chats/group/delete", "/api/chats/group/import",
+                "/api/chats/backups/restore")):
+            Handler.chat_write_count += 1
+        if path == "/api/groups/all":
+            return self.mock_json(list(Handler.mock_groups))
+        if path == "/api/groups/create":
+            Handler.group_seq += 1
+            gid = str(1790000000000 + Handler.group_seq)
+            group = {
+                "id": gid,
+                "name": req.get("name", "New Group"),
+                "members": req.get("members") or [],
+                "avatar_url": req.get("avatar_url"),
+                "allow_self_responses": bool(req.get("allow_self_responses")),
+                "activation_strategy": req.get("activation_strategy", 0),
+                "generation_mode": req.get("generation_mode", 0),
+                "disabled_members": req.get("disabled_members") or [],
+                "fav": req.get("fav"),
+                "chat_id": gid,
+                "chats": [gid],
+                "auto_mode_delay": req.get("auto_mode_delay", 5),
+                "generation_mode_join_prefix": "",
+                "generation_mode_join_suffix": "",
+                "date_last_chat": 0,
+            }
+            Handler.mock_groups.append(group)
+            return self.mock_json(group)
+        if path == "/api/groups/edit":
+            gid = req.get("id")
+            if not gid:
+                return self.mock_status(400, {"error": "no id"})
+            for i, g in enumerate(Handler.mock_groups):
+                if g.get("id") == gid:
+                    Handler.mock_groups[i] = req
+                    return self.mock_json({"ok": True})
+            # The real route writes the file regardless; an unknown id becomes a new entry.
+            Handler.mock_groups.append(req)
+            return self.mock_json({"ok": True})
+        if path == "/api/groups/delete":
+            gid = req.get("id")
+            if not gid:
+                return self.mock_status(400, {"error": "no id"})
+            Handler.mock_groups = [g for g in Handler.mock_groups if g.get("id") != gid]
+            return self.mock_json({"ok": True})
 
         if path == "/csrf-token":
             return self.mock_json({"token": "mock-csrf-token"})

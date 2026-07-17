@@ -20,6 +20,8 @@ pub const PanelId = enum {
     card_editor,
     // w3-chatmgr
     chat_manager,
+    // w3-grp
+    groups,
 };
 
 pub const Side = enum { left, right };
@@ -56,6 +58,8 @@ pub const panels = [_]Panel{
     .{ .id = .card_editor, .dom_id = "d-card_editor", .icon = "pencil", .title = "Character Card", .side = .left },
     // w3-chatmgr
     .{ .id = .chat_manager, .dom_id = "d-chat_manager", .icon = "chats", .title = "Chat Management", .side = .right },
+    // w3-grp
+    .{ .id = .groups, .dom_id = "d-groups", .icon = "users", .title = "Group Chats", .side = .right, .kind = .dock },
 };
 
 pub const min_width: f32 = 240;

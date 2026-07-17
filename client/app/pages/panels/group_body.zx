@@ -1,0 +1,170 @@
+// Group Chats panel body (w3-grp). Right dock, two views off one region: the roster list here, the
+// membership editor in group_editor.zx (group_store.editing_index routes). group_actions owns the
+// fetch, the dialogs and the persistence; this file reads the clicked control and hands it over,
+// the backgrounds_body pattern.
+//
+// The roster loads on this panel's first render, not at boot: sessions without groups never pay the
+// request. All four async states are drawn (WD54): skeleton rows, a failure with a retry, an empty
+// state that says how to start, and the list itself.
+//
+// A group row is an option in a listbox (selection is the OPEN group, the send target) and its edit
+// affordance is a SIBLING button, not a child: nested buttons are invalid markup, the pencil stays
+// keyboard-reachable on its own (WD37), and editing must not retarget the send loop.
+//
+// The row face reuses character_list's class strings so the three roster surfaces (characters,
+// personas, groups) cannot drift apart.
+pub fn GroupBody(ctx: *zx.ComponentCtx(void)) zx.Component {
+    group_actions.region = ctx.state(u32, 0);
+    group_actions.ensureLoaded();
+    return (
+        <div @allocator={ctx.allocator} class="group-panel flex flex-col gap-2" @rendering={.client}>
+            {if (editingIndex()) |i| (
+                <GroupEditor index={i} />
+            ) else (
+                listView(ctx)
+            )}
+        </div>
+    );
+}
+
+/// editing_index, guarded in range (a stale index after a roster shrink falls back to the list).
+fn editingIndex() ?usize {
+    const i = gs.editing_index orelse return null;
+    return if (i < gs.slice().len) i else null;
+}
+
+fn listView(ctx: *zx.ComponentCtx(void)) zx.Component {
+    const groups = gs.slice();
+    return (
+        <div @allocator={ctx.allocator} class="group-roster flex flex-col gap-2">
+            <div class="group-actions-bar flex flex-wrap items-center gap-2 max-[640px]:flex-col max-[640px]:gap-[0.4rem]">
+                <button class={editor.act_btn} type="button" data-group-action="new" onclick={onNewGroup}>New group</button>
+            </div>
+            {if (group_actions.errorText().len > 0) (
+                <div class="flex flex-col items-start gap-2 rounded-md border border-control-border bg-bg p-3" role="alert">
+                    <p class="m-0 text-sm text-text">{group_actions.errorText()}</p>
+                </div>
+            )}
+            {if (group_actions.state() == .failed) (
+                <div class="flex flex-col items-start gap-2 rounded-md border border-control-border bg-bg p-3">
+                    <button class={editor.act_btn} type="button" data-group-action="retry" onclick={onRetry}>Try again</button>
+                </div>
+            ) else if (group_actions.state() == .loading) (
+                <div class="flex flex-col gap-[2px]" aria-busy="true" aria-label="Loading groups">
+                    {for (skeleton_slots) |_| (
+                        <div class="h-12 animate-pulse rounded-md border border-control-border bg-surface-2"></div>
+                    )}
+                </div>
+            ) else if (groups.len == 0) (
+                <div class="flex flex-col gap-1 rounded-md border border-control-border bg-bg p-4">
+                    <p class="m-0 text-base text-text">No groups yet.</p>
+                    <p class="m-0 text-sm text-muted">A group chat rotates replies between its member characters. Create one and pick members from your character list.</p>
+                </div>
+            ) else (
+                <div id="group-list" class="char-list group/list flex min-h-[8rem] flex-col gap-[2px]" role="listbox" aria-label="Groups">
+                    {for (groups, 0..) |g, i| (
+                        <div class="group-row-wrap group/grow relative">
+                            <div
+                                class={if (isSelected(i)) (char_list.row_class ++ " is-selected") else char_list.row_class}
+                                role="option"
+                                aria-selected={if (isSelected(i)) "true" else "false"}
+                                data-group-index={i}
+                                tabindex="0"
+                                onclick={ctx.bind(onRowOpen)}
+                                onkeydown={ctx.bind(onRowKey)}
+                            >
+                                <img class={char_list.avatar_class} src={rowAvatarUrl(ctx.allocator, &g)} alt={g.name} loading="lazy" />
+                                <div class={char_list.info_class}>
+                                    <div class={char_list.name_class}>{g.name}</div>
+                                    <div class={char_list.desc_class}>{rowMeta(ctx.allocator, &g)}</div>
+                                </div>
+                            </div>
+                            <button
+                                class={row_edit_btn}
+                                type="button"
+                                data-icon="pencil"
+                                data-group-edit={i}
+                                aria-label={editor.label(ctx.allocator, "Edit group ", g.name)}
+                                onclick={onRowEdit}
+                            ><span class="icon"></span></button>
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
+const row_edit_btn = "group-row-edit absolute top-1/2 right-1 grid size-7 -translate-y-1/2 cursor-pointer place-items-center rounded-md border border-control-border bg-surface-2/90 text-muted opacity-0 transition-opacity duration-120 ease-[ease] group-hover/grow:opacity-100 focus-visible:opacity-100 hover:text-text max-[768px]:opacity-100";
+
+/// Three rows of skeleton roughly match a small roster, so the list does not jump (WD43).
+const skeleton_slots: []const u8 = &[_]u8{ 0, 0, 0 };
+
+fn isSelected(index: usize) bool {
+    const sel = gs.selectedIndex();
+    return sel != null and sel.? == index;
+}
+
+/// A group row wears its first member's avatar. The group's own avatar_url is carried in the model
+/// (and round-trips through edits) but is not rendered yet: its value scheme differs per source and
+/// a wrong guess renders a broken image on every row.
+fn rowAvatarUrl(a: std.mem.Allocator, g: *const gs.Group) []const u8 {
+    const members = g.memberSlice();
+    if (members.len == 0) return "";
+    return editor.avatarThumb(a, members[0]);
+}
+
+fn rowMeta(a: std.mem.Allocator, g: *const gs.Group) []const u8 {
+    const n = g.memberSlice().len;
+    return std.fmt.allocPrint(a, "{d} member{s}", .{ n, if (n == 1) @as([]const u8, "") else "s" }) catch "";
+}
+
+// ---- event handlers (target walks per ZX11; comptime client guards per ZX2) --------------------
+
+fn onNewGroup(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    _ = ev;
+    group_actions.startCreate();
+}
+
+fn onRetry(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    _ = ev;
+    group_actions.reload();
+}
+
+fn onRowOpen(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const i = statefulIndexFrom(e, "groupIndex") orelse return;
+    group_actions.openGroup(i);
+}
+
+// Enter/Space on a focused row opens it, matching the click path (WD37 keyboard parity).
+fn onRowKey(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    if (!dom_event.isActivationKey(e)) return;
+    onRowOpen(e);
+}
+
+fn onRowEdit(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const i = editor.indexFrom(ev, "groupEdit") orelse return;
+    gs.openEditor(i);
+    group_actions.bumpPanel();
+}
+
+fn statefulIndexFrom(e: *zx.client.Event.Stateful, comptime key: []const u8) ?usize {
+    const target = dom_event.statefulTarget(e) orelse return null;
+    const s = dom_event.datasetUp(target, key) orelse return null;
+    defer zx.allocator.free(s);
+    return std.fmt.parseInt(usize, s, 10) catch null;
+}
+
+const zx = @import("zx");
+const std = @import("std");
+const gs = @import("../group_store.zig");
+const group_actions = @import("../group_actions.zig");
+const dom_event = @import("../dom_event.zig");
+const char_list = @import("character_list.zx");
+const editor = @import("group_editor.zx");
+const GroupEditor = editor.GroupEditor;

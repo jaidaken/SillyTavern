@@ -27,6 +27,8 @@ comptime {
     _ = @import("log_spec.zig");
     _ = @import("dropdown_nav.zig");
     _ = @import("background_store.zig");
+    // w3-grp
+    _ = @import("group_store.zig");
     _ = @import("textgen_types.zig");
     _ = @import("secret_mask.zig");
     // character_view's tests never reached the runner: the module was absent here.
