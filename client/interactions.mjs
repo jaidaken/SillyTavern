@@ -3296,6 +3296,160 @@ async function main() {
                 say(settled));
         }
 
+        // ===== W3-WI (append-only): world-info store + entry editor (3b-A, no engine) =====
+        // The mock books are mutable and survive reloads within the run, so persistence rows are
+        // real server round-trips. The T0 row deep-diffs the WHOLE stored book after one editor
+        // edit: an editor that drops any of the ~40 stock fields, or the unknown futureField, or a
+        // sibling entry, fails it (the whole-file /edit is exactly where a clobber would happen).
+        console.log('== W3-WI world info: books, scopes, entries, T0 round-trip ==');
+        {
+            const wiState = async () => (await fetch(`${args.base}/dev/state`)).json();
+            const wiDiff = (a, b, p) => {
+                if (a === b) return [];
+                if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object' || typeof a !== typeof b) {
+                    return JSON.stringify(a) === JSON.stringify(b) ? [] : [p || '(root)'];
+                }
+                let out = [];
+                for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+                    out = out.concat(wiDiff(a[k], b[k], p ? `${p}.${k}` : k));
+                }
+                return out;
+            };
+            const wiOrig = JSON.parse(JSON.stringify((await wiState()).wi_books['gate-lore']));
+            // An earlier section saved a card, and the mock then serves that save verbatim (no
+            // embedded book). Reset so the deep card carries its character_book again.
+            await fetch(`${args.base}/dev/wi-reset-card`);
+
+            await page.navigate(`${args.base}/`);
+            await openRecentChat();
+            await page.waitFor(hydrated, 15000);
+            // The deep card is cached per avatar and earlier sections loaded it while their saved
+            // (bookless) card was live, so pick a never-deep-loaded character and wait on the mock's
+            // own request counter: the fresh /characters/get is what carries the embedded book in.
+            const wiGetsBefore = (await wiState()).card_get_count;
+            await page.click('#d-characters');
+            await page.waitFor("document.querySelectorAll('#chat-root .char-item').length >= 14", 8000);
+            await page.eval("document.querySelectorAll('#chat-root .char-item .char-name')[13].click()");
+            const wiDeepFetched = await (async () => {
+                const deadline = Date.now() + 10000;
+                while (Date.now() < deadline) {
+                    if ((await wiState()).card_get_count > wiGetsBefore) return true;
+                    await sleep(250);
+                }
+                return false;
+            })();
+            row('must', wiDeepFetched, 'W3WI-0 selecting a fresh character deep-fetches its card', `fetched=${wiDeepFetched}`);
+            await page.click('#d-world_info');
+
+            const wiRows = await page.waitFor("document.querySelectorAll('.wi-books ul li').length === 2", 8000);
+            row('must', wiRows, 'W3WI-1 the book list renders every server book with its display name',
+                `rows=${await page.eval("document.querySelectorAll('.wi-books ul li').length")} names=${await page.eval("JSON.stringify(Array.from(document.querySelectorAll('.wi-books .wi-row')).map(function(b){return b.textContent.trim();}))")}`);
+
+            const wiChatLine = await page.eval("(document.querySelector('.wi-books')||{textContent:''}).textContent.indexOf('gate-lore') >= 0");
+            row('must', wiChatLine, 'W3WI-2 the chat-linked book name surfaces from the chat metadata', `seen=${wiChatLine}`);
+
+            // The embedded v2 card book: surfaces, converts, and is view-only.
+            const wiCharBtn = await page.waitFor("!!document.querySelector('[data-wi-charbook]')", 8000);
+            await page.click('[data-wi-charbook]');
+            const charEntry = await page.waitFor("document.querySelectorAll('.wi-entries ul li').length === 1 && document.querySelector('.wi-entries').textContent.indexOf('lighthouse') >= 0", 8000);
+            const roMarked = await page.eval("document.querySelector('.wi-entries').textContent.indexOf('read only') >= 0 && !document.querySelector('[data-wi-newentry]')");
+            row('must', wiCharBtn && charEntry && roMarked,
+                "W3WI-3 the card's embedded book surfaces converted from the v2 shape, view-only",
+                `btn=${wiCharBtn} entry=${charEntry} readonly=${roMarked}`);
+            await page.click('[data-wi-back]');
+
+            // T0: edit ONE field of the fully-loaded stock book, let the debounced save land, then
+            // deep-diff the stored file against the pre-edit copy.
+            await page.waitFor("document.querySelectorAll('.wi-books ul li').length === 2", 5000);
+            await page.click("[data-wi-open='gate-lore']");
+            await page.waitFor("document.querySelectorAll('.wi-entries ul li').length === 2", 8000);
+            await page.click("[data-wi-entry='0']");
+            await page.waitFor("!!document.querySelector('#wi-content')", 5000);
+            await page.eval("(function(){var t=document.querySelector('#wi-content'); t.value='Dragons hoard gold.'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            const wiSaved = await page.waitFor("document.querySelector('.wi-save-status').textContent === 'Saved'", 10000);
+            const wiAfter = (await wiState()).wi_books['gate-lore'];
+            const diff = wiDiff(wiOrig, wiAfter, '');
+            const onlyContent = diff.length === 1 && diff[0] === 'entries.0.content'
+                && wiAfter.entries['0'].content === 'Dragons hoard gold.'
+                && JSON.stringify(wiAfter.entries['0'].futureField) === JSON.stringify({ nested: [1, 2, 3] });
+            row('must', wiSaved && onlyContent,
+                'W3WI-4 T0: the whole-book save changes ONLY the edited field; all stock fields, the unknown futureField and the sibling entry survive',
+                `saved=${wiSaved} diff=${JSON.stringify(diff)}`);
+
+            // Create: the new entry carries the full stock template server-side and survives a reload.
+            await page.click('[data-wi-toentries]');
+            await page.waitFor("document.querySelectorAll('.wi-entries ul li').length === 2", 5000);
+            await page.click('[data-wi-newentry]');
+            await page.waitFor("!!document.querySelector('#wi-comment')", 5000);
+            await page.eval("(function(){var t=document.querySelector('#wi-comment'); t.value='GATE NEW'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            await page.waitFor("document.querySelector('.wi-save-status').textContent === 'Saved'", 10000);
+            const created = (await wiState()).wi_books['gate-lore'].entries['4'];
+            const tmplOk = !!created && created.comment === 'GATE NEW' && created.groupWeight === 100
+                && created.triggers && Object.keys(created).length >= 40;
+            await page.navigate(`${args.base}/`);
+            await page.waitFor(hydrated, 15000);
+            await page.click('#d-world_info');
+            await page.waitFor("document.querySelectorAll('.wi-books ul li').length === 2", 8000);
+            await page.click("[data-wi-open='gate-lore']");
+            const survived = await page.waitFor("document.querySelectorAll('.wi-entries ul li').length === 3 && document.querySelector('.wi-entries').textContent.indexOf('GATE NEW') >= 0", 8000);
+            row('must', tmplOk && survived,
+                'W3WI-5 a created entry carries the full stock template and persists across a reload',
+                `template=${tmplOk} keys=${created ? Object.keys(created).length : 0} reloaded=${survived}`);
+
+            // Delete: confirm-gated, persists, and the sibling entries stay.
+            await page.eval('window.confirm = function(){ return true; };');
+            await page.click("[data-wi-entry='4']");
+            await page.waitFor("!!document.querySelector('[data-wi-delentry]')", 5000);
+            await page.click('[data-wi-delentry]');
+            await page.waitFor("document.querySelectorAll('.wi-entries ul li').length === 2", 8000);
+            await page.waitFor("document.querySelector('.wi-save-status').textContent === 'Saved'", 10000);
+            const afterDel = (await wiState()).wi_books['gate-lore'].entries;
+            const delOk = !afterDel['4'] && !!afterDel['0'] && !!afterDel['3'];
+            row('must', delOk, 'W3WI-6 deleting an entry removes only that entry, server-side too',
+                `keys=${JSON.stringify(Object.keys(afterDel))}`);
+
+            // Scope + budget knobs persist through the ONE settings saver into the classic keys.
+            await page.click('[data-wi-back]');
+            await page.waitFor("!!document.querySelector('#wi-budget')", 5000);
+            await page.eval("(function(){var t=document.querySelector('#wi-budget'); t.value='40'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            await page.eval("(function(){var c=document.querySelector('[data-wi-global=\\'beta-lore\\']'); c.checked=true; c.dispatchEvent(new Event('change',{bubbles:true}));})()");
+            const wiPersisted = await (async () => {
+                const deadline = Date.now() + 12000;
+                while (Date.now() < deadline) {
+                    const ws = (await wiState()).settings_world_info;
+                    if (ws && ws.world_info_budget === 40 && ws.world_info
+                        && (ws.world_info.globalSelect || []).indexOf('beta-lore') >= 0) return true;
+                    await sleep(300);
+                }
+                return false;
+            })();
+            row('must', wiPersisted,
+                'W3WI-7 the budget knob and a global-select toggle persist under the classic world_info_settings keys',
+                `persisted=${wiPersisted}`);
+
+            // Chat link: REQUEST SHAPE only (the lead re-verifies persistence on the merged tree,
+            // where /api/chats/metadata accepts world_info since 9bc8ee713).
+            await page.click("[data-wi-open='beta-lore']");
+            await page.waitFor("!!document.querySelector('[data-wi-chatlink]')", 8000);
+            await page.click('[data-wi-chatlink]');
+            const wiLinkBody = await (async () => {
+                const deadline = Date.now() + 8000;
+                while (Date.now() < deadline) {
+                    const b = await (await fetch(`${args.base}/dev/note-save`)).json();
+                    if (b && b.world_info === 'beta-lore') return b;
+                    await sleep(250);
+                }
+                return null;
+            })();
+            const wiLinkShape = !!wiLinkBody && typeof wiLinkBody.avatar_url === 'string' && wiLinkBody.avatar_url.length > 0
+                && typeof wiLinkBody.file_name === 'string' && wiLinkBody.file_name.length > 0
+                && typeof wiLinkBody.change_token === 'string';
+            const wiLinkReflected = await page.waitFor("document.querySelector('[data-wi-chatlink]').getAttribute('aria-pressed') === 'true'", 5000);
+            row('must', wiLinkShape && wiLinkReflected,
+                'W3WI-8 linking a book to the open chat POSTs the metadata descriptor shape (avatar_url + file_name + change_token + world_info) and the toggle reflects it',
+                `shape=${wiLinkShape} body=${JSON.stringify(wiLinkBody || {}).slice(0, 140)} reflected=${wiLinkReflected}`);
+        }
+
         /* C-DBG */
         // The [zx:dom] channel. A live crash (removeChild NotFoundError) came out of the door with the
         // framework's tree and the real DOM already drifted apart, and no reproduction was ever found,

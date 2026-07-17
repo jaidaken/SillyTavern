@@ -25,6 +25,7 @@ const character_view = @import("./character_view.zig");
 const persona_store = @import("./persona_store.zig");
 const persona_actions = @import("./persona_actions.zig");
 const store = @import("./store.zig");
+const wi_actions = @import("./world_info_actions.zig"); // w3-wi
 const pager = @import("./pager.zig");
 const regions = @import("./regions.zig");
 const dom_event = @import("./dom_event.zig");
@@ -397,6 +398,8 @@ fn loadPersonas(status: u16, res: ?*zx.Fetch.Response) void {
     // The samplers and the instruct/context templates ride the same blob. AFTER conn_mod.setFrom:
     // the samplers are adopted off the freshly mined connection, then localStorage overrides (C-CFG).
     config_state.setFrom(settings_str);
+    // World-info global selection + budget ride the same blob (w3-wi).
+    wi_actions.setFrom(settings_str);
     // Persona selection by precedence (user_avatar, default_persona, first), and mark the store
     // authoritative so a later save can serialize the persona set (C-PERS).
     persona_actions.applyAutoSelect(settings_str);
@@ -537,9 +540,13 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     char_store.global.select(index);
     // The author's note belongs to THIS chat's header, so it loads with the chat and is replaced
     // wholesale on every open. The full token gates its save (C-CFG).
+    // The chat-linked lorebook + link identity live in the same header (w3-wi).
     if (chatFileName(c)) |fname| {
         defer alloc.free(fname);
         an_state.setFromPage(c.avatar, fname, page.chat_metadata, page.full_token);
+        wi_actions.setChatContext(c.avatar, fname, page.chat_metadata, page.full_token);
+    } else {
+        wi_actions.setChatContext("", "", "", "");
     }
     // Deep-load the card's personality/scenario/mesExamples once, so the send prompt is not the
     // degraded shallow form. Reused for every send against this card.
@@ -806,13 +813,14 @@ fn charAt(index: usize) ?char_store.Character {
 
 // ---- send loop -----------------------------------------------------------------------------
 
-/// The card fields the shallow /api/characters/all form omits. Response.json ignores the ~30 other
-/// fields the endpoint returns; only these three fill the prompt macros.
-const DeepCard = struct {
-    personality: []const u8 = "",
-    scenario: []const u8 = "",
-    mes_example: []const u8 = "",
-};
+/// A top-level string field off the deep-card object, or "" when absent or not a string (w3-wi).
+fn cardStr(obj: *const std.json.ObjectMap, key: []const u8) []const u8 {
+    const v = obj.get(key) orelse return "";
+    return switch (v) {
+        .string => |s| s,
+        else => "",
+    };
+}
 
 fn fetchDeepCard(avatar: []const u8) void {
     if (zx.platform.role != .client) return;
@@ -841,15 +849,28 @@ fn onDeepCardDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         chars_log.warn("deep card fetch failed: {d} - prompt uses the shallow form", .{status});
         return;
     }
-    const parsed = res.?.json(DeepCard) catch {
+    // Raw body once (w3-wi): the prompt strings parse locally; the SAME bytes go to the store's
+    // one card-adoption entry point (adoptCharCard), which owns the book memory (probe 3 delta).
+    const body = res.?.text() catch {
+        chars_log.warn("deep card body unreadable - prompt uses the shallow form", .{});
+        return;
+    };
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), body, .{}) catch {
         chars_log.warn("deep card body unparseable - prompt uses the shallow form", .{});
         return;
     };
-    defer parsed.deinit();
+    if (parsed != .object) {
+        chars_log.warn("deep card body is not an object - prompt uses the shallow form", .{});
+        return;
+    }
+    const obj = &parsed.object;
     setOwned(&deep_avatar, deep_pending);
-    setOwned(&deep_personality, parsed.value.personality);
-    setOwned(&deep_scenario, parsed.value.scenario);
-    setOwned(&deep_mes_example, parsed.value.mes_example);
+    setOwned(&deep_personality, cardStr(obj, "personality"));
+    setOwned(&deep_scenario, cardStr(obj, "scenario"));
+    setOwned(&deep_mes_example, cardStr(obj, "mes_example"));
+    wi_actions.adoptCard(body);
     chars_log.debug("deep card loaded: personality {d}b scenario {d}b examples {d}b", .{ deep_personality.len, deep_scenario.len, deep_mes_example.len });
 }
 

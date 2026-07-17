@@ -569,6 +569,49 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     chat_meta = None
     metadata_stale_once = False
     last_metadata_body = None
+    # w3-wi: mutable mock lorebooks; gate-lore entry "0" = full stock shape + an unknown
+    # futureField, which the T0 row deep-diffs after an editor save.
+    wi_books = None
+    last_wi_edit = None
+    card_get_count = 0
+    last_card_get = None
+
+    @classmethod
+    def worldinfo_books(cls):
+        if cls.wi_books is None:
+            cls.wi_books = {
+                "gate-lore": {
+                    "name": "Gate Lore",
+                    "entries": {
+                        "0": {
+                            "uid": 0, "key": ["dragon", "wyrm"], "keysecondary": ["red"],
+                            "comment": "the dragon", "content": "Dragons breathe fire.",
+                            "constant": False, "vectorized": False, "selective": True,
+                            "selectiveLogic": 1, "addMemo": True, "order": 90, "position": 4,
+                            "disable": False, "ignoreBudget": False, "excludeRecursion": True,
+                            "preventRecursion": False, "matchPersonaDescription": False,
+                            "matchCharacterDescription": False, "matchCharacterPersonality": False,
+                            "matchCharacterDepthPrompt": False, "matchScenario": False,
+                            "matchCreatorNotes": False, "delayUntilRecursion": 0,
+                            "probability": 75, "useProbability": True, "depth": 6,
+                            "outletName": "", "group": "beasts", "groupOverride": False,
+                            "groupWeight": 100, "scanDepth": None, "caseSensitive": None,
+                            "matchWholeWords": None, "useGroupScoring": None, "automationId": "",
+                            "role": 0, "sticky": 2, "cooldown": 0, "delay": 0, "displayIndex": 0,
+                            "triggers": [], "futureField": {"nested": [1, 2, 3]},
+                        },
+                        "3": {
+                            "uid": 3, "key": ["castle"], "keysecondary": [], "comment": "",
+                            "content": "The castle stands.", "constant": True, "selective": False,
+                            "selectiveLogic": 0, "order": 100, "position": 0, "disable": True,
+                            "probability": 100, "useProbability": False, "depth": 4,
+                        },
+                    },
+                    "extensions": {"custom": "kept"},
+                },
+                "beta-lore": {"name": "Beta Lore", "entries": {}},
+            }
+        return cls.wi_books
 
     @classmethod
     def chat_metadata(cls):
@@ -581,6 +624,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "note_depth": "2",
                 "note_position": 1,
                 "note_role": 0,
+                "world_info": "gate-lore",  # w3-wi chat-scope book link
             }
         return cls.chat_meta
 
@@ -714,8 +758,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "full_token": Handler.full_token,
                     "reader_total": len(Handler.reader_current()),
                     "reader_above_probe": Handler.reader_current()[0]["mes"],
+                    "wi_books": Handler.worldinfo_books(),  # w3-wi
+                    "last_wi_edit": Handler.last_wi_edit,  # w3-wi
+                    "card_get_count": Handler.card_get_count,  # w3-wi
+                    "last_card_get": Handler.last_card_get,  # w3-wi
+                    "settings_world_info": Handler.settings_blob().get("world_info_settings"),  # w3-wi
                 })
             # C-CONN: model allowKeysExposure=true, so /api/secrets/read hands back raw keys.
+            # w3-wi: drop a card saved by an earlier section, so /api/characters/get serves the
+            # stock card (with its embedded character_book) again.
+            if self.path.startswith("/dev/wi-reset-card"):
+                Handler.saved_card = None
+                Handler.hostile_card = False
+                return self.mock_json({"ok": True})
             if self.path.startswith("/dev/arm-keys-exposed"):
                 Handler.keys_exposed = True
                 return self.mock_json({"ok": True, "keys_exposed": True})
@@ -937,7 +992,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 Handler.bump_full_token()
                 return self.mock_status(409, {"error": "stale", "change_token": Handler.full_token})
             meta = Handler.chat_metadata()
-            for key in ("note_prompt", "note_interval", "note_depth", "note_position", "note_role"):
+            # world_info joined the allowlist on main (9bc8ee713); mirrored here for the w3-wi row.
+            for key in ("note_prompt", "note_interval", "note_depth", "note_position", "note_role", "world_info"):
                 if key in req:
                     meta[key] = req[key]
             Handler.bump_full_token()
@@ -947,6 +1003,30 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "tail_token": Handler.append_token or "v1.mock",
                 "total_items": len(Handler.reader_current()) + len(Handler.appended_messages),
             })
+        # w3-wi: the five real worldinfo routes (src/endpoints/worldinfo.js), whole-file semantics.
+        if path == "/api/worldinfo/list":
+            books = Handler.worldinfo_books()
+            return self.mock_json([
+                {"file_id": fid, "name": b.get("name", fid), "extensions": b.get("extensions", {})}
+                for fid, b in sorted(books.items())
+            ])
+        if path == "/api/worldinfo/get":
+            name = req.get("name") if isinstance(req, dict) else None
+            book = Handler.worldinfo_books().get(name)
+            return self.mock_json(book if book is not None else {"entries": {}})
+        if path == "/api/worldinfo/edit":
+            data = req.get("data") if isinstance(req, dict) else None
+            if not isinstance(req, dict) or not req.get("name") or not isinstance(data, dict) or "entries" not in data:
+                return self.mock_status(400, {"error": "Is not a valid world info file"})
+            Handler.worldinfo_books()[req["name"]] = data
+            Handler.last_wi_edit = req
+            return self.mock_json({"ok": True})
+        if path == "/api/worldinfo/delete":
+            name = req.get("name") if isinstance(req, dict) else None
+            if name in Handler.worldinfo_books():
+                del Handler.worldinfo_books()[name]
+                return self.mock_json({})
+            return self.mock_status(500, {"error": "no such book"})
         if path == "/api/settings/save":
             # C-PERS: merge the posted settings so a persona persist round-trips on the next get.
             if isinstance(req, dict):
@@ -994,6 +1074,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # must keep their values; everything below is the rest of the deep card the editor loads,
             # shaped as processCharacter returns it (top-level v1 mirror + data.* + json_data).
             avatar = req.get("avatar_url", "char")
+            Handler.card_get_count += 1  # w3-wi: the deep-fetch completion signal for the gate
+            Handler.last_card_get = avatar
             if Handler.hostile_card:
                 return self.mock_json(_hostile_card(avatar))
             if Handler.saved_card is not None:
@@ -1021,6 +1103,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "extensions": {
                         "world": "",
                         "depth_prompt": {"prompt": "keep the lamp burning", "depth": 4, "role": "system"},
+                    },
+                    # w3-wi: v2-spec embedded book, converted + surfaced read-only by the WI panel.
+                    "character_book": {
+                        "name": "Keeper's Book",
+                        "entries": [
+                            {"keys": ["lighthouse"], "secondary_keys": [], "content": "The lamp never dies.",
+                             "enabled": True, "insertion_order": 10, "position": "before_char",
+                             "extensions": {"probability": 80, "depth": 3}},
+                        ],
                     },
                 },
             })

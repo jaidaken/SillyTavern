@@ -12,6 +12,7 @@ const reading_prefs = @import("./reading_prefs.zig");
 const appearance = @import("./appearance.zig");
 const backgrounds = @import("./backgrounds.zig");
 const char_api = @import("./char_api.zig");
+const wi_actions = @import("./world_info_actions.zig"); // w3-wi
 const ui = @import("./ui.zig");
 const zx = @import("zx");
 const regions = @import("./regions.zig");
@@ -203,6 +204,11 @@ fn refreshCharacters() callconv(.c) void {
     char_api.fetchCharacters();
 }
 
+// w3-wi: called by the __st_wi_import JS helper after a successful lorebook import.
+fn refreshWorldInfo() callconv(.c) void {
+    wi_actions.reloadList();
+}
+
 /// Called by the __st_persona_avatar JS multipart helper after a successful persona-avatar upload,
 /// so the persona panel re-renders against the new image (C-PERS).
 fn personaAvatarUploaded() callconv(.c) void {
@@ -304,6 +310,7 @@ comptime {
         @export(&bootInit, .{ .name = "__st_boot_init" });
         @export(&seedDemo, .{ .name = "__st_seed_demo" });
         @export(&refreshCharacters, .{ .name = "__st_refresh_characters" });
+        @export(&refreshWorldInfo, .{ .name = "__st_refresh_wi" }); // w3-wi
         @export(&personaAvatarUploaded, .{ .name = "__st_persona_avatar_done" });
         @export(&cardAvatarUploaded, .{ .name = "__st_card_avatar_done" });
         @export(&backgroundUploaded, .{ .name = "__st_bg_upload_done" });
