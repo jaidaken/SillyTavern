@@ -17,6 +17,7 @@ const net = @import("./net.zig");
 const char_store = @import("./character_store.zig");
 const reading_prefs = @import("./reading_prefs.zig");
 const regions = @import("./regions.zig");
+const pager = @import("./pager.zig"); // w3-wi-engine: the one full-token owner
 
 const alloc = char_store.page_gpa;
 const log = std.log.scoped(.wi);
@@ -130,6 +131,8 @@ fn onListDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         return;
     };
     list_state = .ready;
+    // w3-wi-engine: names are resolvable now; load whatever the scopes reference.
+    ensureScopeBooksLoaded();
     bump();
 }
 
@@ -544,6 +547,7 @@ pub fn toggleGlobal(file_id: []const u8) void {
         log.warn("global toggle failed: {s}", .{@errorName(err)});
         return;
     };
+    ensureScopeBooksLoaded(); // w3-wi-engine
     reading_prefs.scheduleSave();
     bump();
 }
@@ -555,11 +559,72 @@ pub fn setBudget(raw: []const u8) void {
     bump();
 }
 
+// ---- scope-book loading for the engine (w3-wi-engine) --------------------------------------------
+
+/// File ids with a /get in flight, so a scope re-check does not spam duplicate fetches.
+var scope_fetches: std.ArrayList([]u8) = .empty;
+
+/// Fetch every book the activation engine can reach (chat link, card link, global selection) that
+/// is not loaded yet. The engine reads only loaded books at send time; this is what loads them.
+/// Names resolve through the /list rows, so the list is (re)loaded first when absent.
+pub fn ensureScopeBooksLoaded() void {
+    if (zx.platform.role != .client) return;
+    if (list_state == .idle) {
+        reloadList();
+        return; // onListDone re-enters once names are resolvable.
+    }
+    ensureBookLoaded(wi.global.chat_world);
+    ensureBookLoaded(wi.global.char_world);
+    for (wi.global.global_selected.items) |fid| ensureBookLoaded(fid);
+}
+
+fn ensureBookLoaded(ref: []const u8) void {
+    const fid = wi.global.resolveRefFileId(ref) orelse return;
+    if (wi.global.bookByFileId(fid) != null) return;
+    for (scope_fetches.items) |f| {
+        if (std.mem.eql(u8, f, fid)) return;
+    }
+    const body = std.json.Stringify.valueAlloc(alloc, .{ .name = fid }, .{}) catch return;
+    defer alloc.free(body);
+    const m = startMutation(fid, "") orelse return;
+    const fid_c = alloc.dupe(u8, fid) catch {
+        freeMutation(m);
+        return;
+    };
+    scope_fetches.append(alloc, fid_c) catch {
+        alloc.free(fid_c);
+        freeMutation(m);
+        return;
+    };
+    net.request("/api/worldinfo/get", body, @intFromPtr(m), onScopeBookDone, .{});
+}
+
+fn onScopeBookDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
+    const m = mutationFor(tag);
+    defer freeMutation(m);
+    for (scope_fetches.items, 0..) |f, i| {
+        if (std.mem.eql(u8, f, m.old)) {
+            alloc.free(f);
+            _ = scope_fetches.swapRemove(i);
+            break;
+        }
+    }
+    if (res == null or status < 200 or status >= 300) {
+        log.warn("scope book {s} fetch failed: {d}; it will not activate", .{ m.old, status });
+        return;
+    }
+    const body = res.?.text() catch return;
+    wi.global.loadBookFromJson(m.old, body) catch |err| {
+        log.warn("scope book {s} unparseable: {s}", .{ m.old, @errorName(err) });
+    };
+}
+
 // ---- the boot / card / chat seams ----------------------------------------------------------------
 
 /// Boot hydration off the account settings blob (called from char_api after conn/config setFrom).
 pub fn setFrom(settings_str: []const u8) void {
     wi.global.setFromSettings(settings_str);
+    ensureScopeBooksLoaded();
 }
 
 /// reading_prefs' merge hook: write globalSelect + budget into the blob being saved.
@@ -572,23 +637,26 @@ pub fn mergeWorldInfo(a: std.mem.Allocator, root_obj: *std.json.ObjectMap) !void
 pub fn adoptCard(card_bytes: []const u8) void {
     wi.global.adoptCharCard(card_bytes);
     if (open_char_book and wi.global.char_book == null) closeBook();
+    ensureScopeBooksLoaded(); // w3-wi-engine: the card may link a world by name
     bump();
 }
 
-/// The open chat's identity for the /api/chats/metadata write path (avatar + file + the FULL
-/// change token, the same descriptor an_state's note save uses). Empty file = no chat to link.
+/// The open chat's identity for the /api/chats/metadata write path (avatar + file). The FULL
+/// change token the write gates on is pager's (w3-wi-engine): one owner shared with the note save
+/// and the message mutations, so no writer stomps another's copy. Empty file = no chat to link.
 var chat_avatar: []u8 = &.{};
 var chat_file: []u8 = &.{};
-var chat_token: []u8 = &.{};
 var chat_link_in_flight = false;
 
 /// Chat seam (chat open): adopt the chat's identity for the link write path, and its linked book
 /// name from the metadata. An empty file clears both (no chat open).
 pub fn setChatContext(avatar: []const u8, file_name: []const u8, chat_metadata: []const u8, full_token: []const u8) void {
+    // The token parameter stays for call-site stability; pager owns the live copy (w3-wi-engine).
+    _ = full_token;
     setOwned(&chat_avatar, avatar);
     setOwned(&chat_file, file_name);
-    setOwned(&chat_token, full_token);
     setChatWorldFromMetadata(chat_metadata);
+    ensureScopeBooksLoaded();
 }
 
 pub fn chatOpen() bool {
@@ -605,7 +673,7 @@ pub fn setChatBook(file_id: []const u8) void {
     const body = std.json.Stringify.valueAlloc(alloc, .{
         .avatar_url = chat_avatar,
         .file_name = chat_file,
-        .change_token = chat_token,
+        .change_token = pager.fullToken(),
         .world_info = file_id,
     }, .{}) catch {
         freeMutation(m);
@@ -633,19 +701,20 @@ fn onChatLinkDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         return;
     }
     wi.global.setChatWorld(m.old);
+    ensureScopeBooksLoaded();
     save_status = "Saved";
     bump();
 }
 
-/// The metadata response carries the post-save full token; without adopting it every later link
-/// or note save would 409 on the token this module was holding.
+/// The metadata response carries the post-save full token; without adopting it into the one owner
+/// (pager) every later link, note save or message mutation would 409 on a stale copy.
 fn adoptChatToken(res: ?*zx.Fetch.Response) void {
     const r = res orelse return;
     const parsed = r.json(std.json.Value) catch return;
     defer parsed.deinit();
     if (parsed.value != .object) return;
     const t = parsed.value.object.get("change_token") orelse return;
-    if (t == .string) setOwned(&chat_token, t.string);
+    if (t == .string and t.string.len > 0) pager.setFullToken(t.string);
 }
 
 /// Stock stores a plain string under `world_info`; newer blobs may wrap it in an object with a

@@ -52,6 +52,8 @@ comptime {
     _ = @import("chat_names.zig");
     // w3-wi
     _ = @import("world_info.zig");
+    // w3-wi-engine
+    _ = @import("world_info_engine.zig");
 }
 
 const sink_call = "html.sink(";

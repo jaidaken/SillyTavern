@@ -16,6 +16,7 @@ const std = @import("std");
 const macros = @import("./macros.zig");
 const templates = @import("./templates.zig");
 const authors_note = @import("./authors_note.zig");
+const wi_engine = @import("./world_info_engine.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -177,11 +178,23 @@ pub fn selectWindow(history: []const PromptMsg, budget_chars: usize, tpl: templa
 }
 
 /// Everything about prompt SHAPE that is not the card content or the history: the instruct/context
-/// templates the formatting panel edits, and the chat's author's note. Defaulted, so a caller that
-/// has neither still assembles the classic `Name: mes` prompt.
+/// templates the formatting panel edits, the chat's author's note, and the world-info activation
+/// inputs (probe#3 delta 1). Defaulted, so a caller that has none still assembles the classic
+/// `Name: mes` prompt.
 pub const Shape = struct {
     tpl: Templates = .{},
     note: Note = .{},
+    /// World-info candidates in priority order (WorldInfoStore.collectActive); store-owned memory,
+    /// borrowed for the build only.
+    wi_entries: []const wi_engine.Entry = &.{},
+    /// Stock world_info_depth: how many newest PROMPT-window messages the key scan reads.
+    wi_scan_depth: usize = 2,
+    /// Engine-side cap on the WI slice alone (probe#3 delta 2); the story string stays uncapped.
+    wi_budget_chars: usize = std.math.maxInt(usize),
+    /// Stock world_info_recursive: activated content re-enters the key scan.
+    wi_recursive: bool = false,
+    /// Caller-supplied roll for probability entries (probe#3 delta 5); null = every roll passes.
+    wi_rng: ?std.Random = null,
 };
 
 /// Builds the text-completion prompt with no budget cap. Owned result.
@@ -196,41 +209,117 @@ pub fn buildPrompt(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, shape
 ///   3. `chat_start`
 ///   4. the chat history, each turn wrapped in the sequence its ROLE selects, trimmed oldest-first
 ///      to the remaining budget
-///   5. an `in_chat` author's note, inserted at its depth AFTER the trim
+///   5. the in-chat injections at their depths AFTER the trim: the `in_chat` author's note and the
+///      activated world-info atDepth groups
 ///   6. the continuation prefix that primes the model to answer
 ///
-/// The system block is built in full first (it is per-card and small) and the author's note is
-/// reserved out of the budget BEFORE the history walk, so neither can be silently trimmed: the note
-/// is a control instruction, and losing it would change the reply with nothing to point at. The
-/// remaining budget bounds the history alone. Owned result.
+/// World info activates first (scan over the full window at wi_scan_depth, capped by its own
+/// wi_budget_chars) and rides the story string's wi slots, the example section, the note anchors,
+/// or the injection list per entry position. The system block is built in full first (it is
+/// per-card and small) and the injections are reserved out of the budget BEFORE the history walk,
+/// so neither can be silently trimmed: they are control instructions, and losing one would change
+/// the reply with nothing to point at. The remaining budget bounds the history alone. Owned result.
 pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, budget_chars: usize, shape: Shape) Allocator.Error![]u8 {
     const instruct = shape.tpl.instruct;
+
+    // The world-info scan reads the PROMPT window tail, so the display window never bounds what
+    // can activate (invariant 2).
+    const scan_texts = try alloc.alloc([]const u8, history.len);
+    defer alloc.free(scan_texts);
+    for (history, 0..) |m, i| scan_texts[i] = m.mes;
+    var wi_act = try wi_engine.activate(alloc, .{
+        .entries = shape.wi_entries,
+        .scan_depth = shape.wi_scan_depth,
+        .budget_chars = shape.wi_budget_chars,
+        .recursive = shape.wi_recursive,
+        .rng = shape.wi_rng,
+    }, scan_texts);
+    defer wi_act.deinit();
+
+    // Probe#3 delta 1: the ctx copy that feeds {{wiBefore}}/{{wiAfter}}; macros inside activated
+    // content resolve in renderStoryString's nested pass.
+    var wctx = ctx;
+    wctx.wi_before = wi_act.before;
+    wctx.wi_after = wi_act.after;
+    // Stock drops wi content a story string has no slot for, warn-only (power-user.js:2294).
+    if ((wi_act.before.len > 0 and !storyHasSlot(shape.tpl.context.story_string, "{{wiBefore}}", "{{loreBefore}}")) or
+        (wi_act.after.len > 0 and !storyHasSlot(shape.tpl.context.story_string, "{{wiAfter}}", "{{loreAfter}}")))
+    {
+        std.log.scoped(.wi).warn("the story string has no wi slot; activated world info is dropped", .{});
+    }
+
+    // an_top/an_bottom entries wrap the note wherever it lands (stock ANWithWI); for the anchor
+    // positions that is the anchor slot, for in_chat it is the injection built below.
+    var anchor_owned: ?[]u8 = null;
+    defer if (anchor_owned) |s| alloc.free(s);
+    if (wi_act.an_top.len > 0 or wi_act.an_bottom.len > 0) switch (shape.note.position) {
+        .before_prompt => {
+            anchor_owned = try joinNonEmpty(alloc, &.{ wi_act.an_top, wctx.anchor_before, wi_act.an_bottom });
+            wctx.anchor_before = anchor_owned.?;
+        },
+        .in_prompt => {
+            anchor_owned = try joinNonEmpty(alloc, &.{ wi_act.an_top, wctx.anchor_after, wi_act.an_bottom });
+            wctx.anchor_after = anchor_owned.?;
+        },
+        .in_chat => {},
+    };
 
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(alloc);
 
-    const story = try templates.renderStoryString(alloc, shape.tpl.context.story_string, ctx);
+    const story = try templates.renderStoryString(alloc, shape.tpl.context.story_string, wctx);
     defer alloc.free(story);
     const wrapped_story = try templates.wrapStoryString(alloc, instruct, story);
     defer alloc.free(wrapped_story);
     try out.appendSlice(alloc, wrapped_story);
 
-    try appendExamples(alloc, &out, ctx, shape.tpl.context.example_separator);
+    try appendExamples(alloc, &out, wctx, shape.tpl.context.example_separator, wi_act.em_top, wi_act.em_bottom);
     if (shape.tpl.context.chat_start.len > 0) {
-        const start = try substituteMacros(alloc, shape.tpl.context.chat_start, ctx);
+        const start = try substituteMacros(alloc, shape.tpl.context.chat_start, wctx);
         defer alloc.free(start);
         try out.appendSlice(alloc, start);
         try out.append(alloc, '\n');
     }
 
-    const note_cost = noteCost(instruct, shape.note, history.len);
-    const windowed = selectWindow(history, budget_chars -| out.items.len -| note_cost, instruct);
-    const inject_at = authors_note.injectionIndex(shape.note, windowed.len);
+    // The generalized injection list (probe#3 delta 4): the in_chat note plus every atDepth group,
+    // reserved out of the budget pre-walk so a tight budget sheds history, never an injection.
+    var injections: std.ArrayList(Injection) = .empty;
+    defer {
+        for (injections.items) |inj| alloc.free(inj.text);
+        injections.deinit(alloc);
+    }
+    // WI an entries force the note slot to fire even when the note itself is silent this turn
+    // (stock shouldWIAddPrompt).
+    const an_wrap = shape.note.position == .in_chat and (wi_act.an_top.len > 0 or wi_act.an_bottom.len > 0);
+    if (an_wrap or authors_note.injectionIndex(shape.note, history.len) != null) {
+        const note_text = if (authors_note.injectionIndex(shape.note, history.len) != null) shape.note.prompt else "";
+        const joined = try joinNonEmpty(alloc, &.{ wi_act.an_top, note_text, wi_act.an_bottom });
+        defer alloc.free(joined);
+        const subbed = try substituteMacros(alloc, joined, wctx);
+        errdefer alloc.free(subbed);
+        try injections.append(alloc, .{
+            .depth = @intCast(@max(0, shape.note.depth)),
+            .role = shape.note.role.toTemplateRole(),
+            .text = subbed,
+            .is_note = true,
+        });
+    }
+    for (wi_act.at_depth) |g| {
+        const subbed = try substituteMacros(alloc, g.content, wctx);
+        errdefer alloc.free(subbed);
+        try injections.append(alloc, .{ .depth = @intCast(@max(0, g.depth)), .role = .system, .text = subbed, .is_note = false });
+    }
+    var inj_cost: usize = 0;
+    for (injections.items) |inj| inj_cost += templates.wrapCost(instruct, inj.role, "", inj.text);
+
+    const windowed = selectWindow(history, budget_chars -| out.items.len -| inj_cost, instruct);
+    // The note's interval reads the windowed count, as it always has; an_wrap overrides it.
+    const note_live = an_wrap or authors_note.injectionIndex(shape.note, windowed.len) != null;
     for (windowed, 0..) |m, i| {
-        if (inject_at != null and inject_at.? == i) try appendNote(alloc, &out, instruct, shape.note);
+        try appendInjectionsAt(alloc, &out, instruct, injections.items, note_live, windowed.len, i);
         try templates.appendWrapped(alloc, &out, instruct, m.role, m.name, m.mes);
     }
-    if (inject_at != null and inject_at.? >= windowed.len) try appendNote(alloc, &out, instruct, shape.note);
+    try appendInjectionsAt(alloc, &out, instruct, injections.items, note_live, windowed.len, windowed.len);
 
     const prefix = try templates.continuationPrefix(alloc, instruct, ctx.char);
     defer alloc.free(prefix);
@@ -238,37 +327,70 @@ pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMs
     return out.toOwnedSlice(alloc);
 }
 
-/// The byte cost of an in_chat note, reserved from the budget before the history walk. Zero for the
-/// anchor positions: those already rode into the story string, which is built in full.
-fn noteCost(tpl: templates.Instruct, note: Note, history_len: usize) usize {
-    if (authors_note.injectionIndex(note, history_len) == null) return 0;
-    return templates.wrapCost(tpl, note.role.toTemplateRole(), "", note.prompt);
+/// One in-chat control insertion: the author's note, or a merged WI atDepth group. `depth` counts
+/// back from the newest windowed turn (the authors_note.injectionIndex convention).
+const Injection = struct {
+    depth: usize,
+    role: templates.Role,
+    text: []const u8,
+    is_note: bool,
+};
+
+fn appendInjectionsAt(alloc: Allocator, out: *std.ArrayList(u8), tpl: templates.Instruct, injections: []const Injection, note_live: bool, window_len: usize, at: usize) Allocator.Error!void {
+    for (injections) |inj| {
+        if (inj.is_note and !note_live) continue;
+        if (window_len -| inj.depth != at) continue;
+        try templates.appendWrapped(alloc, out, tpl, inj.role, "", inj.text);
+    }
 }
 
-fn appendNote(alloc: Allocator, out: *std.ArrayList(u8), tpl: templates.Instruct, note: Note) Allocator.Error!void {
-    try templates.appendWrapped(alloc, out, tpl, note.role.toTemplateRole(), "", note.prompt);
+fn storyHasSlot(story: []const u8, slot: []const u8, legacy: []const u8) bool {
+    return std.mem.indexOf(u8, story, slot) != null or std.mem.indexOf(u8, story, legacy) != null;
 }
 
-/// The card's example dialogue. The classic client splits the field on `<START>` and gives each block
-/// the context template's example separator as a heading (instruct-mode.js:513), which is what keeps
-/// a multi-block example from reading as one run-on exchange.
-fn appendExamples(alloc: Allocator, out: *std.ArrayList(u8), ctx: Ctx, separator: []const u8) Allocator.Error!void {
-    if (ctx.mes_example.len == 0) return;
-    const subbed = try substituteMacros(alloc, ctx.mes_example, ctx);
-    defer alloc.free(subbed);
-    if (std.mem.trim(u8, subbed, " \t\r\n").len == 0) return;
+/// The non-empty parts joined with newlines. Owned result, possibly empty.
+fn joinNonEmpty(alloc: Allocator, parts: []const []const u8) Allocator.Error![]u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(alloc);
+    for (parts) |p| {
+        if (p.len == 0) continue;
+        if (buf.items.len > 0) try buf.append(alloc, '\n');
+        try buf.appendSlice(alloc, p);
+    }
+    return buf.toOwnedSlice(alloc);
+}
 
-    var it = std.mem.splitSequence(u8, subbed, "<START>");
-    while (it.next()) |raw| {
-        const block = std.mem.trim(u8, raw, " \t\r\n");
-        if (block.len == 0) continue;
-        if (separator.len > 0) {
-            try out.appendSlice(alloc, separator);
-            try out.append(alloc, '\n');
+/// The example section: WI em_top entries, then the card's example dialogue split on `<START>`
+/// (instruct-mode.js:513), then em_bottom, every block under the context template's example
+/// separator so a multi-block example never reads as one run-on exchange.
+fn appendExamples(alloc: Allocator, out: *std.ArrayList(u8), ctx: Ctx, separator: []const u8, em_top: []const []const u8, em_bottom: []const []const u8) Allocator.Error!void {
+    for (em_top) |b| try appendExampleBlock(alloc, out, ctx, separator, b);
+    if (ctx.mes_example.len > 0) {
+        const subbed = try substituteMacros(alloc, ctx.mes_example, ctx);
+        defer alloc.free(subbed);
+        if (std.mem.trim(u8, subbed, " \t\r\n").len != 0) {
+            var it = std.mem.splitSequence(u8, subbed, "<START>");
+            while (it.next()) |raw| try appendBlockRaw(alloc, out, separator, raw);
         }
-        try out.appendSlice(alloc, block);
+    }
+    for (em_bottom) |b| try appendExampleBlock(alloc, out, ctx, separator, b);
+}
+
+fn appendExampleBlock(alloc: Allocator, out: *std.ArrayList(u8), ctx: Ctx, separator: []const u8, raw: []const u8) Allocator.Error!void {
+    const subbed = try substituteMacros(alloc, raw, ctx);
+    defer alloc.free(subbed);
+    try appendBlockRaw(alloc, out, separator, subbed);
+}
+
+fn appendBlockRaw(alloc: Allocator, out: *std.ArrayList(u8), separator: []const u8, raw: []const u8) Allocator.Error!void {
+    const block = std.mem.trim(u8, raw, " \t\r\n");
+    if (block.len == 0) return;
+    if (separator.len > 0) {
+        try out.appendSlice(alloc, separator);
         try out.append(alloc, '\n');
     }
+    try out.appendSlice(alloc, block);
+    try out.append(alloc, '\n');
 }
 
 /// Builds the JSON body for POST /api/backends/text-completions/generate. `stream` is always true:
@@ -635,6 +757,147 @@ test "a periodic note only fires on its interval" {
     try testing.expect(std.mem.indexOf(u8, quiet, ": N") == null);
 }
 
+fn wiTestEntry(uid: i64, position: @import("./world_info.zig").Position, content: []const u8) wi_engine.Entry {
+    return .{
+        .uid_key = "",
+        .uid = uid,
+        .keys = &.{},
+        .keysecondary = &.{},
+        .selective_logic = .and_any,
+        .content = content,
+        .comment = "",
+        .constant = true,
+        .selective = false,
+        .disable = false,
+        .order = 100,
+        .position = position,
+        .depth = 4,
+        .probability = 100,
+        .use_probability = true,
+    };
+}
+
+test "activated world info renders through the story string's wi slots" {
+    const ctx = Ctx{ .char = "Rita", .description = "A diver.", .scenario = "the shoals" };
+    var before = wiTestEntry(0, .before, "The realm of {{char}}.");
+    before.constant = false;
+    before.keys = &.{"realm"};
+    const entries = [_]wi_engine.Entry{ before, wiTestEntry(1, .after, "WI-AFTER") };
+    const history = [_]PromptMsg{.{ .name = "Jamie", .mes = "tell me of the realm", .role = .user }};
+    const shape = Shape{
+        .tpl = .{ .context = .{ .story_string = templates.default_story_string } },
+        .wi_entries = &entries,
+    };
+    const out = try buildPrompt(testing.allocator, ctx, &history, shape);
+    defer testing.allocator.free(out);
+    const want =
+        "The realm of Rita.\n" ++
+        "A diver.\n" ++
+        "the shoals\n" ++
+        "WI-AFTER\n" ++
+        "Jamie: tell me of the realm\n" ++
+        "Rita:";
+    try testing.expectEqualStrings(want, out);
+}
+
+test "a non-matching wi entry stays out of the prompt" {
+    const ctx = Ctx{ .char = "Rita", .description = "A diver." };
+    var e = wiTestEntry(0, .before, "NEVER");
+    e.constant = false;
+    e.keys = &.{"zebra"};
+    const entries = [_]wi_engine.Entry{e};
+    const history = [_]PromptMsg{.{ .name = "Jamie", .mes = "hello there", .role = .user }};
+    const shape = Shape{
+        .tpl = .{ .context = .{ .story_string = templates.default_story_string } },
+        .wi_entries = &entries,
+    };
+    const out = try buildPrompt(testing.allocator, ctx, &history, shape);
+    defer testing.allocator.free(out);
+    try testing.expect(std.mem.indexOf(u8, out, "NEVER") == null);
+}
+
+test "an atDepth entry injects at its depth and survives a tight budget" {
+    const ctx = Ctx{ .char = "Rita" };
+    var deep = wiTestEntry(0, .at_depth, "THE WARD HOLDS");
+    deep.depth = 1;
+    const entries = [_]wi_engine.Entry{deep};
+    const history = [_]PromptMsg{
+        .{ .name = "Jamie", .mes = "an old line", .role = .user },
+        .{ .name = "Rita", .mes = "a mid line", .role = .assistant },
+        .{ .name = "Jamie", .mes = "a new line", .role = .user },
+    };
+    const shape = Shape{ .tpl = .{ .context = .{ .story_string = "" } }, .wi_entries = &entries };
+    const out = try buildPrompt(testing.allocator, ctx, &history, shape);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("Jamie: an old line\nRita: a mid line\n: THE WARD HOLDS\nJamie: a new line\nRita:", out);
+
+    const tight = try buildPromptBudgeted(testing.allocator, ctx, &history, 40, shape);
+    defer testing.allocator.free(tight);
+    try testing.expect(std.mem.indexOf(u8, tight, "THE WARD HOLDS") != null);
+    try testing.expect(std.mem.indexOf(u8, tight, "an old line") == null);
+}
+
+test "the wi budget caps the wi slice while the story string stays uncapped" {
+    const ctx = Ctx{ .char = "Rita", .description = "A diver." };
+    var hi = wiTestEntry(0, .before, "KEEPKEEPKEEP");
+    hi.order = 900;
+    var lo = wiTestEntry(1, .before, "DROPDROPDROP");
+    lo.order = 10;
+    const entries = [_]wi_engine.Entry{ hi, lo };
+    const shape = Shape{
+        .tpl = .{ .context = .{ .story_string = templates.default_story_string } },
+        .wi_entries = &entries,
+        .wi_budget_chars = 20,
+    };
+    const out = try buildPrompt(testing.allocator, ctx, &.{}, shape);
+    defer testing.allocator.free(out);
+    try testing.expect(std.mem.indexOf(u8, out, "KEEPKEEPKEEP") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "DROPDROPDROP") == null);
+    try testing.expect(std.mem.indexOf(u8, out, "A diver.") != null);
+}
+
+test "an-anchored wi wraps the note's anchor slot" {
+    const ctx = Ctx{ .char = "Rita", .description = "A diver.", .anchor_before = "NOTE" };
+    const entries = [_]wi_engine.Entry{ wiTestEntry(0, .an_top, "TOP"), wiTestEntry(1, .an_bottom, "BOTTOM") };
+    const story = "{{#if anchorBefore}}{{anchorBefore}}\n{{/if}}{{#if description}}{{description}}\n{{/if}}";
+    const shape = Shape{
+        .tpl = .{ .context = .{ .story_string = story } },
+        .note = .{ .prompt = "NOTE", .interval = 1, .position = .before_prompt },
+        .wi_entries = &entries,
+    };
+    const out = try buildPrompt(testing.allocator, ctx, &.{}, shape);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("TOP\nNOTE\nBOTTOM\nA diver.\nRita:", out);
+}
+
+test "an-position wi fires the in-chat note slot even when the note is silent" {
+    const ctx = Ctx{ .char = "Rita" };
+    var top = wiTestEntry(0, .an_top, "TOP");
+    top.depth = 0;
+    const entries = [_]wi_engine.Entry{top};
+    const history = [_]PromptMsg{.{ .name = "Jamie", .mes = "one", .role = .user }};
+    const shape = Shape{
+        .tpl = .{ .context = .{ .story_string = "" } },
+        .note = .{ .prompt = "", .interval = 1, .position = .in_chat, .depth = 0, .role = .system },
+        .wi_entries = &entries,
+    };
+    const out = try buildPrompt(testing.allocator, ctx, &history, shape);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("Jamie: one\n: TOP\nRita:", out);
+}
+
+test "em entries bracket the example blocks under the separator" {
+    const ctx = Ctx{ .char = "Rita", .mes_example = "<START>\nRita: card" };
+    const entries = [_]wi_engine.Entry{ wiTestEntry(0, .em_top, "EM-TOP"), wiTestEntry(1, .em_bottom, "EM-BOTTOM") };
+    const shape = Shape{
+        .tpl = .{ .context = .{ .story_string = "", .example_separator = "***" } },
+        .wi_entries = &entries,
+    };
+    const out = try buildPrompt(testing.allocator, ctx, &.{}, shape);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("***\nEM-TOP\n***\nRita: card\n***\nEM-BOTTOM\nRita:", out);
+}
+
 test "buildPromptBudgeted cleans up on every allocation failure" {
     const ctx = Ctx{ .char = "Rita", .description = "A diver.", .system = "You are {{char}}." };
     try testing.checkAllAllocationFailures(testing.allocator, struct {
@@ -643,9 +906,14 @@ test "buildPromptBudgeted cleans up on every allocation failure" {
                 .{ .name = "Jamie", .mes = "Hi.", .role = .user },
                 .{ .name = "Rita", .mes = "Hello.", .role = .assistant },
             };
+            var keyed = wiTestEntry(0, .before, "of {{char}}");
+            keyed.constant = false;
+            keyed.keys = &.{"hi"};
+            const entries = [_]wi_engine.Entry{ keyed, wiTestEntry(1, .at_depth, "WARD"), wiTestEntry(2, .em_top, "EM") };
             const shape = Shape{
                 .tpl = .{ .instruct = chatml, .context = .{ .story_string = templates.default_story_string, .example_separator = "***" } },
                 .note = .{ .prompt = "Be terse.", .interval = 1, .position = .in_chat, .depth = 1, .role = .system },
+                .wi_entries = &entries,
             };
             const out = try buildPromptBudgeted(alloc, c, &history, 4096, shape);
             alloc.free(out);

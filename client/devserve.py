@@ -189,7 +189,9 @@ def _default_settings():
             },
             "context": {
                 "name": "ChatML",
-                "story_string": "{{#if system}}{{system}}\n{{/if}}{{#if description}}{{description}}\n{{/if}}{{#if personality}}{{personality}}\n{{/if}}{{#if scenario}}{{scenario}}\n{{/if}}{{#if persona}}{{persona}}\n{{/if}}{{#if anchorAfter}}{{anchorAfter}}\n{{/if}}{{trim}}",
+                # w3-wi-engine: carries {{wiBefore}}/{{wiAfter}} like every shipped context preset
+                # (default/content/presets/context/ChatML.json); without a slot stock DROPS wi.
+                "story_string": "{{#if system}}{{system}}\n{{/if}}{{#if wiBefore}}{{wiBefore}}\n{{/if}}{{#if description}}{{description}}\n{{/if}}{{#if personality}}{{personality}}\n{{/if}}{{#if scenario}}{{scenario}}\n{{/if}}{{#if wiAfter}}{{wiAfter}}\n{{/if}}{{#if persona}}{{persona}}\n{{/if}}{{#if anchorAfter}}{{anchorAfter}}\n{{/if}}{{trim}}",
                 "chat_start": "",
                 "example_separator": "***",
                 "story_string_position": 0,
@@ -288,7 +290,8 @@ def _context_presets():
         # Carries the migration marker AND both anchors, exactly like every shipped context preset.
         {
             "name": "ChatML",
-            "story_string": "{{#if system}}{{system}}\n{{/if}}{{#if description}}{{description}}\n{{/if}}{{#if anchorBefore}}{{anchorBefore}}\n{{/if}}{{#if anchorAfter}}{{anchorAfter}}\n{{/if}}{{trim}}",
+            # w3-wi-engine: wi slots added, mirroring the real shipped ChatML context preset.
+            "story_string": "{{#if system}}{{system}}\n{{/if}}{{#if wiBefore}}{{wiBefore}}\n{{/if}}{{#if description}}{{description}}\n{{/if}}{{#if wiAfter}}{{wiAfter}}\n{{/if}}{{#if anchorBefore}}{{anchorBefore}}\n{{/if}}{{#if anchorAfter}}{{anchorAfter}}\n{{/if}}{{trim}}",
             "chat_start": "",
             "example_separator": "***",
             "story_string_position": 0,
@@ -692,6 +695,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # futureField, which the T0 row deep-diffs after an editor save.
     wi_books = None
     last_wi_edit = None
+    wi_get_log = []  # w3-wi-engine
     card_get_count = 0
     last_card_get = None
 
@@ -898,6 +902,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "reader_above_probe": Handler.reader_current()[0]["mes"],
                     "group_appended": Handler.group_appended,  # w3-grp
                     "wi_books": Handler.worldinfo_books(),  # w3-wi
+                    "wi_get_log": Handler.wi_get_log,  # w3-wi-engine
+                    "settings_context": Handler.settings_blob().get("power_user", {}).get("context"),  # w3-wi-engine
                     "last_wi_edit": Handler.last_wi_edit,  # w3-wi
                     "card_get_count": Handler.card_get_count,  # w3-wi
                     "last_card_get": Handler.last_card_get,  # w3-wi
@@ -1214,6 +1220,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             ])
         if path == "/api/worldinfo/get":
             name = req.get("name") if isinstance(req, dict) else None
+            Handler.wi_get_log.append(name)  # w3-wi-engine: which books the client fetched
             book = Handler.worldinfo_books().get(name)
             return self.mock_json(book if book is not None else {"entries": {}})
         if path == "/api/worldinfo/edit":
@@ -1229,6 +1236,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 del Handler.worldinfo_books()[name]
                 return self.mock_json({})
             return self.mock_status(500, {"error": "no such book"})
+        # w3-wi-engine BEGIN: the sixth real route (src/endpoints/worldinfo.js /import): multipart
+        # 'avatar' file, name = the sanitized filename stem, body must carry an entries object.
+        if path == "/api/worldinfo/import":
+            raw = body.decode("utf-8", "replace") if body else ""
+            content = _mgr_multipart_file(raw, "avatar")
+            fname = _multipart_filename(raw, "avatar") or "imported.json"
+            try:
+                book = json.loads(content or "")
+                if not isinstance(book, dict) or "entries" not in book:
+                    raise ValueError("no entries")
+            except ValueError:
+                return self.mock_status(400, {"error": "Is not a valid world info file"})
+            stem = _sanitize_filename(fname)
+            if stem.lower().endswith(".json"):
+                stem = stem[:-5]
+            if not stem:
+                return self.mock_status(400, {"error": "World file must have a name"})
+            Handler.worldinfo_books()[stem] = book
+            return self.mock_json({"name": stem})
+        # w3-wi-engine END
         if path == "/api/settings/save":
             # C-PERS: merge the posted settings so a persona persist round-trips on the next get.
             if isinstance(req, dict):

@@ -27,6 +27,7 @@ const persona_store = @import("./persona_store.zig");
 const persona_actions = @import("./persona_actions.zig");
 const store = @import("./store.zig");
 const wi_actions = @import("./world_info_actions.zig"); // w3-wi
+const wi_store = @import("./world_info.zig"); // w3-wi-engine
 const pager = @import("./pager.zig");
 const group_send = @import("./group_send.zig"); // w3-grp
 const regions = @import("./regions.zig");
@@ -1046,6 +1047,14 @@ fn stashSend(conn: generate.Connection, c: char_store.Character, persona: ?perso
     return true;
 }
 
+// w3-wi-engine: one PRNG for the probability entries, seeded from the clock at first send.
+var wi_prng: ?std.Random.DefaultPrng = null;
+
+fn wiRandom() std.Random {
+    if (wi_prng == null) wi_prng = std.Random.DefaultPrng.init(@bitCast(nowMs()));
+    return wi_prng.?.random();
+}
+
 /// The instruct sequence family a stored turn wraps in. is_system wins over is_user: a narrator line
 /// is a system turn whoever is nominally credited with it.
 fn roleOf(m: data.ChatMsg) templates.Role {
@@ -1122,6 +1131,12 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
     // w3-grp: a group member launch stashes no user text (the turn is already in the window).
     if (!user_turn_present and pend_user_text.len > 0) try history.append(alloc, .{ .name = pend_user_name, .mes = pend_user_text, .role = .user });
 
+    // w3-wi-engine: candidates come from the store AT DISPATCH, never the stash (probe#3 delta 3:
+    // store-owned book memory; the async gap between send and this callback cannot dangle them).
+    const wi_candidates: []const wi_store.Entry = wi_store.global.collectActive(alloc) catch &.{};
+    defer alloc.free(wi_candidates);
+    const wi_budget_chars = (generate.promptCharBudget(conn) *| @as(usize, @intCast(wi_store.global.budget))) / 100;
+
     // The note's anchor positions render through the story string; the in_chat position is inserted
     // into the history by the builder. Both read the same note, so only one of them ever fires.
     const anchors = noteAnchors(pend_note);
@@ -1136,7 +1151,17 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
         .anchor_before = anchors.before,
         .anchor_after = anchors.after,
     };
-    const shape = generate.Shape{ .tpl = pend_tpl, .note = pend_note };
+    // w3-wi-engine: the engine knobs ride the shape; scan depth + recursion + budget are the
+    // store's hydrated classic settings, the rng is this module's seeded PRNG.
+    const shape = generate.Shape{
+        .tpl = pend_tpl,
+        .note = pend_note,
+        .wi_entries = wi_candidates,
+        .wi_scan_depth = @intCast(@max(0, wi_store.global.scan_depth)),
+        .wi_budget_chars = wi_budget_chars,
+        .wi_recursive = wi_store.global.recursive,
+        .wi_rng = wiRandom(),
+    };
     const prompt = try generate.buildPromptBudgeted(alloc, ctx, history.items, generate.promptCharBudget(conn), shape);
     defer alloc.free(prompt);
     var stop_buf: [1][]const u8 = undefined;

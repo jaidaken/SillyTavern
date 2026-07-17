@@ -3895,6 +3895,146 @@ async function main() {
                 `shape=${wiLinkShape} body=${JSON.stringify(wiLinkBody || {}).slice(0, 140)} reflected=${wiLinkReflected}`);
         }
 
+        // w3-wi-engine BEGIN (append-only): activation engine rows (3b-B). Books are seeded
+        // deterministic (probability 100 / constant); rows read the RECORDED payload, not the UI.
+        console.log('== w3-wi-engine: activation, budget cap, unlink, import ==');
+        {
+            const engState = async () => (await fetch(`${args.base}/dev/state`)).json();
+            const engPost = (path, obj) => fetch(`${args.base}${path}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj),
+            });
+            const engEntry = (uid, over) => Object.assign({
+                uid, key: [], keysecondary: [], comment: '', content: '', constant: false,
+                selective: false, selectiveLogic: 0, order: 100, position: 0, disable: false,
+                probability: 100, useProbability: true, depth: 4,
+            }, over);
+
+            // E1: only the entry whose key appears in the typed message reaches the payload.
+            await engPost('/api/worldinfo/edit', {
+                name: 'engine-lore', data: {
+                    name: 'Engine Lore', entries: {
+                        0: engEntry(0, { key: ['gatekey'], content: 'WI-ENGINE-ALPHA' }),
+                        1: engEntry(1, { key: ['zebraword'], content: 'WI-ENGINE-NEVER' }),
+                    },
+                },
+            });
+            await engPost('/api/chats/metadata', { world_info: 'engine-lore' });
+            // Earlier preset rows leave a context template without wi slots active (stock DROPS wi
+            // then); pin a slotted one so these rows do not depend on run order.
+            const engEnv = await (await engPost('/api/settings/get', {})).json();
+            const engSettings = JSON.parse(engEnv.settings);
+            engSettings.power_user.context = {
+                name: 'WI Slotted',
+                story_string: '{{#if system}}{{system}}\n{{/if}}{{#if wiBefore}}{{wiBefore}}\n{{/if}}{{#if description}}{{description}}\n{{/if}}{{#if wiAfter}}{{wiAfter}}\n{{/if}}{{#if anchorBefore}}{{anchorBefore}}\n{{/if}}{{#if anchorAfter}}{{anchorAfter}}\n{{/if}}{{trim}}',
+                chat_start: '',
+                example_separator: '',
+                story_string_position: 0,
+            };
+            await engPost('/api/settings/save', engSettings);
+            await page.navigate(`${args.base}/`);
+            await openRecentChat();
+            await sendProbe('I found the GATEKEY in the sand');
+            const engS1 = await engState();
+            const engP1 = engS1.last_generate_prompt || '';
+            row('must', engP1.includes('WI-ENGINE-ALPHA') && !engP1.includes('WI-ENGINE-NEVER'),
+                'W3WI-E1 a linked book\'s matching entry lands in the generation payload and a non-matching entry does not',
+                `alpha=${engP1.includes('WI-ENGINE-ALPHA')} never=${engP1.includes('WI-ENGINE-NEVER')} gets=${JSON.stringify(engS1.wi_get_log)} slot=${JSON.stringify((engS1.settings_context || {}).story_string || '').includes('wiBefore')} plen=${engP1.length}`);
+
+            // E2 (T0): entries sized 0.6x the MEASURED 1% cap (earlier rows may leave any
+            // max_context), so either fits alone and the lower-order one is what the cap sheds.
+            const engBody1 = JSON.parse(engS1.last_generate_body || '{}');
+            const engCap = Math.floor((Number(engBody1.truncation_length || 8192) - Number(engBody1.max_new_tokens || 64)) * 7 / 2 / 100);
+            const engFill = (tag, n) => tag + 'x'.repeat(Math.max(1, n - tag.length));
+            await engPost('/api/worldinfo/edit', {
+                name: 'engine-budget', data: {
+                    name: 'Engine Budget', entries: {
+                        0: engEntry(0, { constant: true, order: 900, content: engFill('WI-BUDGET-KEEP ', Math.floor(engCap * 0.6)) }),
+                        1: engEntry(1, { constant: true, order: 50, content: engFill('WI-BUDGET-DROP ', Math.floor(engCap * 0.6)) }),
+                    },
+                },
+            });
+            // Drive the PANEL knobs (the deterministic path: a harness-written blob races the
+            // client's own debounced settings save): budget 1%, engine-budget globally selected.
+            await page.navigate(`${args.base}/`);
+            await openRecentChat();
+            await page.click('#d-world_info');
+            await page.waitFor("!!document.querySelector('#wi-budget')", 8000);
+            await page.eval("(function(){var t=document.querySelector('#wi-budget'); t.value='1'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            await page.eval("(function(){var c=document.querySelector('[data-wi-global=\\'engine-budget\\']'); c.checked=true; c.dispatchEvent(new Event('change',{bubbles:true}));})()");
+            const engBudgetLoaded = await (async () => {
+                const deadline = Date.now() + 8000;
+                while (Date.now() < deadline) {
+                    if (((await engState()).wi_get_log || []).includes('engine-budget')) return true;
+                    await sleep(250);
+                }
+                return false;
+            })();
+            await page.click('#send_textarea');
+            await sendProbe('a plain probe line');
+            const engP2 = (await engState()).last_generate_prompt || '';
+            row('must', engBudgetLoaded && engP2.includes('WI-BUDGET-KEEP') && !engP2.includes('WI-BUDGET-DROP'),
+                'W3WI-E2 the budget cap drops the lowest-priority entry when exceeded',
+                `bookLoaded=${engBudgetLoaded} keep=${engP2.includes('WI-BUDGET-KEEP')} drop=${engP2.includes('WI-BUDGET-DROP')} cap=${engCap}`);
+
+            // E3: unlink writes world_info:"" through the server allowlist and the next payload
+            // carries nothing from the unlinked book (the global engine-budget book stays live).
+            await page.click('#d-world_info');
+            await page.waitFor("!!document.querySelector(\"[data-wi-open='engine-lore']\")", 8000);
+            await page.click("[data-wi-open='engine-lore']");
+            await page.waitFor("!!document.querySelector('[data-wi-chatlink]')", 8000);
+            const engLinked = await page.eval("document.querySelector('[data-wi-chatlink]').getAttribute('aria-pressed')");
+            await page.click('[data-wi-chatlink]');
+            const engUnlinkBody = await (async () => {
+                const deadline = Date.now() + 8000;
+                while (Date.now() < deadline) {
+                    const b = await (await fetch(`${args.base}/dev/note-save`)).json();
+                    if (b && b.world_info === '') return b;
+                    await sleep(250);
+                }
+                return null;
+            })();
+            // boolAttr renders false as aria-pressed="" (not "false"), so test for not-'true'.
+            const engUnlinkToggle = await page.waitFor("document.querySelector('[data-wi-chatlink]').getAttribute('aria-pressed') !== 'true'", 5000);
+            await page.click('#send_textarea');
+            await sendProbe('the GATEKEY once more');
+            const engP3 = (await engState()).last_generate_prompt || '';
+            row('must', engLinked === 'true' && !!engUnlinkBody && engUnlinkToggle && !engP3.includes('WI-ENGINE-ALPHA'),
+                'W3WI-E3 unlink round-trips world_info:"" and the next payload carries no content from the unlinked book',
+                `wasLinked=${engLinked} bodyEmptyStr=${!!engUnlinkBody} toggle=${engUnlinkToggle} alphaGone=${!engP3.includes('WI-ENGINE-ALPHA')}`);
+
+            // E4: a stock ST world book FILE imports through the real input and round-trips into
+            // the list (server-side entries intact, display name from inside the file).
+            await page.click('#d-world_info');
+            await page.waitFor("!!document.querySelector('[data-wi-back]')", 5000);
+            await page.click('[data-wi-back]');
+            await page.waitFor("!!document.querySelector('#wi-import-input')", 8000);
+            const engImportFired = await page.eval(`(function(){
+                var book = JSON.stringify({ name: 'Imported Realm', entries: { '0': { uid: 0, key: ['relic'], content: 'the relic hums', order: 100, position: 0 } } });
+                var file = new File([book], 'stock realm.json', { type: 'application/json' });
+                var input = document.getElementById('wi-import-input');
+                if (!input) return 'no-input';
+                var dt = new DataTransfer();
+                dt.items.add(file);
+                input.files = dt.files;
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                return 'ok';
+            })()`);
+            const engImported = await (async () => {
+                const deadline = Date.now() + 8000;
+                while (Date.now() < deadline) {
+                    const b = (await engState()).wi_books['stock realm'];
+                    if (b) return b;
+                    await sleep(250);
+                }
+                return null;
+            })();
+            const engImportListed = await page.waitFor("(document.querySelector('.wi-books')||{textContent:''}).textContent.indexOf('Imported Realm') >= 0", 8000);
+            row('must', engImportFired === 'ok' && !!engImported && engImported.entries['0'].content === 'the relic hums' && engImportListed,
+                'W3WI-E4 a stock world book file imports through the panel and round-trips into the list',
+                `fired=${engImportFired} stored=${!!engImported} listed=${engImportListed}`);
+        }
+        // w3-wi-engine END
+
         /* C-DBG */
         // The [zx:dom] channel. A live crash (removeChild NotFoundError) came out of the door with the
         // framework's tree and the real DOM already drifted apart, and no reproduction was ever found,
