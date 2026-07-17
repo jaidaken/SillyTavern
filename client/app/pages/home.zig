@@ -17,6 +17,9 @@ const char_store = @import("./character_store.zig");
 const store = @import("./store.zig");
 const char_api = @import("./char_api.zig");
 const regions = @import("./regions.zig");
+// w3-grp
+const group_store = @import("./group_store.zig");
+const group_actions = @import("./group_actions.zig");
 
 const alloc = char_store.page_gpa;
 const log = std.log.scoped(.home);
@@ -34,6 +37,8 @@ pub const RecentRow = struct {
     file_name: []const u8,
     preview: []const u8,
     when: []const u8,
+    // w3-grp: the group id when this is a group chat ("" = character chat).
+    group: []const u8 = "",
 };
 
 /// The recent-chats response subset. The endpoint returns ~7 fields; Response.json ignores the rest
@@ -73,6 +78,8 @@ pub fn chatShowing() bool {
 /// follow a load see .ready/.err and do not refetch.
 pub fn ensureLoaded() void {
     if (state == .idle) loadRecent();
+    // w3-grp: group rows name themselves off the roster, so the landing warms it alongside.
+    group_actions.ensureLoaded();
 }
 
 /// Fetch the recent conversations. Sets .loading and re-renders, then onRecentDone lands the rows.
@@ -136,9 +143,8 @@ fn rebuildRows(list: []const RecentJson) !void {
         out.deinit(alloc);
     }
     for (list) |rj| {
-        // v1: character chats only. A group row has no character to loadCharacterChat, so listing it
-        // would render an unopenable row; groups return in a later wave.
-        if (rj.avatar.len == 0) continue;
+        // w3-grp: a row is openable when it names a character OR a group; anything else is noise.
+        if (rj.avatar.len == 0 and rj.group.len == 0) continue;
         try out.append(alloc, try makeRow(rj, now));
     }
     rows = try out.toOwnedSlice(alloc);
@@ -152,7 +158,9 @@ fn makeRow(rj: RecentJson, now: f64) !RecentRow {
     const preview = try dupePreview(rj.mes);
     errdefer alloc.free(preview);
     const when = try formatWhen(rj.last_mes, now);
-    return .{ .avatar = avatar, .file_name = file_name, .preview = preview, .when = when };
+    errdefer alloc.free(when);
+    const group = try alloc.dupe(u8, rj.group);
+    return .{ .avatar = avatar, .file_name = file_name, .preview = preview, .when = when, .group = group };
 }
 
 /// Copies the preview, capped to PREVIEW_CAP bytes on a UTF-8 boundary so a truncation never splits a
@@ -192,6 +200,12 @@ fn nowMs() f64 {
 /// that loads after the recent fetch still names the rows. Owned by the caller's allocator (the
 /// render arena).
 pub fn rowDisplayName(arena: std.mem.Allocator, r: RecentRow) []const u8 {
+    // w3-grp: a group row names itself off the roster; the file stem covers a roster that has not
+    // loaded yet (the roster bump re-renders home when it lands).
+    if (r.group.len > 0) {
+        if (group_store.byId(r.group)) |g| return g.name;
+        return fileStem(arena, r.file_name);
+    }
     for (char_store.slice()) |c| {
         if (std.mem.eql(u8, c.avatar, r.avatar)) return c.name;
     }
@@ -209,6 +223,14 @@ fn fileStem(arena: std.mem.Allocator, file_name: []const u8) []const u8 {
 /// percent-encoded (a space or special byte in the name would otherwise break the src). Owned by
 /// the render arena.
 pub fn rowAvatarUrl(arena: std.mem.Allocator, r: RecentRow) []const u8 {
+    // w3-grp: a group row wears its first member's avatar (group_body's rule); imageless until the
+    // roster loads or when the group is memberless.
+    if (r.group.len > 0) {
+        const g = group_store.byId(r.group) orelse return "";
+        const members = g.memberSlice();
+        if (members.len == 0) return "";
+        return data.thumbUrl(arena, "avatar", members[0]) catch "";
+    }
     return data.thumbUrl(arena, "avatar", r.avatar) catch "";
 }
 
@@ -219,6 +241,12 @@ pub fn rowAvatarUrl(arena: std.mem.Allocator, r: RecentRow) []const u8 {
 /// characters not yet loaded) logs and stands down.
 pub fn openRow(index: usize) void {
     if (index >= rows.len) return;
+    // w3-grp: a group row routes to the group open path (roster select + the send side's hook).
+    if (rows[index].group.len > 0) {
+        log.info("open recent row {d}: group {s}", .{ index, rows[index].group });
+        group_actions.openGroupById(rows[index].group);
+        return;
+    }
     const avatar = rows[index].avatar;
     const ci = charIndexByAvatar(avatar) orelse {
         log.warn("open recent: no loaded character for avatar {s}", .{avatar});
@@ -271,4 +299,5 @@ fn freeRow(r: RecentRow) void {
     alloc.free(r.file_name);
     alloc.free(r.preview);
     alloc.free(r.when);
+    alloc.free(r.group);
 }
