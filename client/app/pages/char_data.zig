@@ -412,6 +412,61 @@ pub fn freeChatPage(alloc: Allocator, page: ChatPage) void {
     alloc.free(page.full_token);
 }
 
+/// w3-chatref: which server chat file a paged read addresses, the client half of the server's
+/// ChatRef: a solo chat (chats/<avatar>/<file>.jsonl) or a group chat (groupChats/<id>.jsonl).
+/// One reader path serves both (invariant 5); only the route and the body's identity keys differ.
+pub const ChatRef = union(enum) {
+    solo: struct { avatar: []const u8, file: []const u8 },
+    group: struct { id: []const u8 },
+
+    /// The paged read route this ref addresses.
+    pub fn url(self: ChatRef) []const u8 {
+        return switch (self) {
+            .solo => "/api/chats/get",
+            .group => "/api/chats/group/get",
+        };
+    }
+
+    /// True when the ref names a fetchable chat: both solo parts, or a non-empty group id.
+    pub fn valid(self: ChatRef) bool {
+        return switch (self) {
+            .solo => |s| s.avatar.len > 0 and s.file.len > 0,
+            .group => |g| g.id.len > 0,
+        };
+    }
+};
+
+/// w3-chatref: one paged chat read: a tail window (no before_index), a scroll-up prepend
+/// (before_index + change_token), or a prompt window (a larger limit).
+pub const PageOpts = struct {
+    limit: usize,
+    before_index: ?usize = null,
+    change_token: ?[]const u8 = null,
+};
+
+/// w3-chatref: the JSON body for a paged chat read over `ref`. Unset optionals are omitted, not
+/// null, so the solo tail body keeps the exact shape the server's readPageOpts always saw.
+pub fn pageBody(alloc: Allocator, ref: ChatRef, opts: PageOpts) Allocator.Error![]u8 {
+    const o = std.json.Stringify.Options{ .emit_null_optional_fields = false };
+    return switch (ref) {
+        .solo => |s| std.json.Stringify.valueAlloc(alloc, .{
+            .avatar_url = s.avatar,
+            .file_name = s.file,
+            .paged = true,
+            .limit = opts.limit,
+            .before_index = opts.before_index,
+            .change_token = opts.change_token,
+        }, o),
+        .group => |g| std.json.Stringify.valueAlloc(alloc, .{
+            .id = g.id,
+            .paged = true,
+            .limit = opts.limit,
+            .before_index = opts.before_index,
+            .change_token = opts.change_token,
+        }, o),
+    };
+}
+
 /// First-message greeting with the {{char}}/{{user}} macros substituted (both, every
 /// occurrence), as the old glue's replaceAll pair did. Owned result.
 pub fn renderGreeting(alloc: Allocator, first_mes: []const u8, char_name: []const u8, user_name: []const u8) Allocator.Error![]u8 {
@@ -902,4 +957,44 @@ test "chatMessages with reasoning cleans up on every allocation failure" {
             freeChatMessages(alloc, msgs);
         }
     }.run, .{parsed.value});
+}
+
+// w3-chatref: the ref-agnostic page-body contract the reader and the send window ride.
+
+test "pageBody solo tail body carries exactly the four page keys" {
+    const out = try pageBody(testing.allocator, .{ .solo = .{ .avatar = "a.png", .file = "f" } }, .{ .limit = 50 });
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("{\"avatar_url\":\"a.png\",\"file_name\":\"f\",\"paged\":true,\"limit\":50}", out);
+}
+
+test "pageBody solo prepend adds before_index and change_token" {
+    const out = try pageBody(testing.allocator, .{ .solo = .{ .avatar = "a.png", .file = "f" } }, .{ .limit = 100, .before_index = 120, .change_token = "v1" });
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("{\"avatar_url\":\"a.png\",\"file_name\":\"f\",\"paged\":true,\"limit\":100,\"before_index\":120,\"change_token\":\"v1\"}", out);
+}
+
+test "pageBody group read addresses the group id over its own route" {
+    const ref = ChatRef{ .group = .{ .id = "g1" } };
+    const out = try pageBody(testing.allocator, ref, .{ .limit = 300 });
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("{\"id\":\"g1\",\"paged\":true,\"limit\":300}", out);
+    try testing.expectEqualStrings("/api/chats/group/get", ref.url());
+    try testing.expectEqualStrings("/api/chats/get", (ChatRef{ .solo = .{ .avatar = "a", .file = "f" } }).url());
+}
+
+test "ChatRef valid requires both solo parts or a group id" {
+    try testing.expect((ChatRef{ .solo = .{ .avatar = "a", .file = "f" } }).valid());
+    try testing.expect(!(ChatRef{ .solo = .{ .avatar = "a", .file = "" } }).valid());
+    try testing.expect(!(ChatRef{ .solo = .{ .avatar = "", .file = "f" } }).valid());
+    try testing.expect((ChatRef{ .group = .{ .id = "g" } }).valid());
+    try testing.expect(!(ChatRef{ .group = .{ .id = "" } }).valid());
+}
+
+test "pageBody cleans up on every allocation failure" {
+    try std.testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn run(alloc: Allocator) !void {
+            const out = try pageBody(alloc, .{ .group = .{ .id = "g1" } }, .{ .limit = 10, .before_index = 5, .change_token = "t" });
+            alloc.free(out);
+        }
+    }.run, .{});
 }

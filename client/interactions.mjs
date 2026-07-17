@@ -3895,6 +3895,91 @@ async function main() {
                 `shape=${wiLinkShape} body=${JSON.stringify(wiLinkBody || {}).slice(0, 140)} reflected=${wiLinkReflected}`);
         }
 
+        // w3-chatref BEGIN group chat open + composer routing (3c-C). Keep ABOVE C-DBG.
+        // The mock's single group_appended list feeds /group/get, so the rotation turns the earlier
+        // w3-grp block persisted ARE the history a fresh group open must render.
+        console.log('== w3-chatref: group chat open, composer rotation, solo return ==');
+        {
+            const refState = async () => (await fetch(`${args.base}/dev/state`)).json();
+            const refGrpBase = ((await refState()).group_appended || []).length;
+
+            // A UI-created group (members char00 "Char 00 Moon" + char01 "Char 01 Vex").
+            await page.navigate(`${args.base}/`);
+            await page.waitFor(hydrated, 15000);
+            await page.eval("window.prompt = function(){ return 'Ref Party'; }; window.confirm = function(){ return true; };");
+            await page.click('#d-groups');
+            await page.waitFor("!!document.querySelector('.group-panel')", 8000);
+            await page.click("[data-group-action='new']");
+            await page.waitFor("!!document.querySelector('.group-editor')", 5000);
+            await page.click('.group-candidate-row [data-member-add]');
+            await page.waitFor("document.querySelectorAll('.group-member-row').length === 1", 4000);
+            await page.click('.group-candidate-row [data-member-add]');
+            await page.waitFor("document.querySelectorAll('.group-member-row').length === 2", 4000);
+            await page.click("[data-group-action='create']");
+            await page.waitFor("!!document.querySelector('[data-group-action=\\'delete\\']')", 6000);
+            await page.click("[data-group-action='back']");
+            await page.waitFor("document.querySelectorAll('#group-list [data-group-index]').length >= 1", 5000);
+
+            // (a) Opening the group from the roster renders the group file's history, each row
+            // attributed to its own speaker by NAME (char02/char03 are not even members here).
+            await page.click("#group-list [data-group-index='0']");
+            const refOpened = await page.waitFor(
+                `document.querySelectorAll('#chat .mes').length === ${refGrpBase} && document.getElementById('chat').textContent.includes('GROUP ROTATION PROBE') && ${idle}`, 10000);
+            const refAttrib = JSON.parse(await page.eval(
+                "JSON.stringify([...document.querySelectorAll('#chat .mes')].slice(1, 4).map(e => ({ n: e.querySelector('.mes_name').textContent, a: (e.querySelector('.mes_avatar') || { src: '' }).src })))"));
+            const refAttribOk = refAttrib.length === 3
+                && refAttrib[0].n === 'Char 01 Vex' && refAttrib[0].a.includes('char01')
+                && refAttrib[1].n === 'Char 02 Vex' && refAttrib[1].a.includes('char02')
+                && refAttrib[2].n === 'Char 03 Moon' && refAttrib[2].a.includes('char03');
+            row('must', refOpened && refAttribOk,
+                'CHATREF-1 opening a group from the roster renders its chat history with per-member attribution',
+                `opened=${refOpened} rows=${JSON.stringify(refAttrib)}`);
+
+            // (b) A composer send in the open group runs the rotation (both mentioned members, in
+            // mention order) and persists into the group file, never the solo one.
+            const stPre = await refState();
+            const refSoloBase = (stPre.appended || []).length;
+            const refGrpPre = (stPre.group_appended || []).length;
+            const beforeRefSend = await page.eval("document.querySelectorAll('#chat .mes').length");
+            await page.focus('#send_textarea');
+            await page.insertText('Moon and Vex muster at the CHATREF beacon');
+            await page.click('#composer button[aria-label="Send"]');
+            const refSent = await page.waitFor(`document.querySelectorAll('#chat .mes').length >= ${beforeRefSend} + 3 && ${idle}`, 30000);
+            let stPost = {};
+            for (let i = 0; i < 60; i++) {
+                stPost = await refState();
+                if ((stPost.group_appended || []).length >= refGrpPre + 3) break;
+                await sleep(150);
+            }
+            const refTurns = (stPost.group_appended || []).slice(refGrpPre);
+            const refSeq = refTurns.length === 3
+                && refTurns[0].is_user === true && refTurns[0].mes === 'Moon and Vex muster at the CHATREF beacon'
+                && refTurns[1].is_user === false && refTurns[1].name === 'Char 00 Moon' && refTurns[1].mes.includes('FIN')
+                && refTurns[2].is_user === false && refTurns[2].name === 'Char 01 Vex' && refTurns[2].mes.includes('FIN');
+            const refSoloHeld = (stPost.appended || []).length === refSoloBase;
+            row('must', refSent && refSeq && refSoloHeld,
+                'CHATREF-2 a composer send in an open group rotates the mentioned members and persists only into the group file',
+                `sent=${refSent} turns=${JSON.stringify(refTurns.map(m => ({ n: m.name, u: m.is_user, fin: String(m.mes).includes('FIN') })))} soloHeld=${refSoloHeld}`);
+
+            // (c) Switching back to a solo character loads the solo chat; a follow-up send lands in
+            // the solo file while the group file holds still (no group state leak).
+            await page.click('#d-characters');
+            await page.waitFor("document.querySelectorAll('#chat-root .char-item').length >= 14", 8000);
+            await page.eval("document.querySelectorAll('#chat-root .char-item .char-name')[5].click()");
+            const refSoloLoaded = await page.waitFor(
+                `document.querySelectorAll('#chat .mes').length >= 50 && !document.getElementById('chat').textContent.includes('GROUP ROTATION PROBE') && ${idle}`, 10000);
+            const stPre2 = await refState();
+            const refGrp2 = (stPre2.group_appended || []).length;
+            await sendProbe('CHATREF SOLO PROBE');
+            const stPost2 = await refState();
+            const refSoloLanded = (stPost2.appended || []).some(m => m.mes === 'CHATREF SOLO PROBE');
+            const refGrpHeld = (stPost2.group_appended || []).length === refGrp2;
+            row('must', refSoloLoaded && refSoloLanded && refGrpHeld,
+                'CHATREF-3 switching back to a solo character loads the solo chat and its sends stay solo (no group leak)',
+                `soloLoaded=${refSoloLoaded} soloLanded=${refSoloLanded} grpHeld=${refGrpHeld}`);
+        }
+        // w3-chatref END
+
         /* C-DBG */
         // The [zx:dom] channel. A live crash (removeChild NotFoundError) came out of the door with the
         // framework's tree and the real DOM already drifted apart, and no reproduction was ever found,
