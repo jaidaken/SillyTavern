@@ -582,6 +582,57 @@
         });
     };
 
+    /* w3-chatmgr */
+    // Chat jsonl import: FormData cannot cross the wasm boundary, so importFile hops here. Posts the
+    // stock /api/chats/import fields; reports the settle either way (0 = never completed), because
+    // the panel has drawn "importing" and the bridge callback is the only thing that clears it.
+    window.__st_chat_import = async function (avatar, characterName, userName) {
+        const input = document.getElementById('chat-import-input');
+        if (!input || !input.files || !input.files[0]) return;
+        const file = input.files[0];
+        const ext = (file.name.split('.').pop() || '').toLowerCase();
+        const fd = new FormData();
+        fd.append('avatar', file);
+        fd.append('file_type', ext);
+        fd.append('avatar_url', avatar);
+        fd.append('character_name', characterName);
+        fd.append('user_name', userName);
+        await ensureCsrfToken();
+        let status = 0;
+        try {
+            const res = await loggedFetch('/api/chats/import', { method: 'POST', headers: withCsrf({}), body: fd });
+            status = res.status;
+            if (!res.ok) log.net.warn('chat import refused:', res.status);
+        } catch (err) {
+            log.net.error('chat import never completed:', err);
+        } finally {
+            input.value = '';
+            wasm.__st_chat_import_done(status);
+        }
+    };
+
+    /* w3-chatmgr */
+    // Chat jsonl export: /api/chats/export answers JSON with the raw file text in .result, and the
+    // blob download is browser-forced, so both stay here (the __st_char_export shape).
+    window.__st_chat_export = async function (avatar, stem) {
+        await ensureCsrfToken();
+        try {
+            const res = await loggedFetch('/api/chats/export', {
+                method: 'POST',
+                headers: withCsrf({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ avatar_url: avatar, file: stem + '.jsonl', exportfilename: stem + '.jsonl', format: 'jsonl', is_group: false }),
+            });
+            if (!res.ok) { log.net.warn('chat export failed:', res.status); return; }
+            const data = await res.json();
+            const blob = new Blob([data.result || ''], { type: 'application/jsonl' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = stem + '.jsonl';
+            document.body.appendChild(a); a.click(); a.remove();
+            URL.revokeObjectURL(url);
+        } catch (err) { log.chars.error('chat export failed:', err); }
+    };
+
     // Persona avatar replace (C-PERS): FormData cannot cross the wasm boundary, so replaceAvatar hops here.
     // Posts to /api/avatars/upload with the stock frontend's fields ('avatar' file + 'overwrite_name').
     window.__st_persona_avatar = async function (avatar) {

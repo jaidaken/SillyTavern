@@ -43,6 +43,8 @@ comptime {
     // C-PRE-TPL: the zx-free half of the preset pickers. template_presets.zig imports zx, so only
     // its rules can be proven here; its fetch and panel state are browser-verified.
     _ = @import("preset_lib.zig");
+    // w3-chatmgr: the zx-free half of the chat manager (suffix rules + name minting).
+    _ = @import("chat_names.zig");
 }
 
 const sink_call = "html.sink(";

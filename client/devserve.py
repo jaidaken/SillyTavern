@@ -485,11 +485,124 @@ def _undo_chat_page():
     }
 
 
+# ===== w3-chatmgr (append-only zone): a stateful per-FILE chat store for one fixture character. =====
+# The chat-manager rows need what the global _mock_chat_page cannot give: which FILE a read, an
+# append, a rename, a delete, a duplicate or a branch actually touched. char07 is otherwise unused
+# by the gate; every other avatar keeps the existing handlers, so the zone is isolated by key.
+MGR_AVATAR = "char07.png"
+MGR_DEFAULT = "Char 07 Vex - 2026-07-14"
+
+
+def _mgr_msg(name, is_user, mes):
+    return {"name": name, "is_user": is_user, "is_system": False,
+            "send_date": 1783700000000, "mes": mes, "extra": {}}
+
+
+def _mgr_fresh_chats():
+    return {
+        MGR_DEFAULT: [
+            _mgr_msg("You", True, "Shall we pick up where we left off?"),
+            _mgr_msg("Char 07 Vex", False, "The default thread continues."),
+            _mgr_msg("You", True, "Default thread tail marker."),
+        ],
+        "old adventure": [
+            _mgr_msg("You", True, "Tell me about the peppermint dragon."),
+            _mgr_msg("Char 07 Vex", False, "The peppermint dragon sleeps in the candy caves."),
+        ],
+        "keep me": [
+            _mgr_msg("You", True, "Sibling canary line one."),
+            _mgr_msg("Char 07 Vex", False, "Sibling canary line two."),
+        ],
+    }
+
+
+def _mgr_page(stem, req):
+    msgs = [dict(m) for m in Handler.mgr_files().get(stem, [])]
+    total = len(msgs)
+    return {
+        "messages": msgs,
+        "header": {"user_name": "You", "chat_metadata": {}},
+        "change_token": f"mgr-tail-{stem}-{total}",
+        "full_token": f"mgr-full-{stem}-{total}",
+        "has_more_before": False,
+        "has_more_after": False,
+        "total_items": total,
+        "anchor_index": None if req.get("before_index") is None else req.get("before_index"),
+        "anchor_found": True,
+    }
+
+
+def _mgr_search_rows(query):
+    fragments = [f for f in str(query or "").lower().split() if f]
+    rows = []
+    for stem, msgs in Handler.mgr_files().items():
+        haystack = (stem + " " + " ".join(str(m.get("mes", "")) for m in msgs)).lower()
+        if fragments and not all(f in haystack for f in fragments):
+            continue
+        last = msgs[-1] if msgs else None
+        rows.append({
+            "file_name": stem,
+            "file_size": f"{sum(len(str(m.get('mes', ''))) for m in msgs)} B",
+            "message_count": len(msgs),
+            "last_mes": last["send_date"] if last else int(time.time() * 1000),
+            "preview_message": last["mes"] if last else "[The chat is empty]",
+        })
+    return rows
+
+
+def _mgr_multipart_file(raw, field):
+    # The uploaded file part's CONTENT (the fixture jsonl carries only \n, so \r\n-- ends the part).
+    m = re.search(r'name="' + re.escape(field) + r'"; filename="[^"]*"\r?\n(?:[^\r\n]*\r?\n)*?\r?\n(.*?)\r?\n--', raw, re.S)
+    return m.group(1) if m else None
+
+
+def _mgr_parse_jsonl(text):
+    lines = [ln for ln in str(text).split("\n") if ln.strip()]
+    if not lines:
+        return None
+    try:
+        header = json.loads(lines[0])
+    except ValueError:
+        return None
+    if not any(k in header for k in ("user_name", "name", "chat_metadata")):
+        return None
+    msgs = []
+    for ln in lines[1:]:
+        try:
+            obj = json.loads(ln)
+        except ValueError:
+            return None
+        msgs.append({"name": obj.get("name", ""), "is_user": bool(obj.get("is_user")),
+                     "is_system": bool(obj.get("is_system")), "send_date": obj.get("send_date", 0),
+                     "mes": obj.get("mes", ""), "extra": obj.get("extra", {})})
+    return msgs
+
+
+def _mgr_export_text(stem):
+    header = {"user_name": "You", "character_name": "Char 07 Vex", "create_date": "2026-07-14", "chat_metadata": {}}
+    lines = [json.dumps(header)]
+    for m in Handler.mgr_files().get(stem, []):
+        lines.append(json.dumps(m))
+    return "\n".join(lines)
+# ===== end w3-chatmgr module zone =====
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     backend = "http://127.0.0.1:8000"
     dev = False
     mock_api = False
     mock_favs = {}
+    # ===== w3-chatmgr (append-only): the fixture store, lazy so each gate run starts fresh. =====
+    mgr_chats = None
+    mgr_exported = None
+    mgr_import_count = 0
+
+    @classmethod
+    def mgr_files(cls):
+        if cls.mgr_chats is None:
+            cls.mgr_chats = _mgr_fresh_chats()
+        return cls.mgr_chats
+    # ===== end w3-chatmgr class zone =====
     # C-BG: the gallery /api/backgrounds/all serves. Mutable, so a delete or rename shows on the next
     # load; "a b.jpg" carries the space that proves the url encode, "loop.webp" is the animated one.
     mock_backgrounds = ["dusk harbor.jpg", "a b.jpg", "loop.webp", "study.png",
@@ -768,6 +881,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 i = int(params.get("i", ["-1"])[0])
                 reader = Handler.reader_current()
                 return self.mock_json({"mes": reader[i]["mes"] if 0 <= i < len(reader) else None, "total": len(reader)})
+            # ===== w3-chatmgr (append-only): the fixture store, server-side truth for the gate rows. =====
+            if self.path.startswith("/dev/mgr-state"):
+                return self.mock_json({
+                    "files": {stem: [m["mes"] for m in msgs] for stem, msgs in Handler.mgr_files().items()},
+                    "exported": Handler.mgr_exported,
+                })
+            # ===== end w3-chatmgr /dev zone =====
             self.send_error(404, "not found")
             return
         if self.is_proxied():
@@ -1111,6 +1231,80 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_response(204)
             self.end_headers()
             return
+        # ===== w3-chatmgr (append-only zone): per-FILE handlers for the fixture character. Placed
+        # BEFORE the generic /api/chats/* handlers so char07 traffic is keyed here; every other
+        # avatar falls through unchanged. Guards mirror the real routes (chats.js), not happy paths. =====
+        if path == "/api/chats/get" and req.get("avatar_url") == MGR_AVATAR:
+            return self.mock_json(_mgr_page(str(req.get("file_name") or ""), req))
+        if path == "/api/chats/append" and req.get("avatar_url") == MGR_AVATAR:
+            stem = str(req.get("file_name") or "")
+            msgs = req.get("messages") or []
+            Handler.mgr_files().setdefault(stem, []).extend(dict(m) for m in msgs)
+            total = len(Handler.mgr_files()[stem])
+            return self.mock_json({"ok": True, "appended": len(msgs), "change_token": f"mgr-tail-{stem}-{total}"})
+        if path == "/api/chats/search":
+            if req.get("avatar_url") == MGR_AVATAR:
+                return self.mock_json(_mgr_search_rows(req.get("query")))
+            return self.mock_json([])
+        if path == "/api/chats/rename" and req.get("avatar_url") == MGR_AVATAR:
+            old = str(req.get("original_file") or "").removesuffix(".jsonl")
+            new = str(req.get("renamed_file") or "").removesuffix(".jsonl")
+            files = Handler.mgr_files()
+            if not old or not new or old not in files or new in files:
+                return self.mock_status(400, {"error": True})
+            files[new] = files.pop(old)
+            return self.mock_json({"ok": True, "sanitizedFileName": new})
+        if path == "/api/chats/delete" and req.get("avatar_url") == MGR_AVATAR:
+            stem = str(req.get("chatfile") or "").removesuffix(".jsonl")
+            files = Handler.mgr_files()
+            if stem not in files:
+                return self.mock_status(400, {"error": True})
+            del files[stem]
+            return self.mock_json({"ok": True})
+        if path == "/api/chats/duplicate" and req.get("avatar_url") == MGR_AVATAR:
+            files = Handler.mgr_files()
+            src = str(req.get("file_name") or "")
+            dst = str(req.get("new_file_name") or "")
+            if not src or not dst:
+                return self.mock_status(400, {"error": True})
+            if src not in files:
+                return self.mock_status(404, {"error": "not_found"})
+            if dst in files:
+                return self.mock_status(409, {"error": "exists"})
+            files[dst] = [dict(m) for m in files[src]]
+            return self.mock_json({"ok": True})
+        if path == "/api/chats/branch" and req.get("avatar_url") == MGR_AVATAR:
+            files = Handler.mgr_files()
+            src = str(req.get("file_name") or "")
+            dst = str(req.get("new_file_name") or "")
+            index = req.get("index")
+            if not src or not dst or src not in files:
+                return self.mock_status(400, {"error": True})
+            if dst in files:
+                return self.mock_status(409, {"error": "exists"})
+            if not isinstance(index, int) or index < 0 or index >= len(files[src]):
+                return self.mock_status(400, {"error": "target_not_found"})
+            files[dst] = [dict(m) for m in files[src][: index + 1]]
+            return self.mock_json({"ok": True, "total_items": len(files[dst])})
+        if path == "/api/chats/export" and req.get("avatar_url") == MGR_AVATAR:
+            stem = str(req.get("file") or "").removesuffix(".jsonl")
+            if stem not in Handler.mgr_files():
+                return self.mock_status(404, {"message": "no such chat"})
+            Handler.mgr_exported = stem
+            return self.mock_json({"message": "ok", "result": _mgr_export_text(stem)})
+        if path == "/api/chats/import":
+            raw = body.decode("utf-8", "replace") if body else ""
+            if _multipart_value(raw, "avatar_url") != MGR_AVATAR:
+                return self.mock_status(400, {"error": True})
+            content = _mgr_multipart_file(raw, "avatar")
+            msgs = _mgr_parse_jsonl(content) if content is not None else None
+            if msgs is None:
+                return self.mock_json({"error": True})
+            Handler.mgr_import_count += 1
+            stem = f"Char 07 Vex - imported {Handler.mgr_import_count}"
+            Handler.mgr_files()[stem] = msgs
+            return self.mock_json({"res": True, "fileNames": [stem + ".jsonl"]})
+        # ===== end w3-chatmgr POST zone =====
         if path == "/api/chats/append":
             msgs = req.get("messages") or []
             # Deterministic resync trigger: a message whose text starts with "409:" forces a mismatch.
