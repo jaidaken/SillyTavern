@@ -30,6 +30,7 @@ comptime {
     _ = @import("textgen_types.zig");
     _ = @import("secret_mask.zig");
     // character_view's tests never reached the runner: the module was absent here.
+    _ = @import("tag_store.zig");
     _ = @import("character_view.zig");
     _ = @import("character_row.zig");
     _ = @import("card_form.zig");
@@ -375,7 +376,9 @@ test "every_raw_html_element_in_the_zx_sources_is_fed_by_the_sink" {
             return error.UnsanitizedRawHtmlSink;
         }
     }
-    try std.testing.expectEqual(@as(usize, 1), total);
+    // 2 = the message body + the reasoning block (w3-reason), both fed by renderMessage's
+    // DOMPurify pass. Adding a raw element means reviewing it HERE, then bumping this pin.
+    try std.testing.expectEqual(@as(usize, 2), total);
 }
 
 test "the_raw_child_scan_rejects_a_second_child_the_old_line_scan_waved_through" {

@@ -350,6 +350,8 @@ def _mock_characters(favs):
             "chat_size": 1024 + i,
             "data_size": 4096 + i,
             "create_date": "2026-07-01",
+            # w3-reason 3d: card tags for the filter-chip gate rows. Rita + every 10th get one.
+            "tags": ["harbor"] if i == 41 else (["night"] if i % 10 == 5 else []),
         }
         if i == 30:
             # A card from another tool: the server passes card JSON through UNCOERCED
@@ -651,6 +653,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "is_system": False,
                     "mes": f"History message {i} in the reverse-lazy reader chat.",
                 })
+            # w3-reason: the newest assistant turn carries thinking, for the reasoning gate rows.
+            for m in reversed(cls.reader_msgs):
+                if not m["is_user"]:
+                    m["extra"] = {"reasoning": "Weigh the tide tables before answering."}
+                    break
         return cls.reader_msgs
 
     @classmethod
@@ -823,7 +830,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.end_headers()
-        reply = ["lantern "] + [f"w{i} " for i in range(22)] + ["FIN"]
+        # w3-reason: think tags cut MID-TAG across tokens, so the gate proves the client's buffered
+        # boundary split in a real browser. "lantern" stays the first BODY token for the SL rows.
+        reply = ["<th", "ink>mull the tides", "</th", "ink>", "lantern "] + [f"w{i} " for i in range(22)] + ["FIN"]
         try:
             for tok in reply:
                 payload = json.dumps({"choices": [{"text": tok}]})

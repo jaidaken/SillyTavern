@@ -25,6 +25,7 @@ pub const CharacterJson = struct {
     chat: std.json.Value = .null,
     first_mes: std.json.Value = .null,
     fav: std.json.Value = .null,
+    tags: std.json.Value = .null,
     create_date: std.json.Value = .null,
     date_last_chat: ?f64 = null,
     chat_size: ?f64 = null,
@@ -65,6 +66,40 @@ pub fn favTruthy(v: std.json.Value) bool {
         .float => |f| f != 0,
         else => false,
     };
+}
+
+/// The card's tags as an owned slice of owned strings. Cards from other tools carry tags in any
+/// shape: only an array yields tags, and a non-string or empty entry costs that entry, never the
+/// card. Free with freeTags.
+pub fn tagsAlloc(gpa: Allocator, v: std.json.Value) Allocator.Error![]const []const u8 {
+    const arr = switch (v) {
+        .array => |a| a,
+        else => return &.{},
+    };
+    var out: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (out.items) |t| gpa.free(t);
+        out.deinit(gpa);
+    }
+    for (arr.items) |item| {
+        const s = jsonStr(item);
+        if (s.len == 0) continue;
+        // ensureUnusedCapacity first: `append(dupe(...))` leaks the dupe when the append fails.
+        try out.ensureUnusedCapacity(gpa, 1);
+        out.appendAssumeCapacity(try gpa.dupe(u8, s));
+    }
+    if (out.items.len == 0) {
+        out.deinit(gpa);
+        return &.{};
+    }
+    return try out.toOwnedSlice(gpa);
+}
+
+/// Frees a tagsAlloc result. The empty result is the static slice and owns nothing.
+pub fn freeTags(gpa: Allocator, tags: []const []const u8) void {
+    if (tags.len == 0) return;
+    for (tags) |t| gpa.free(t);
+    gpa.free(tags);
 }
 
 /// Numeric metadata to u64, matching the glue's `BigInt(Math.trunc(v) || 0)`: absent, NaN,
@@ -179,6 +214,8 @@ pub const ChatMsg = struct {
     mes: []u8,
     is_user: bool,
     is_system: bool = false,
+    /// The turn's thinking text (extra.reasoning in the chat file); empty when absent. Owned.
+    reasoning: []u8 = &.{},
 };
 
 /// Chat messages from a parsed /api/chats/get body. The server contract: element 0 is chat
@@ -197,6 +234,7 @@ pub fn chatMessages(alloc: Allocator, root: std.json.Value) Allocator.Error![]Ch
         for (out.items) |m| {
             alloc.free(m.name);
             alloc.free(m.mes);
+            alloc.free(m.reasoning);
         }
         out.deinit(alloc);
     }
@@ -205,6 +243,7 @@ pub fn chatMessages(alloc: Allocator, root: std.json.Value) Allocator.Error![]Ch
         var mes_src: []const u8 = "";
         var is_user = false;
         var is_system = false;
+        var reasoning_src: []const u8 = "";
         switch (item) {
             .object => |o| {
                 if (o.get("name")) |v| switch (v) {
@@ -217,6 +256,13 @@ pub fn chatMessages(alloc: Allocator, root: std.json.Value) Allocator.Error![]Ch
                 };
                 if (o.get("is_user")) |v| is_user = favTruthy(v);
                 if (o.get("is_system")) |v| is_system = favTruthy(v);
+                if (o.get("extra")) |v| switch (v) {
+                    .object => |e| if (e.get("reasoning")) |rv| switch (rv) {
+                        .string => |s| reasoning_src = s,
+                        else => {},
+                    },
+                    else => {},
+                };
             },
             else => {},
         }
@@ -224,7 +270,9 @@ pub fn chatMessages(alloc: Allocator, root: std.json.Value) Allocator.Error![]Ch
         errdefer alloc.free(name);
         const mes = try alloc.dupe(u8, mes_src);
         errdefer alloc.free(mes);
-        try out.append(alloc, .{ .name = name, .mes = mes, .is_user = is_user, .is_system = is_system });
+        const reasoning = try alloc.dupe(u8, reasoning_src);
+        errdefer alloc.free(reasoning);
+        try out.append(alloc, .{ .name = name, .mes = mes, .is_user = is_user, .is_system = is_system, .reasoning = reasoning });
     }
     return try out.toOwnedSlice(alloc);
 }
@@ -233,6 +281,7 @@ pub fn freeChatMessages(alloc: Allocator, list: []ChatMsg) void {
     for (list) |m| {
         alloc.free(m.name);
         alloc.free(m.mes);
+        alloc.free(m.reasoning);
     }
     alloc.free(list);
 }
@@ -266,6 +315,7 @@ fn valueMessages(alloc: Allocator, v: std.json.Value) Allocator.Error![]ChatMsg 
         for (out.items) |m| {
             alloc.free(m.name);
             alloc.free(m.mes);
+            alloc.free(m.reasoning);
         }
         out.deinit(alloc);
     }
@@ -274,6 +324,7 @@ fn valueMessages(alloc: Allocator, v: std.json.Value) Allocator.Error![]ChatMsg 
         var mes_src: []const u8 = "";
         var is_user = false;
         var is_system = false;
+        var reasoning_src: []const u8 = "";
         switch (item) {
             .object => |o| {
                 if (o.get("name")) |x| switch (x) {
@@ -286,6 +337,13 @@ fn valueMessages(alloc: Allocator, v: std.json.Value) Allocator.Error![]ChatMsg 
                 };
                 if (o.get("is_user")) |x| is_user = favTruthy(x);
                 if (o.get("is_system")) |x| is_system = favTruthy(x);
+                if (o.get("extra")) |x| switch (x) {
+                    .object => |e| if (e.get("reasoning")) |rv| switch (rv) {
+                        .string => |s| reasoning_src = s,
+                        else => {},
+                    },
+                    else => {},
+                };
             },
             else => {},
         }
@@ -293,7 +351,9 @@ fn valueMessages(alloc: Allocator, v: std.json.Value) Allocator.Error![]ChatMsg 
         errdefer alloc.free(name);
         const mes = try alloc.dupe(u8, mes_src);
         errdefer alloc.free(mes);
-        try out.append(alloc, .{ .name = name, .mes = mes, .is_user = is_user, .is_system = is_system });
+        const reasoning = try alloc.dupe(u8, reasoning_src);
+        errdefer alloc.free(reasoning);
+        try out.append(alloc, .{ .name = name, .mes = mes, .is_user = is_user, .is_system = is_system, .reasoning = reasoning });
     }
     return try out.toOwnedSlice(alloc);
 }
@@ -762,4 +822,84 @@ test "parseChatPage with metadata cleans up on every allocation failure" {
             freeChatPage(alloc, page);
         }
     }.run, .{@as([]const u8, body)});
+}
+
+test "tagsAlloc keeps string entries and drops hostile shapes" {
+    const body =
+        \\["fantasy", 42, "", {"x":1}, "slice-of-life", null]
+    ;
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, body, .{});
+    defer parsed.deinit();
+    const tags = try tagsAlloc(testing.allocator, parsed.value);
+    defer freeTags(testing.allocator, tags);
+    try testing.expectEqual(@as(usize, 2), tags.len);
+    try testing.expectEqualStrings("fantasy", tags[0]);
+    try testing.expectEqualStrings("slice-of-life", tags[1]);
+}
+
+test "tagsAlloc degrades every non-array shape to no tags" {
+    const cases = [_][]const u8{ "\"a, b\"", "42", "{\"t\":1}", "null", "[]", "[42, null]" };
+    for (cases) |body| {
+        const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, body, .{});
+        defer parsed.deinit();
+        const tags = try tagsAlloc(testing.allocator, parsed.value);
+        defer freeTags(testing.allocator, tags);
+        try testing.expectEqual(@as(usize, 0), tags.len);
+    }
+}
+
+test "tagsAlloc cleans up on every allocation failure" {
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator,
+        \\["a", "b", "c"]
+    , .{});
+    defer parsed.deinit();
+    try std.testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn run(alloc: Allocator, v: std.json.Value) !void {
+            const tags = try tagsAlloc(alloc, v);
+            freeTags(alloc, tags);
+        }
+    }.run, .{parsed.value});
+}
+
+test "chatMessages lifts extra.reasoning and degrades hostile shapes to empty" {
+    const body =
+        \\[{"chat_metadata":{}},
+        \\ {"name":"Rita","mes":"Answer.","extra":{"reasoning":"I should consider the shoals."}},
+        \\ {"name":"Rita","mes":"No extra."},
+        \\ {"name":"Rita","mes":"Bad extra.","extra":7},
+        \\ {"name":"Rita","mes":"Bad reasoning.","extra":{"reasoning":42}}]
+    ;
+    const parsed = try parseJson(std.json.Value, testing.allocator, body);
+    defer parsed.deinit();
+    const msgs = try chatMessages(testing.allocator, parsed.value);
+    defer freeChatMessages(testing.allocator, msgs);
+    try testing.expectEqual(@as(usize, 4), msgs.len);
+    try testing.expectEqualStrings("I should consider the shoals.", msgs[0].reasoning);
+    try testing.expectEqualStrings("", msgs[1].reasoning);
+    try testing.expectEqualStrings("", msgs[2].reasoning);
+    try testing.expectEqualStrings("", msgs[3].reasoning);
+}
+
+test "parseChatPage window messages carry extra.reasoning" {
+    const body =
+        \\{"messages":[{"name":"Rita","mes":"Older.","extra":{"reasoning":"earlier thoughts"}}],
+        \\ "change_token":"v1","has_more_before":false,"total_items":1}
+    ;
+    const parsed = try parseJson(std.json.Value, testing.allocator, body);
+    defer parsed.deinit();
+    const page = try parseChatPage(testing.allocator, parsed.value);
+    defer freeChatPage(testing.allocator, page);
+    try testing.expectEqual(@as(usize, 1), page.messages.len);
+    try testing.expectEqualStrings("earlier thoughts", page.messages[0].reasoning);
+}
+
+test "chatMessages with reasoning cleans up on every allocation failure" {
+    const parsed = try parseJson(std.json.Value, testing.allocator, "[{},{\"name\":\"A\",\"mes\":\"m\",\"extra\":{\"reasoning\":\"r\"}}]");
+    defer parsed.deinit();
+    try std.testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn run(alloc: Allocator, v: std.json.Value) !void {
+            const msgs = try chatMessages(alloc, v);
+            freeChatMessages(alloc, msgs);
+        }
+    }.run, .{parsed.value});
 }

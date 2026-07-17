@@ -154,7 +154,9 @@ echo "== served html (pre-hydration) =="
 # Four client regions (Shell, MessageLog, Home, Composer), each with one SSR marker; three fixtures,
 # each body a placeholder the client replaces.
 check "region hydration markers in index.html" "$(count '<!--\$' dist/index.html)" 4
-check "ssr placeholder, one per message" "$(count 'ST_SSR_PLACEHOLDER' dist/index.html)" 12
+# 24 = two sinks per fixture message: the body and the reasoning block (w3-reason), which always
+# renders (hidden when empty) so mid-stream appearance never needs a structural vdom insert.
+check "ssr placeholder, two per message (body + reasoning)" "$(count 'ST_SSR_PLACEHOLDER' dist/index.html)" 24
 # The justify gate (message.zx): long messages carry mes-justify, short roleplay turns stay plain, so
 # both classes must appear in the SSR. A regression that justified everything (or nothing) fails here.
 atleast "justify gate: long messages carry mes-justify" "$(count 'class=\"mes_text mes-justify\"' dist/index.html)" 1
@@ -342,7 +344,9 @@ render "http://127.0.0.1:$PORT/?demo=1&stream=2&hold=5000" \
 python3 - "$STREAM_DOM" "$TALLY" <<'PY2'
 import re, sys
 h = open(sys.argv[1], encoding="utf-8", errors="replace").read()
-msgs = re.findall(r'<div class="mes_name">([^<]*)</div><div class="mes_text"[^>]*>(.*?)</div>', h, re.S)
+# The reasoning block (w3-reason) always sits between mes_name and mes_text; skip it. mes_text may
+# carry mes-justify, and missing that here lets the skip group backtrack across whole messages.
+msgs = re.findall(r'<div class="mes_name">([^<]*)</div>(?:<div class="mes_reasoning.*?</div></div>)?<div class="mes_text[^"]*"[^>]*>(.*?)</div>', h, re.S)
 want = {"First": (True, False), "Second": (False, True)}
 seen = set()
 fail = 0

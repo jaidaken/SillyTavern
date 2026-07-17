@@ -24,6 +24,7 @@ const backgrounds = @import("./backgrounds.zig");
 const character_prefs = @import("./character_prefs.zig");
 const config_state = @import("./config_state.zig");
 const persona_actions = @import("./persona_actions.zig");
+const tag_store = @import("./tag_store.zig"); // w3-reason 3d tags
 
 const alloc = char_store.page_gpa;
 const log = std.log.scoped(.panels);
@@ -288,6 +289,7 @@ fn mergedSettings(settings_str: []const u8) ![]u8 {
     try backgrounds.mergeState(a, &root.object); // C-BG background
     try character_prefs.mergeCharPrefs(a, &root.object); // C-CHAR character list
     try config_state.mergeConfig(a, &root.object); // C-CFG samplers + templates
+    try tag_store.global.mergeTags(a, &root.object); // w3-reason 3d tags
 
     return std.json.Stringify.valueAlloc(alloc, root, .{});
 }

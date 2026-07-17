@@ -169,7 +169,7 @@ pub fn applyPage(bytes: []const u8) u32 {
     for (page.messages, 0..) |m, i| {
         const sender = if (m.name.len > 0) m.name else if (m.is_user) "You" else char_name;
         const avatar = if (m.is_user) persona_avatar else char_avatar;
-        items[i] = .{ .name = sender, .body = m.mes, .avatar = avatar };
+        items[i] = .{ .name = sender, .body = m.mes, .avatar = avatar, .reasoning = m.reasoning }; // w3-reason
     }
     store.global.prependSealed(items) catch |err| {
         log.err("prepend into store failed: {s}", .{@errorName(err)});
