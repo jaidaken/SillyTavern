@@ -2213,6 +2213,12 @@ router.post('/metadata', async function (request, response) {
                 }
                 meta.note_role = body.note_role;
             }
+            if ('world_info' in body) {
+                if (typeof body.world_info !== 'string') {
+                    return { status: 400, error: 'world_info must be a string' };
+                }
+                meta.world_info = body.world_info;
+            }
             // No message changed, so there is no affected object to name: the header is the mutation.
             return { index: -1, obj: null };
         });

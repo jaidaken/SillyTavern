@@ -218,6 +218,32 @@ describe('chat mutation family (cf_id ON, steady-state chats)', () => {
         expect(JSON.parse(after[9]).mes).toBe('EDITED');
     }, CASE_TIMEOUT_MS);
 
+    test('metadata_route_persists_world_info_and_rejects_non_string', async () => {
+        const filePath = soloChatPath(server, 'CardWi', 'chatWi');
+        writeChatFile(filePath, chatHeader('CardWi'), buildMinted(4));
+        const beforeLines = readRawLines(filePath);
+
+        const res = await client.postJson('/api/chats/metadata', {
+            avatar_url: 'CardWi.png', file_name: 'chatWi', world_info: 'Denny Lore',
+        });
+        expect(res.status).toBe(200);
+
+        const after = readRawLines(filePath);
+        const header = JSON.parse(after[0]);
+        expect(header.chat_metadata.world_info).toBe('Denny Lore');
+        expect(header.chat_metadata.integrity).toBe('mut-test');
+        // Messages untouched by a header-only mutation.
+        for (let line = 1; line < beforeLines.length; line++) {
+            expect(after[line]).toBe(beforeLines[line]);
+        }
+
+        const bad = await client.postJson('/api/chats/metadata', {
+            avatar_url: 'CardWi.png', file_name: 'chatWi', world_info: 42,
+        });
+        expect(bad.status).toBe(400);
+        expect((await bad.json()).error).toBe('world_info must be a string');
+    }, CASE_TIMEOUT_MS);
+
     test('get_page_carries_full_token_usable_as_a_mutation_gate_in_one_round_trip', async () => {
         const filePath = soloChatPath(server, 'CardFT', 'chatFT');
         writeChatFile(filePath, chatHeader('CardFT'), buildMinted(12));
