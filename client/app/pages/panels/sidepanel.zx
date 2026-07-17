@@ -37,8 +37,12 @@ pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
                     <div class="flex min-h-0 flex-col gap-2">
                         <CharacterToolbar />
                         <CharacterActions />
+                        <GroupQuickList />
                         <CharacterListRegion />
                     </div>
+                // w3-grp
+                ) else if (p.id == .groups) (
+                    <GroupBody />
                 ) else (
                     <></>
                 )}
@@ -67,3 +71,6 @@ const PersonaList = @import("persona_list.zx").PersonaList;
 const CharacterToolbar = @import("character_toolbar.zx").CharacterToolbar;
 const CharacterActions = @import("character_actions.zx").CharacterActions;
 const CharacterListRegion = @import("character_list_region.zx").CharacterListRegion;
+// w3-grp
+const GroupBody = @import("group_body.zx").GroupBody;
+const GroupQuickList = @import("group_quick_list.zx").GroupQuickList;

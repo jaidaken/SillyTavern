@@ -1120,18 +1120,24 @@ async function main() {
         // ===== C-HOME (append-only): recent-chats home landing (list-first) =====
         console.log('== home: recent-chats landing ==');
         await page.navigate(`${args.base}/`);
-        // Boot shows the landing (no auto-open) with the recent list: three character chats, the group
-        // chat filtered out of v1.
+        // Boot shows the landing (no auto-open) with the recent list: three character chats plus the
+        // group chat (w3-grp: group rows list and open; the v1 filter is gone). The group row's name
+        // falls back to the file stem ("Party") while the roster holds no such group.
         row('must', await page.waitFor(
-            `${hydrated} && document.querySelector('#chat-home:not(.hidden)') && document.querySelectorAll('#chat-home .home-thread').length === 3`, 15000),
-            'HOME-1 boot shows the home landing with three recent character chats (group filtered)');
+            `${hydrated} && document.querySelector('#chat-home:not(.hidden)') && document.querySelectorAll('#chat-home .home-thread').length === 4`, 15000),
+            'HOME-1 boot shows the home landing with all four recent chats (group row included)');
+        const grpRowName = await page.eval(
+            "(function(){var rows=document.querySelectorAll('#chat-home .home-thread');var last=rows[rows.length-1];return last?last.textContent:'';})()");
+        row('must', grpRowName.includes('Party'),
+            'HOME-6 the group recent row renders with a name, not blank (w3-grp)',
+            `text=${JSON.stringify(grpRowName.slice(0, 60))}`);
 
         // The fixture's chats are 5 minutes, 3 hours and 4 days old, so "recently" is the NaN fallback
         // rather than a date, and a list whose parse fails for every row still looks populated.
         const whenTexts = await page.eval(
             "JSON.stringify(Array.from(document.querySelectorAll('#chat-home .home-thread time')).map(function(t){return t.textContent.trim();}))");
         const whens = JSON.parse(whenTexts);
-        const datesReal = whens.length === 3 && whens.every((w) => /^(just now|\d+[mhd] ago|\d{4}-\d{2}-\d{2})$/.test(w));
+        const datesReal = whens.length === 4 && whens.every((w) => /^(just now|\d+[mhd] ago|\d{4}-\d{2}-\d{2})$/.test(w));
         row('must', datesReal, 'HOME-5 a recent row dates the chat instead of falling back to "recently"',
             `when=${whenTexts}`);
 
@@ -3294,6 +3300,99 @@ async function main() {
             row('must', settled.drove && settled.anomalies.length === 0 && settled.shellAlive && settled.orphans === 0,
                 'C-SWAP-2 the same swap with a settled selection drifts nothing either',
                 say(settled));
+        }
+
+        // ===== w3-grp (append-only): groups roster, membership, dangerous property =====
+        // T0: the whole create/edit/delete cycle runs between two /dev/grp-t0 snapshots; the last
+        // row asserts no chat write fired and the solo-chat fingerprint held byte-identical.
+        console.log('== w3-grp: groups roster, membership, T0 ==');
+        {
+            const grpT0 = async () => (await fetch(`${args.base}/dev/grp-t0`)).json();
+            const grpAll = async () => (await fetch(`${args.base}/api/groups/all`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+            })).json();
+            // Server-truth wait: persistEdit is fire-and-forget, so a reload straight after a click
+            // can cancel the in-flight POST and turn a real pass flaky. The gate polls the mock
+            // until the edit landed, then reloads.
+            const grpSettled = async (pred, ms = 5000) => {
+                const deadline = Date.now() + ms;
+                while (Date.now() < deadline) {
+                    try { if (pred(await grpAll())) return true; } catch (_) { /* poll again */ }
+                    await sleep(120);
+                }
+                return false;
+            };
+            const t0Before = await grpT0();
+
+            await page.navigate(`${args.base}/`);
+            await page.waitFor(hydrated, 15000);
+            await page.click('#d-groups');
+            const emptyState = await page.waitFor(
+                "!!document.querySelector('.group-panel') && /No groups yet/.test(document.querySelector('.group-panel').textContent)", 8000);
+            row('must', emptyState, 'W3-GRP-1 the groups panel opens on its empty state', `empty=${emptyState}`);
+
+            // Create: prompt stubbed, the first two characters picked as members, one POST on commit.
+            await page.eval("window.prompt = function(){ return 'Gate Party'; }; window.confirm = function(){ return true; };");
+            await page.click("[data-group-action='new']");
+            const editorUp = await page.waitFor("!!document.querySelector('.group-editor')", 5000);
+            await page.click('.group-candidate-row [data-member-add]');
+            await page.waitFor("document.querySelectorAll('.group-member-row').length === 1", 4000);
+            await page.click('.group-candidate-row [data-member-add]');
+            const twoMembers = await page.waitFor("document.querySelectorAll('.group-member-row').length === 2", 4000);
+            await page.click("[data-group-action='create']");
+            const promoted = await page.waitFor("!!document.querySelector('[data-group-action=\\'delete\\']')", 6000);
+            const t0Created = await grpT0();
+            row('must', editorUp && twoMembers && promoted && t0Created.groups === t0Before.groups + 1,
+                'W3-GRP-2 create builds a group from two existing characters and adopts the minted id',
+                `editor=${editorUp} members2=${twoMembers} promoted=${promoted} serverGroups=${t0Created.groups}`);
+
+            // The roster row wears its first member's avatar, percent-encoded through thumbUrl.
+            await page.click("[data-group-action='back']");
+            const rosterRow = await page.waitFor("document.querySelectorAll('#group-list [data-group-index]').length === 1", 5000);
+            const rowAvatar = await page.eval(
+                "(function(){var i=document.querySelector('#group-list img');return i?(i.getAttribute('src')||''):'';})()");
+            row('must', rosterRow && rowAvatar.indexOf('thumbnail?type=avatar&file=char00.png') >= 0,
+                'W3-GRP-3 the roster row renders with its first member\'s avatar',
+                `row=${rosterRow} src=${JSON.stringify(rowAvatar)}`);
+
+            // Membership edits: mute the second member, move it up, then prove BOTH survive a reload
+            // (the store is a mirror; the truth must be in the group file the server holds).
+            await page.click("[data-group-edit='0']");
+            await page.click(".group-member-row [data-member-mute='char01.png']");
+            const muteMarked = await page.waitFor(
+                "(function(){var b=document.querySelector('.group-member-row [data-member-mute=\\'char01.png\\']');return !!b && b.getAttribute('aria-pressed')==='true';})()", 4000);
+            await page.click(".group-member-row [data-member-up='1']");
+            const editsLanded = await grpSettled((gs) => gs.length === 1
+                && Array.isArray(gs[0].disabled_members) && gs[0].disabled_members.indexOf('char01.png') >= 0
+                && Array.isArray(gs[0].members) && gs[0].members[0] === 'char01.png');
+            await page.navigate(`${args.base}/`);
+            await page.waitFor(hydrated, 15000);
+            await page.click('#d-groups');
+            await page.waitFor("document.querySelectorAll('#group-list [data-group-index]').length === 1", 8000);
+            await page.click("[data-group-edit='0']");
+            const orderKept = await page.waitFor(
+                "(function(){var i=document.querySelector('.group-member-row img');return !!i && (i.getAttribute('src')||'').indexOf('char01.png')>=0;})()", 5000);
+            const muteKept = await page.eval(
+                "(function(){var b=document.querySelector('.group-member-row [data-member-mute=\\'char01.png\\']');return !!b && b.getAttribute('aria-pressed')==='true';})()");
+            row('must', muteMarked && editsLanded && orderKept && muteKept,
+                'W3-GRP-4 mute and member order persist to the server and survive a reload',
+                `muted=${muteMarked} landed=${editsLanded} orderKept=${orderKept} muteKept=${muteKept}`);
+
+            // Delete: server-authoritative, back to the empty roster.
+            await page.eval('window.confirm = function(){ return true; };');
+            await page.click("[data-group-action='delete']");
+            const emptyAgain = await page.waitFor(
+                "!!document.querySelector('.group-panel') && /No groups yet/.test(document.querySelector('.group-panel').textContent)", 6000);
+            const t0After = await grpT0();
+            row('must', emptyAgain && t0After.groups === t0Before.groups,
+                'W3-GRP-5 delete removes the group and returns the roster to empty',
+                `empty=${emptyAgain} serverGroups=${t0After.groups}`);
+
+            // THE dangerous-property row (T0): the whole cycle above fired no chat-file write and
+            // left the solo-chat state byte-identical.
+            row('must', t0After.chat_writes === t0Before.chat_writes && t0After.fingerprint === t0Before.fingerprint,
+                'W3-GRP-T0 group create/edit/delete never touches a chat file',
+                `writesBefore=${t0Before.chat_writes} writesAfter=${t0After.chat_writes} fpHeld=${t0After.fingerprint === t0Before.fingerprint}`);
         }
 
         /* C-DBG */
