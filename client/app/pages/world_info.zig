@@ -61,6 +61,14 @@ pub const Entry = struct {
     /// Stock delayUntilRecursion: the entry cannot activate until at least this recursion level
     /// (1 = any recursion pass; higher = deeper). 0 = no delay.
     delay_until_recursion: i64 = 0,
+    /// Stock group: comma-separated inclusion-group names; an entry may belong to several groups.
+    group: []const u8 = "",
+    /// Stock groupOverride: this entry wins its inclusion group outright (highest-order prio winner).
+    group_override: bool = false,
+    /// Stock groupWeight: weight in the group's weighted-random pick (stock DEFAULT_WEIGHT = 100).
+    group_weight: i64 = 100,
+    /// null falls back to the store global (world_info_use_group_scoring).
+    use_group_scoring: ?bool = null,
 };
 
 /// One row of POST /api/worldinfo/list.
@@ -222,6 +230,10 @@ fn entryFromObj(a: Allocator, uid_key: []const u8, obj: *const std.json.ObjectMa
         .exclude_recursion = getBool(obj, "excludeRecursion", false),
         .prevent_recursion = getBool(obj, "preventRecursion", false),
         .delay_until_recursion = getInt(obj, "delayUntilRecursion", 0),
+        .group = getStr(obj, "group", ""),
+        .group_override = getBool(obj, "groupOverride", false),
+        .group_weight = getInt(obj, "groupWeight", 100),
+        .use_group_scoring = getBoolOpt(obj, "useGroupScoring"),
     };
 }
 
@@ -252,6 +264,8 @@ pub const WorldInfoStore = struct {
     min_activations: i64 = 0,
     /// Stock world_info_min_activations_depth_max: hard cap on the widened depth (0 = history-bounded).
     min_activations_depth_max: i64 = 0,
+    /// Stock world_info_use_group_scoring: default an entry's null useGroupScoring falls back to.
+    use_group_scoring: bool = false,
     /// False until the settings blob has hydrated us; mergeState skips until then, or a save fired
     /// before hydration would wipe the account's globalSelect (the persona_actions precedent).
     authoritative: bool = false,
@@ -609,6 +623,7 @@ pub const WorldInfoStore = struct {
         self.match_whole_words = getBool(ws, "world_info_match_whole_words", self.match_whole_words);
         self.min_activations = std.math.clamp(getInt(ws, "world_info_min_activations", self.min_activations), 0, 1000);
         self.min_activations_depth_max = std.math.clamp(getInt(ws, "world_info_min_activations_depth_max", self.min_activations_depth_max), 0, 1000);
+        self.use_group_scoring = getBool(ws, "world_info_use_group_scoring", self.use_group_scoring);
         const wi = ws.get("world_info") orelse return;
         if (wi != .object) return;
         const sel = wi.object.get("globalSelect") orelse return;

@@ -207,6 +207,8 @@ pub const Shape = struct {
     wi_min_activations: usize = 0,
     /// Stock world_info_min_activations_depth_max: hard cap on the widened depth (0 = history-bounded).
     wi_min_activations_depth_max: usize = 0,
+    /// Stock world_info_use_group_scoring: default for a null per-entry useGroupScoring.
+    wi_use_group_scoring: bool = false,
     /// Caller-supplied roll for probability entries (probe#3 delta 5); null = every roll passes.
     wi_rng: ?std.Random = null,
 };
@@ -248,6 +250,7 @@ pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMs
         .match_whole_words = shape.wi_match_whole_words,
         .min_activations = shape.wi_min_activations,
         .min_activations_depth_max = shape.wi_min_activations_depth_max,
+        .use_group_scoring = shape.wi_use_group_scoring,
         .rng = shape.wi_rng,
     }, scan_texts);
     defer wi_act.deinit();

@@ -40,6 +40,8 @@ pub const Params = struct {
     /// Stock world_info_min_activations_depth_max: hard cap on the widened depth. 0 = bounded only
     /// by the history length.
     min_activations_depth_max: usize = 0,
+    /// Stock world_info_use_group_scoring: the default a null per-entry useGroupScoring falls back to.
+    use_group_scoring: bool = false,
 };
 
 /// One merged at-depth injection: every activated atDepth entry at this depth AND role, joined.
@@ -137,15 +139,15 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
             const ww = e.match_whole_words orelse params.match_whole_words;
             // Per-entry scanDepth (stock buffer.get :281) overrides the skew-widened global window; a
             // depth <= 0 scans no chat (only the recursion buffer). Clamp to the window we hold.
-            const e_scan = blk: {
-                const d = e.scan_depth orelse global_depth;
-                const eff: usize = if (d <= 0) 0 else @min(@as(usize, @intCast(d)), history.len);
-                break :blk history[history.len - eff ..];
-            };
+            const e_scan = entryScan(e, history, global_depth);
             if (!matchAnyKey(e.keys, e_scan, rec_view, cs, ww)) continue;
             if (e.selective and e.keysecondary.len > 0 and !selectiveOk(e, e_scan, rec_view, cs, ww)) continue;
             try newly.append(a, i);
         }
+
+        // Inclusion groups: prune the pass candidates to one winner per group before the budget loop
+        // (stock filterByInclusionGroups :4891). activated holds prior passes, not this one yet.
+        try filterByInclusionGroups(a, params, &newly, activated.items, history, global_depth, rec_view);
 
         // Budget + probability over the candidates in priority order. An ignoreBudget entry activates
         // past the cap; once overflowed, only later ignoreBudget entries are still reached (:4896-4905).
@@ -370,6 +372,157 @@ fn selectiveOk(e: Entry, scan: []const []const u8, recurse: []const []const u8, 
         .not_any => !any,
         .and_all => all,
     };
+}
+
+/// The scan window an entry's own scanDepth selects (stock buffer.get :281): a null scanDepth uses
+/// the skew-widened global depth, a depth <= 0 scans no chat (recursion buffer only).
+fn entryScan(e: Entry, history: []const []const u8, global_depth: i64) []const []const u8 {
+    const d = e.scan_depth orelse global_depth;
+    const eff: usize = if (d <= 0) 0 else @min(@as(usize, @intCast(d)), history.len);
+    return history[history.len - eff ..];
+}
+
+/// Stock WorldInfoBuffer.getScore (world-info.js:429): the count of primary + secondary key hits in
+/// the entry's scan window. No primary keys scores 0; only and_any/and_all fold the secondary count.
+fn getScore(e: Entry, scan: []const []const u8, recurse: []const []const u8, cs: bool, ww: bool) i64 {
+    if (e.keys.len == 0) return 0;
+    var primary: i64 = 0;
+    for (e.keys) |k| {
+        if (matchKey(k, scan, recurse, cs, ww)) primary += 1;
+    }
+    if (e.keysecondary.len == 0) return primary;
+    var secondary: i64 = 0;
+    for (e.keysecondary) |k| {
+        if (matchKey(k, scan, recurse, cs, ww)) secondary += 1;
+    }
+    return switch (e.selective_logic) {
+        .and_any => primary + secondary,
+        .and_all => if (secondary == @as(i64, @intCast(e.keysecondary.len))) primary + secondary else primary,
+        else => primary,
+    };
+}
+
+const ws_chars = " \t\n\r\x0b\x0c";
+
+/// Prunes `newly` to one winner per inclusion group (stock filterByInclusionGroups :5266). Buckets
+/// the group-carrying candidates by each comma-split token, runs the group-scoring pre-filter, then
+/// per group applies: already-activated wipe, single-member skip, groupOverride prio, weighted random.
+/// timedEffects (sticky/cooldown/delay) is stubbed off for this chunk. Mutates `newly` in place.
+fn filterByInclusionGroups(
+    a: Allocator,
+    params: Params,
+    newly: *std.ArrayList(usize),
+    activated: []const usize,
+    history: []const []const u8,
+    global_depth: i64,
+    rec_view: []const []const u8,
+) Allocator.Error!void {
+    const entries = params.entries;
+    const Bucket = struct { name: []const u8, members: std.ArrayList(usize) };
+    var buckets: std.ArrayList(Bucket) = .empty;
+    for (newly.items) |i| {
+        const g = entries[i].group;
+        if (g.len == 0) continue;
+        // Stock split(/,\s*/): comma delimits and the whitespace after each comma is consumed, so
+        // only tokens past the first are left-trimmed; a trailing space before a comma stays.
+        var it = std.mem.splitScalar(u8, g, ',');
+        var first = true;
+        while (it.next()) |piece| {
+            const tok = if (first) piece else std.mem.trimStart(u8, piece, ws_chars);
+            first = false;
+            if (tok.len == 0) continue;
+            const b = for (buckets.items) |*b| {
+                if (std.mem.eql(u8, b.name, tok)) break b;
+            } else blk: {
+                try buckets.append(a, .{ .name = tok, .members = .empty });
+                break :blk &buckets.items[buckets.items.len - 1];
+            };
+            try b.members.append(a, i);
+        }
+    }
+    if (buckets.items.len == 0) return;
+
+    var removed = try a.alloc(bool, entries.len);
+    @memset(removed, false);
+
+    // filterGroupsByScoring (:5171): drop scored members below the group's max score. Gated per group
+    // on world_info_use_group_scoring or any member carrying useGroupScoring; unscored members stay.
+    for (buckets.items) |*b| {
+        var any_scored = params.use_group_scoring;
+        for (b.members.items) |m| {
+            if (entries[m].use_group_scoring orelse false) any_scored = true;
+        }
+        if (!any_scored) continue;
+        const scores = try a.alloc(i64, b.members.items.len);
+        var max_score: i64 = std.math.minInt(i64);
+        for (b.members.items, 0..) |m, k| {
+            const e = entries[m];
+            scores[k] = getScore(e, entryScan(e, history, global_depth), rec_view, e.case_sensitive orelse params.case_sensitive, e.match_whole_words orelse params.match_whole_words);
+            if (scores[k] > max_score) max_score = scores[k];
+        }
+        var kept: std.ArrayList(usize) = .empty;
+        for (b.members.items, 0..) |m, k| {
+            const is_scored = entries[m].use_group_scoring orelse params.use_group_scoring;
+            if (is_scored and scores[k] < max_score) removed[m] = true else try kept.append(a, m);
+        }
+        b.members = kept;
+    }
+
+    for (buckets.items) |*b| {
+        // Already activated in a prior pass: stock compares the activated entry's whole group string
+        // to this single token (:5309, x.group === key), then force-drops every candidate here.
+        var already = false;
+        for (activated) |ai| {
+            if (std.mem.eql(u8, entries[ai].group, b.name)) {
+                already = true;
+                break;
+            }
+        }
+        if (already) {
+            for (b.members.items) |m| removed[m] = true;
+            continue;
+        }
+        if (b.members.items.len <= 1) continue;
+
+        // groupOverride: the highest-order override entry wins outright (:5322, sortFn order-desc).
+        var prio: std.ArrayList(usize) = .empty;
+        for (b.members.items) |m| {
+            if (entries[m].group_override) try prio.append(a, m);
+        }
+        if (prio.items.len > 0) {
+            std.mem.sort(usize, prio.items, entries, orderDesc);
+            const winner = prio.items[0];
+            for (b.members.items) |m| {
+                if (m != winner) removed[m] = true;
+            }
+            continue;
+        }
+
+        // Weighted random by groupWeight (:5330). A null rng rolls 0, so the first member wins.
+        var total: i64 = 0;
+        for (b.members.items) |m| total += entries[m].group_weight;
+        const roll: f64 = if (params.rng) |rng| rng.float(f64) * @as(f64, @floatFromInt(total)) else 0.0;
+        var cumulative: i64 = 0;
+        var winner: ?usize = null;
+        for (b.members.items) |m| {
+            cumulative += entries[m].group_weight;
+            if (roll <= @as(f64, @floatFromInt(cumulative))) {
+                winner = m;
+                break;
+            }
+        }
+        if (winner) |w| {
+            for (b.members.items) |m| {
+                if (m != w) removed[m] = true;
+            }
+        }
+    }
+
+    var kept: std.ArrayList(usize) = .empty;
+    for (newly.items) |i| {
+        if (!removed[i]) try kept.append(a, i);
+    }
+    newly.* = kept;
 }
 
 const testing = std.testing;
@@ -777,6 +930,136 @@ test "min_activations widens the scan until a deeper match activates" {
     var capped = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 1, .min_activations = 1, .min_activations_depth_max = 1 }, &history);
     defer capped.deinit();
     try testing.expectEqualStrings("", capped.before);
+}
+
+test "groupOverride activates the highest-order override entry and drops the rest of its group" {
+    var plain = te(0, &.{}, "PLAIN");
+    plain.constant = true;
+    plain.order = 100;
+    plain.group = "g";
+    var win = te(1, &.{}, "WIN");
+    win.constant = true;
+    win.order = 90;
+    win.group = "g";
+    win.group_override = true;
+    var lose = te(2, &.{}, "LOSE");
+    lose.constant = true;
+    lose.order = 50;
+    lose.group = "g";
+    lose.group_override = true;
+    const entries = [_]Entry{ plain, win, lose };
+    var act = try activate(testing.allocator, .{ .entries = &entries }, &.{});
+    defer act.deinit();
+    // The order-90 override outranks the order-50 override; the non-override order-100 entry loses too.
+    try testing.expectEqualStrings("WIN", act.before);
+}
+
+test "weighted random picks the group winner the seeded roll selects" {
+    var e0 = te(0, &.{}, "FIRST");
+    e0.constant = true;
+    e0.order = 100;
+    e0.group = "g";
+    e0.group_weight = 50;
+    var e1 = te(1, &.{}, "SECOND");
+    e1.constant = true;
+    e1.order = 90;
+    e1.group = "g";
+    e1.group_weight = 50;
+    const entries = [_]Entry{ e0, e1 };
+
+    // The filter consumes exactly one float (the weighted roll); mirror it to know the winner.
+    var mirror = std.Random.DefaultPrng.init(0x9317);
+    const roll = mirror.random().float(f64) * 100.0;
+    const want: []const u8 = if (roll <= 50.0) "FIRST" else "SECOND";
+
+    var prng = std.Random.DefaultPrng.init(0x9317);
+    var act = try activate(testing.allocator, .{ .entries = &entries, .rng = prng.random() }, &.{});
+    defer act.deinit();
+    try testing.expectEqualStrings(want, act.before);
+}
+
+test "a group already activated on a prior pass drops the group's later recursion candidates" {
+    const seed = te(0, &.{"dragon"}, "the ember hoard");
+    var later = te(1, &.{"ember"}, "SECOND");
+    later.order = 50;
+    // Same group as the seed: the recursion candidate is force-dropped as already-activated.
+    var same = seed;
+    same.group = "g";
+    var later_same = later;
+    later_same.group = "g";
+    const grouped = [_]Entry{ same, later_same };
+    var act = try activate(testing.allocator, .{ .entries = &grouped, .recursive = true }, &.{"a dragon"});
+    defer act.deinit();
+    try testing.expect(std.mem.indexOf(u8, act.before, "SECOND") == null);
+    try testing.expect(std.mem.indexOf(u8, act.before, "the ember hoard") != null);
+
+    // A different group leaves the recursion candidate free to activate.
+    var later_other = later;
+    later_other.group = "h";
+    var same_h = seed;
+    same_h.group = "g";
+    const split = [_]Entry{ same_h, later_other };
+    var act2 = try activate(testing.allocator, .{ .entries = &split, .recursive = true }, &.{"a dragon"});
+    defer act2.deinit();
+    try testing.expect(std.mem.indexOf(u8, act2.before, "SECOND") != null);
+}
+
+test "a multi-group override entry wins every group it belongs to" {
+    var x = te(0, &.{}, "X");
+    x.constant = true;
+    x.order = 100;
+    x.group = "g1, g2";
+    x.group_override = true;
+    var y = te(1, &.{}, "Y");
+    y.constant = true;
+    y.order = 90;
+    y.group = "g1";
+    var z = te(2, &.{}, "Z");
+    z.constant = true;
+    z.order = 80;
+    z.group = "g2";
+    const entries = [_]Entry{ x, y, z };
+    var act = try activate(testing.allocator, .{ .entries = &entries }, &.{});
+    defer act.deinit();
+    // X sits in both g1 and g2 buckets and wins each, so Y and Z are both dropped.
+    try testing.expectEqualStrings("X", act.before);
+}
+
+test "useGroupScoring keeps only the higher-scoring entry of a group" {
+    var hi = te(0, &.{ "dragon", "wyrm" }, "HI");
+    hi.order = 100;
+    hi.group = "g";
+    var lo = te(1, &.{"dragon"}, "LO");
+    lo.order = 90;
+    lo.group = "g";
+    const entries = [_]Entry{ hi, lo };
+    // Scan hits both of hi's keys (score 2) but only lo's one key (score 1); scoring drops lo.
+    var act = try activate(testing.allocator, .{ .entries = &entries, .use_group_scoring = true }, &.{"a dragon wyrm appears"});
+    defer act.deinit();
+    try testing.expect(std.mem.indexOf(u8, act.before, "HI") != null);
+    try testing.expect(std.mem.indexOf(u8, act.before, "LO") == null);
+}
+
+test "inclusion group filter cleans up on every allocation failure" {
+    try testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn run(alloc: Allocator) !void {
+            var a1 = te(0, &.{ "dragon", "wyrm" }, "A1");
+            a1.constant = true;
+            a1.group = "g1, g2";
+            a1.group_override = true;
+            var a2 = te(1, &.{"dragon"}, "A2");
+            a2.group = "g1";
+            a2.group_weight = 30;
+            var a3 = te(2, &.{}, "A3");
+            a3.constant = true;
+            a3.group = "g2";
+            a3.use_group_scoring = true;
+            const entries = [_]Entry{ a1, a2, a3 };
+            var prng = std.Random.DefaultPrng.init(0x1234);
+            var act = try activate(alloc, .{ .entries = &entries, .rng = prng.random(), .use_group_scoring = true }, &.{"a dragon wyrm"});
+            act.deinit();
+        }
+    }.run, .{});
 }
 
 test "activate cleans up on every allocation failure" {
