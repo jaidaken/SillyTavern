@@ -28,6 +28,7 @@ const persona_actions = @import("./persona_actions.zig");
 const store = @import("./store.zig");
 const wi_actions = @import("./world_info_actions.zig"); // w3-wi
 const wi_store = @import("./world_info.zig"); // w3-wi-engine
+const wi_timed = @import("./world_info_timed.zig"); // wi-timed: the chat's sticky/cooldown state
 const pager = @import("./pager.zig");
 const group_send = @import("./group_send.zig"); // w3-grp
 const group_store = @import("./group_store.zig"); // w3-chatref
@@ -87,6 +88,8 @@ var send_file: []u8 = &.{};
 /// The chat-load ticket at send time. A resync (a 409 append, or the user opening another chat) bumps
 /// it mid-generation, so the seal-time assistant append checks it and skips a now-stale target.
 var send_seq: u32 = 0;
+/// wi-timed: this send touched a live timed window, so the seal persists the state to the chat header.
+var pend_timed_persist: bool = false;
 
 // ---- pending send (invariant 2) -------------------------------------------------------------
 
@@ -685,6 +688,9 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         wi_actions.setGroupChatContext(gid, page.chat_metadata);
         open_group_index = index;
     }
+    // wi-timed: the chat's sticky/cooldown windows load with its header, replaced wholesale on every
+    // open (empty metadata clears). Both the solo and group headers carry it under timedWorldInfo.
+    wi_timed.setFromMetadata(page.chat_metadata);
 
     const char_avatar: ?[]u8 = if (char) |c|
         (if (c.avatar.len > 0) data.thumbUrl(alloc, "avatar", c.avatar) catch null else null)
@@ -1415,9 +1421,19 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
         .wi_min_activations_depth_max = @intCast(@max(0, wi_store.global.min_activations_depth_max)),
         .wi_use_group_scoring = wi_store.global.use_group_scoring,
         .wi_rng = wiRandom(),
+        .wi_timed_in = wi_timed.current(),
     };
-    const prompt = try generate.buildPromptBudgeted(alloc, ctx, history.items, generate.promptCharBudget(conn), shape);
+    const had_timed = wi_timed.hasState();
+    var timed_out_json: []const u8 = "";
+    const prompt = try generate.buildPromptBudgeted(alloc, ctx, history.items, generate.promptCharBudget(conn), shape, &timed_out_json);
     defer alloc.free(prompt);
+    // wi-timed: advance the in-memory state now so the NEXT send reads this send's outcome before the
+    // server persist. Persist when a window is live now or was before (so an expiry still clears it).
+    if (timed_out_json.len > 0) {
+        wi_timed.advance(timed_out_json);
+        alloc.free(timed_out_json);
+    }
+    pend_timed_persist = had_timed or wi_timed.hasState();
     var stop_buf: [1][]const u8 = undefined;
     const raw_stop = generate.stopSequences(pend_tpl.instruct, &stop_buf);
     // Stock resolves macros in the stop sequence too (instruct-mode.js:321), gated on instruct.macro.
@@ -1512,6 +1528,46 @@ fn onAppendDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         } else |_| {}
     }
     chars_log.debug("chat append ({s}) persisted", .{which});
+    // wi-timed: the assistant seal (tag 0) just settled the token, so persist the timed window now,
+    // chained after the append rather than racing it. A user turn (tag != 0) never carries it.
+    if (tag == 0 and pend_timed_persist) {
+        pend_timed_persist = false;
+        persistTimedMetadata();
+    }
+}
+
+/// Write the chat's live timed-effect state to the header via /api/chats/metadata (the timedWorldInfo
+/// key the fork's allowlist accepts). Fire-and-adopt like the note/link writes: a 409 just means the
+/// write missed this seal, and the next send re-persists the full in-memory state, so it self-heals.
+fn persistTimedMetadata() void {
+    if (zx.platform.role != .client) return;
+    if (send_file.len == 0 or send_avatar.len == 0) return;
+    var body_arena = std.heap.ArenaAllocator.init(alloc);
+    defer body_arena.deinit();
+    const ba = body_arena.allocator();
+    var obj: std.json.ObjectMap = .empty;
+    obj.put(ba, "avatar_url", .{ .string = send_avatar }) catch return;
+    obj.put(ba, "file_name", .{ .string = send_file }) catch return;
+    obj.put(ba, "change_token", .{ .string = pager.currentToken() }) catch return;
+    obj.put(ba, "timedWorldInfo", wi_timed.toValue(ba) catch return) catch return;
+    const body = std.json.Stringify.valueAlloc(alloc, std.json.Value{ .object = obj }, .{}) catch return;
+    defer alloc.free(body);
+    net.request("/api/chats/metadata", body, 0, onTimedMetaDone, .{});
+}
+
+fn onTimedMetaDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
+    _ = tag;
+    if (status < 200 or status >= 300) {
+        chars_log.debug("timed world-info persist skipped ({d}); re-persists next send", .{status});
+        return;
+    }
+    // Adopt the post-write token so the next append/link is not left holding a stale copy.
+    if (res) |r| {
+        if (r.json(struct { change_token: []const u8 = "" })) |parsed| {
+            defer parsed.deinit();
+            if (parsed.value.change_token.len > 0) pager.adoptToken(parsed.value.change_token);
+        } else |_| {}
+    }
 }
 
 /// Abort the in-flight reply and seal what arrived. The JS pump cancels the SSE reader, which runs

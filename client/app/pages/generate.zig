@@ -211,11 +211,14 @@ pub const Shape = struct {
     wi_use_group_scoring: bool = false,
     /// Caller-supplied roll for probability entries (probe#3 delta 5); null = every roll passes.
     wi_rng: ?std.Random = null,
+    /// The chat's persisted timed-effect state (stock chat_metadata.timedWorldInfo) at scan start.
+    /// The updated state is surfaced through buildPromptBudgeted's timed_out_json out-param.
+    wi_timed_in: wi_engine.TimedState = .{},
 };
 
 /// Builds the text-completion prompt with no budget cap. Owned result.
 pub fn buildPrompt(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, shape: Shape) Allocator.Error![]u8 {
-    return buildPromptBudgeted(alloc, ctx, history, std.math.maxInt(usize), shape);
+    return buildPromptBudgeted(alloc, ctx, history, std.math.maxInt(usize), shape, null);
 }
 
 /// The prompt, in the order the classic client assembles it:
@@ -235,7 +238,10 @@ pub fn buildPrompt(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, shape
 /// per-card and small) and the injections are reserved out of the budget BEFORE the history walk,
 /// so neither can be silently trimmed: they are control instructions, and losing one would change
 /// the reply with nothing to point at. The remaining budget bounds the history alone. Owned result.
-pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, budget_chars: usize, shape: Shape) Allocator.Error![]u8 {
+/// `timed_out_json`, when non-null, receives the updated timed-effect state (stock
+/// chat_metadata.timedWorldInfo) as an owned JSON string the caller persists then frees. It is the
+/// last thing set, so an error anywhere leaves it untouched and the caller frees nothing.
+pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, budget_chars: usize, shape: Shape, timed_out_json: ?*[]const u8) Allocator.Error![]u8 {
     // The world-info scan reads the PROMPT window tail, so the display window never bounds what
     // can activate (invariant 2).
     const scan_texts = try alloc.alloc([]const u8, history.len);
@@ -252,6 +258,7 @@ pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMs
         .min_activations_depth_max = shape.wi_min_activations_depth_max,
         .use_group_scoring = shape.wi_use_group_scoring,
         .rng = shape.wi_rng,
+        .timed_in = shape.wi_timed_in,
     }, scan_texts);
     defer wi_act.deinit();
 
@@ -388,7 +395,18 @@ pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMs
         w += 1;
     }
     out.shrinkRetainingCapacity(w);
-    return out.toOwnedSlice(alloc);
+
+    const result = try out.toOwnedSlice(alloc);
+    errdefer alloc.free(result);
+    // Stringify while wi_act's arena still backs the timed-effect keys (freed on scope exit). Set
+    // last so an OOM frees `result` and leaves the caller's slot untouched, never a partial state.
+    if (timed_out_json) |slot| {
+        var ja = std.heap.ArenaAllocator.init(alloc);
+        defer ja.deinit();
+        const v = try wi_engine.writeTimedState(ja.allocator(), wi_act.timed_out);
+        slot.* = try std.json.Stringify.valueAlloc(alloc, v, .{});
+    }
+    return result;
 }
 
 /// An owned macro-resolved copy of the value, or the value itself when empty (no macro possible, no
@@ -843,7 +861,7 @@ test "buildPromptBudgeted trims history oldest-first but keeps the card block" {
         .{ .name = "Jamie", .mes = "middle line here" },
         .{ .name = "Rita", .mes = "newest line here" },
     };
-    const out = try buildPromptBudgeted(testing.allocator, ctx, &history, "A diver.\n".len + 24, .{});
+    const out = try buildPromptBudgeted(testing.allocator, ctx, &history, "A diver.\n".len + 24, .{}, null);
     defer testing.allocator.free(out);
     try testing.expect(std.mem.startsWith(u8, out, "A diver.\n"));
     try testing.expect(std.mem.indexOf(u8, out, "newest line here") != null);
@@ -910,7 +928,7 @@ test "a note is never trimmed away by a tight budget" {
         .tpl = .{ .context = .{ .story_string = "" } },
         .note = .{ .prompt = "Keep it short.", .interval = 1, .position = .in_chat, .depth = 0, .role = .system },
     };
-    const out = try buildPromptBudgeted(testing.allocator, ctx, &history, 20, shape);
+    const out = try buildPromptBudgeted(testing.allocator, ctx, &history, 20, shape, null);
     defer testing.allocator.free(out);
     try testing.expect(std.mem.indexOf(u8, out, "Keep it short.") != null);
     try testing.expect(std.mem.indexOf(u8, out, "an old line") == null);
@@ -1069,7 +1087,7 @@ test "an atDepth entry injects at its depth and survives a tight budget" {
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("Jamie: an old line\nRita: a mid line\n: THE WARD HOLDS\nJamie: a new line\nRita:", out);
 
-    const tight = try buildPromptBudgeted(testing.allocator, ctx, &history, 40, shape);
+    const tight = try buildPromptBudgeted(testing.allocator, ctx, &history, 40, shape, null);
     defer testing.allocator.free(tight);
     try testing.expect(std.mem.indexOf(u8, tight, "THE WARD HOLDS") != null);
     try testing.expect(std.mem.indexOf(u8, tight, "an old line") == null);
@@ -1153,7 +1171,7 @@ test "buildPromptBudgeted cleans up on every allocation failure" {
                 .note = .{ .prompt = "Be terse.", .interval = 1, .position = .in_chat, .depth = 1, .role = .system },
                 .wi_entries = &entries,
             };
-            const out = try buildPromptBudgeted(alloc, c, &history, 4096, shape);
+            const out = try buildPromptBudgeted(alloc, c, &history, 4096, shape, null);
             alloc.free(out);
         }
     }.run, .{ctx});

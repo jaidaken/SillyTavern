@@ -22,6 +22,213 @@ const log = std.log.scoped(.wi);
 
 pub const Entry = wi.Entry;
 
+/// One persisted timed effect (stock WITimedEffect). `hash` identifies the entry the effect
+/// belongs to (an entry whose content changed no longer matches and the effect expires); `start`
+/// / `end` bound it in message counts; `protected` keeps it alive on the message it was created.
+pub const Effect = struct { hash: u64, start: i64, end: i64, protected: bool };
+
+/// One keyed effect. `key` = "<world>.<uid>" (stock #getEntryKey), the slot the effect persists in.
+pub const Timed = struct { key: []const u8, effect: Effect };
+
+/// The chat-persisted timed-effect state (stock chat_metadata.timedWorldInfo). `sticky` + `cooldown`
+/// round-trip through chat metadata; `delay` is not persisted (recomputed live from entry.delay).
+/// `timed_in` is caller-owned and read-only; `timed_out` lives in the Activation arena.
+pub const TimedState = struct { sticky: []const Timed = &.{}, cooldown: []const Timed = &.{} };
+
+/// Stock #getEntryHash surrogate: a stable per-entry hash over the fields that identify the entry
+/// and its content. Internal-consistency only (not stock's getStringHash(JSON.stringify) bytes): the
+/// same entry hashes the same across sends, an edited entry hashes differently so its effect expires.
+fn entryHash(e: Entry) u64 {
+    var h = std.hash.Wyhash.init(0);
+    h.update(e.world);
+    h.update(std.mem.asBytes(&e.uid));
+    h.update(e.content);
+    return h.final();
+}
+
+fn findByHash(entries: []const Entry, hash: u64) ?usize {
+    for (entries, 0..) |e, i| {
+        if (entryHash(e) == hash) return i;
+    }
+    return null;
+}
+
+fn timedIndexOf(list: []const Timed, key: []const u8) ?usize {
+    for (list, 0..) |t, i| {
+        if (std.mem.eql(u8, t.key, key)) return i;
+    }
+    return null;
+}
+
+/// Insert or replace the effect at `key`, duping the key into the arena on insert (stock's
+/// object-assign semantics: a re-set overwrites the slot).
+fn putTimed(a: Allocator, list: *std.ArrayList(Timed), key: []const u8, effect: Effect) Allocator.Error!void {
+    if (timedIndexOf(list.items, key)) |i| {
+        list.items[i].effect = effect;
+        return;
+    }
+    try list.append(a, .{ .key = try a.dupe(u8, key), .effect = effect });
+}
+
+fn entryKey(a: Allocator, e: Entry) Allocator.Error![]const u8 {
+    return std.fmt.allocPrint(a, "{s}.{d}", .{ e.world, e.uid });
+}
+
+/// Stock #checkTimedEffectOfType (world-info.js:620): validates one stored effect against the
+/// current chat length, marks the entry active in `active` and carries the effect into `out_list`
+/// when it still holds, else drops it. A sticky effect that just ended starts the entry's cooldown
+/// (onEnded :519), which lands in `out_cool` protected and marks the entry cooldown-active this scan.
+fn checkTimedEffect(
+    a: Allocator,
+    comptime kind: enum { sticky, cooldown },
+    entries: []const Entry,
+    t: Timed,
+    chat_len: i64,
+    active: []bool,
+    out_list: *std.ArrayList(Timed),
+    out_cool: *std.ArrayList(Timed),
+    cooldown_active: []bool,
+) Allocator.Error!void {
+    // Chat has not advanced past the effect's start and it is not protected: drop (:627).
+    if (chat_len <= t.effect.start and !t.effect.protected) return;
+
+    const entry_idx = findByHash(entries, t.effect.hash);
+    if (entry_idx == null) {
+        // Entry gone (e.g. another character's book): keep until its interval passes (:634).
+        if (chat_len >= t.effect.end) return;
+        try putTimed(a, out_list, t.key, t.effect);
+        return;
+    }
+    const i = entry_idx.?;
+    const cfg: i64 = if (kind == .sticky) entries[i].sticky else entries[i].cooldown;
+    // Entry no longer configured for this effect: drop (:643).
+    if (cfg == 0) return;
+
+    if (chat_len >= t.effect.end) {
+        // Interval passed: drop. A sticky end immediately opens the entry's cooldown (:519).
+        if (kind == .sticky) {
+            const cd = entries[i].cooldown;
+            if (cd != 0) {
+                const key = try entryKey(a, entries[i]);
+                try putTimed(a, out_cool, key, .{ .hash = entryHash(entries[i]), .start = chat_len, .end = chat_len + cd, .protected = true });
+                cooldown_active[i] = true;
+            }
+        }
+        return;
+    }
+
+    active[i] = true;
+    try putTimed(a, out_list, t.key, t.effect);
+}
+
+fn stickyFirst(sticky: []const bool, l: usize, r: usize) bool {
+    return sticky[l] and !sticky[r];
+}
+
+// ---- persistence (chat_metadata.timedWorldInfo <-> TimedState) ----------------------------------
+
+/// Serialize a TimedState to the stock chat_metadata.timedWorldInfo JSON shape:
+/// `{ "sticky": { "<world>.<uid>": {hash,start,end,protected}, ... }, "cooldown": {...} }`. Built in
+/// `a` (the caller's chat-metadata arena); the result stringifies straight, no engine internals.
+pub fn writeTimedState(a: Allocator, ts: TimedState) Allocator.Error!std.json.Value {
+    var root: std.json.ObjectMap = .empty;
+    try root.put(a, "sticky", try timedToObject(a, ts.sticky));
+    try root.put(a, "cooldown", try timedToObject(a, ts.cooldown));
+    return .{ .object = root };
+}
+
+fn timedToObject(a: Allocator, list: []const Timed) Allocator.Error!std.json.Value {
+    var obj: std.json.ObjectMap = .empty;
+    for (list) |t| {
+        var row: std.json.ObjectMap = .empty;
+        // hash is u64; number_string keeps full precision past json's i64 integer.
+        try row.put(a, "hash", .{ .number_string = try std.fmt.allocPrint(a, "{d}", .{t.effect.hash}) });
+        try row.put(a, "start", .{ .integer = t.effect.start });
+        try row.put(a, "end", .{ .integer = t.effect.end });
+        try row.put(a, "protected", .{ .bool = t.effect.protected });
+        try obj.put(a, t.key, .{ .object = row });
+    }
+    return .{ .object = obj };
+}
+
+/// Parse a TimedState from the stock chat_metadata.timedWorldInfo shape. Tolerant: a non-object or a
+/// malformed row is skipped. Slices are allocated in `a` (pass the same arena you feed to activate).
+pub fn readTimedState(a: Allocator, v: std.json.Value) Allocator.Error!TimedState {
+    if (v != .object) return .{};
+    return .{
+        .sticky = try objectToTimed(a, v.object.get("sticky")),
+        .cooldown = try objectToTimed(a, v.object.get("cooldown")),
+    };
+}
+
+fn objectToTimed(a: Allocator, v: ?std.json.Value) Allocator.Error![]const Timed {
+    const val = v orelse return &.{};
+    if (val != .object) return &.{};
+    var out: std.ArrayList(Timed) = .empty;
+    errdefer out.deinit(a);
+    var it = val.object.iterator();
+    while (it.next()) |kv| {
+        if (kv.value_ptr.* != .object) continue;
+        const row = &kv.value_ptr.object;
+        const key = try a.dupe(u8, kv.key_ptr.*);
+        try out.append(a, .{ .key = key, .effect = .{
+            .hash = jHash(row),
+            .start = jInt(row, "start"),
+            .end = jInt(row, "end"),
+            .protected = jBool(row, "protected"),
+        } });
+    }
+    return out.toOwnedSlice(a);
+}
+
+fn jHash(obj: *const std.json.ObjectMap) u64 {
+    const v = obj.get("hash") orelse return 0;
+    return switch (v) {
+        .integer => |i| @bitCast(i),
+        .number_string => |s| std.fmt.parseInt(u64, s, 10) catch 0,
+        .float => |f| if (std.math.isFinite(f)) @intFromFloat(f) else 0,
+        else => 0,
+    };
+}
+
+fn jInt(obj: *const std.json.ObjectMap, key: []const u8) i64 {
+    const v = obj.get(key) orelse return 0;
+    return switch (v) {
+        .integer => |i| i,
+        .float => |f| if (std.math.isFinite(f)) @intFromFloat(f) else 0,
+        .number_string => |s| std.fmt.parseInt(i64, s, 10) catch 0,
+        else => 0,
+    };
+}
+
+fn jBool(obj: *const std.json.ObjectMap, key: []const u8) bool {
+    const v = obj.get(key) orelse return false;
+    return switch (v) {
+        .bool => |b| b,
+        .integer => |i| i != 0,
+        else => false,
+    };
+}
+
+/// Tolerant read of the timed state from a chat header's metadata JSON (stock chat_metadata),
+/// unwrapping its `timedWorldInfo` field. Absent/empty/malformed yields the empty state (a chat
+/// with no timed history just starts fresh). Slices live in `a`.
+pub fn readTimedFromMetadata(a: Allocator, chat_metadata: []const u8) TimedState {
+    if (chat_metadata.len == 0) return .{};
+    const root = std.json.parseFromSliceLeaky(std.json.Value, a, chat_metadata, .{}) catch return .{};
+    if (root != .object) return .{};
+    const v = root.object.get("timedWorldInfo") orelse return .{};
+    return readTimedState(a, v) catch .{};
+}
+
+/// Tolerant read of a bare timed-state value string (the shape writeTimedState emits): what a send
+/// persists then reloads to advance its held state. Empty/malformed yields empty. Slices live in `a`.
+pub fn readTimedFromJson(a: Allocator, json: []const u8) TimedState {
+    if (json.len == 0) return .{};
+    const v = std.json.parseFromSliceLeaky(std.json.Value, a, json, .{}) catch return .{};
+    return readTimedState(a, v) catch .{};
+}
+
 /// Activation inputs. `entries` must already be in priority order (WorldInfoStore.collectActive).
 /// A null `rng` skips the probability roll entirely (every roll passes); the send path always
 /// supplies one, tests pass a seeded PRNG.
@@ -42,6 +249,9 @@ pub const Params = struct {
     min_activations_depth_max: usize = 0,
     /// Stock world_info_use_group_scoring: the default a null per-entry useGroupScoring falls back to.
     use_group_scoring: bool = false,
+    /// The chat's persisted timed-effect state (stock chat_metadata.timedWorldInfo) at scan start.
+    /// Caller-owned, read-only; the updated state comes back as Activation.timed_out.
+    timed_in: TimedState = .{},
 };
 
 /// One merged at-depth injection: every activated atDepth entry at this depth AND role, joined.
@@ -63,6 +273,9 @@ pub const Activation = struct {
     em_bottom: []const []const u8 = &.{},
     at_depth: []const DepthGroup = &.{},
     outlets: []const OutletGroup = &.{},
+    /// The updated timed-effect state to persist back to chat metadata. Lives in `arena`, so
+    /// serialize it into chat metadata BEFORE calling deinit.
+    timed_out: TimedState = .{},
 
     pub fn deinit(self: *Activation) void {
         self.arena.deinit();
@@ -80,6 +293,28 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
     const State = enum(u8) { idle, active, failed };
     const flags = try a.alloc(State, params.entries.len);
     @memset(flags, .idle);
+
+    // Timed effects (stock WorldInfoTimedEffects). Cooldown is processed before sticky so a sticky
+    // end's fresh cooldown (onEnded) is the final write for its slot, matching stock's reread order.
+    const entries = params.entries;
+    const chat_len: i64 = @intCast(history.len);
+    const sticky_active = try a.alloc(bool, entries.len);
+    @memset(sticky_active, false);
+    const cooldown_active = try a.alloc(bool, entries.len);
+    @memset(cooldown_active, false);
+    const delay_active = try a.alloc(bool, entries.len);
+    @memset(delay_active, false);
+    var out_sticky: std.ArrayList(Timed) = .empty;
+    var out_cool: std.ArrayList(Timed) = .empty;
+    for (params.timed_in.cooldown) |t| {
+        try checkTimedEffect(a, .cooldown, entries, t, chat_len, cooldown_active, &out_cool, &out_cool, cooldown_active);
+    }
+    for (params.timed_in.sticky) |t| {
+        try checkTimedEffect(a, .sticky, entries, t, chat_len, sticky_active, &out_sticky, &out_cool, cooldown_active);
+    }
+    for (entries, 0..) |e, i| {
+        if (e.delay != 0 and chat_len < e.delay) delay_active[i] = true;
+    }
 
     // Distinct positive delayUntilRecursion levels, ascending. The lowest is pre-loaded as the
     // current level; the rest open one per delayed-recursion pass (stock :4640-4645, :5008-5011).
@@ -121,16 +356,25 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
         const rec_view: []const []const u8 = if (scan_state == .min_activations) &.{} else recurse.items;
 
         var newly: std.ArrayList(usize) = .empty;
-        for (params.entries, 0..) |e, i| {
+        for (entries, 0..) |e, i| {
             if (flags[i] != .idle) continue;
             if (e.disable) continue;
+            const is_sticky = sticky_active[i];
+            // delay suppresses outright; cooldown suppresses unless the entry is sticky (stock :4735).
+            if (delay_active[i]) continue;
+            if (cooldown_active[i] and !is_sticky) continue;
             // delayUntilRecursion: suppressed outside recursion, and on recursion until its level is
-            // open (stock :4746, :4751; timed sticky is stubbed off).
-            if (e.delay_until_recursion != 0 and scan_state != .recursion) continue;
-            if (e.delay_until_recursion != 0 and scan_state == .recursion and e.delay_until_recursion > current_delay_level) continue;
-            // excludeRecursion: an excluded entry never fires from a recursion pass (stock :4756).
-            if (scan_state == .recursion and params.recursive and e.exclude_recursion) continue;
+            // open; a sticky entry bypasses both (stock :4746, :4751).
+            if (e.delay_until_recursion != 0 and scan_state != .recursion and !is_sticky) continue;
+            if (e.delay_until_recursion != 0 and scan_state == .recursion and e.delay_until_recursion > current_delay_level and !is_sticky) continue;
+            // excludeRecursion: an excluded entry never fires from a recursion pass; sticky bypasses (:4756).
+            if (scan_state == .recursion and params.recursive and e.exclude_recursion and !is_sticky) continue;
             if (e.constant) {
+                try newly.append(a, i);
+                continue;
+            }
+            // A sticky-active entry re-activates without a key match (stock :4785).
+            if (is_sticky) {
                 try newly.append(a, i);
                 continue;
             }
@@ -145,9 +389,13 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
             try newly.append(a, i);
         }
 
+        // Sticky entries take budget/probability priority within the pass (stock :4880). Stable sort
+        // keeps candidate order for the rest.
+        std.mem.sort(usize, newly.items, @as([]const bool, sticky_active), stickyFirst);
+
         // Inclusion groups: prune the pass candidates to one winner per group before the budget loop
         // (stock filterByInclusionGroups :4891). activated holds prior passes, not this one yet.
-        try filterByInclusionGroups(a, params, &newly, activated.items, history, global_depth, rec_view);
+        try filterByInclusionGroups(a, params, &newly, activated.items, history, global_depth, rec_view, sticky_active, cooldown_active, delay_active);
 
         // Budget + probability over the candidates in priority order. An ignoreBudget entry activates
         // past the cap; once overflowed, only later ignoreBudget entries are still reached (:4896-4905).
@@ -161,7 +409,8 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
             if (overflow and !e.ignore_budget) {
                 if (ignores_budget > 0) continue else break;
             }
-            if (e.use_probability and e.probability < 100) {
+            // A sticky-active entry does not re-roll probability (stock :4914).
+            if (e.use_probability and e.probability < 100 and !sticky_active[i]) {
                 const roll: f64 = if (params.rng) |rng| rng.float(f64) * 100.0 else 0.0;
                 if (roll > @as(f64, @floatFromInt(e.probability))) {
                     flags[i] = .failed;
@@ -221,6 +470,22 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
         }
     }
 
+    // setTimedEffects (:5153): every activated entry with a sticky/cooldown seeds its effect when the
+    // slot is empty; a carried or onEnded effect already present is not overwritten.
+    for (activated.items) |i| {
+        const e = entries[i];
+        if (e.sticky != 0) {
+            const key = try entryKey(a, e);
+            if (timedIndexOf(out_sticky.items, key) == null)
+                try out_sticky.append(a, .{ .key = key, .effect = .{ .hash = entryHash(e), .start = chat_len, .end = chat_len + e.sticky, .protected = false } });
+        }
+        if (e.cooldown != 0) {
+            const key = try entryKey(a, e);
+            if (timedIndexOf(out_cool.items, key) == null)
+                try out_cool.append(a, .{ .key = key, .effect = .{ .hash = entryHash(e), .start = chat_len, .end = chat_len + e.cooldown, .protected = false } });
+        }
+    }
+
     // Stock sorts activated entries order-DESCENDING (stable sortFn :89) then distributes with
     // unshift (all buckets + atDepth content) or push (outlets), :5082; mirror both to land ties right.
     const idx = activated;
@@ -277,16 +542,24 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
     const out_outlets = try a.alloc(OutletGroup, outlets.items.len);
     for (outlets.items, 0..) |g, i| out_outlets[i] = .{ .name = g.name, .content = try std.mem.join(a, "\n", g.buf.items) };
 
+    // Every arena allocation must finish BEFORE the struct literal copies `arena` by value: a copy
+    // taken first would miss any chunk a later field alloc adds, orphaning it from deinit.
+    const before_s = try std.mem.join(a, "\n", before.items);
+    const after_s = try std.mem.join(a, "\n", after.items);
+    const an_top_s = try std.mem.join(a, "\n", an_top.items);
+    const an_bottom_s = try std.mem.join(a, "\n", an_bottom.items);
+    const timed_out: TimedState = .{ .sticky = try out_sticky.toOwnedSlice(a), .cooldown = try out_cool.toOwnedSlice(a) };
     return .{
         .arena = arena,
-        .before = try std.mem.join(a, "\n", before.items),
-        .after = try std.mem.join(a, "\n", after.items),
-        .an_top = try std.mem.join(a, "\n", an_top.items),
-        .an_bottom = try std.mem.join(a, "\n", an_bottom.items),
+        .before = before_s,
+        .after = after_s,
+        .an_top = an_top_s,
+        .an_bottom = an_bottom_s,
         .em_top = em_top.items,
         .em_bottom = em_bottom.items,
         .at_depth = out_groups,
         .outlets = out_outlets,
+        .timed_out = timed_out,
     };
 }
 
@@ -405,9 +678,10 @@ fn getScore(e: Entry, scan: []const []const u8, recurse: []const []const u8, cs:
 const ws_chars = " \t\n\r\x0b\x0c";
 
 /// Prunes `newly` to one winner per inclusion group (stock filterByInclusionGroups :5266). Buckets
-/// the group-carrying candidates by each comma-split token, runs the group-scoring pre-filter, then
-/// per group applies: already-activated wipe, single-member skip, groupOverride prio, weighted random.
-/// timedEffects (sticky/cooldown/delay) is stubbed off for this chunk. Mutates `newly` in place.
+/// the group-carrying candidates by each comma-split token, runs the timed-effects filter then the
+/// group-scoring pre-filter, then per group applies: already-activated wipe, single-member skip,
+/// groupOverride prio, weighted random. A group with a sticky member skips scoring + selection (the
+/// sticky members force the group). Mutates `newly` in place.
 fn filterByInclusionGroups(
     a: Allocator,
     params: Params,
@@ -416,6 +690,9 @@ fn filterByInclusionGroups(
     history: []const []const u8,
     global_depth: i64,
     rec_view: []const []const u8,
+    sticky_active: []const bool,
+    cooldown_active: []const bool,
+    delay_active: []const bool,
 ) Allocator.Error!void {
     const entries = params.entries;
     const Bucket = struct { name: []const u8, members: std.ArrayList(usize) };
@@ -445,9 +722,33 @@ fn filterByInclusionGroups(
     var removed = try a.alloc(bool, entries.len);
     @memset(removed, false);
 
+    // filterGroupsByTimedEffects (:5215): a group with any sticky member keeps only its sticky
+    // members and forces them (they skip scoring + selection); cooldown/delay members are removed.
+    // Cooldown/delay members are already gate-suppressed, so their removal here is defensive parity.
+    const has_sticky = try a.alloc(bool, buckets.items.len);
+    @memset(has_sticky, false);
+    for (buckets.items, 0..) |*b, bi| {
+        for (b.members.items) |m| {
+            if (sticky_active[m]) {
+                has_sticky[bi] = true;
+                break;
+            }
+        }
+        if (has_sticky[bi]) {
+            for (b.members.items) |m| {
+                if (!sticky_active[m]) removed[m] = true;
+            }
+        }
+        for (b.members.items) |m| {
+            if (cooldown_active[m] or delay_active[m]) removed[m] = true;
+        }
+    }
+
     // filterGroupsByScoring (:5171): drop scored members below the group's max score. Gated per group
     // on world_info_use_group_scoring or any member carrying useGroupScoring; unscored members stay.
-    for (buckets.items) |*b| {
+    // Skips a sticky-forced group (:5181).
+    for (buckets.items, 0..) |*b, bi| {
+        if (has_sticky[bi]) continue;
         var any_scored = params.use_group_scoring;
         for (b.members.items) |m| {
             if (entries[m].use_group_scoring orelse false) any_scored = true;
@@ -468,7 +769,9 @@ fn filterByInclusionGroups(
         b.members = kept;
     }
 
-    for (buckets.items) |*b| {
+    for (buckets.items, 0..) |*b, bi| {
+        // A sticky-forced group is already resolved by the timed filter (:5303).
+        if (has_sticky[bi]) continue;
         // Already activated in a prior pass: stock compares the activated entry's whole group string
         // to this single token (:5309, x.group === key), then force-drops every candidate here.
         var already = false;
@@ -1095,4 +1398,218 @@ test "activate never panics on arbitrary scan bytes" {
         var act = try activate(testing.allocator, .{ .entries = &entries }, &.{buf[0..len]});
         act.deinit();
     }
+}
+
+// ---- timed effects (sticky / cooldown / delay) -------------------------------------------------
+
+fn tt(uid: i64, keys: []const []const u8, content: []const u8, world: []const u8) Entry {
+    var e = te(uid, keys, content);
+    e.world = world;
+    return e;
+}
+
+/// Deep-copies a timed state into `a` so a send's timed_out can be threaded after its Activation
+/// (and its arena) is freed. Models the chat-metadata persist/reload the lead wires.
+fn cloneTimed(a: Allocator, src: TimedState) !TimedState {
+    const s = try a.alloc(Timed, src.sticky.len);
+    for (src.sticky, 0..) |t, i| s[i] = .{ .key = try a.dupe(u8, t.key), .effect = t.effect };
+    const c = try a.alloc(Timed, src.cooldown.len);
+    for (src.cooldown, 0..) |t, i| c[i] = .{ .key = try a.dupe(u8, t.key), .effect = t.effect };
+    return .{ .sticky = s, .cooldown = c };
+}
+
+test "a sticky entry stays active for its window after triggering, then drops" {
+    var e = tt(0, &.{"dragon"}, "S", "w");
+    e.sticky = 2;
+    const entries = [_]Entry{e};
+    // scan_depth 1 scans only the newest message, so once the keyword scrolls out only sticky can fire.
+    var s1 = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 1 }, &.{"a dragon"});
+    defer s1.deinit();
+    try testing.expectEqualStrings("S", s1.before);
+
+    var s2 = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 1, .timed_in = s1.timed_out }, &.{ "a dragon", "boring" });
+    defer s2.deinit();
+    // Newest is "boring" (no key), yet the entry is still sticky-active from send 1.
+    try testing.expectEqualStrings("S", s2.before);
+
+    var s3 = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 1, .timed_in = s2.timed_out }, &.{ "a dragon", "boring", "dull" });
+    defer s3.deinit();
+    // chat_len 3 reaches end (1 + 2): the sticky effect drops and the key no longer matches.
+    try testing.expectEqualStrings("", s3.before);
+}
+
+test "a cooldown entry is suppressed for its window after triggering" {
+    var e = tt(0, &.{"dragon"}, "C", "w");
+    e.cooldown = 2;
+    const entries = [_]Entry{e};
+    // The key matches every send; only the cooldown can suppress it.
+    var s1 = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 1 }, &.{"a dragon"});
+    defer s1.deinit();
+    try testing.expectEqualStrings("C", s1.before);
+
+    var s2 = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 1, .timed_in = s1.timed_out }, &.{ "a dragon", "a dragon" });
+    defer s2.deinit();
+    // On cooldown (start 1, end 3) at chat_len 2, so suppressed despite the key match.
+    try testing.expectEqualStrings("", s2.before);
+
+    var s3 = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 1, .timed_in = s2.timed_out }, &.{ "a dragon", "a dragon", "a dragon" });
+    defer s3.deinit();
+    // chat_len 3 reaches end: cooldown drops and the entry fires again.
+    try testing.expectEqualStrings("C", s3.before);
+}
+
+test "a sticky ending starts the entry's cooldown from the sticky-end message" {
+    var e = tt(0, &.{"dragon"}, "S", "w");
+    e.sticky = 3;
+    e.cooldown = 1;
+    const entries = [_]Entry{e};
+    // The activation-time cooldown (start 1, end 2) expires long before the sticky (end 4); only a
+    // cooldown re-armed at the sticky-end message can suppress send 4.
+    var s1 = try activate(testing.allocator, .{ .entries = &entries }, &.{"a dragon"});
+    defer s1.deinit();
+    var s2 = try activate(testing.allocator, .{ .entries = &entries, .timed_in = s1.timed_out }, &.{ "a dragon", "x" });
+    defer s2.deinit();
+    var s3 = try activate(testing.allocator, .{ .entries = &entries, .timed_in = s2.timed_out }, &.{ "a dragon", "x", "y" });
+    defer s3.deinit();
+    var s4 = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 1, .timed_in = s3.timed_out }, &.{ "a dragon", "x", "y", "z" });
+    defer s4.deinit();
+    // Sticky ends at chat_len 4; the entry is suppressed by the fresh cooldown, and that cooldown's
+    // effect starts at message 4 with the protected flag onEnded sets.
+    try testing.expectEqualStrings("", s4.before);
+    try testing.expectEqual(@as(usize, 1), s4.timed_out.cooldown.len);
+    try testing.expectEqual(@as(i64, 4), s4.timed_out.cooldown[0].effect.start);
+    try testing.expect(s4.timed_out.cooldown[0].effect.protected);
+}
+
+test "a delay entry is suppressed until the chat length reaches its delay" {
+    var e = tt(0, &.{"dragon"}, "D", "w");
+    e.delay = 3;
+    const entries = [_]Entry{e};
+    // delay is not persisted; it reads history.len directly, so two independent sends prove it.
+    var short = try activate(testing.allocator, .{ .entries = &entries }, &.{ "a dragon", "a dragon" });
+    defer short.deinit();
+    try testing.expectEqualStrings("", short.before);
+    var reached = try activate(testing.allocator, .{ .entries = &entries }, &.{ "a dragon", "a dragon", "a dragon" });
+    defer reached.deinit();
+    try testing.expectEqualStrings("D", reached.before);
+}
+
+test "a sticky member forces its inclusion group over a higher-order sibling" {
+    var a = tt(0, &.{"alpha"}, "ALPHACONTENT", "w");
+    a.order = 100;
+    a.group = "g";
+    var b = tt(1, &.{"beta"}, "BETACONTENT", "w");
+    b.order = 50;
+    b.group = "g";
+    b.sticky = 2;
+    const entries = [_]Entry{ a, b };
+    // Send 1: only B's key is present, so B alone activates and becomes sticky.
+    var s1 = try activate(testing.allocator, .{ .entries = &entries }, &.{"a beta"});
+    defer s1.deinit();
+    try testing.expectEqualStrings("BETACONTENT", s1.before);
+    // Send 2: both keys present. A outranks B by order, but B is sticky and forces the group.
+    var s2 = try activate(testing.allocator, .{ .entries = &entries, .timed_in = s1.timed_out }, &.{ "a beta", "an alpha and beta" });
+    defer s2.deinit();
+    try testing.expectEqualStrings("BETACONTENT", s2.before);
+}
+
+test "timed_out round-trips through a persist and reload to the same decision" {
+    var e = tt(0, &.{"dragon"}, "S", "w");
+    e.sticky = 2;
+    const entries = [_]Entry{e};
+    var persist_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer persist_arena.deinit();
+
+    var s1 = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 1 }, &.{"a dragon"});
+    // Clone timed_out, then free s1 (and its arena) entirely before the reload send.
+    const persisted = try cloneTimed(persist_arena.allocator(), s1.timed_out);
+    s1.deinit();
+
+    var s2 = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 1, .timed_in = persisted }, &.{ "a dragon", "boring" });
+    defer s2.deinit();
+    // The reloaded sticky state still activates the entry with no live key match.
+    try testing.expectEqualStrings("S", s2.before);
+}
+
+test "timed state writes the stock chat_metadata shape and parses back through JSON" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const ts = TimedState{
+        .sticky = &.{.{ .key = "w.0", .effect = .{ .hash = 0xFFFFFFFFFFFFFFF0, .start = 1, .end = 3, .protected = false } }},
+        .cooldown = &.{.{ .key = "w.1", .effect = .{ .hash = 42, .start = 2, .end = 5, .protected = true } }},
+    };
+    const bytes = try std.json.Stringify.valueAlloc(a, try writeTimedState(a, ts), .{});
+    // The shape is stock's: sticky/cooldown objects keyed by "world.uid".
+    try testing.expect(std.mem.indexOf(u8, bytes, "\"sticky\":{\"w.0\":") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "\"cooldown\":{\"w.1\":") != null);
+
+    const back = try readTimedState(a, try std.json.parseFromSliceLeaky(std.json.Value, a, bytes, .{}));
+    try testing.expectEqual(@as(usize, 1), back.sticky.len);
+    try testing.expectEqualStrings("w.0", back.sticky[0].key);
+    // A u64 hash past i64 range survives the number_string round-trip.
+    try testing.expectEqual(@as(u64, 0xFFFFFFFFFFFFFFF0), back.sticky[0].effect.hash);
+    try testing.expectEqual(@as(i64, 3), back.sticky[0].effect.end);
+    try testing.expect(!back.sticky[0].effect.protected);
+    try testing.expectEqual(@as(u64, 42), back.cooldown[0].effect.hash);
+    try testing.expect(back.cooldown[0].effect.protected);
+}
+
+test "readTimedFromMetadata unwraps the header field and both readers tolerate junk" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const md =
+        \\{"world_info":"Eldoria","timedWorldInfo":{"sticky":{"w.0":{"hash":7,"start":1,"end":3,"protected":false}},"cooldown":{}}}
+    ;
+    const ts = readTimedFromMetadata(a, md);
+    try testing.expectEqual(@as(usize, 1), ts.sticky.len);
+    try testing.expectEqualStrings("w.0", ts.sticky[0].key);
+    try testing.expectEqual(@as(i64, 3), ts.sticky[0].effect.end);
+    try testing.expectEqual(@as(usize, 0), ts.cooldown.len);
+    // No field, wrong type, and outright junk all degrade to empty, never a crash.
+    try testing.expectEqual(@as(usize, 0), readTimedFromMetadata(a, "{}").sticky.len);
+    try testing.expectEqual(@as(usize, 0), readTimedFromMetadata(a, "not json").sticky.len);
+    try testing.expectEqual(@as(usize, 0), readTimedFromJson(a, "").cooldown.len);
+    // The bare-value reader takes the writeTimedState shape directly (no timedWorldInfo wrapper).
+    const bare =
+        \\{"sticky":{"w.1":{"hash":1,"start":0,"end":2,"protected":true}},"cooldown":{}}
+    ;
+    const bs = readTimedFromJson(a, bare);
+    try testing.expectEqual(@as(usize, 1), bs.sticky.len);
+    try testing.expect(bs.sticky[0].effect.protected);
+}
+
+test "timed_out survives a JSON persist and reload and drives the same sticky decision" {
+    var e = tt(0, &.{"dragon"}, "S", "w");
+    e.sticky = 2;
+    const entries = [_]Entry{e};
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var s1 = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 1 }, &.{"a dragon"});
+    const bytes = try std.json.Stringify.valueAlloc(a, try writeTimedState(a, s1.timed_out), .{});
+    s1.deinit(); // free s1 and its arena; the JSON string is the only surviving state.
+
+    const reloaded = try readTimedState(a, try std.json.parseFromSliceLeaky(std.json.Value, a, bytes, .{}));
+    var s2 = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 1, .timed_in = reloaded }, &.{ "a dragon", "boring" });
+    defer s2.deinit();
+    // The reloaded sticky state fires the entry with no live key match, proving the wired path.
+    try testing.expectEqualStrings("S", s2.before);
+}
+
+test "timed effects clean up on every allocation failure across a multi-send thread" {
+    try testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn run(alloc: Allocator) !void {
+            var e = tt(0, &.{"dragon"}, "S", "w");
+            e.sticky = 2;
+            e.cooldown = 2;
+            const entries = [_]Entry{e};
+            var s1 = try activate(alloc, .{ .entries = &entries, .scan_depth = 1 }, &.{"a dragon"});
+            defer s1.deinit();
+            var s2 = try activate(alloc, .{ .entries = &entries, .scan_depth = 1, .timed_in = s1.timed_out }, &.{ "a dragon", "boring", "dull" });
+            s2.deinit();
+        }
+    }.run, .{});
 }

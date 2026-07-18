@@ -28,6 +28,10 @@ pub const Position = enum(i64) { before = 0, after = 1, an_top = 2, an_bottom = 
 pub const Entry = struct {
     uid_key: []const u8,
     uid: i64,
+    /// Source book identity (file_id), tagged by collectActive. Feeds the timed-effect key
+    /// "<world>.<uid>" so a sticky/cooldown effect survives across sends. Empty for the embedded
+    /// character book (at most one per chat, so its ".<uid>" keys stay unique).
+    world: []const u8 = "",
     keys: []const []const u8,
     keysecondary: []const []const u8,
     selective_logic: Logic,
@@ -69,6 +73,12 @@ pub const Entry = struct {
     group_weight: i64 = 100,
     /// null falls back to the store global (world_info_use_group_scoring).
     use_group_scoring: ?bool = null,
+    /// Stock sticky: once activated, the entry stays active for this many further messages. 0 = off.
+    sticky: i64 = 0,
+    /// Stock cooldown: after activating, the entry is suppressed for this many messages. 0 = off.
+    cooldown: i64 = 0,
+    /// Stock delay: the entry cannot activate until the chat has at least this many messages. 0 = off.
+    delay: i64 = 0,
 };
 
 /// One row of POST /api/worldinfo/list.
@@ -234,6 +244,10 @@ fn entryFromObj(a: Allocator, uid_key: []const u8, obj: *const std.json.ObjectMa
         .group_override = getBool(obj, "groupOverride", false),
         .group_weight = getInt(obj, "groupWeight", 100),
         .use_group_scoring = getBoolOpt(obj, "useGroupScoring"),
+        // Stock stores null|number; getInt folds null/absent to 0 (effect off).
+        .sticky = getInt(obj, "sticky", 0),
+        .cooldown = getInt(obj, "cooldown", 0),
+        .delay = getInt(obj, "delay", 0),
     };
 }
 
@@ -727,6 +741,8 @@ fn appendBookSorted(out: *std.ArrayList(Entry), seen: *std.ArrayList(*const Book
     try seen.append(a, book);
     const start = out.items.len;
     try out.appendSlice(a, book.entries);
+    // Tag the timed-effect world identity from the source book; borrows the store-owned file_id.
+    for (out.items[start..]) |*e| e.world = book.file_id;
     std.mem.sort(Entry, out.items[start..], {}, orderDesc);
 }
 
