@@ -5,8 +5,9 @@
 //! Semantics follow the classic client (public/scripts/world-info.js, checked 2026-07-17):
 //! candidate PRIORITY (probability + budget) is the caller's list order (chat lore, then character,
 //! then global; each book by `order` descending, sortFn :89 + the character_first default strategy);
-//! the JOINED text runs order-ASCENDING (the :5080 unshift loop), so a higher order sits closer to
-//! the prompt tail. Matching is case-insensitive ASCII substring over the newest `scan_depth`
+//! the JOINED text follows stock's descending-sort-then-distribute (:5082): unshift for every bucket
+//! but outlets (order-ascending, ties reversed), push for outlets (order-descending, ties kept).
+//! Matching is case-insensitive ASCII substring over the newest `scan_depth`
 //! message texts (probe#3: "ASCII substring"); recursion re-scans activated content when enabled
 //! (stock world_info_recursive, default off). The budget cap bounds the WI slice ONLY (probe#3
 //! delta 2): an entry that would reach the cap is dropped and activation stops, so the
@@ -71,6 +72,9 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
     @memset(flags, .idle);
 
     var recurse: std.ArrayList([]const u8) = .empty;
+    // Activation order = stock's allActivatedEntries Map insertion order (pass by pass, candidate
+    // order within a pass). sortFn is stable, so equal-order ties keep THIS order, not candidate order.
+    var activated: std.ArrayList(usize) = .empty;
     var used_chars: usize = 0;
     var overflow = false;
 
@@ -109,39 +113,37 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
             }
             used_chars += e.content.len + 1;
             flags[i] = .active;
+            try activated.append(a, i);
             activated_this_pass = true;
             if (params.recursive and e.content.len > 0) try recurse.append(a, e.content);
         }
         if (params.recursive and !overflow and activated_this_pass) scanning = true;
     }
 
-    // Join ascending by order; ties keep candidate order (stock's unshift artifact reverses ties,
-    // a deliberate simplification).
-    var idx: std.ArrayList(usize) = .empty;
-    for (flags, 0..) |f, i| {
-        if (f == .active) try idx.append(a, i);
-    }
-    std.mem.sort(usize, idx.items, params.entries, orderAsc);
+    // Stock sorts activated entries order-DESCENDING (stable sortFn :89) then distributes with
+    // unshift (all buckets + atDepth content) or push (outlets), :5082; mirror both to land ties right.
+    const idx = activated;
+    std.mem.sort(usize, idx.items, params.entries, orderDesc);
 
-    var before: std.ArrayList(u8) = .empty;
-    var after: std.ArrayList(u8) = .empty;
-    var an_top: std.ArrayList(u8) = .empty;
-    var an_bottom: std.ArrayList(u8) = .empty;
+    var before: std.ArrayList([]const u8) = .empty;
+    var after: std.ArrayList([]const u8) = .empty;
+    var an_top: std.ArrayList([]const u8) = .empty;
+    var an_bottom: std.ArrayList([]const u8) = .empty;
     var em_top: std.ArrayList([]const u8) = .empty;
     var em_bottom: std.ArrayList([]const u8) = .empty;
-    var outlets: std.ArrayList(struct { name: []const u8, buf: std.ArrayList(u8) }) = .empty;
-    var groups: std.ArrayList(struct { depth: i64, buf: std.ArrayList(u8) }) = .empty;
+    var outlets: std.ArrayList(struct { name: []const u8, buf: std.ArrayList([]const u8) }) = .empty;
+    var groups: std.ArrayList(struct { depth: i64, buf: std.ArrayList([]const u8) }) = .empty;
 
     for (idx.items) |i| {
         const e = params.entries[i];
         if (e.content.len == 0) continue;
         switch (e.position) {
-            .before => try joinLine(a, &before, e.content),
-            .after => try joinLine(a, &after, e.content),
-            .an_top => try joinLine(a, &an_top, e.content),
-            .an_bottom => try joinLine(a, &an_bottom, e.content),
-            .em_top => try em_top.append(a, e.content),
-            .em_bottom => try em_bottom.append(a, e.content),
+            .before => try before.insert(a, 0, e.content),
+            .after => try after.insert(a, 0, e.content),
+            .an_top => try an_top.insert(a, 0, e.content),
+            .an_bottom => try an_bottom.insert(a, 0, e.content),
+            .em_top => try em_top.insert(a, 0, e.content),
+            .em_bottom => try em_bottom.insert(a, 0, e.content),
             .at_depth => {
                 const depth = @max(0, e.depth);
                 const g = for (groups.items) |*g| {
@@ -150,7 +152,7 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
                     try groups.append(a, .{ .depth = depth, .buf = .empty });
                     break :blk &groups.items[groups.items.len - 1];
                 };
-                try joinLine(a, &g.buf, e.content);
+                try g.buf.insert(a, 0, e.content); // unshift, :5117
             },
             .outlet => {
                 if (e.outlet_name.len == 0) {
@@ -164,22 +166,22 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
                     try outlets.append(a, .{ .name = e.outlet_name, .buf = .empty });
                     break :blk &outlets.items[outlets.items.len - 1];
                 };
-                try joinLine(a, &g.buf, e.content);
+                try g.buf.append(a, e.content); // push, :5133
             },
         }
     }
 
     const out_groups = try a.alloc(DepthGroup, groups.items.len);
-    for (groups.items, 0..) |g, i| out_groups[i] = .{ .depth = g.depth, .content = g.buf.items };
+    for (groups.items, 0..) |g, i| out_groups[i] = .{ .depth = g.depth, .content = try std.mem.join(a, "\n", g.buf.items) };
     const out_outlets = try a.alloc(OutletGroup, outlets.items.len);
-    for (outlets.items, 0..) |g, i| out_outlets[i] = .{ .name = g.name, .content = g.buf.items };
+    for (outlets.items, 0..) |g, i| out_outlets[i] = .{ .name = g.name, .content = try std.mem.join(a, "\n", g.buf.items) };
 
     return .{
         .arena = arena,
-        .before = before.items,
-        .after = after.items,
-        .an_top = an_top.items,
-        .an_bottom = an_bottom.items,
+        .before = try std.mem.join(a, "\n", before.items),
+        .after = try std.mem.join(a, "\n", after.items),
+        .an_top = try std.mem.join(a, "\n", an_top.items),
+        .an_bottom = try std.mem.join(a, "\n", an_bottom.items),
         .em_top = em_top.items,
         .em_bottom = em_bottom.items,
         .at_depth = out_groups,
@@ -187,14 +189,10 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
     };
 }
 
-fn orderAsc(entries: []const Entry, lhs: usize, rhs: usize) bool {
-    if (entries[lhs].order != entries[rhs].order) return entries[lhs].order < entries[rhs].order;
-    return lhs < rhs;
-}
-
-fn joinLine(a: Allocator, buf: *std.ArrayList(u8), content: []const u8) Allocator.Error!void {
-    if (buf.items.len > 0) try buf.append(a, '\n');
-    try buf.appendSlice(a, content);
+// Order-only so std.mem.sort (stable) keeps equal-order entries in activation order, as stock's
+// stable sortFn keeps its Map insertion order.
+fn orderDesc(entries: []const Entry, lhs: usize, rhs: usize) bool {
+    return entries[lhs].order > entries[rhs].order;
 }
 
 fn matchText(needle: []const u8, texts: []const []const u8) bool {
@@ -333,7 +331,9 @@ test "recursion activates an entry keyed only by another entry's content, gated 
     };
     var on = try activate(testing.allocator, .{ .entries = &entries, .recursive = true }, &.{"a dragon"});
     defer on.deinit();
-    try testing.expectEqualStrings("the ember hoard\nSECOND", on.before);
+    // Both share the default order, so the tie reverses (stock's unshift): the later-activated SECOND
+    // sits ahead of the entry that seeded it.
+    try testing.expectEqualStrings("SECOND\nthe ember hoard", on.before);
     var off = try activate(testing.allocator, .{ .entries = &entries, .recursive = false }, &.{"a dragon"});
     defer off.deinit();
     try testing.expectEqualStrings("the ember hoard", off.before);
@@ -389,12 +389,13 @@ test "probability entries roll the caller's rng with a fixed seed, once each" {
     var prng = std.Random.DefaultPrng.init(0x5eed);
     var act = try activate(testing.allocator, .{ .entries = &entries, .rng = prng.random() }, &.{});
     defer act.deinit();
-    const want = if (expect_gated) "MAYBE\nSURE" else "SURE";
+    // Both entries share the default order, so the tie reverses to SURE (uid1) then MAYBE (uid0).
+    const want = if (expect_gated) "SURE\nMAYBE" else "SURE";
     try testing.expectEqualStrings(want, act.before);
 
     var no_rng = try activate(testing.allocator, .{ .entries = &entries }, &.{});
     defer no_rng.deinit();
-    try testing.expectEqualStrings("MAYBE\nSURE", no_rng.before);
+    try testing.expectEqualStrings("SURE\nMAYBE", no_rng.before);
 }
 
 test "every position lands in its own slot and at_depth groups merge per depth" {
@@ -441,7 +442,7 @@ test "every position lands in its own slot and at_depth groups merge per depth" 
     try testing.expectEqualStrings("OUT", act.outlets[0].content);
 }
 
-test "outlet entries group per name, join order-ascending, and a nameless one is skipped" {
+test "outlet entries group per name via push, and a nameless one is skipped" {
     const mk = struct {
         fn e(uid: i64, name: []const u8, order: i64, content: []const u8) Entry {
             var x = te(uid, &.{}, content);
@@ -460,11 +461,13 @@ test "outlet entries group per name, join order-ascending, and a nameless one is
     };
     var act = try activate(testing.allocator, .{ .entries = &entries }, &.{});
     defer act.deinit();
+    // Groups keyed in descending-scan first-seen order (judge's order-200 entry leads), and outlet
+    // content is push (:5133), so within judge the descending scan keeps J-LATE ahead of J-EARLY.
     try testing.expectEqual(@as(usize, 2), act.outlets.len);
-    try testing.expectEqualStrings("narrator", act.outlets[0].name);
-    try testing.expectEqualStrings("N", act.outlets[0].content);
-    try testing.expectEqualStrings("judge", act.outlets[1].name);
-    try testing.expectEqualStrings("J-EARLY\nJ-LATE", act.outlets[1].content);
+    try testing.expectEqualStrings("judge", act.outlets[0].name);
+    try testing.expectEqualStrings("J-LATE\nJ-EARLY", act.outlets[0].content);
+    try testing.expectEqualStrings("narrator", act.outlets[1].name);
+    try testing.expectEqualStrings("N", act.outlets[1].content);
     try testing.expectEqualStrings("", act.before);
 }
 

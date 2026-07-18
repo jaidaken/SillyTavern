@@ -282,7 +282,7 @@ pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMs
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(alloc);
 
-    const story = try templates.renderStoryString(alloc, shape.tpl.context.story_string, wctx);
+    const story = try templates.renderStoryString(alloc, shape.tpl.context.story_string, wctx, instruct);
     defer alloc.free(story);
     const wrapped_story = try templates.wrapStoryString(alloc, instruct, story);
     defer alloc.free(wrapped_story);
@@ -357,6 +357,16 @@ pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMs
     const prefix = try templates.continuationPrefix(alloc, instruct, ctx.char);
     defer alloc.free(prefix);
     try out.appendSlice(alloc, prefix);
+
+    // Stock strips every CR from the assembled prompt (script.js:5075, .replace(/\r/gm, '')); card
+    // fields routinely carry CRLF and the wire prompt is LF-only.
+    var w: usize = 0;
+    for (out.items) |b| {
+        if (b == '\r') continue;
+        out.items[w] = b;
+        w += 1;
+    }
+    out.shrinkRetainingCapacity(w);
     return out.toOwnedSlice(alloc);
 }
 
@@ -678,7 +688,9 @@ test "buildPrompt wraps every turn in the role's own ChatML sequence" {
     const out = try buildPrompt(testing.allocator, ctx, &history, chatmlShape());
     defer testing.allocator.free(out);
     const want =
-        "<|im_start|>system\nA diver.\n<|im_end|>\n" ++
+        // the story sits flush against its suffix; stock adds a trailing newline only when the
+        // instruct has no story_string_suffix (power-user.js:2243), which ChatML does.
+        "<|im_start|>system\nA diver.<|im_end|>\n" ++
         "<|im_start|>user\nHi.<|im_end|>\n" ++
         "<|im_start|>assistant\nHello.<|im_end|>\n" ++
         "<|im_start|>system\nThe lamp dies.<|im_end|>\n" ++
@@ -993,10 +1005,11 @@ test "outlet entries render at their named outlet macros in the story string" {
     };
     const out = try buildPrompt(testing.allocator, ctx, &history, shape);
     defer testing.allocator.free(out);
+    // Outlet content is push over the descending scan (:5133), so the order-200 J-LATE leads J-EARLY.
     const want =
         "A diver.\n" ++
         "N-VOICE\n" ++
-        "J-EARLY\nJ-LATE for Rita\n" ++
+        "J-LATE for Rita\nJ-EARLY\n" ++
         "Jamie: hello\n" ++
         "Rita:";
     try testing.expectEqualStrings(want, out);

@@ -428,7 +428,7 @@ test "a picked context preset that predates the anchors gets them migrated in" {
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, back.context.story_string, "{{anchorAfter}}"));
 
     // And the note now has a slot to render into, which is the whole point of the migration.
-    const out = try templates.renderStoryString(a, back.context.story_string, .{ .description = "D", .anchor_after = "NOTE" });
+    const out = try templates.renderStoryString(a, back.context.story_string, .{ .description = "D", .anchor_after = "NOTE" }, .{});
     try testing.expectEqualStrings("D\nNOTE\n", out);
 }
 

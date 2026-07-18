@@ -365,7 +365,7 @@ fn contextObject(a: Allocator, c: Context) Allocator.Error!std.json.ObjectMap {
 /// Anything else is left verbatim, which is the same courtesy macros.zig extends an unknown macro:
 /// a template this renderer cannot read degrades visibly in the prompt rather than silently blanking
 /// the system block. An unterminated `{{#if}}` keeps its literal text for the same reason.
-pub fn renderStoryString(alloc: Allocator, story: []const u8, ctx: Ctx) Allocator.Error![]u8 {
+pub fn renderStoryString(alloc: Allocator, story: []const u8, ctx: Ctx, instruct: Instruct) Allocator.Error![]u8 {
     const structured = try renderBlocks(alloc, story, ctx);
     defer alloc.free(structured);
 
@@ -383,7 +383,10 @@ pub fn renderStoryString(alloc: Allocator, story: []const u8, ctx: Ctx) Allocato
     const lead = std.mem.indexOfNone(u8, trimmed, "\n") orelse trimmed.len;
     const body = trimmed[lead..];
     if (body.len == 0) return alloc.dupe(u8, "");
-    if (std.mem.endsWith(u8, body, "\n")) return alloc.dupe(u8, body);
+    // Stock adds a trailing newline ONLY when nothing butts against it (power-user.js:2243): instruct
+    // disabled, or wrap-mode with an empty story_string_suffix. A suffix (e.g. ChatML `<|im_end|>`) sits flush.
+    const add_nl = !instruct.enabled or (instruct.wrap and instruct.story_string_suffix.len == 0);
+    if (!add_nl or std.mem.endsWith(u8, body, "\n")) return alloc.dupe(u8, body);
     return std.fmt.allocPrint(alloc, "{s}\n", .{body});
 }
 
@@ -781,7 +784,7 @@ test "parseTemplates cleans up on every allocation failure" {
 
 test "renderStoryString keeps a truthy field block and drops an empty one" {
     const ctx = Ctx{ .char = "Rita", .description = "A diver.", .personality = "" };
-    const out = try renderStoryString(testing.allocator, "{{#if description}}{{description}}\n{{/if}}{{#if personality}}{{personality}}\n{{/if}}", ctx);
+    const out = try renderStoryString(testing.allocator, "{{#if description}}{{description}}\n{{/if}}{{#if personality}}{{personality}}\n{{/if}}", ctx, .{});
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("A diver.\n", out);
 }
@@ -789,24 +792,24 @@ test "renderStoryString keeps a truthy field block and drops an empty one" {
 test "renderStoryString runs the nested macro pass over a resolved value" {
     // The tear only a headless run catches: system resolves, and its own {{char}} must resolve too.
     const ctx = Ctx{ .char = "Rita", .system = "You are {{char}}." };
-    const out = try renderStoryString(testing.allocator, "{{#if system}}{{system}}\n{{/if}}", ctx);
+    const out = try renderStoryString(testing.allocator, "{{#if system}}{{system}}\n{{/if}}", ctx, .{});
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("You are Rita.\n", out);
 }
 
 test "renderStoryString counts nesting so an inner close does not end the outer block" {
     const ctx = Ctx{ .description = "D", .personality = "P" };
-    const out = try renderStoryString(testing.allocator, "{{#if description}}A{{#if personality}}B{{/if}}C{{/if}}", ctx);
+    const out = try renderStoryString(testing.allocator, "{{#if description}}A{{#if personality}}B{{/if}}C{{/if}}", ctx, .{});
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("ABC\n", out);
 
     const inner_empty = Ctx{ .description = "D", .personality = "" };
-    const out2 = try renderStoryString(testing.allocator, "{{#if description}}A{{#if personality}}B{{/if}}C{{/if}}", inner_empty);
+    const out2 = try renderStoryString(testing.allocator, "{{#if description}}A{{#if personality}}B{{/if}}C{{/if}}", inner_empty, .{});
     defer testing.allocator.free(out2);
     try testing.expectEqualStrings("AC\n", out2);
 
     const outer_empty = Ctx{ .description = "", .personality = "P" };
-    const out3 = try renderStoryString(testing.allocator, "{{#if description}}A{{#if personality}}B{{/if}}C{{/if}}tail", outer_empty);
+    const out3 = try renderStoryString(testing.allocator, "{{#if description}}A{{#if personality}}B{{/if}}C{{/if}}tail", outer_empty, .{});
     defer testing.allocator.free(out3);
     try testing.expectEqualStrings("tail\n", out3);
 }
@@ -820,27 +823,27 @@ test "renderStoryString renders the stock Default preset in field order" {
         .scenario = "The shoals.",
         .persona = "Jamie dives too.",
     };
-    const out = try renderStoryString(testing.allocator, default_story_string, ctx);
+    const out = try renderStoryString(testing.allocator, default_story_string, ctx, .{});
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("Be terse.\nA diver.\nWarm.\nThe shoals.\nJamie dives too.\n", out);
 }
 
 test "renderStoryString applies trim and strips leading newlines" {
     const ctx = Ctx{ .description = "D" };
-    const out = try renderStoryString(testing.allocator, "\n\n{{#if description}}{{description}}\n{{/if}}{{trim}}", ctx);
+    const out = try renderStoryString(testing.allocator, "\n\n{{#if description}}{{description}}\n{{/if}}{{trim}}", ctx, .{});
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("D\n", out);
 }
 
 test "renderStoryString leaves an unterminated block verbatim rather than blanking" {
     const ctx = Ctx{ .description = "D" };
-    const out = try renderStoryString(testing.allocator, "head {{#if description}}never closed", ctx);
+    const out = try renderStoryString(testing.allocator, "head {{#if description}}never closed", ctx, .{});
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("head {{#if description}}never closed\n", out);
 }
 
 test "renderStoryString yields empty for an all-empty ctx" {
-    const out = try renderStoryString(testing.allocator, default_story_string, .{});
+    const out = try renderStoryString(testing.allocator, default_story_string, .{}, .{});
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("", out);
 }
@@ -849,7 +852,7 @@ test "renderStoryString cleans up on every allocation failure" {
     const ctx = Ctx{ .char = "Rita", .system = "You are {{char}}.", .description = "A diver." };
     try testing.checkAllAllocationFailures(testing.allocator, struct {
         fn run(alloc: Allocator, c: Ctx) !void {
-            const out = try renderStoryString(alloc, default_story_string, c);
+            const out = try renderStoryString(alloc, default_story_string, c, .{});
             alloc.free(out);
         }
     }.run, .{ctx});
@@ -864,7 +867,7 @@ test "renderStoryString never panics or leaks on arbitrary template bytes" {
     for (0..5000) |_| {
         const len = rand.intRangeAtMost(usize, 0, buf.len);
         for (buf[0..len]) |*b| b.* = alphabet[rand.uintLessThan(usize, alphabet.len)];
-        const out = try renderStoryString(testing.allocator, buf[0..len], ctx);
+        const out = try renderStoryString(testing.allocator, buf[0..len], ctx, .{});
         testing.allocator.free(out);
     }
 }
@@ -1033,7 +1036,7 @@ test "parseTemplates migrates the anchors into a story string that predates them
     );
 
     // A note at either anchor now has a slot to render into.
-    const out = try renderStoryString(testing.allocator, tpl.context.story_string, .{ .description = "D", .anchor_before = "AB", .anchor_after = "AA" });
+    const out = try renderStoryString(testing.allocator, tpl.context.story_string, .{ .description = "D", .anchor_before = "AB", .anchor_after = "AA" }, .{});
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("AB\nD\nAA\n", out);
 }
