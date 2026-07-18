@@ -44,6 +44,23 @@ pub const Entry = struct {
     /// Stock outletName: which {{outlet::name}} macro an outlet-position entry feeds. Empty = none;
     /// stock skips such an entry (world-info.js:5128) and the engine mirrors that.
     outlet_name: []const u8,
+    /// null falls back to the store global (world_info_case_sensitive), stock `?? world_info_...`.
+    case_sensitive: ?bool = null,
+    /// null falls back to world_info_match_whole_words.
+    match_whole_words: ?bool = null,
+    /// null falls back to world_info_depth (the store scan_depth).
+    scan_depth: ?i64 = null,
+    /// atDepth role: 0 system, 1 user, 2 assistant (stock extension_prompt_roles).
+    role: i64 = 0,
+    /// Stock ignoreBudget: the entry activates even past the WI budget cap.
+    ignore_budget: bool = false,
+    /// Stock excludeRecursion: the entry's content never re-enters the recursive scan.
+    exclude_recursion: bool = false,
+    /// Stock preventRecursion: the entry never activates FROM a recursive pass (only the first scan).
+    prevent_recursion: bool = false,
+    /// Stock delayUntilRecursion: the entry cannot activate until at least this recursion level
+    /// (1 = any recursion pass; higher = deeper). 0 = no delay.
+    delay_until_recursion: i64 = 0,
 };
 
 /// One row of POST /api/worldinfo/list.
@@ -130,6 +147,26 @@ fn getBool(obj: *const std.json.ObjectMap, key: []const u8, default: bool) bool 
     };
 }
 
+/// null when the key is absent or JSON null (stock's `entry.field ?? global` default path).
+fn getBoolOpt(obj: *const std.json.ObjectMap, key: []const u8) ?bool {
+    const v = obj.get(key) orelse return null;
+    return switch (v) {
+        .bool => |b| b,
+        .integer => |i| i != 0,
+        else => null,
+    };
+}
+
+fn getIntOpt(obj: *const std.json.ObjectMap, key: []const u8) ?i64 {
+    const v = obj.get(key) orelse return null;
+    return switch (v) {
+        .integer => |i| i,
+        .float => |f| if (std.math.isFinite(f)) @as(i64, @intFromFloat(f)) else null,
+        .number_string => |s| std.fmt.parseInt(i64, s, 10) catch null,
+        else => null,
+    };
+}
+
 fn getStr(obj: *const std.json.ObjectMap, key: []const u8, default: []const u8) []const u8 {
     const v = obj.get(key) orelse return default;
     return switch (v) {
@@ -177,6 +214,14 @@ fn entryFromObj(a: Allocator, uid_key: []const u8, obj: *const std.json.ObjectMa
         .probability = clampNum(.probability, getInt(obj, "probability", 100)),
         .use_probability = getBool(obj, "useProbability", true),
         .outlet_name = getStr(obj, "outletName", ""),
+        .case_sensitive = getBoolOpt(obj, "caseSensitive"),
+        .match_whole_words = getBoolOpt(obj, "matchWholeWords"),
+        .scan_depth = getIntOpt(obj, "scanDepth"),
+        .role = getInt(obj, "role", 0),
+        .ignore_budget = getBool(obj, "ignoreBudget", false),
+        .exclude_recursion = getBool(obj, "excludeRecursion", false),
+        .prevent_recursion = getBool(obj, "preventRecursion", false),
+        .delay_until_recursion = getInt(obj, "delayUntilRecursion", 0),
     };
 }
 
@@ -199,6 +244,12 @@ pub const WorldInfoStore = struct {
     scan_depth: i64 = 2,
     /// Stock world_info_recursive: activated content re-enters the key scan. Off by default.
     recursive: bool = false,
+    /// Stock world_info_case_sensitive: the default an entry's null caseSensitive falls back to.
+    case_sensitive: bool = false,
+    /// Stock world_info_match_whole_words: default for an entry's null matchWholeWords.
+    match_whole_words: bool = false,
+    /// Stock world_info_min_activations: if > 0, keep scanning deeper until this many entries fire.
+    min_activations: i64 = 0,
     /// False until the settings blob has hydrated us; mergeState skips until then, or a save fired
     /// before hydration would wipe the account's globalSelect (the persona_actions precedent).
     authoritative: bool = false,
@@ -552,6 +603,9 @@ pub const WorldInfoStore = struct {
         // 1000 = stock MAX_SCAN_DEPTH (world-info.js).
         self.scan_depth = std.math.clamp(getInt(ws, "world_info_depth", self.scan_depth), 0, 1000);
         self.recursive = getBool(ws, "world_info_recursive", self.recursive);
+        self.case_sensitive = getBool(ws, "world_info_case_sensitive", self.case_sensitive);
+        self.match_whole_words = getBool(ws, "world_info_match_whole_words", self.match_whole_words);
+        self.min_activations = std.math.clamp(getInt(ws, "world_info_min_activations", self.min_activations), 0, 1000);
         const wi = ws.get("world_info") orelse return;
         if (wi != .object) return;
         const sel = wi.object.get("globalSelect") orelse return;

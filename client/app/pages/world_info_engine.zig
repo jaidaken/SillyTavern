@@ -31,10 +31,15 @@ pub const Params = struct {
     budget_chars: usize = std.math.maxInt(usize),
     recursive: bool = false,
     rng: ?std.Random = null,
+    /// Stock world_info_case_sensitive: the default a null per-entry caseSensitive falls back to.
+    case_sensitive: bool = false,
+    /// Stock world_info_match_whole_words: default for a null per-entry matchWholeWords.
+    match_whole_words: bool = false,
 };
 
-/// One merged at-depth injection: every activated atDepth entry at this depth, joined.
-pub const DepthGroup = struct { depth: i64, content: []const u8 };
+/// One merged at-depth injection: every activated atDepth entry at this depth AND role, joined.
+/// role: 0 system, 1 user, 2 assistant (stock groups by depth+role, world-info.js:5115).
+pub const DepthGroup = struct { depth: i64, role: i64 = 0, content: []const u8 };
 
 /// One named outlet: every activated outlet entry with this outletName, joined. Feeds the
 /// {{outlet::name}} macro (stock world-info.js:5127); a nameless outlet entry is skipped as stock.
@@ -90,8 +95,17 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
                 continue;
             }
             if (e.keys.len == 0) continue;
-            if (!matchAnyKey(e.keys, scan_texts, recurse.items)) continue;
-            if (e.selective and e.keysecondary.len > 0 and !selectiveOk(e, scan_texts, recurse.items)) continue;
+            const cs = e.case_sensitive orelse params.case_sensitive;
+            const ww = e.match_whole_words orelse params.match_whole_words;
+            // Per-entry scanDepth (stock buffer.get :281): null falls back to the global window; a
+            // depth <= 0 scans no chat (only the recursion buffer). Clamp to the window we hold.
+            const e_scan = blk: {
+                const d = e.scan_depth orelse break :blk scan_texts;
+                const eff: usize = if (d <= 0) 0 else @min(@as(usize, @intCast(d)), history.len);
+                break :blk history[history.len - eff ..];
+            };
+            if (!matchAnyKey(e.keys, e_scan, recurse.items, cs, ww)) continue;
+            if (e.selective and e.keysecondary.len > 0 and !selectiveOk(e, e_scan, recurse.items, cs, ww)) continue;
             try newly.append(a, i);
         }
         var activated_this_pass = false;
@@ -132,7 +146,7 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
     var em_top: std.ArrayList([]const u8) = .empty;
     var em_bottom: std.ArrayList([]const u8) = .empty;
     var outlets: std.ArrayList(struct { name: []const u8, buf: std.ArrayList([]const u8) }) = .empty;
-    var groups: std.ArrayList(struct { depth: i64, buf: std.ArrayList([]const u8) }) = .empty;
+    var groups: std.ArrayList(struct { depth: i64, role: i64, buf: std.ArrayList([]const u8) }) = .empty;
 
     for (idx.items) |i| {
         const e = params.entries[i];
@@ -147,9 +161,9 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
             .at_depth => {
                 const depth = @max(0, e.depth);
                 const g = for (groups.items) |*g| {
-                    if (g.depth == depth) break g;
+                    if (g.depth == depth and g.role == e.role) break g;
                 } else blk: {
-                    try groups.append(a, .{ .depth = depth, .buf = .empty });
+                    try groups.append(a, .{ .depth = depth, .role = e.role, .buf = .empty });
                     break :blk &groups.items[groups.items.len - 1];
                 };
                 try g.buf.insert(a, 0, e.content); // unshift, :5117
@@ -172,7 +186,7 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
     }
 
     const out_groups = try a.alloc(DepthGroup, groups.items.len);
-    for (groups.items, 0..) |g, i| out_groups[i] = .{ .depth = g.depth, .content = try std.mem.join(a, "\n", g.buf.items) };
+    for (groups.items, 0..) |g, i| out_groups[i] = .{ .depth = g.depth, .role = g.role, .content = try std.mem.join(a, "\n", g.buf.items) };
     const out_outlets = try a.alloc(OutletGroup, outlets.items.len);
     for (outlets.items, 0..) |g, i| out_outlets[i] = .{ .name = g.name, .content = try std.mem.join(a, "\n", g.buf.items) };
 
@@ -195,33 +209,71 @@ fn orderDesc(entries: []const Entry, lhs: usize, rhs: usize) bool {
     return entries[lhs].order > entries[rhs].order;
 }
 
-fn matchText(needle: []const u8, texts: []const []const u8) bool {
+fn isWordChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_';
+}
+
+fn hasWhitespace(s: []const u8) bool {
+    for (s) |c| if (std.ascii.isWhitespace(c)) return true;
+    return false;
+}
+
+/// Case-folded substring search from `start`; a case-sensitive match is an exact byte search.
+fn foldIndex(hay: []const u8, needle: []const u8, cs: bool, start: usize) ?usize {
+    if (needle.len == 0 or needle.len > hay.len) return null;
+    if (cs) return std.mem.indexOfPos(u8, hay, start, needle);
+    var i = start;
+    while (i + needle.len <= hay.len) : (i += 1) {
+        if (std.ascii.eqlIgnoreCase(hay[i .. i + needle.len], needle)) return i;
+    }
+    return null;
+}
+
+/// Stock matchKeys (world-info.js:338): caseSensitive lowercases both sides, matchWholeWords bounds
+/// a single-word key with (?:^|\W)(key)(?:$|\W); a multi-word key falls back to plain containment.
+fn textMatches(hay: []const u8, needle: []const u8, cs: bool, ww: bool) bool {
+    if (needle.len == 0) return false;
+    if (ww and !hasWhitespace(needle)) {
+        var start: usize = 0;
+        while (foldIndex(hay, needle, cs, start)) |i| {
+            const before_ok = i == 0 or !isWordChar(hay[i - 1]);
+            const after = i + needle.len;
+            const after_ok = after == hay.len or !isWordChar(hay[after]);
+            if (before_ok and after_ok) return true;
+            start = i + 1;
+        }
+        return false;
+    }
+    return foldIndex(hay, needle, cs, 0) != null;
+}
+
+fn matchText(needle: []const u8, texts: []const []const u8, cs: bool, ww: bool) bool {
     for (texts) |t| {
-        if (std.ascii.findIgnoreCase(t, needle) != null) return true;
+        if (textMatches(t, needle, cs, ww)) return true;
     }
     return false;
 }
 
-fn matchKey(raw: []const u8, scan: []const []const u8, recurse: []const []const u8) bool {
+fn matchKey(raw: []const u8, scan: []const []const u8, recurse: []const []const u8, cs: bool, ww: bool) bool {
     const key = std.mem.trim(u8, raw, " \t\r\n");
     if (key.len == 0) return false;
-    return matchText(key, scan) or matchText(key, recurse);
+    return matchText(key, scan, cs, ww) or matchText(key, recurse, cs, ww);
 }
 
-fn matchAnyKey(keys: []const []const u8, scan: []const []const u8, recurse: []const []const u8) bool {
+fn matchAnyKey(keys: []const []const u8, scan: []const []const u8, recurse: []const []const u8, cs: bool, ww: bool) bool {
     for (keys) |k| {
-        if (matchKey(k, scan, recurse)) return true;
+        if (matchKey(k, scan, recurse, cs, ww)) return true;
     }
     return false;
 }
 
 /// The four stock selective logics over the secondary keys (world-info.js:4829). An empty
 /// secondary key matches nothing, which fails and_all and never satisfies and_any, as stock.
-fn selectiveOk(e: Entry, scan: []const []const u8, recurse: []const []const u8) bool {
+fn selectiveOk(e: Entry, scan: []const []const u8, recurse: []const []const u8, cs: bool, ww: bool) bool {
     var any = false;
     var all = true;
     for (e.keysecondary) |k| {
-        if (matchKey(k, scan, recurse)) any = true else all = false;
+        if (matchKey(k, scan, recurse, cs, ww)) any = true else all = false;
     }
     return switch (e.selective_logic) {
         .and_any => any,
@@ -476,6 +528,87 @@ test "an entry without keys and without constant never fires" {
     var act = try activate(testing.allocator, .{ .entries = &entries }, &.{"anything"});
     defer act.deinit();
     try testing.expectEqualStrings("", act.before);
+}
+
+test "caseSensitive gates on exact case per entry and via the global default" {
+    var sens = te(0, &.{"GLADE"}, "S");
+    sens.case_sensitive = true;
+    var fold = te(1, &.{"GLADE"}, "F");
+    fold.case_sensitive = false;
+    const entries = [_]Entry{ sens, fold };
+    var act = try activate(testing.allocator, .{ .entries = &entries }, &.{"the glade"});
+    defer act.deinit();
+    // The case-sensitive "GLADE" misses lowercase "glade"; the folding entry matches.
+    try testing.expectEqualStrings("F", act.before);
+
+    // A null per-entry value falls back to the global (params.case_sensitive).
+    const g_entries = [_]Entry{te(2, &.{"GLADE"}, "G")};
+    var g = try activate(testing.allocator, .{ .entries = &g_entries, .case_sensitive = true }, &.{"the glade"});
+    defer g.deinit();
+    try testing.expectEqualStrings("", g.before);
+}
+
+test "matchWholeWords bounds a single-word key, a multi-word key stays substring" {
+    var whole = te(0, &.{"cat"}, "W");
+    whole.match_whole_words = true;
+    const one = [_]Entry{whole};
+    var miss = try activate(testing.allocator, .{ .entries = &one }, &.{"concatenate"});
+    defer miss.deinit();
+    try testing.expectEqualStrings("", miss.before);
+    var hit = try activate(testing.allocator, .{ .entries = &one }, &.{"the cat sat"});
+    defer hit.deinit();
+    try testing.expectEqualStrings("W", hit.before);
+
+    // Stock: a multi-word key (keyWords.length > 1) ignores boundaries and plain-contains.
+    var multi = te(1, &.{"safe haven"}, "M");
+    multi.match_whole_words = true;
+    const two = [_]Entry{multi};
+    var m = try activate(testing.allocator, .{ .entries = &two }, &.{"a safe havenland"});
+    defer m.deinit();
+    try testing.expectEqualStrings("M", m.before);
+}
+
+test "per-entry scanDepth bounds an entry's own key window" {
+    var shallow = te(0, &.{"old"}, "S");
+    shallow.scan_depth = 1;
+    var deep = te(1, &.{"old"}, "D");
+    deep.scan_depth = 2;
+    const entries = [_]Entry{ shallow, deep };
+    // Oldest-first history; "old" appears only in the older message.
+    var act = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 5 }, &.{ "mentions old", "newest" });
+    defer act.deinit();
+    // The scanDepth-1 entry sees only "newest" (no match); the scanDepth-2 entry sees both.
+    try testing.expectEqualStrings("D", act.before);
+}
+
+test "atDepth entries at one depth split into separate groups by role" {
+    var sys = te(0, &.{}, "SYS");
+    sys.constant = true;
+    sys.position = .at_depth;
+    sys.depth = 3;
+    sys.role = 0;
+    var usr = te(1, &.{}, "USR");
+    usr.constant = true;
+    usr.position = .at_depth;
+    usr.depth = 3;
+    usr.role = 1;
+    const entries = [_]Entry{ sys, usr };
+    var act = try activate(testing.allocator, .{ .entries = &entries }, &.{});
+    defer act.deinit();
+    try testing.expectEqual(@as(usize, 2), act.at_depth.len);
+    var saw_sys = false;
+    var saw_usr = false;
+    for (act.at_depth) |grp| {
+        if (grp.role == 0) {
+            saw_sys = true;
+            try testing.expectEqualStrings("SYS", grp.content);
+        }
+        if (grp.role == 1) {
+            saw_usr = true;
+            try testing.expectEqualStrings("USR", grp.content);
+        }
+    }
+    try testing.expect(saw_sys and saw_usr);
 }
 
 test "activate cleans up on every allocation failure" {

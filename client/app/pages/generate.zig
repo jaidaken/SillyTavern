@@ -199,6 +199,10 @@ pub const Shape = struct {
     wi_budget_chars: usize = std.math.maxInt(usize),
     /// Stock world_info_recursive: activated content re-enters the key scan.
     wi_recursive: bool = false,
+    /// Stock world_info_case_sensitive: default for a null per-entry caseSensitive.
+    wi_case_sensitive: bool = false,
+    /// Stock world_info_match_whole_words: default for a null per-entry matchWholeWords.
+    wi_match_whole_words: bool = false,
     /// Caller-supplied roll for probability entries (probe#3 delta 5); null = every roll passes.
     wi_rng: ?std.Random = null,
 };
@@ -236,6 +240,8 @@ pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMs
         .scan_depth = shape.wi_scan_depth,
         .budget_chars = shape.wi_budget_chars,
         .recursive = shape.wi_recursive,
+        .case_sensitive = shape.wi_case_sensitive,
+        .match_whole_words = shape.wi_match_whole_words,
         .rng = shape.wi_rng,
     }, scan_texts);
     defer wi_act.deinit();
@@ -340,7 +346,13 @@ pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMs
     for (wi_act.at_depth) |g| {
         const subbed = try substituteMacros(alloc, g.content, wctx);
         errdefer alloc.free(subbed);
-        try injections.append(alloc, .{ .depth = @intCast(@max(0, g.depth)), .role = .system, .text = subbed, .is_note = false });
+        // Stock extension_prompt_roles: 0 system, 1 user, 2 assistant (world-info.js:5115 groups by it).
+        const role: Role = switch (g.role) {
+            1 => .user,
+            2 => .assistant,
+            else => .system,
+        };
+        try injections.append(alloc, .{ .depth = @intCast(@max(0, g.depth)), .role = role, .text = subbed, .is_note = false });
     }
     var inj_cost: usize = 0;
     for (injections.items) |inj| inj_cost += templates.wrapCost(instruct, inj.role, "", inj.text);

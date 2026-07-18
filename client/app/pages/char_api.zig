@@ -1409,6 +1409,8 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
         .wi_scan_depth = @intCast(@max(0, wi_store.global.scan_depth)),
         .wi_budget_chars = wi_budget_chars,
         .wi_recursive = wi_store.global.recursive,
+        .wi_case_sensitive = wi_store.global.case_sensitive,
+        .wi_match_whole_words = wi_store.global.match_whole_words,
         .wi_rng = wiRandom(),
     };
     const prompt = try generate.buildPromptBudgeted(alloc, ctx, history.items, generate.promptCharBudget(conn), shape);
