@@ -1344,7 +1344,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     # A1: a per-card system_prompt override. Carries {{original}} so one prompt-body
                     # assertion proves the card wins AND {{original}} expands to the global sysprompt.
                     "system_prompt": "CARD SAYS {{original}} EXTRA",
-                    "post_history_instructions": "",
+                    # A1 jailbreak: the card's post-history instruction, injected as a user turn after
+                    # the history. {{char}} proves macro resolution in the injected jailbreak.
+                    "post_history_instructions": "JB PROBE reply as {{char}}",
                     "creator": "jaidaken",
                     "character_version": "1.2",
                     "alternate_greetings": ["The fog is in.", "Mind the step."],

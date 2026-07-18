@@ -889,6 +889,13 @@ async function main() {
         row('must', genPrompt.includes('CARD SAYS') && genPrompt.includes('SYSPROMPT PROBE'),
             'A1 card system_prompt overrides global and {{original}} expands',
             `len=${genPrompt.length} deepPersona=${genPrompt.includes('curious and warm')} card=${genPrompt.includes('CARD SAYS')} global=${genPrompt.includes('SYSPROMPT PROBE')}`);
+        // Jailbreak (post_history_instructions): a user turn after the history, macros resolved.
+        row('must', genPrompt.includes('JB PROBE reply as ') && !genPrompt.includes('JB PROBE reply as {{char}}'),
+            'A1 jailbreak reaches the prompt with macros resolved',
+            `jb=${genPrompt.includes('JB PROBE reply as ')} unresolved=${genPrompt.includes('reply as {{char}}')}`);
+        // Character depth note (data.extensions.depth_prompt) injected at its depth.
+        row('must', genPrompt.includes('keep the lamp burning'),
+            'A1 character depth note reaches the prompt', `note=${genPrompt.includes('keep the lamp burning')}`);
 
         // --- append-409 ---
         // A "409:" message makes the mock append 409; asserted via observable state (mock counters +

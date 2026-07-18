@@ -115,6 +115,12 @@ pub const Templates = struct {
     /// power_user.prefer_character_prompt (stock default true): a character's own system_prompt wins
     /// over the global when set.
     prefer_character_prompt: bool = true,
+    /// The global post-history instruction (power_user.sysprompt.post_history), the jailbreak text
+    /// appended after the chat history. Gated by the same sysprompt_enabled flag as system_prompt.
+    sysprompt_post_history: []const u8 = "",
+    /// power_user.prefer_character_jailbreak (stock default true): a character's own
+    /// post_history_instructions wins over the global when set.
+    prefer_character_jailbreak: bool = true,
 };
 
 /// The story string the classic client ships as its Default context preset, byte-identical to
@@ -162,9 +168,11 @@ pub fn parseTemplates(arena: Allocator, settings_str: []const u8) Allocator.Erro
         if (v == .object) {
             out.system_prompt = try strField(arena, v.object, "content");
             out.sysprompt_enabled = boolField(v.object, "enabled", true);
+            out.sysprompt_post_history = try strField(arena, v.object, "post_history");
         }
     }
     out.prefer_character_prompt = boolField(power_user, "prefer_character_prompt", true);
+    out.prefer_character_jailbreak = boolField(power_user, "prefer_character_jailbreak", true);
     return out;
 }
 
@@ -291,6 +299,8 @@ pub fn dupeTemplates(arena: Allocator, t: Templates) Allocator.Error!Templates {
         .system_prompt = try arena.dupe(u8, t.system_prompt),
         .sysprompt_enabled = t.sysprompt_enabled,
         .prefer_character_prompt = t.prefer_character_prompt,
+        .sysprompt_post_history = try arena.dupe(u8, t.sysprompt_post_history),
+        .prefer_character_jailbreak = t.prefer_character_jailbreak,
     };
 }
 

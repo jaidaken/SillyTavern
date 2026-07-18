@@ -184,6 +184,12 @@ pub fn selectWindow(history: []const PromptMsg, budget_chars: usize, tpl: templa
 pub const Shape = struct {
     tpl: Templates = .{},
     note: Note = .{},
+    /// The character's own depth note (stock "character-specific A/N", data.extensions.depth_prompt):
+    /// always in_chat, its own depth + role. Empty prompt = absent.
+    char_note: Note = .{},
+    /// The jailbreak / post-history instruction, pre-resolved (its {{original}} is the global
+    /// post_history, resolved at composition). Injected as a user turn after the history (depth 0).
+    jailbreak: []const u8 = "",
     /// World-info candidates in priority order (WorldInfoStore.collectActive); store-owned memory,
     /// borrowed for the build only.
     wi_entries: []const wi_engine.Entry = &.{},
@@ -312,6 +318,24 @@ pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMs
             .text = subbed,
             .is_note = true,
         });
+    }
+    // The character's own depth note (stock "character-specific A/N"): always at its own depth+role.
+    if (shape.char_note.prompt.len > 0) {
+        const subbed = try substituteMacros(alloc, shape.char_note.prompt, wctx);
+        errdefer alloc.free(subbed);
+        try injections.append(alloc, .{
+            .depth = @intCast(@max(0, shape.char_note.depth)),
+            .role = shape.char_note.role.toTemplateRole(),
+            .text = subbed,
+            .is_note = false,
+        });
+    }
+    // The jailbreak / post-history instruction: a user turn after the history (depth 0). Its
+    // {{original}} was resolved at composition, so this is a plain macro pass for {{char}} etc.
+    if (shape.jailbreak.len > 0) {
+        const subbed = try substituteMacros(alloc, shape.jailbreak, wctx);
+        errdefer alloc.free(subbed);
+        try injections.append(alloc, .{ .depth = 0, .role = .user, .text = subbed, .is_note = false });
     }
     for (wi_act.at_depth) |g| {
         const subbed = try substituteMacros(alloc, g.content, wctx);
@@ -690,6 +714,34 @@ test "effectiveSystem: card override wins, global falls back, disabled drops" {
     try testing.expectEqualStrings("CARD", effectiveSystem(true, true, "CARD", "GLOBAL"));
     try testing.expectEqualStrings("GLOBAL", effectiveSystem(true, true, "", "GLOBAL"));
     try testing.expectEqualStrings("GLOBAL", effectiveSystem(true, false, "CARD", "GLOBAL"));
+}
+
+test "buildPrompt appends the jailbreak as a user turn after the history" {
+    const ctx = Ctx{ .char = "Rita", .user = "Jamie" };
+    const history = [_]PromptMsg{.{ .name = "Jamie", .mes = "Hi.", .role = .user }};
+    const shape = Shape{ .tpl = .{ .instruct = chatml, .context = .{ .story_string = "" } }, .jailbreak = "Reply as {{char}} only." };
+    const out = try buildPrompt(testing.allocator, ctx, &history, shape);
+    defer testing.allocator.free(out);
+    const hi = std.mem.indexOf(u8, out, "Hi.") orelse return error.NoHistory;
+    const jb = std.mem.indexOf(u8, out, "Reply as Rita only.") orelse return error.NoJailbreak;
+    try testing.expect(jb > hi); // JB lands after the history, before the assistant prefix
+}
+
+test "buildPrompt injects the character depth note at its depth and role" {
+    const ctx = Ctx{ .char = "Rita" };
+    const history = [_]PromptMsg{
+        .{ .name = "Jamie", .mes = "one", .role = .user },
+        .{ .name = "Rita", .mes = "two", .role = .assistant },
+        .{ .name = "Jamie", .mes = "three", .role = .user },
+    };
+    // depth 1 lands the note one turn from the end: after "two", before the last turn "three".
+    const shape = Shape{ .tpl = .{ .instruct = chatml, .context = .{ .story_string = "" } }, .char_note = .{ .prompt = "CHARNOTE for {{char}}", .depth = 1, .role = .system } };
+    const out = try buildPrompt(testing.allocator, ctx, &history, shape);
+    defer testing.allocator.free(out);
+    const note = std.mem.indexOf(u8, out, "CHARNOTE for Rita") orelse return error.NoNote;
+    const two = std.mem.indexOf(u8, out, "two").?;
+    const three = std.mem.indexOf(u8, out, "three").?;
+    try testing.expect(note > two and note < three);
 }
 
 test "buildPrompt gives each example block the context separator" {

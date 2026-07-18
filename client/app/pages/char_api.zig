@@ -74,6 +74,10 @@ var deep_personality: []u8 = &.{};
 var deep_scenario: []u8 = &.{};
 var deep_mes_example: []u8 = &.{};
 var deep_system_prompt: []u8 = &.{};
+var deep_post_history: []u8 = &.{};
+var deep_char_note: []u8 = &.{};
+var deep_char_note_depth: i64 = authors_note.default_depth;
+var deep_char_note_role: authors_note.Role = .system;
 var deep_in_flight: bool = false;
 
 /// Captured at send so the seal-time assistant append targets the chat the send opened against, even
@@ -101,6 +105,12 @@ var pend_mes_example: []u8 = &.{};
 var pend_first_mes: []u8 = &.{};
 /// The card's own system_prompt override (deep field), captured at send. Empty = use the global.
 var pend_system_prompt: []u8 = &.{};
+/// The card's own post_history_instructions (jailbreak) override, captured at send. Empty = global.
+var pend_post_history: []u8 = &.{};
+/// The card's own depth note (data.extensions.depth_prompt), captured at send.
+var pend_char_note: []u8 = &.{};
+var pend_char_note_depth: i64 = authors_note.default_depth;
+var pend_char_note_role: authors_note.Role = .system;
 
 fn setOwned(dst: *[]u8, src: []const u8) void {
     if (dst.len > 0) alloc.free(dst.*);
@@ -173,7 +183,7 @@ fn freePending() void {
     }
     pend_tpl = .{};
     pend_note = .{};
-    inline for (.{ &pend_char_name, &pend_char_avatar, &pend_user_name, &pend_user_text, &pend_persona_desc, &pend_description, &pend_personality, &pend_scenario, &pend_mes_example, &pend_first_mes, &pend_system_prompt }) |f| {
+    inline for (.{ &pend_char_name, &pend_char_avatar, &pend_user_name, &pend_user_text, &pend_persona_desc, &pend_description, &pend_personality, &pend_scenario, &pend_mes_example, &pend_first_mes, &pend_system_prompt, &pend_post_history, &pend_char_note }) |f| {
         if (f.len > 0) alloc.free(f.*);
         f.* = &.{};
     }
@@ -1002,6 +1012,42 @@ fn cardDataStr(obj: *const std.json.ObjectMap, key: []const u8) []const u8 {
     return cardStr(obj, key);
 }
 
+const DepthPromptCard = struct { prompt: []const u8, depth: i64, role: authors_note.Role };
+
+/// The card's depth note from `data.extensions.depth_prompt` (stock character-specific A/N). Prompt
+/// borrowed from the parse; depth/role default to 4/system when absent or odd-shaped.
+fn cardDepthPrompt(obj: *const std.json.ObjectMap) DepthPromptCard {
+    var out = DepthPromptCard{ .prompt = "", .depth = authors_note.default_depth, .role = .system };
+    const card_data = obj.get("data") orelse return out;
+    if (card_data != .object) return out;
+    const ext = card_data.object.get("extensions") orelse return out;
+    if (ext != .object) return out;
+    const dp = ext.object.get("depth_prompt") orelse return out;
+    if (dp != .object) return out;
+    const o = dp.object;
+    if (o.get("prompt")) |v| {
+        if (v == .string) out.prompt = v.string;
+    }
+    if (o.get("depth")) |v| out.depth = switch (v) {
+        .integer => |i| i,
+        .float => |f| @intFromFloat(f),
+        .string => |s| std.fmt.parseInt(i64, s, 10) catch authors_note.default_depth,
+        else => authors_note.default_depth,
+    };
+    if (o.get("role")) |v| out.role = switch (v) {
+        .integer => |i| authors_note.Role.fromInt(i) orelse .system,
+        .string => |s| roleFromName(s),
+        else => .system,
+    };
+    return out;
+}
+
+fn roleFromName(s: []const u8) authors_note.Role {
+    if (std.ascii.eqlIgnoreCase(s, "user")) return .user;
+    if (std.ascii.eqlIgnoreCase(s, "assistant")) return .assistant;
+    return .system;
+}
+
 fn fetchDeepCard(avatar: []const u8) void {
     _ = requestDeepCard(avatar);
 }
@@ -1076,6 +1122,11 @@ fn onDeepCardDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     setOwned(&deep_scenario, cardStr(obj, "scenario"));
     setOwned(&deep_mes_example, cardStr(obj, "mes_example"));
     setOwned(&deep_system_prompt, cardDataStr(obj, "system_prompt"));
+    setOwned(&deep_post_history, cardDataStr(obj, "post_history_instructions"));
+    const dp = cardDepthPrompt(obj);
+    setOwned(&deep_char_note, dp.prompt);
+    deep_char_note_depth = dp.depth;
+    deep_char_note_role = dp.role;
     wi_actions.adoptCard(body);
     chars_log.debug("deep card loaded: personality {d}b scenario {d}b examples {d}b", .{ deep_personality.len, deep_scenario.len, deep_mes_example.len });
 }
@@ -1212,6 +1263,11 @@ fn stashSend(conn: generate.Connection, c: char_store.Character, persona: ?perso
     setOwned(&pend_mes_example, deepField(c, c.mes_example, deep_mes_example));
     setOwned(&pend_first_mes, c.first_mes);
     setOwned(&pend_system_prompt, deepField(c, "", deep_system_prompt));
+    setOwned(&pend_post_history, deepField(c, "", deep_post_history));
+    setOwned(&pend_char_note, deepField(c, "", deep_char_note));
+    const deep_match = deep_avatar.len > 0 and std.mem.eql(u8, deep_avatar, c.avatar);
+    pend_char_note_depth = if (deep_match) deep_char_note_depth else authors_note.default_depth;
+    pend_char_note_role = if (deep_match) deep_char_note_role else .system;
     pend_active = true;
     return true;
 }
@@ -1324,11 +1380,20 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
         .anchor_before = anchors.before,
         .anchor_after = anchors.after,
     };
+    // Jailbreak / post-history: card override wins over the global (same sysprompt gate). Its
+    // {{original}} means the global POST_HISTORY here, so resolve against that before it injects.
+    const effective_jb = generate.effectiveSystem(pend_tpl.sysprompt_enabled, pend_tpl.prefer_character_jailbreak, pend_post_history, pend_tpl.sysprompt_post_history);
+    var jb_ctx = ctx;
+    jb_ctx.original = pend_tpl.sysprompt_post_history;
+    const jb_resolved: []const u8 = if (effective_jb.len > 0) try generate.substituteMacros(alloc, effective_jb, jb_ctx) else "";
+    defer if (jb_resolved.len > 0) alloc.free(jb_resolved);
     // w3-wi-engine: the engine knobs ride the shape; scan depth + recursion + budget are the
     // store's hydrated classic settings, the rng is this module's seeded PRNG.
     const shape = generate.Shape{
         .tpl = pend_tpl,
         .note = pend_note,
+        .char_note = .{ .prompt = pend_char_note, .depth = pend_char_note_depth, .role = pend_char_note_role },
+        .jailbreak = jb_resolved,
         .wi_entries = wi_candidates,
         .wi_scan_depth = @intCast(@max(0, wi_store.global.scan_depth)),
         .wi_budget_chars = wi_budget_chars,
