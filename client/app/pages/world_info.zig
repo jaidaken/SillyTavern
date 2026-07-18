@@ -634,8 +634,13 @@ pub const WorldInfoStore = struct {
         defer seen.deinit(a);
 
         if (self.resolveBookRef(self.chat_world)) |b| try appendBookSorted(&out, &seen, a, b);
-        if (self.char_book) |*cb| try appendBookSorted(&out, &seen, a, cb);
-        if (self.resolveBookRef(self.char_world)) |b| try appendBookSorted(&out, &seen, a, b);
+        // Stock getCharacterLore activates the LINKED world (data.extensions.world), not the embedded
+        // character_book (import extracts the book INTO that world); using both double-counts every entry.
+        if (self.resolveBookRef(self.char_world)) |b| {
+            try appendBookSorted(&out, &seen, a, b);
+        } else if (self.char_book) |*cb| {
+            try appendBookSorted(&out, &seen, a, cb);
+        }
         for (self.global_selected.items) |fid| {
             if (self.bookByFileId(fid)) |b| try appendBookSorted(&out, &seen, a, b);
         }
