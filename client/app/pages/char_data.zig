@@ -7,6 +7,7 @@ const std = @import("std");
 
 const Allocator = std.mem.Allocator;
 const Character = @import("./character_store.zig").Character;
+const macros = @import("./macros.zig");
 
 /// One character as /api/characters/all returns it (the shallow form). Types are tolerant on
 /// purpose: real card data carries fav as bool OR string, and the numeric metadata may be
@@ -467,12 +468,11 @@ pub fn pageBody(alloc: Allocator, ref: ChatRef, opts: PageOpts) Allocator.Error!
     };
 }
 
-/// First-message greeting with the {{char}}/{{user}} macros substituted (both, every
-/// occurrence), as the old glue's replaceAll pair did. Owned result.
-pub fn renderGreeting(alloc: Allocator, first_mes: []const u8, char_name: []const u8, user_name: []const u8) Allocator.Error![]u8 {
-    const pass1 = try std.mem.replaceOwned(u8, alloc, first_mes, "{{char}}", char_name);
-    defer alloc.free(pass1);
-    return std.mem.replaceOwned(u8, alloc, pass1, "{{user}}", user_name);
+/// First-message greeting with the full macro set resolved, matching stock's substituteParams on
+/// the first message: beyond the {{char}}/{{user}} pair the old glue handled, cards carry
+/// {{//comment}} (stripped), {{persona}}, and the card-field macros. Owned result.
+pub fn renderGreeting(alloc: Allocator, first_mes: []const u8, ctx: macros.Ctx) Allocator.Error![]u8 {
+    return macros.substituteMacros(alloc, first_mes, ctx);
 }
 
 /// Index of the most recently chatted character (ties keep the first, as the old glue's
@@ -743,16 +743,16 @@ test "parseChatPage cleans up on every allocation failure" {
     }.run, .{parsed.value});
 }
 
-test "renderGreeting substitutes every macro occurrence" {
-    const out = try renderGreeting(testing.allocator, "{{char}} bows. {{user}}, {{char}} waits for {{user}}.", "Rita", "Jamie");
+test "renderGreeting substitutes every macro occurrence and strips a comment" {
+    const out = try renderGreeting(testing.allocator, "{{char}} bows. {{//aside}}{{user}}, {{char}} waits for {{user}}. Persona: {{persona}}.", .{ .char = "Rita", .user = "Jamie", .persona = "a diver" });
     defer testing.allocator.free(out);
-    try testing.expectEqualStrings("Rita bows. Jamie, Rita waits for Jamie.", out);
+    try testing.expectEqualStrings("Rita bows. Jamie, Rita waits for Jamie. Persona: a diver.", out);
 }
 
 test "renderGreeting cleans up on every allocation failure" {
     try std.testing.checkAllAllocationFailures(testing.allocator, struct {
         fn run(alloc: Allocator) !void {
-            const out = try renderGreeting(alloc, "{{char}}/{{user}}", "a", "b");
+            const out = try renderGreeting(alloc, "{{char}}/{{user}}", .{ .char = "a", .user = "b" });
             alloc.free(out);
         }
     }.run, .{});

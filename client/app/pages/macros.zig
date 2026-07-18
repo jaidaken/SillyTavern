@@ -60,6 +60,9 @@ pub const Outlet = struct {
 /// The story-string spellings are the classic client's camelCase (`wiBefore`), and the aliases
 /// `loreBefore`/`loreAfter` are accepted because the stock templates offer both (script.js:4680).
 pub fn resolve(name: []const u8, ctx: Ctx) ?[]const u8 {
+    // {{//comment}} is stripped (empty), matching stock (macros.js:606); cards routinely carry
+    // `{{// author note}}` and the old resolver left it LITERAL in the prompt.
+    if (std.mem.startsWith(u8, name, "//")) return "";
     if (std.mem.eql(u8, name, "char")) return ctx.char;
     if (std.mem.eql(u8, name, "user")) return ctx.user;
     if (std.mem.eql(u8, name, "persona")) return ctx.persona;

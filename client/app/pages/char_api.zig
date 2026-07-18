@@ -721,7 +721,8 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     } else if (char) |c| {
         if (c.first_mes.len > 0) {
             const user_name = if (persona) |p| p.name else "You";
-            if (data.renderGreeting(alloc, c.first_mes, c.name, user_name)) |greeting| {
+            const persona_desc = if (persona) |p| p.description else "";
+            if (data.renderGreeting(alloc, c.first_mes, .{ .char = c.name, .user = user_name, .persona = persona_desc })) |greeting| {
                 defer alloc.free(greeting);
                 store.global.appendCopy(c.name, greeting, char_avatar orelse "") catch |err| {
                     chars_log.err("append greeting: {s}", .{@errorName(err)});
@@ -1334,11 +1335,21 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
     defer history.deinit(alloc);
 
     const at_head = if (page) |p| !p.has_more_before else true;
-    const first_is_user = if (page) |p| (p.messages.len > 0 and p.messages[0].is_user) else true;
+    // An EMPTY page (fresh chat) needs the greeting too; the old guard required a user message and so
+    // dropped it on every new conversation. A leading assistant turn already IS the greeting.
+    const head_lacks_greeting = if (page) |p| (p.messages.len == 0 or p.messages[0].is_user) else true;
     var greeting: ?[]u8 = null;
     defer if (greeting) |g| alloc.free(g);
-    if (at_head and first_is_user and pend_first_mes.len > 0) {
-        greeting = data.renderGreeting(alloc, pend_first_mes, pend_char_name, pend_user_name) catch null;
+    if (at_head and head_lacks_greeting and pend_first_mes.len > 0) {
+        greeting = data.renderGreeting(alloc, pend_first_mes, .{
+            .char = pend_char_name,
+            .user = pend_user_name,
+            .persona = pend_persona_desc,
+            .description = pend_description,
+            .personality = pend_personality,
+            .scenario = pend_scenario,
+            .mes_example = pend_mes_example,
+        }) catch null;
         if (greeting) |g| try history.append(alloc, .{ .name = pend_char_name, .mes = g });
     }
 
