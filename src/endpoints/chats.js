@@ -2219,6 +2219,12 @@ router.post('/metadata', async function (request, response) {
                 }
                 meta.world_info = body.world_info;
             }
+            if ('timedWorldInfo' in body) {
+                if (body.timedWorldInfo === null || typeof body.timedWorldInfo !== 'object' || Array.isArray(body.timedWorldInfo)) {
+                    return { status: 400, error: 'timedWorldInfo must be an object' };
+                }
+                meta.timedWorldInfo = body.timedWorldInfo;
+            }
             // No message changed, so there is no affected object to name: the header is the mutation.
             return { index: -1, obj: null };
         });
