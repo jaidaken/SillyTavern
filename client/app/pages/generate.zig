@@ -203,6 +203,10 @@ pub const Shape = struct {
     wi_case_sensitive: bool = false,
     /// Stock world_info_match_whole_words: default for a null per-entry matchWholeWords.
     wi_match_whole_words: bool = false,
+    /// Stock world_info_min_activations: keep widening the scan window until this many entries fire.
+    wi_min_activations: usize = 0,
+    /// Stock world_info_min_activations_depth_max: hard cap on the widened depth (0 = history-bounded).
+    wi_min_activations_depth_max: usize = 0,
     /// Caller-supplied roll for probability entries (probe#3 delta 5); null = every roll passes.
     wi_rng: ?std.Random = null,
 };
@@ -242,6 +246,8 @@ pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMs
         .recursive = shape.wi_recursive,
         .case_sensitive = shape.wi_case_sensitive,
         .match_whole_words = shape.wi_match_whole_words,
+        .min_activations = shape.wi_min_activations,
+        .min_activations_depth_max = shape.wi_min_activations_depth_max,
         .rng = shape.wi_rng,
     }, scan_texts);
     defer wi_act.deinit();

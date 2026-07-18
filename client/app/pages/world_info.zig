@@ -250,6 +250,8 @@ pub const WorldInfoStore = struct {
     match_whole_words: bool = false,
     /// Stock world_info_min_activations: if > 0, keep scanning deeper until this many entries fire.
     min_activations: i64 = 0,
+    /// Stock world_info_min_activations_depth_max: hard cap on the widened depth (0 = history-bounded).
+    min_activations_depth_max: i64 = 0,
     /// False until the settings blob has hydrated us; mergeState skips until then, or a save fired
     /// before hydration would wipe the account's globalSelect (the persona_actions precedent).
     authoritative: bool = false,
@@ -606,6 +608,7 @@ pub const WorldInfoStore = struct {
         self.case_sensitive = getBool(ws, "world_info_case_sensitive", self.case_sensitive);
         self.match_whole_words = getBool(ws, "world_info_match_whole_words", self.match_whole_words);
         self.min_activations = std.math.clamp(getInt(ws, "world_info_min_activations", self.min_activations), 0, 1000);
+        self.min_activations_depth_max = std.math.clamp(getInt(ws, "world_info_min_activations_depth_max", self.min_activations_depth_max), 0, 1000);
         const wi = ws.get("world_info") orelse return;
         if (wi != .object) return;
         const sel = wi.object.get("globalSelect") orelse return;

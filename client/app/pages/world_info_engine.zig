@@ -35,6 +35,11 @@ pub const Params = struct {
     case_sensitive: bool = false,
     /// Stock world_info_match_whole_words: default for a null per-entry matchWholeWords.
     match_whole_words: bool = false,
+    /// Stock world_info_min_activations: keep widening the scan window until this many entries fire.
+    min_activations: usize = 0,
+    /// Stock world_info_min_activations_depth_max: hard cap on the widened depth. 0 = bounded only
+    /// by the history length.
+    min_activations_depth_max: usize = 0,
 };
 
 /// One merged at-depth injection: every activated atDepth entry at this depth AND role, joined.
@@ -62,19 +67,39 @@ pub const Activation = struct {
     }
 };
 
-/// Runs the scan-activate-budget loop over `history` (message texts, OLDEST first; the engine
-/// scans the newest `scan_depth` of them) and buckets the survivors by position. Owned result.
+/// Runs stock checkWorldInfo's scan-state machine over `history` (message texts, OLDEST first; the
+/// engine scans the newest `scan_depth` of them) and buckets the survivors by position. The state
+/// walks INITIAL -> (RECURSION | MIN_ACTIVATIONS) -> NONE (world-info.js:4652). Owned result.
 pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) Allocator.Error!Activation {
     var arena = std.heap.ArenaAllocator.init(gpa);
     errdefer arena.deinit();
     const a = arena.allocator();
 
-    const scan_n = @min(params.scan_depth, history.len);
-    const scan_texts = history[history.len - scan_n ..];
-
     const State = enum(u8) { idle, active, failed };
     const flags = try a.alloc(State, params.entries.len);
     @memset(flags, .idle);
+
+    // Distinct positive delayUntilRecursion levels, ascending. The lowest is pre-loaded as the
+    // current level; the rest open one per delayed-recursion pass (stock :4640-4645, :5008-5011).
+    var delay_levels: std.ArrayList(i64) = .empty;
+    for (params.entries) |e| {
+        if (e.delay_until_recursion == 0) continue;
+        var seen = false;
+        for (delay_levels.items) |v| {
+            if (v == e.delay_until_recursion) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) try delay_levels.append(a, e.delay_until_recursion);
+    }
+    std.mem.sort(i64, delay_levels.items, {}, ascI64);
+    var delay_idx: usize = 0;
+    var current_delay_level: i64 = 0;
+    if (delay_levels.items.len > 0) {
+        current_delay_level = delay_levels.items[0];
+        delay_idx = 1;
+    }
 
     var recurse: std.ArrayList([]const u8) = .empty;
     // Activation order = stock's allActivatedEntries Map insertion order (pass by pass, candidate
@@ -82,14 +107,27 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
     var activated: std.ArrayList(usize) = .empty;
     var used_chars: usize = 0;
     var overflow = false;
+    var skew: usize = 0;
 
-    var scanning = params.entries.len > 0;
-    while (scanning) {
-        scanning = false;
+    const ScanState = enum { none, initial, recursion, min_activations };
+    var scan_state: ScanState = if (params.entries.len > 0) .initial else .none;
+
+    while (scan_state != .none) {
+        // getDepth() = world_info_depth + skew (:403); the skew widens the global window during a
+        // min-activations sweep. The recurse buffer is excluded during that sweep (:324).
+        const global_depth: i64 = @as(i64, @intCast(params.scan_depth)) + @as(i64, @intCast(skew));
+        const rec_view: []const []const u8 = if (scan_state == .min_activations) &.{} else recurse.items;
+
         var newly: std.ArrayList(usize) = .empty;
         for (params.entries, 0..) |e, i| {
             if (flags[i] != .idle) continue;
             if (e.disable) continue;
+            // delayUntilRecursion: suppressed outside recursion, and on recursion until its level is
+            // open (stock :4746, :4751; timed sticky is stubbed off).
+            if (e.delay_until_recursion != 0 and scan_state != .recursion) continue;
+            if (e.delay_until_recursion != 0 and scan_state == .recursion and e.delay_until_recursion > current_delay_level) continue;
+            // excludeRecursion: an excluded entry never fires from a recursion pass (stock :4756).
+            if (scan_state == .recursion and params.recursive and e.exclude_recursion) continue;
             if (e.constant) {
                 try newly.append(a, i);
                 continue;
@@ -97,21 +135,30 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
             if (e.keys.len == 0) continue;
             const cs = e.case_sensitive orelse params.case_sensitive;
             const ww = e.match_whole_words orelse params.match_whole_words;
-            // Per-entry scanDepth (stock buffer.get :281): null falls back to the global window; a
+            // Per-entry scanDepth (stock buffer.get :281) overrides the skew-widened global window; a
             // depth <= 0 scans no chat (only the recursion buffer). Clamp to the window we hold.
             const e_scan = blk: {
-                const d = e.scan_depth orelse break :blk scan_texts;
+                const d = e.scan_depth orelse global_depth;
                 const eff: usize = if (d <= 0) 0 else @min(@as(usize, @intCast(d)), history.len);
                 break :blk history[history.len - eff ..];
             };
-            if (!matchAnyKey(e.keys, e_scan, recurse.items, cs, ww)) continue;
-            if (e.selective and e.keysecondary.len > 0 and !selectiveOk(e, e_scan, recurse.items, cs, ww)) continue;
+            if (!matchAnyKey(e.keys, e_scan, rec_view, cs, ww)) continue;
+            if (e.selective and e.keysecondary.len > 0 and !selectiveOk(e, e_scan, rec_view, cs, ww)) continue;
             try newly.append(a, i);
         }
-        var activated_this_pass = false;
+
+        // Budget + probability over the candidates in priority order. An ignoreBudget entry activates
+        // past the cap; once overflowed, only later ignoreBudget entries are still reached (:4896-4905).
+        var ignores_budget: usize = 0;
         for (newly.items) |i| {
-            if (overflow) break;
+            if (params.entries[i].ignore_budget) ignores_budget += 1;
+        }
+        for (newly.items) |i| {
             const e = params.entries[i];
+            if (e.ignore_budget) ignores_budget -= 1;
+            if (overflow and !e.ignore_budget) {
+                if (ignores_budget > 0) continue else break;
+            }
             if (e.use_probability and e.probability < 100) {
                 const roll: f64 = if (params.rng) |rng| rng.float(f64) * 100.0 else 0.0;
                 if (roll > @as(f64, @floatFromInt(e.probability))) {
@@ -120,18 +167,56 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
                 }
             }
             // Stock reaching the budget exactly also overflows (world-info.js:4940, `>=`).
-            if (used_chars +| e.content.len +| 1 >= params.budget_chars) {
+            if (!e.ignore_budget and used_chars +| e.content.len +| 1 >= params.budget_chars) {
                 overflow = true;
                 log.debug("wi budget {d} reached, activation stopped", .{params.budget_chars});
-                break;
+                continue;
             }
             used_chars += e.content.len + 1;
             flags[i] = .active;
             try activated.append(a, i);
-            activated_this_pass = true;
-            if (params.recursive and e.content.len > 0) try recurse.append(a, e.content);
         }
-        if (params.recursive and !overflow and activated_this_pass) scanning = true;
+
+        // successfulNewEntriesForRecursion (:4958-4959): passed probability (activated, budget-
+        // overflowed, or unreached) and not preventRecursion. This set feeds recursion + its buffer.
+        var sfr: std.ArrayList(usize) = .empty;
+        for (newly.items) |i| {
+            if (flags[i] == .failed) continue;
+            if (params.entries[i].prevent_recursion) continue;
+            try sfr.append(a, i);
+        }
+
+        var next_state: ScanState = .none;
+        if (params.recursive and !overflow and sfr.items.len > 0) next_state = .recursion;
+        // A min-activations sweep is always chased by a recursion pass to read its new buffer (:4983).
+        if (params.recursive and !overflow and scan_state == .min_activations and recurse.items.len > 0) next_state = .recursion;
+
+        const min_not_satisfied = params.min_activations > 0 and activated.items.len < params.min_activations;
+        if (next_state == .none and !overflow and min_not_satisfied) {
+            // over_max on the CURRENT depth, before advanceScan (:4993-4996).
+            const over_max = (params.min_activations_depth_max > 0 and global_depth > @as(i64, @intCast(params.min_activations_depth_max))) or
+                (global_depth > @as(i64, @intCast(history.len)));
+            if (!over_max) {
+                next_state = .min_activations;
+                skew += 1;
+            }
+        }
+
+        // Scan would stop but delayed-recursion levels remain: open the next one (:5008-5011). This
+        // path is NOT gated on world_info_recursive, matching stock.
+        if (next_state == .none and delay_idx < delay_levels.items.len) {
+            next_state = .recursion;
+            current_delay_level = delay_levels.items[delay_idx];
+            delay_idx += 1;
+        }
+
+        scan_state = next_state;
+        if (scan_state != .none and sfr.items.len > 0) {
+            const parts = try a.alloc([]const u8, sfr.items.len);
+            for (sfr.items, 0..) |i, j| parts[j] = params.entries[i].content;
+            const text = try std.mem.join(a, "\n", parts);
+            if (text.len > 0) try recurse.append(a, text);
+        }
     }
 
     // Stock sorts activated entries order-DESCENDING (stable sortFn :89) then distributes with
@@ -207,6 +292,10 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
 // stable sortFn keeps its Map insertion order.
 fn orderDesc(entries: []const Entry, lhs: usize, rhs: usize) bool {
     return entries[lhs].order > entries[rhs].order;
+}
+
+fn ascI64(_: void, l: i64, r: i64) bool {
+    return l < r;
 }
 
 fn isWordChar(c: u8) bool {
@@ -611,6 +700,85 @@ test "atDepth entries at one depth split into separate groups by role" {
     try testing.expect(saw_sys and saw_usr);
 }
 
+test "a delayUntilRecursion entry fires only on a recursion pass" {
+    const seed = te(0, &.{"dragon"}, "the hoard");
+    var delayed = te(1, &.{"dragon"}, "DELAYED");
+    delayed.delay_until_recursion = 1;
+    const entries = [_]Entry{ seed, delayed };
+    // With recursion, the seed's pass opens a recursion scan where the delayed entry may fire.
+    var on = try activate(testing.allocator, .{ .entries = &entries, .recursive = true }, &.{"a dragon"});
+    defer on.deinit();
+    try testing.expect(std.mem.indexOf(u8, on.before, "DELAYED") != null);
+    // Without a recursion pass the delayed entry is suppressed on the initial scan and never fires.
+    var off = try activate(testing.allocator, .{ .entries = &entries, .recursive = false }, &.{"a dragon"});
+    defer off.deinit();
+    try testing.expect(std.mem.indexOf(u8, off.before, "DELAYED") == null);
+    try testing.expect(std.mem.indexOf(u8, off.before, "the hoard") != null);
+}
+
+test "an excludeRecursion entry does not fire on a recursion pass" {
+    const seed = te(0, &.{"dragon"}, "the ember");
+    var excl = te(1, &.{"ember"}, "EXCLUDED");
+    excl.exclude_recursion = true;
+    const entries = [_]Entry{ seed, excl };
+    var act = try activate(testing.allocator, .{ .entries = &entries, .recursive = true }, &.{"a dragon"});
+    defer act.deinit();
+    try testing.expect(std.mem.indexOf(u8, act.before, "EXCLUDED") == null);
+    // The same entry without the flag matches the seed's content on recursion and fires.
+    const incl = te(2, &.{"ember"}, "INCLUDED");
+    const ctrl = [_]Entry{ seed, incl };
+    var act2 = try activate(testing.allocator, .{ .entries = &ctrl, .recursive = true }, &.{"a dragon"});
+    defer act2.deinit();
+    try testing.expect(std.mem.indexOf(u8, act2.before, "INCLUDED") != null);
+}
+
+test "a preventRecursion entry keeps its content out of the recursion scan" {
+    var prevent = te(0, &.{"dragon"}, "the ember");
+    prevent.prevent_recursion = true;
+    const second = te(1, &.{"ember"}, "SECOND");
+    const entries = [_]Entry{ prevent, second };
+    var act = try activate(testing.allocator, .{ .entries = &entries, .recursive = true }, &.{"a dragon"});
+    defer act.deinit();
+    try testing.expect(std.mem.indexOf(u8, act.before, "SECOND") == null);
+    try testing.expect(std.mem.indexOf(u8, act.before, "the ember") != null);
+    // Feeding the same content without the flag lets SECOND activate off the recursion buffer.
+    const feed = te(0, &.{"dragon"}, "the ember");
+    const ctrl = [_]Entry{ feed, second };
+    var act2 = try activate(testing.allocator, .{ .entries = &ctrl, .recursive = true }, &.{"a dragon"});
+    defer act2.deinit();
+    try testing.expect(std.mem.indexOf(u8, act2.before, "SECOND") != null);
+}
+
+test "an ignoreBudget entry activates past an overflowed budget" {
+    var big = te(0, &.{}, "AAAAAAAAAA");
+    big.constant = true;
+    var ignored = te(1, &.{}, "KEEP");
+    ignored.constant = true;
+    ignored.ignore_budget = true;
+    ignored.order = 50;
+    const entries = [_]Entry{ big, ignored };
+    // The 10-char entry overflows a 5-char budget; the ignoreBudget entry still lands.
+    var act = try activate(testing.allocator, .{ .entries = &entries, .budget_chars = 5 }, &.{});
+    defer act.deinit();
+    try testing.expectEqualStrings("KEEP", act.before);
+}
+
+test "min_activations widens the scan until a deeper match activates" {
+    const entries = [_]Entry{te(0, &.{"lighthouse"}, "DEEP")};
+    // Oldest-first; "lighthouse" is only in the oldest message, out of the depth-1 window.
+    const history = [_][]const u8{ "the lighthouse looms", "chatter", "more" };
+    var with_min = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 1, .min_activations = 1 }, &history);
+    defer with_min.deinit();
+    try testing.expectEqualStrings("DEEP", with_min.before);
+    var without = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 1 }, &history);
+    defer without.deinit();
+    try testing.expectEqualStrings("", without.before);
+    // A depth-max cap stops the widening before the oldest message is ever in the window.
+    var capped = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 1, .min_activations = 1, .min_activations_depth_max = 1 }, &history);
+    defer capped.deinit();
+    try testing.expectEqualStrings("", capped.before);
+}
+
 test "activate cleans up on every allocation failure" {
     try testing.checkAllAllocationFailures(testing.allocator, struct {
         fn run(alloc: Allocator) !void {
@@ -624,8 +792,10 @@ test "activate cleans up on every allocation failure" {
             d.constant = true;
             d.position = .outlet;
             d.outlet_name = "gate";
-            const entries = [_]Entry{ recurse_a, b, c, d };
-            var act = try activate(alloc, .{ .entries = &entries, .recursive = true }, &.{"a dragon"});
+            var delayed = te(4, &.{"dragon"}, "LATE");
+            delayed.delay_until_recursion = 2;
+            const entries = [_]Entry{ recurse_a, b, c, d, delayed };
+            var act = try activate(alloc, .{ .entries = &entries, .recursive = true, .min_activations = 3 }, &.{"a dragon"});
             act.deinit();
         }
     }.run, .{});

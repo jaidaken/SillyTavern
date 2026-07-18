@@ -1411,6 +1411,8 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
         .wi_recursive = wi_store.global.recursive,
         .wi_case_sensitive = wi_store.global.case_sensitive,
         .wi_match_whole_words = wi_store.global.match_whole_words,
+        .wi_min_activations = @intCast(@max(0, wi_store.global.min_activations)),
+        .wi_min_activations_depth_max = @intCast(@max(0, wi_store.global.min_activations_depth_max)),
         .wi_rng = wiRandom(),
     };
     const prompt = try generate.buildPromptBudgeted(alloc, ctx, history.items, generate.promptCharBudget(conn), shape);
