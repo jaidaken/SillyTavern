@@ -1411,6 +1411,10 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
         .original = pend_tpl.system_prompt,
         .anchor_before = anchors.before,
         .anchor_after = anchors.after,
+        // {{pick}} seeds off the open chat id (stock getChatIdHash macros.js:262 = main_chat ??
+        // getCurrentChatId(); this client tracks only the latter, send_file); {{roll}}/{{random}} draw the PRNG.
+        .chat_id = send_file,
+        .rng = wiRandom(),
     };
     // Jailbreak / post-history: card override wins over the global (same sysprompt gate). Its
     // {{original}} means the global POST_HISTORY here, so resolve against that before it injects.

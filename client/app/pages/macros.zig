@@ -9,6 +9,8 @@
 
 const std = @import("std");
 
+const rng = @import("rng.zig");
+
 const Allocator = std.mem.Allocator;
 
 /// The values the card/persona macros resolve to, and the fields a context template's story string
@@ -37,6 +39,12 @@ pub const Ctx = struct {
     anchor_after: []const u8 = "",
     /// Named world-info outlets for `{{outlet::name}}` (stock macros.js:615), keyed by outletName.
     outlets: []const Outlet = &.{},
+    /// The open chat's file id, for `{{pick}}`'s deterministic seed (stock getChatIdHash, macros.js:262:
+    /// chat_metadata.main_chat ?? the current chat id). Empty until a caller feeds it.
+    chat_id: []const u8 = "",
+    /// Entropy for the genuinely-random `{{roll}}`/`{{random}}`. Null draws deterministically (0.0),
+    /// mirroring the world-info engine's null-rng fallback (world_info_engine.zig:414).
+    rng: ?std.Random = null,
 
     fn outletByName(self: Ctx, name: []const u8) ?[]const u8 {
         for (self.outlets) |o| {
@@ -54,8 +62,9 @@ pub const Outlet = struct {
 
 /// The resolvable macro name -> value, or null for a name this narrow resolver does not know (the
 /// caller keeps the literal untouched, so an unknown `{{macro}}` survives rather than blanking).
-/// Deliberately NOT the STscript engine: the pure card/persona set plus `{{newline}}`. Dynamic
-/// macros (time/date/roll) are impure and intentionally excluded this phase.
+/// Deliberately NOT the STscript engine: the pure card/persona set plus `{{newline}}`. The impure
+/// `{{roll}}`/`{{random}}`/`{{pick}}` are handled directly in substituteMacros, not here, because
+/// they parse args and need the Ctx entropy/chat id rather than a name-to-value lookup.
 ///
 /// The story-string spellings are the classic client's camelCase (`wiBefore`), and the aliases
 /// `loreBefore`/`loreAfter` are accepted because the stock templates offer both (script.js:4680).
@@ -97,6 +106,14 @@ pub fn substituteMacros(alloc: Allocator, text: []const u8, ctx: Ctx) Allocator.
     while (i < text.len) {
         if (i + 1 < text.len and text[i] == '{' and text[i + 1] == '{') {
             if (std.mem.indexOfPos(u8, text, i + 2, "}}")) |close| {
+                const raw = text[i + 2 .. close];
+                // stock computes {{pick}}'s offset post-earlier-macro-expansion; single-pass uses the
+                // original-text offset, see section-file IMPURE MACROS. Isolated for a later swap.
+                const pick_offset = i;
+                if (try tryImpureMacro(alloc, &out, raw, text, pick_offset, ctx)) {
+                    i = close + 2;
+                    continue;
+                }
                 const inner = std.mem.trim(u8, text[i + 2 .. close], " \t");
                 if (outletKey(inner)) |key| {
                     // Stock renders '' for a key no outlet feeds (macros.js:615 getOutletPrompt).
@@ -130,6 +147,222 @@ fn outletKey(inner: []const u8) ?[]const u8 {
     return if (key.len == 0) null else key;
 }
 
+/// Handles a `{{roll}}`/`{{random}}`/`{{pick}}` at `raw` (the text between `{{` and `}}`), appending
+/// its result and returning true. Returns false when `raw` is not one of these, so the caller falls
+/// through to the card/outlet resolver. `text`+`offset` seed `{{pick}}`; `ctx.rng` drives the random
+/// pair (stock getDiceRollMacro/getRandomReplaceMacro/getPickReplaceMacro, macros.js:438-519).
+fn tryImpureMacro(alloc: Allocator, out: *std.ArrayList(u8), raw: []const u8, text: []const u8, offset: usize, ctx: Ctx) Allocator.Error!bool {
+    if (matchRoll(raw)) |formula_raw| {
+        try appendRoll(alloc, out, formula_raw, ctx);
+        return true;
+    }
+    if (matchListMacro(raw, "random")) |list_string| {
+        const count = listItemCount(list_string);
+        const r: f64 = if (ctx.rng) |rr| rr.float(f64) else 0.0;
+        const idx: usize = @intFromFloat(@floor(r * @as(f64, @floatFromInt(count))));
+        try appendListItem(alloc, out, list_string, if (idx >= count) count - 1 else idx);
+        return true;
+    }
+    if (matchListMacro(raw, "pick")) |list_string| {
+        const count = listItemCount(list_string);
+        const idx = rng.pickIndex(ctx.chat_id, text, offset, count);
+        try appendListItem(alloc, out, list_string, if (idx >= count) count - 1 else idx);
+        return true;
+    }
+    return false;
+}
+
+/// The formula of a `{{roll<sep>F}}`, or null. Separator is one space or colon (stock `[ : ]`), the
+/// capture is `[^}]+`. Untrimmed; appendRoll trims like stock's `matchValue.trim()`.
+fn matchRoll(raw: []const u8) ?[]const u8 {
+    if (raw.len < 5) return null;
+    if (!std.ascii.eqlIgnoreCase(raw[0..4], "roll")) return null;
+    if (raw[4] != ' ' and raw[4] != ':') return null;
+    const cap = raw[5..];
+    if (cap.len == 0 or std.mem.indexOfScalar(u8, cap, '}') != null) return null;
+    return cap;
+}
+
+/// The list string of a `{{<keyword><sep>LIST}}`, or null. Separator is optional single whitespace,
+/// then `:` then optional `:` (stock `\s?::?`); the capture is `[^}]+`.
+fn matchListMacro(raw: []const u8, keyword: []const u8) ?[]const u8 {
+    if (raw.len < keyword.len) return null;
+    if (!std.ascii.eqlIgnoreCase(raw[0..keyword.len], keyword)) return null;
+    var p = keyword.len;
+    if (p < raw.len and std.ascii.isWhitespace(raw[p])) p += 1;
+    if (p >= raw.len or raw[p] != ':') return null;
+    p += 1;
+    if (p < raw.len and raw[p] == ':') p += 1;
+    const cap = raw[p..];
+    if (cap.len == 0 or std.mem.indexOfScalar(u8, cap, '}') != null) return null;
+    return cap;
+}
+
+const Dice = struct { num_dice: u64, num_sides: u64, modifier: i64 };
+
+fn isDigit(c: u8) bool {
+    return c >= '0' and c <= '9';
+}
+
+fn isDigitsOnly(s: []const u8) bool {
+    if (s.len == 0) return false;
+    for (s) |c| {
+        if (!isDigit(c)) return false;
+    }
+    return true;
+}
+
+/// Parses a droll formula (droll.js:58, `^([1-9]\d*)?d([1-9]\d*)([+-]\d+)?$`, case-insensitive `d`),
+/// with the digits-only shortcut that becomes `1dF` (getDiceRollMacro). Null on any invalid formula.
+fn parseDice(formula: []const u8) ?Dice {
+    if (isDigitsOnly(formula)) {
+        if (formula[0] == '0') return null;
+        const sides = std.fmt.parseInt(u64, formula, 10) catch return null;
+        return .{ .num_dice = 1, .num_sides = sides, .modifier = 0 };
+    }
+    var p: usize = 0;
+    var num_dice: u64 = 1;
+    if (formula.len > 0 and formula[0] >= '1' and formula[0] <= '9') {
+        var e = p + 1;
+        while (e < formula.len and isDigit(formula[e])) e += 1;
+        num_dice = std.fmt.parseInt(u64, formula[p..e], 10) catch return null;
+        p = e;
+    }
+    if (p >= formula.len or (formula[p] != 'd' and formula[p] != 'D')) return null;
+    p += 1;
+    if (p >= formula.len or !(formula[p] >= '1' and formula[p] <= '9')) return null;
+    var e2 = p + 1;
+    while (e2 < formula.len and isDigit(formula[e2])) e2 += 1;
+    const sides = std.fmt.parseInt(u64, formula[p..e2], 10) catch return null;
+    p = e2;
+    var modifier: i64 = 0;
+    if (p < formula.len and (formula[p] == '+' or formula[p] == '-')) {
+        const neg = formula[p] == '-';
+        p += 1;
+        if (p >= formula.len or !isDigit(formula[p])) return null;
+        var e3 = p + 1;
+        while (e3 < formula.len and isDigit(formula[e3])) e3 += 1;
+        const m = std.fmt.parseInt(i64, formula[p..e3], 10) catch return null;
+        modifier = if (neg) -m else m;
+        p = e3;
+    }
+    if (p != formula.len) return null;
+    return .{ .num_dice = num_dice, .num_sides = sides, .modifier = modifier };
+}
+
+/// Rolls the formula and appends `String(total)`; an invalid formula appends nothing (stock returns '').
+fn appendRoll(alloc: Allocator, out: *std.ArrayList(u8), formula_raw: []const u8, ctx: Ctx) Allocator.Error!void {
+    const formula = std.mem.trim(u8, formula_raw, &std.ascii.whitespace);
+    const dice = parseDice(formula) orelse return;
+    var total: i64 = 0;
+    var k: u64 = 0;
+    while (k < dice.num_dice) : (k += 1) {
+        const r: f64 = if (ctx.rng) |rr| rr.float(f64) else 0.0;
+        total += 1 + @as(i64, @intFromFloat(@floor(r * @as(f64, @floatFromInt(dice.num_sides)))));
+    }
+    total += dice.modifier;
+    try appendDecI64(alloc, out, total);
+}
+
+fn appendDecI64(alloc: Allocator, out: *std.ArrayList(u8), val: i64) Allocator.Error!void {
+    if (val == 0) {
+        try out.append(alloc, '0');
+        return;
+    }
+    if (val < 0) try out.append(alloc, '-');
+    var mag: u64 = if (val < 0) @as(u64, @intCast(-(val + 1))) + 1 else @intCast(val);
+    var digits: [20]u8 = undefined;
+    var k: usize = 0;
+    while (mag > 0) : (mag /= 10) {
+        digits[k] = @intCast('0' + mag % 10);
+        k += 1;
+    }
+    while (k > 0) {
+        k -= 1;
+        try out.append(alloc, digits[k]);
+    }
+}
+
+fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
+    var n: usize = 0;
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, haystack, at, needle)) |found| {
+        n += 1;
+        at = found + needle.len;
+    }
+    return n;
+}
+
+/// The number of items a list string splits into: `::` present -> count on `::`; else on unescaped
+/// commas (a `\,` is a literal comma, not a separator). Stock split always yields >= 1.
+fn listItemCount(s: []const u8) usize {
+    if (std.mem.indexOf(u8, s, "::") != null) return countOccurrences(s, "::") + 1;
+    var n: usize = 1;
+    var i: usize = 0;
+    while (i < s.len) {
+        if (s[i] == '\\' and i + 1 < s.len and s[i + 1] == ',') {
+            i += 2;
+            continue;
+        }
+        if (s[i] == ',') n += 1;
+        i += 1;
+    }
+    return n;
+}
+
+/// Appends the `idx`-th list item. `::` mode is verbatim (no trim/unescape); comma mode trims each
+/// item and turns `\,` back into `,`, matching getRandomReplaceMacro/getPickReplaceMacro.
+fn appendListItem(alloc: Allocator, out: *std.ArrayList(u8), s: []const u8, idx: usize) Allocator.Error!void {
+    if (std.mem.indexOf(u8, s, "::") != null) {
+        try out.appendSlice(alloc, doubleColonItem(s, idx));
+        return;
+    }
+    var start: usize = 0;
+    var n: usize = 0;
+    var i: usize = 0;
+    var found_start: usize = 0;
+    var found_end: usize = s.len;
+    while (i <= s.len) {
+        if (i < s.len and s[i] == '\\' and i + 1 < s.len and s[i + 1] == ',') {
+            i += 2;
+            continue;
+        }
+        if (i == s.len or s[i] == ',') {
+            if (n == idx) {
+                found_start = start;
+                found_end = i;
+                break;
+            }
+            n += 1;
+            if (i == s.len) break;
+            start = i + 1;
+        }
+        i += 1;
+    }
+    const trimmed = std.mem.trim(u8, s[found_start..found_end], &std.ascii.whitespace);
+    var j: usize = 0;
+    while (j < trimmed.len) {
+        if (trimmed[j] == '\\' and j + 1 < trimmed.len and trimmed[j + 1] == ',') {
+            try out.append(alloc, ',');
+            j += 2;
+        } else {
+            try out.append(alloc, trimmed[j]);
+            j += 1;
+        }
+    }
+}
+
+fn doubleColonItem(s: []const u8, idx: usize) []const u8 {
+    var start: usize = 0;
+    var n: usize = 0;
+    while (std.mem.indexOfPos(u8, s, start, "::")) |pos| {
+        if (n == idx) return s[start..pos];
+        n += 1;
+        start = pos + 2;
+    }
+    return s[start..];
+}
+
 const testing = std.testing;
 
 test "substituteMacros resolves the card and persona set every occurrence" {
@@ -141,9 +374,16 @@ test "substituteMacros resolves the card and persona set every occurrence" {
 
 test "substituteMacros keeps an unknown macro and a dangling brace verbatim" {
     const ctx = Ctx{ .char = "Rita" };
-    const out = try substituteMacros(testing.allocator, "{{char}} {{roll:2}} {{unknown}} {{oops", ctx);
+    const out = try substituteMacros(testing.allocator, "{{char}} {{time}} {{unknown}} {{oops", ctx);
     defer testing.allocator.free(out);
-    try testing.expectEqualStrings("Rita {{roll:2}} {{unknown}} {{oops", out);
+    try testing.expectEqualStrings("Rita {{time}} {{unknown}} {{oops", out);
+}
+
+test "an impure macro with no valid separator stays verbatim" {
+    const ctx = Ctx{ .chat_id = "c" };
+    const out = try substituteMacros(testing.allocator, "{{roll:}} {{pick}} {{random}} {{pickle}}", ctx);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("{{roll:}} {{pick}} {{random}} {{pickle}}", out);
 }
 
 test "substituteMacros resolves the story-string field names and their lore aliases" {
@@ -207,4 +447,117 @@ test "substituteMacros never panics or leaks on arbitrary bytes" {
         const out = try substituteMacros(testing.allocator, buf[0..len], ctx);
         testing.allocator.free(out);
     }
+}
+
+fn rollTotal(text: []const u8, r: std.Random) !i64 {
+    const out = try substituteMacros(testing.allocator, text, .{ .rng = r });
+    defer testing.allocator.free(out);
+    return std.fmt.parseInt(i64, out, 10);
+}
+
+test "roll stays within the droll range across many seeded draws" {
+    var prng = std.Random.DefaultPrng.init(0xd101);
+    const rand = prng.random();
+    for (0..3000) |_| {
+        try testing.expect((try rollTotal("{{roll:2d6+1}}", rand)) >= 3);
+        try testing.expect((try rollTotal("{{roll:2d6+1}}", rand)) <= 13);
+        const d100 = try rollTotal("{{roll:100}}", rand);
+        try testing.expect(d100 >= 1 and d100 <= 100);
+        const dneg = try rollTotal("{{roll:3d4-2}}", rand);
+        try testing.expect(dneg >= 1 and dneg <= 10);
+    }
+}
+
+test "roll accepts the digits-only shortcut and a bare d form" {
+    var prng = std.Random.DefaultPrng.init(7);
+    const rand = prng.random();
+    const one = try rollTotal("{{roll 1}}", rand);
+    try testing.expectEqual(@as(i64, 1), one);
+    const bare_d = try rollTotal("{{roll:d1}}", rand);
+    try testing.expectEqual(@as(i64, 1), bare_d);
+}
+
+test "an invalid roll formula resolves to empty" {
+    const cases = [_][]const u8{ "{{roll:abc}}", "{{roll:0}}", "{{roll:2d}}", "{{roll:d0}}", "{{roll:1.5}}" };
+    var prng = std.Random.DefaultPrng.init(1);
+    for (cases) |c| {
+        const out = try substituteMacros(testing.allocator, c, .{ .rng = prng.random() });
+        defer testing.allocator.free(out);
+        try testing.expectEqualStrings("", out);
+    }
+}
+
+test "random always yields a member of the split list" {
+    var prng = std.Random.DefaultPrng.init(0x4a4de);
+    const rand = prng.random();
+    for (0..3000) |_| {
+        const out = try substituteMacros(testing.allocator, "{{random::red::green::blue}}", .{ .rng = rand });
+        defer testing.allocator.free(out);
+        try testing.expect(std.mem.eql(u8, out, "red") or std.mem.eql(u8, out, "green") or std.mem.eql(u8, out, "blue"));
+    }
+    for (0..3000) |_| {
+        const out = try substituteMacros(testing.allocator, "{{random: x, y, z}}", .{ .rng = rand });
+        defer testing.allocator.free(out);
+        try testing.expect(std.mem.eql(u8, out, "x") or std.mem.eql(u8, out, "y") or std.mem.eql(u8, out, "z"));
+    }
+}
+
+test "pick reproduces the stock golden item end to end" {
+    const a = try substituteMacros(testing.allocator, "You see {{pick::red::green::blue}} ahead.", .{ .chat_id = "Chat_2024-01-15@10h30m" });
+    defer testing.allocator.free(a);
+    try testing.expectEqualStrings("You see red ahead.", a);
+
+    const b = try substituteMacros(testing.allocator, "{{pick: sword, shield, bow, staff}}", .{ .chat_id = "default" });
+    defer testing.allocator.free(b);
+    try testing.expectEqualStrings("shield", b);
+
+    const c = try substituteMacros(testing.allocator, "single {{pick::only}}", .{ .chat_id = "Chat_2024-01-15@10h30m" });
+    defer testing.allocator.free(c);
+    try testing.expectEqualStrings("single only", c);
+}
+
+test "pick is stable for the same chat, content and offset" {
+    const first = try substituteMacros(testing.allocator, "a {{pick::x::y::z}} b", .{ .chat_id = "room-7" });
+    defer testing.allocator.free(first);
+    const second = try substituteMacros(testing.allocator, "a {{pick::x::y::z}} b", .{ .chat_id = "room-7" });
+    defer testing.allocator.free(second);
+    try testing.expectEqualStrings(first, second);
+}
+
+test "list split counts items on double colon and unescaped commas" {
+    try testing.expectEqual(@as(usize, 3), listItemCount("a::b::c"));
+    try testing.expectEqual(@as(usize, 3), listItemCount("a,b,c"));
+    try testing.expectEqual(@as(usize, 2), listItemCount("a\\,b,c"));
+    try testing.expectEqual(@as(usize, 1), listItemCount("only"));
+}
+
+fn itemAt(s: []const u8, idx: usize) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(testing.allocator);
+    try appendListItem(testing.allocator, &out, s, idx);
+    return out.toOwnedSlice(testing.allocator);
+}
+
+test "comma items are trimmed and unescaped, double-colon items are verbatim" {
+    const esc0 = try itemAt("a\\,b, c ", 0);
+    defer testing.allocator.free(esc0);
+    try testing.expectEqualStrings("a,b", esc0);
+    const esc1 = try itemAt("a\\,b, c ", 1);
+    defer testing.allocator.free(esc1);
+    try testing.expectEqualStrings("c", esc1);
+
+    const dc = try itemAt("a:: b ::c", 1);
+    defer testing.allocator.free(dc);
+    try testing.expectEqualStrings(" b ", dc);
+}
+
+test "the impure macros clean up on every allocation failure" {
+    var prng = std.Random.DefaultPrng.init(99);
+    const ctx = Ctx{ .chat_id = "room-7", .rng = prng.random() };
+    try testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn run(alloc: Allocator, c: Ctx) !void {
+            const out = try substituteMacros(alloc, "roll {{roll:2d6+1}} rand {{random: a\\,b, c}} pick {{pick::x::y::z}} done", c);
+            alloc.free(out);
+        }
+    }.run, .{ctx});
 }

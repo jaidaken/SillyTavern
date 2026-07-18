@@ -41,6 +41,7 @@ comptime {
     _ = @import("datetime.zig");
     // C-CFG
     _ = @import("macros.zig");
+    _ = @import("rng.zig");
     _ = @import("templates.zig");
     _ = @import("samplers.zig");
     _ = @import("sampler_presets.zig");
