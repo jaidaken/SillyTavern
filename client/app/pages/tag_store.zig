@@ -190,6 +190,16 @@ pub const TagStore = struct {
         return null;
     }
 
+    /// The tag IDs assigned to a character, or null when the character has NO tag-map entry at all.
+    /// World-info's characterFilter needs that distinction: null skips the tag filter (stock's
+    /// Array.isArray guard), a present-but-empty list still fails an include filter.
+    pub fn tagsFor(self: *const TagStore, avatar: []const u8) ?[]const []const u8 {
+        for (self.map.items) |e| {
+            if (std.mem.eql(u8, e.avatar, avatar)) return e.ids.items;
+        }
+        return null;
+    }
+
     pub fn isAssigned(self: *const TagStore, avatar: []const u8, id: []const u8) bool {
         for (self.map.items) |e| {
             if (!std.mem.eql(u8, e.avatar, avatar)) continue;

@@ -79,6 +79,28 @@ pub const Entry = struct {
     cooldown: i64 = 0,
     /// Stock delay: the entry cannot activate until the chat has at least this many messages. 0 = off.
     delay: i64 = 0,
+    /// Stock characterFilter.names: the entry filters to (or, with exclude, away from) these character
+    /// filenames. Empty = no name filter.
+    char_filter_names: []const []const u8 = &.{},
+    /// Stock characterFilter.tags: tag IDs the entry filters to (or away from). Empty = no tag filter.
+    char_filter_tags: []const []const u8 = &.{},
+    /// Stock characterFilter.isExclude: flips the name/tag filter from include-only to exclude.
+    char_filter_exclude: bool = false,
+    /// Stock extensions.triggers: generation-type strings the entry is gated to (normal, continue,
+    /// impersonate, swipe, regenerate, quiet). Empty = fires for every generation type.
+    triggers: []const []const u8 = &.{},
+    /// Stock matchPersonaDescription: also scan the persona description for this entry's keys.
+    match_persona_description: bool = false,
+    /// Stock matchCharacterDescription: also scan the character description.
+    match_character_description: bool = false,
+    /// Stock matchCharacterPersonality: also scan the character personality.
+    match_character_personality: bool = false,
+    /// Stock matchCharacterDepthPrompt: also scan the character depth prompt.
+    match_character_depth_prompt: bool = false,
+    /// Stock matchScenario: also scan the scenario.
+    match_scenario: bool = false,
+    /// Stock matchCreatorNotes: also scan the creator notes.
+    match_creator_notes: bool = false,
 };
 
 /// One row of POST /api/worldinfo/list.
@@ -214,7 +236,23 @@ fn clampNum(field: NumField, v: i64) i64 {
     };
 }
 
+const CharFilter = struct { names: []const []const u8, tags: []const []const u8, exclude: bool };
+
+/// Stock entry.characterFilter: an object {isExclude, names, tags}. Absent or non-object yields the
+/// empty filter (no gating). Tag entries are IDs; both arrays dupe into `a`.
+fn getCharFilter(a: Allocator, obj: *const std.json.ObjectMap) Allocator.Error!CharFilter {
+    const v = obj.get("characterFilter") orelse return .{ .names = &.{}, .tags = &.{}, .exclude = false };
+    if (v != .object) return .{ .names = &.{}, .tags = &.{}, .exclude = false };
+    const cf = &v.object;
+    return .{
+        .names = try getStrArray(a, cf, "names"),
+        .tags = try getStrArray(a, cf, "tags"),
+        .exclude = getBool(cf, "isExclude", false),
+    };
+}
+
 fn entryFromObj(a: Allocator, uid_key: []const u8, obj: *const std.json.ObjectMap) Allocator.Error!Entry {
+    const cf = try getCharFilter(a, obj);
     return .{
         .uid_key = uid_key,
         .uid = getInt(obj, "uid", std.fmt.parseInt(i64, uid_key, 10) catch 0),
@@ -248,6 +286,16 @@ fn entryFromObj(a: Allocator, uid_key: []const u8, obj: *const std.json.ObjectMa
         .sticky = getInt(obj, "sticky", 0),
         .cooldown = getInt(obj, "cooldown", 0),
         .delay = getInt(obj, "delay", 0),
+        .char_filter_names = cf.names,
+        .char_filter_tags = cf.tags,
+        .char_filter_exclude = cf.exclude,
+        .triggers = try getStrArray(a, obj, "triggers"),
+        .match_persona_description = getBool(obj, "matchPersonaDescription", false),
+        .match_character_description = getBool(obj, "matchCharacterDescription", false),
+        .match_character_personality = getBool(obj, "matchCharacterPersonality", false),
+        .match_character_depth_prompt = getBool(obj, "matchCharacterDepthPrompt", false),
+        .match_scenario = getBool(obj, "matchScenario", false),
+        .match_creator_notes = getBool(obj, "matchCreatorNotes", false),
     };
 }
 

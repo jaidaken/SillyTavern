@@ -79,6 +79,8 @@ var deep_post_history: []u8 = &.{};
 var deep_char_note: []u8 = &.{};
 var deep_char_note_depth: i64 = authors_note.default_depth;
 var deep_char_note_role: authors_note.Role = .system;
+// chunk-4: the card's creator notes, so world-info matchCreatorNotes can scan them.
+var deep_creator_notes: []u8 = &.{};
 var deep_in_flight: bool = false;
 
 /// Captured at send so the seal-time assistant append targets the chat the send opened against, even
@@ -112,6 +114,8 @@ var pend_system_prompt: []u8 = &.{};
 var pend_post_history: []u8 = &.{};
 /// The card's own depth note (data.extensions.depth_prompt), captured at send.
 var pend_char_note: []u8 = &.{};
+/// The card's creator notes, captured at send for world-info matchCreatorNotes scanning.
+var pend_creator_notes: []u8 = &.{};
 var pend_char_note_depth: i64 = authors_note.default_depth;
 var pend_char_note_role: authors_note.Role = .system;
 
@@ -186,7 +190,7 @@ fn freePending() void {
     }
     pend_tpl = .{};
     pend_note = .{};
-    inline for (.{ &pend_char_name, &pend_char_avatar, &pend_user_name, &pend_user_text, &pend_persona_desc, &pend_description, &pend_personality, &pend_scenario, &pend_mes_example, &pend_first_mes, &pend_system_prompt, &pend_post_history, &pend_char_note }) |f| {
+    inline for (.{ &pend_char_name, &pend_char_avatar, &pend_user_name, &pend_user_text, &pend_persona_desc, &pend_description, &pend_personality, &pend_scenario, &pend_mes_example, &pend_first_mes, &pend_system_prompt, &pend_post_history, &pend_char_note, &pend_creator_notes }) |f| {
         if (f.len > 0) alloc.free(f.*);
         f.* = &.{};
     }
@@ -588,6 +592,15 @@ fn chatFileName(c: char_store.Character) ?[]u8 {
     var buf: [10]u8 = undefined;
     const iso = data.isoDateFromMs(nowMs(), &buf);
     return std.fmt.allocPrint(alloc, "{s} - {s}", .{ c.name, iso }) catch null;
+}
+
+/// Stock getCharaFilename (utils.js:1351): the avatar filename with its final extension stripped, so
+/// it matches what world-info characterFilter.names stores. Regex /\.[^/.]+$/ = drop the last dot and
+/// the non-dot, non-slash run after it.
+fn charaFilename(avatar: []const u8) []const u8 {
+    const dot = std.mem.lastIndexOfScalar(u8, avatar, '.') orelse return avatar;
+    if (std.mem.indexOfScalarPos(u8, avatar, dot, '/') != null) return avatar;
+    return avatar[0..dot];
 }
 
 pub fn nowMs() f64 { // w3-grp: pub for group_send's append timestamps
@@ -1134,6 +1147,7 @@ fn onDeepCardDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     setOwned(&deep_char_note, dp.prompt);
     deep_char_note_depth = dp.depth;
     deep_char_note_role = dp.role;
+    setOwned(&deep_creator_notes, cardDataStr(obj, "creator_notes"));
     wi_actions.adoptCard(body);
     chars_log.debug("deep card loaded: personality {d}b scenario {d}b examples {d}b", .{ deep_personality.len, deep_scenario.len, deep_mes_example.len });
 }
@@ -1272,6 +1286,7 @@ fn stashSend(conn: generate.Connection, c: char_store.Character, persona: ?perso
     setOwned(&pend_system_prompt, deepField(c, "", deep_system_prompt));
     setOwned(&pend_post_history, deepField(c, "", deep_post_history));
     setOwned(&pend_char_note, deepField(c, "", deep_char_note));
+    setOwned(&pend_creator_notes, deepField(c, "", deep_creator_notes));
     const deep_match = deep_avatar.len > 0 and std.mem.eql(u8, deep_avatar, c.avatar);
     pend_char_note_depth = if (deep_match) deep_char_note_depth else authors_note.default_depth;
     pend_char_note_role = if (deep_match) deep_char_note_role else .system;
@@ -1422,6 +1437,17 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
         .wi_use_group_scoring = wi_store.global.use_group_scoring,
         .wi_rng = wiRandom(),
         .wi_timed_in = wi_timed.current(),
+        // chunk-4: characterFilter identity, generation type, and the extended scan-source texts. The
+        // raw avatar (not the thumb URL) matches stock getCharaFilename; null tags = no tag mapping.
+        .wi_chara_filename = charaFilename(send_avatar),
+        .wi_char_tags = tag_store.global.tagsFor(send_avatar),
+        .wi_generation_trigger = "normal",
+        .wi_persona_description = pend_persona_desc,
+        .wi_character_description = pend_description,
+        .wi_character_personality = pend_personality,
+        .wi_character_depth_prompt = pend_char_note,
+        .wi_scenario = pend_scenario,
+        .wi_creator_notes = pend_creator_notes,
     };
     const had_timed = wi_timed.hasState();
     var timed_out_json: []const u8 = "";

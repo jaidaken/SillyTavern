@@ -252,6 +252,26 @@ pub const Params = struct {
     /// The chat's persisted timed-effect state (stock chat_metadata.timedWorldInfo) at scan start.
     /// Caller-owned, read-only; the updated state comes back as Activation.timed_out.
     timed_in: TimedState = .{},
+    /// Stock getCharaFilename(): the selected character's avatar-derived filename, matched against an
+    /// entry's characterFilter.names. Empty when no character is selected.
+    chara_filename: []const u8 = "",
+    /// Stock context.tagMap[tagKey]: the selected character's assigned tag IDs, matched against an
+    /// entry's characterFilter.tags. NULL when the character has no tag mapping at all, so the tag
+    /// filter is skipped outright (stock's `if (tagKey) { if (Array.isArray(tagMapEntry)) }` guard); a
+    /// non-null empty slice means the character has an EMPTY tag list, which an include filter rejects.
+    char_tags: ?[]const []const u8 = null,
+    /// Stock globalScanData.trigger: the current generation type (normal, continue, impersonate,
+    /// swipe, regenerate, quiet). An entry with a non-empty triggers list fires only when it lists this.
+    generation_trigger: []const u8 = "normal",
+    /// Stock globalScanData scan sources: extra text an entry may also scan for its keys, each gated by
+    /// its per-entry match flag AND being non-empty. They join the entry's own chat window, so they are
+    /// scanned even during a min-activations sweep but never when the entry's resolved depth is <= 0.
+    persona_description: []const u8 = "",
+    character_description: []const u8 = "",
+    character_personality: []const u8 = "",
+    character_depth_prompt: []const u8 = "",
+    scenario: []const u8 = "",
+    creator_notes: []const u8 = "",
 };
 
 /// One merged at-depth injection: every activated atDepth entry at this depth AND role, joined.
@@ -294,9 +314,21 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
     const flags = try a.alloc(State, params.entries.len);
     @memset(flags, .idle);
 
+    // Strip @@decorators up front (stock getSortedEntries :4515) so every downstream use, incl. the
+    // timed-effect hash below, sees stripped content; entryHash over decorated content would drift.
+    const entries = try a.alloc(Entry, params.entries.len);
+    const dec_activate = try a.alloc(bool, params.entries.len);
+    const dec_dont = try a.alloc(bool, params.entries.len);
+    for (params.entries, 0..) |e, i| {
+        const d = parseDecorators(e.content);
+        entries[i] = e;
+        entries[i].content = d.content;
+        dec_activate[i] = d.activate;
+        dec_dont[i] = d.dont_activate;
+    }
+
     // Timed effects (stock WorldInfoTimedEffects). Cooldown is processed before sticky so a sticky
     // end's fresh cooldown (onEnded) is the final write for its slot, matching stock's reread order.
-    const entries = params.entries;
     const chat_len: i64 = @intCast(history.len);
     const sticky_active = try a.alloc(bool, entries.len);
     @memset(sticky_active, false);
@@ -319,7 +351,7 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
     // Distinct positive delayUntilRecursion levels, ascending. The lowest is pre-loaded as the
     // current level; the rest open one per delayed-recursion pass (stock :4640-4645, :5008-5011).
     var delay_levels: std.ArrayList(i64) = .empty;
-    for (params.entries) |e| {
+    for (entries) |e| {
         if (e.delay_until_recursion == 0) continue;
         var seen = false;
         for (delay_levels.items) |v| {
@@ -359,6 +391,22 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
         for (entries, 0..) |e, i| {
             if (flags[i] != .idle) continue;
             if (e.disable) continue;
+            // Generation-type trigger gate (stock :4693): a triggers list fires only for a listed type.
+            if (e.triggers.len > 0 and !listContains(e.triggers, params.generation_trigger)) continue;
+            // characterFilter by name then by tag (stock :4702, :4712). A null char_tags means the
+            // character has no tag mapping, so stock's Array.isArray guard skips the tag filter.
+            if (e.char_filter_names.len > 0) {
+                const included = listContains(e.char_filter_names, params.chara_filename);
+                const filtered = if (e.char_filter_exclude) included else !included;
+                if (filtered) continue;
+            }
+            if (e.char_filter_tags.len > 0) {
+                if (params.char_tags) |ctags| {
+                    const includes_tag = listsIntersect(ctags, e.char_filter_tags);
+                    const filtered = if (e.char_filter_exclude) includes_tag else !includes_tag;
+                    if (filtered) continue;
+                }
+            }
             const is_sticky = sticky_active[i];
             // delay suppresses outright; cooldown suppresses unless the entry is sticky (stock :4735).
             if (delay_active[i]) continue;
@@ -369,6 +417,13 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
             if (e.delay_until_recursion != 0 and scan_state == .recursion and e.delay_until_recursion > current_delay_level and !is_sticky) continue;
             // excludeRecursion: an excluded entry never fires from a recursion pass; sticky bypasses (:4756).
             if (scan_state == .recursion and params.recursive and e.exclude_recursion and !is_sticky) continue;
+            // Decorators (stock :4761): @@activate forces the entry in (still runs budget + probability);
+            // @@dont_activate suppresses even a constant or sticky entry. Applied before both.
+            if (dec_activate[i]) {
+                try newly.append(a, i);
+                continue;
+            }
+            if (dec_dont[i]) continue;
             if (e.constant) {
                 try newly.append(a, i);
                 continue;
@@ -381,9 +436,9 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
             if (e.keys.len == 0) continue;
             const cs = e.case_sensitive orelse params.case_sensitive;
             const ww = e.match_whole_words orelse params.match_whole_words;
-            // Per-entry scanDepth (stock buffer.get :281) overrides the skew-widened global window; a
-            // depth <= 0 scans no chat (only the recursion buffer). Clamp to the window we hold.
-            const e_scan = entryScan(e, history, global_depth);
+            // Per-entry scanDepth (stock buffer.get :281) plus any gated extended sources (persona /
+            // character / scenario / creator-notes text) form the entry's scan window.
+            const e_scan = try entryScanFull(a, e, history, global_depth, params);
             if (!matchAnyKey(e.keys, e_scan, rec_view, cs, ww)) continue;
             if (e.selective and e.keysecondary.len > 0 and !selectiveOk(e, e_scan, rec_view, cs, ww)) continue;
             try newly.append(a, i);
@@ -401,10 +456,10 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
         // past the cap; once overflowed, only later ignoreBudget entries are still reached (:4896-4905).
         var ignores_budget: usize = 0;
         for (newly.items) |i| {
-            if (params.entries[i].ignore_budget) ignores_budget += 1;
+            if (entries[i].ignore_budget) ignores_budget += 1;
         }
         for (newly.items) |i| {
-            const e = params.entries[i];
+            const e = entries[i];
             if (e.ignore_budget) ignores_budget -= 1;
             if (overflow and !e.ignore_budget) {
                 if (ignores_budget > 0) continue else break;
@@ -433,7 +488,7 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
         var sfr: std.ArrayList(usize) = .empty;
         for (newly.items) |i| {
             if (flags[i] == .failed) continue;
-            if (params.entries[i].prevent_recursion) continue;
+            if (entries[i].prevent_recursion) continue;
             try sfr.append(a, i);
         }
 
@@ -464,7 +519,7 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
         scan_state = next_state;
         if (scan_state != .none and sfr.items.len > 0) {
             const parts = try a.alloc([]const u8, sfr.items.len);
-            for (sfr.items, 0..) |i, j| parts[j] = params.entries[i].content;
+            for (sfr.items, 0..) |i, j| parts[j] = entries[i].content;
             const text = try std.mem.join(a, "\n", parts);
             if (text.len > 0) try recurse.append(a, text);
         }
@@ -489,7 +544,7 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
     // Stock sorts activated entries order-DESCENDING (stable sortFn :89) then distributes with
     // unshift (all buckets + atDepth content) or push (outlets), :5082; mirror both to land ties right.
     const idx = activated;
-    std.mem.sort(usize, idx.items, params.entries, orderDesc);
+    std.mem.sort(usize, idx.items, @as([]const Entry, entries), orderDesc);
 
     var before: std.ArrayList([]const u8) = .empty;
     var after: std.ArrayList([]const u8) = .empty;
@@ -501,7 +556,7 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
     var groups: std.ArrayList(struct { depth: i64, role: i64, buf: std.ArrayList([]const u8) }) = .empty;
 
     for (idx.items) |i| {
-        const e = params.entries[i];
+        const e = entries[i];
         if (e.content.len == 0) continue;
         switch (e.position) {
             .before => try before.insert(a, 0, e.content),
@@ -675,6 +730,95 @@ fn getScore(e: Entry, scan: []const []const u8, recurse: []const []const u8, cs:
     };
 }
 
+/// Parsed @@decorators plus the content with the decorator lines stripped (stock parseDecorators
+/// world-info.js:4538). `content` is a suffix subslice of the input. Only @@activate / @@dont_activate
+/// (KNOWN_DECORATORS) are recognized, tested by EXACT string equality as stock's decorators.includes.
+const Decor = struct { activate: bool, dont_activate: bool, content: []const u8 };
+
+fn isKnownDecorator(line: []const u8) bool {
+    const d = if (std.mem.startsWith(u8, line, "@@@")) line[1..] else line;
+    return std.mem.startsWith(u8, d, "@@activate") or std.mem.startsWith(u8, d, "@@dont_activate");
+}
+
+fn parseDecorators(content: []const u8) Decor {
+    if (!std.mem.startsWith(u8, content, "@@")) return .{ .activate = false, .dont_activate = false, .content = content };
+    var activate_dec = false;
+    var dont_activate = false;
+    var fallbacked = false;
+    var offset: usize = 0;
+    // Stock init: newContent = content, so an all-@@ body strips to nothing (stays full content).
+    var stripped = content;
+    var it = std.mem.splitScalar(u8, content, '\n');
+    while (it.next()) |line| {
+        if (std.mem.startsWith(u8, line, "@@")) {
+            if (std.mem.startsWith(u8, line, "@@@") and !fallbacked) {
+                offset += line.len + 1;
+                continue;
+            }
+            if (isKnownDecorator(line)) {
+                const d = if (std.mem.startsWith(u8, line, "@@@")) line[1..] else line;
+                if (std.mem.eql(u8, d, "@@activate")) activate_dec = true;
+                if (std.mem.eql(u8, d, "@@dont_activate")) dont_activate = true;
+                fallbacked = false;
+            } else {
+                fallbacked = true;
+            }
+            offset += line.len + 1;
+        } else {
+            stripped = content[offset..];
+            break;
+        }
+    }
+    return .{ .activate = activate_dec, .dont_activate = dont_activate, .content = stripped };
+}
+
+fn listContains(list: []const []const u8, item: []const u8) bool {
+    for (list) |x| {
+        if (std.mem.eql(u8, x, item)) return true;
+    }
+    return false;
+}
+
+fn listsIntersect(xs: []const []const u8, ys: []const []const u8) bool {
+    for (xs) |x| {
+        if (listContains(ys, x)) return true;
+    }
+    return false;
+}
+
+/// The scan texts an entry matches its keys against: its own chat window (entryScan) plus any gated,
+/// non-empty extended sources (stock buffer.get :300-317). Extended sources join only when the entry's
+/// resolved depth is > 0 (stock returns '' for depth <= startDepth, scanning nothing). Allocates only
+/// when at least one extended source applies; otherwise returns the window subslice directly.
+fn entryScanFull(a: Allocator, e: Entry, history: []const []const u8, global_depth: i64, params: Params) Allocator.Error![]const []const u8 {
+    const window = entryScan(e, history, global_depth);
+    const d = e.scan_depth orelse global_depth;
+    if (d <= 0) return window;
+    const srcs = [_]struct { on: bool, text: []const u8 }{
+        .{ .on = e.match_persona_description, .text = params.persona_description },
+        .{ .on = e.match_character_description, .text = params.character_description },
+        .{ .on = e.match_character_personality, .text = params.character_personality },
+        .{ .on = e.match_character_depth_prompt, .text = params.character_depth_prompt },
+        .{ .on = e.match_scenario, .text = params.scenario },
+        .{ .on = e.match_creator_notes, .text = params.creator_notes },
+    };
+    var extra: usize = 0;
+    for (srcs) |s| {
+        if (s.on and s.text.len > 0) extra += 1;
+    }
+    if (extra == 0) return window;
+    const out = try a.alloc([]const u8, window.len + extra);
+    @memcpy(out[0..window.len], window);
+    var j = window.len;
+    for (srcs) |s| {
+        if (s.on and s.text.len > 0) {
+            out[j] = s.text;
+            j += 1;
+        }
+    }
+    return out;
+}
+
 const ws_chars = " \t\n\r\x0b\x0c";
 
 /// Prunes `newly` to one winner per inclusion group (stock filterByInclusionGroups :5266). Buckets
@@ -758,7 +902,7 @@ fn filterByInclusionGroups(
         var max_score: i64 = std.math.minInt(i64);
         for (b.members.items, 0..) |m, k| {
             const e = entries[m];
-            scores[k] = getScore(e, entryScan(e, history, global_depth), rec_view, e.case_sensitive orelse params.case_sensitive, e.match_whole_words orelse params.match_whole_words);
+            scores[k] = getScore(e, try entryScanFull(a, e, history, global_depth, params), rec_view, e.case_sensitive orelse params.case_sensitive, e.match_whole_words orelse params.match_whole_words);
             if (scores[k] > max_score) max_score = scores[k];
         }
         var kept: std.ArrayList(usize) = .empty;
@@ -1610,6 +1754,199 @@ test "timed effects clean up on every allocation failure across a multi-send thr
             defer s1.deinit();
             var s2 = try activate(alloc, .{ .entries = &entries, .scan_depth = 1, .timed_in = s1.timed_out }, &.{ "a dragon", "boring", "dull" });
             s2.deinit();
+        }
+    }.run, .{});
+}
+
+// ---- chunk 4: characterFilter, triggers, decorators, extended scan sources ---------------------
+
+test "parseDecorators recognizes known decorators by exact match and strips their lines" {
+    {
+        const d = parseDecorators("plain body");
+        try testing.expect(!d.activate and !d.dont_activate);
+        try testing.expectEqualStrings("plain body", d.content);
+    }
+    {
+        const d = parseDecorators("@@activate\nbody line");
+        try testing.expect(d.activate and !d.dont_activate);
+        try testing.expectEqualStrings("body line", d.content);
+    }
+    {
+        const d = parseDecorators("@@dont_activate\nx");
+        try testing.expect(d.dont_activate and !d.activate);
+        try testing.expectEqualStrings("x", d.content);
+    }
+    // A known decorator with a trailing argument is stripped but is NOT an exact match, so no flag.
+    {
+        const d = parseDecorators("@@activate foo\nbody");
+        try testing.expect(!d.activate);
+        try testing.expectEqualStrings("body", d.content);
+    }
+    // An unknown decorator sets fallbacked; a following known one still counts and the body strips.
+    {
+        const d = parseDecorators("@@unknown\n@@activate\nbody");
+        try testing.expect(d.activate);
+        try testing.expectEqualStrings("body", d.content);
+    }
+    {
+        const d = parseDecorators("@@dont_activate\n@@activate\nbody");
+        try testing.expect(d.activate and d.dont_activate);
+        try testing.expectEqualStrings("body", d.content);
+    }
+    // @@@activate is escaped when not fallbacked: skipped, no flag, and the line is still stripped.
+    {
+        const d = parseDecorators("@@@activate\nbody");
+        try testing.expect(!d.activate);
+        try testing.expectEqualStrings("body", d.content);
+    }
+}
+
+test "the @@activate decorator forces an entry in and its line is stripped from the content" {
+    // No key match in the scan and not constant; only the decorator can fire it.
+    const entries = [_]Entry{te(0, &.{"never"}, "@@activate\nFORCED")};
+    var act = try activate(testing.allocator, .{ .entries = &entries }, &.{"unrelated text"});
+    defer act.deinit();
+    try testing.expectEqualStrings("FORCED", act.before);
+}
+
+test "the @@dont_activate decorator suppresses even a constant entry" {
+    var e = te(0, &.{}, "@@dont_activate\nHIDDEN");
+    e.constant = true;
+    const entries = [_]Entry{e};
+    var act = try activate(testing.allocator, .{ .entries = &entries }, &.{});
+    defer act.deinit();
+    try testing.expectEqualStrings("", act.before);
+}
+
+test "characterFilter includes or excludes an entry by character name" {
+    var inc = te(0, &.{}, "INC");
+    inc.constant = true;
+    inc.char_filter_names = &.{"alice.png"};
+    const one = [_]Entry{inc};
+    var hit = try activate(testing.allocator, .{ .entries = &one, .chara_filename = "alice.png" }, &.{});
+    defer hit.deinit();
+    try testing.expectEqualStrings("INC", hit.before);
+    var miss = try activate(testing.allocator, .{ .entries = &one, .chara_filename = "bob.png" }, &.{});
+    defer miss.deinit();
+    try testing.expectEqualStrings("", miss.before);
+
+    var exc = te(1, &.{}, "EXC");
+    exc.constant = true;
+    exc.char_filter_names = &.{"alice.png"};
+    exc.char_filter_exclude = true;
+    const two = [_]Entry{exc};
+    var exc_hit = try activate(testing.allocator, .{ .entries = &two, .chara_filename = "bob.png" }, &.{});
+    defer exc_hit.deinit();
+    try testing.expectEqualStrings("EXC", exc_hit.before);
+    var exc_miss = try activate(testing.allocator, .{ .entries = &two, .chara_filename = "alice.png" }, &.{});
+    defer exc_miss.deinit();
+    try testing.expectEqualStrings("", exc_miss.before);
+}
+
+test "characterFilter by tag applies only when the character has a tag mapping" {
+    var e = te(0, &.{}, "T");
+    e.constant = true;
+    e.char_filter_tags = &.{"tag-red"};
+    const entries = [_]Entry{e};
+    // Include mode, the character carries the tag: fires.
+    var hit = try activate(testing.allocator, .{ .entries = &entries, .char_tags = &.{ "tag-red", "tag-blue" } }, &.{});
+    defer hit.deinit();
+    try testing.expectEqualStrings("T", hit.before);
+    // Mapping present but without the tag: filtered out.
+    var miss = try activate(testing.allocator, .{ .entries = &entries, .char_tags = &.{"tag-blue"} }, &.{});
+    defer miss.deinit();
+    try testing.expectEqualStrings("", miss.before);
+    // Mapping present but EMPTY: an include filter still rejects it.
+    var empty = try activate(testing.allocator, .{ .entries = &entries, .char_tags = &[_][]const u8{} }, &.{});
+    defer empty.deinit();
+    try testing.expectEqualStrings("", empty.before);
+    // NULL char_tags (no mapping at all): stock skips the tag filter, so it fires.
+    var no_map = try activate(testing.allocator, .{ .entries = &entries, .char_tags = null }, &.{});
+    defer no_map.deinit();
+    try testing.expectEqualStrings("T", no_map.before);
+}
+
+test "generation-type triggers gate an entry to the listed types" {
+    var e = te(0, &.{}, "TRIG");
+    e.constant = true;
+    e.triggers = &.{ "swipe", "regenerate" };
+    const entries = [_]Entry{e};
+    var hit = try activate(testing.allocator, .{ .entries = &entries, .generation_trigger = "swipe" }, &.{});
+    defer hit.deinit();
+    try testing.expectEqualStrings("TRIG", hit.before);
+    var miss = try activate(testing.allocator, .{ .entries = &entries, .generation_trigger = "normal" }, &.{});
+    defer miss.deinit();
+    try testing.expectEqualStrings("", miss.before);
+    // An empty triggers list fires for every generation type.
+    var any = te(1, &.{}, "ANY");
+    any.constant = true;
+    const two = [_]Entry{any};
+    var a2 = try activate(testing.allocator, .{ .entries = &two, .generation_trigger = "impersonate" }, &.{});
+    defer a2.deinit();
+    try testing.expectEqualStrings("ANY", a2.before);
+}
+
+test "an extended scan source activates an entry only when its match flag is on and the text is present" {
+    var e = te(0, &.{"secret"}, "X");
+    e.match_persona_description = true;
+    const entries = [_]Entry{e};
+    // The key is absent from chat but present in the persona description; the flag lets it match.
+    var on = try activate(testing.allocator, .{ .entries = &entries, .persona_description = "a secret persona" }, &.{"unrelated"});
+    defer on.deinit();
+    try testing.expectEqualStrings("X", on.before);
+    // Same source text, flag OFF: no match.
+    const off_entries = [_]Entry{te(1, &.{"secret"}, "Y")};
+    var off = try activate(testing.allocator, .{ .entries = &off_entries, .persona_description = "a secret persona" }, &.{"unrelated"});
+    defer off.deinit();
+    try testing.expectEqualStrings("", off.before);
+    // Flag on but the source text empty: no match.
+    var empty_src = try activate(testing.allocator, .{ .entries = &entries, .persona_description = "" }, &.{"unrelated"});
+    defer empty_src.deinit();
+    try testing.expectEqualStrings("", empty_src.before);
+}
+
+test "a decorated sticky entry keeps a stable timed hash across sends" {
+    // An unknown @@decorator is stripped but does NOT force activation, so send 2 can only re-fire
+    // through the sticky effect, whose key hash must match the send-1 seed over the SAME stripped content.
+    var e = tt(0, &.{"dragon"}, "@@note\nBODY", "w");
+    e.sticky = 2;
+    const entries = [_]Entry{e};
+    var s1 = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 1 }, &.{"a dragon"});
+    defer s1.deinit();
+    try testing.expectEqualStrings("BODY", s1.before);
+    try testing.expectEqual(@as(usize, 1), s1.timed_out.sticky.len);
+    var s2 = try activate(testing.allocator, .{ .entries = &entries, .scan_depth = 1, .timed_in = s1.timed_out }, &.{ "a dragon", "boring" });
+    defer s2.deinit();
+    try testing.expectEqualStrings("BODY", s2.before);
+}
+
+test "chunk-4 features clean up on every allocation failure" {
+    try testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn run(alloc: Allocator) !void {
+            var deco = te(0, &.{"secret"}, "@@activate\nFORCED");
+            deco.char_filter_names = &.{"alice.png"};
+            var scan = te(1, &.{"secret"}, "SCAN");
+            scan.match_persona_description = true;
+            scan.match_scenario = true;
+            scan.group = "g";
+            scan.use_group_scoring = true;
+            var tagged = te(2, &.{"secret"}, "TAG");
+            tagged.char_filter_tags = &.{"tag-red"};
+            tagged.group = "g";
+            tagged.use_group_scoring = true;
+            const entries = [_]Entry{ deco, scan, tagged };
+            var prng = std.Random.DefaultPrng.init(0x4242);
+            var act = try activate(alloc, .{
+                .entries = &entries,
+                .chara_filename = "alice.png",
+                .char_tags = &.{"tag-red"},
+                .generation_trigger = "normal",
+                .persona_description = "a secret persona",
+                .scenario = "the secret scenario",
+                .use_group_scoring = true,
+                .rng = prng.random(),
+            }, &.{"a secret"});
+            act.deinit();
         }
     }.run, .{});
 }

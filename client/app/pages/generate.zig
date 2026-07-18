@@ -214,6 +214,19 @@ pub const Shape = struct {
     /// The chat's persisted timed-effect state (stock chat_metadata.timedWorldInfo) at scan start.
     /// The updated state is surfaced through buildPromptBudgeted's timed_out_json out-param.
     wi_timed_in: wi_engine.TimedState = .{},
+    /// Chunk-4 characterFilter: the selected character's avatar filename (stock getCharaFilename).
+    wi_chara_filename: []const u8 = "",
+    /// Chunk-4 characterFilter tags: the character's tag IDs, or null when it has no tag mapping.
+    wi_char_tags: ?[]const []const u8 = null,
+    /// Chunk-4 generation-type triggers: the current generation type (stock globalScanData.trigger).
+    wi_generation_trigger: []const u8 = "normal",
+    /// Chunk-4 extended scan sources: extra text an entry may scan for its keys, gated per-entry.
+    wi_persona_description: []const u8 = "",
+    wi_character_description: []const u8 = "",
+    wi_character_personality: []const u8 = "",
+    wi_character_depth_prompt: []const u8 = "",
+    wi_scenario: []const u8 = "",
+    wi_creator_notes: []const u8 = "",
 };
 
 /// Builds the text-completion prompt with no budget cap. Owned result.
@@ -259,6 +272,15 @@ pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMs
         .use_group_scoring = shape.wi_use_group_scoring,
         .rng = shape.wi_rng,
         .timed_in = shape.wi_timed_in,
+        .chara_filename = shape.wi_chara_filename,
+        .char_tags = shape.wi_char_tags,
+        .generation_trigger = shape.wi_generation_trigger,
+        .persona_description = shape.wi_persona_description,
+        .character_description = shape.wi_character_description,
+        .character_personality = shape.wi_character_personality,
+        .character_depth_prompt = shape.wi_character_depth_prompt,
+        .scenario = shape.wi_scenario,
+        .creator_notes = shape.wi_creator_notes,
     }, scan_texts);
     defer wi_act.deinit();
 
