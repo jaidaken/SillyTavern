@@ -4671,7 +4671,7 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
         for (const entry of sortedEntries) {
             // Logging preparation
             let headerLogged = false;
-            function log(...args) {
+            function logEntry(...args) {
                 if (!headerLogged) {
                     log.wi.debug(`[WI] Entry ${entry.uid}`, `from '${entry.world}' processing`, entry);
                     headerLogged = true;
@@ -4685,7 +4685,7 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
             }
 
             if (entry.disable == true) {
-                log('disabled');
+                logEntry('disabled');
                 continue;
             }
 
@@ -4693,7 +4693,7 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
             if (Array.isArray(entry.triggers) && entry.triggers.length > 0) {
                 const isTriggered = entry.triggers.includes(globalScanData.trigger);
                 if (!isTriggered) {
-                    log(`skipped by generation type trigger filter (${globalScanData.trigger} ∉ ${entry.triggers})`);
+                    logEntry(`skipped by generation type trigger filter (${globalScanData.trigger} ∉ ${entry.triggers})`);
                     continue;
                 }
             }
@@ -4704,7 +4704,7 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
                 const filtered = entry.characterFilter.isExclude ? nameIncluded : !nameIncluded;
 
                 if (filtered) {
-                    log('filtered out by character');
+                    logEntry('filtered out by character');
                     continue;
                 }
             }
@@ -4721,7 +4721,7 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
                         const filtered = entry.characterFilter.isExclude ? includesTag : !includesTag;
 
                         if (filtered) {
-                            log('filtered out by tag');
+                            logEntry('filtered out by tag');
                             continue;
                         }
                     }
@@ -4733,63 +4733,63 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
             const isDelay = timedEffects.isEffectActive('delay', entry);
 
             if (isDelay) {
-                log('suppressed by delay');
+                logEntry('suppressed by delay');
                 continue;
             }
 
             if (isCooldown && !isSticky) {
-                log('suppressed by cooldown');
+                logEntry('suppressed by cooldown');
                 continue;
             }
 
             // Only use checks for recursion flags if the scan step was activated by recursion
             if (scanState !== scan_state.RECURSION && entry.delayUntilRecursion && !isSticky) {
-                log('suppressed by delay until recursion');
+                logEntry('suppressed by delay until recursion');
                 continue;
             }
 
             if (scanState === scan_state.RECURSION && entry.delayUntilRecursion && entry.delayUntilRecursion > currentRecursionDelayLevel && !isSticky) {
-                log('suppressed by delay until recursion level', entry.delayUntilRecursion, '. Currently', currentRecursionDelayLevel);
+                logEntry('suppressed by delay until recursion level', entry.delayUntilRecursion, '. Currently', currentRecursionDelayLevel);
                 continue;
             }
 
             if (scanState === scan_state.RECURSION && world_info_recursive && entry.excludeRecursion && !isSticky) {
-                log('suppressed by exclude recursion');
+                logEntry('suppressed by exclude recursion');
                 continue;
             }
 
             if (entry.decorators.includes('@@activate')) {
-                log('activated by @@activate decorator');
+                logEntry('activated by @@activate decorator');
                 activatedNow.add(entry);
                 continue;
             }
 
             if (entry.decorators.includes('@@dont_activate')) {
-                log('suppressed by @@dont_activate decorator');
+                logEntry('suppressed by @@dont_activate decorator');
                 continue;
             }
 
             if (buffer.getExternallyActivated(entry)) {
-                log('externally activated');
+                logEntry('externally activated');
                 activatedNow.add(buffer.getExternallyActivated(entry));
                 continue;
             }
 
             // Now do checks for immediate activations
             if (entry.constant) {
-                log('activated because of constant');
+                logEntry('activated because of constant');
                 activatedNow.add(entry);
                 continue;
             }
 
             if (isSticky) {
-                log('activated because active sticky');
+                logEntry('activated because active sticky');
                 activatedNow.add(entry);
                 continue;
             }
 
             if (!Array.isArray(entry.key) || !entry.key.length) {
-                log('has no keys defined, skipped');
+                logEntry('has no keys defined, skipped');
                 continue;
             }
 
@@ -4815,7 +4815,7 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
 
             if (!hasSecondaryKeywords) {
                 // Handle cases where secondary is empty
-                log('activated by primary key match', primaryKeyMatch);
+                logEntry('activated by primary key match', primaryKeyMatch);
                 activatedNow.add(entry);
                 continue;
             }
@@ -4823,7 +4823,7 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
 
             // SECONDARY KEYWORDS
             const selectiveLogic = entry.selectiveLogic ?? 0; // If selectiveLogic isn't found, assume it's AND, only do this once per entry
-            log('Entry with primary key match', primaryKeyMatch, 'has secondary keywords. Checking with logic logic', Object.entries(world_info_logic).find(x => x[1] === entry.selectiveLogic));
+            logEntry('Entry with primary key match', primaryKeyMatch, 'has secondary keywords. Checking with logic logic', Object.entries(world_info_logic).find(x => x[1] === entry.selectiveLogic));
 
             /** @type {() => boolean} */
             function matchSecondaryKeys() {
@@ -4839,24 +4839,24 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
                     // Simplified AND ANY / NOT ALL if statement. (Proper fix for PR#1356 by Bronya)
                     // If AND ANY logic and the main checks pass OR if NOT ALL logic and the main checks do not pass
                     if (selectiveLogic === world_info_logic.AND_ANY && hasSecondaryMatch) {
-                        log('activated. (AND ANY) Found match secondary keyword', secondarySubstituted);
+                        logEntry('activated. (AND ANY) Found match secondary keyword', secondarySubstituted);
                         return true;
                     }
                     if (selectiveLogic === world_info_logic.NOT_ALL && !hasSecondaryMatch) {
-                        log('activated. (NOT ALL) Found not matching secondary keyword', secondarySubstituted);
+                        logEntry('activated. (NOT ALL) Found not matching secondary keyword', secondarySubstituted);
                         return true;
                     }
                 }
 
                 // Handle NOT ANY logic
                 if (selectiveLogic === world_info_logic.NOT_ANY && !hasAnyMatch) {
-                    log('activated. (NOT ANY) No secondary keywords found', entry.keysecondary);
+                    logEntry('activated. (NOT ANY) No secondary keywords found', entry.keysecondary);
                     return true;
                 }
 
                 // Handle AND ALL logic
                 if (selectiveLogic === world_info_logic.AND_ALL && hasAllMatch) {
-                    log('activated. (AND ALL) All secondary keywords found', entry.keysecondary);
+                    logEntry('activated. (AND ALL) All secondary keywords found', entry.keysecondary);
                     return true;
                 }
 
@@ -4865,7 +4865,7 @@ export async function checkWorldInfo(chat, maxContext, isDryRun, globalScanData 
 
             const matched = matchSecondaryKeys();
             if (!matched) {
-                log('skipped. Secondary keywords not satisfied', entry.keysecondary);
+                logEntry('skipped. Secondary keywords not satisfied', entry.keysecondary);
                 continue;
             }
 
