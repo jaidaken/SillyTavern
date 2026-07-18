@@ -883,6 +883,12 @@ async function main() {
         }
         row('must', used.last_generate_server === connUrl,
             'CONN-send uses the persisted server in the generate body', used.last_generate_server);
+        // A1: the card's own system_prompt overrides the global, its {{original}} expands to the global
+        // content, and it reaches the prompt. The system prompt went out EMPTY on every send pre-fix.
+        const genPrompt = used.last_generate_prompt || '';
+        row('must', genPrompt.includes('CARD SAYS') && genPrompt.includes('SYSPROMPT PROBE'),
+            'A1 card system_prompt overrides global and {{original}} expands',
+            `len=${genPrompt.length} deepPersona=${genPrompt.includes('curious and warm')} card=${genPrompt.includes('CARD SAYS')} global=${genPrompt.includes('SYSPROMPT PROBE')}`);
 
         // --- append-409 ---
         // A "409:" message makes the mock append 409; asserted via observable state (mock counters +

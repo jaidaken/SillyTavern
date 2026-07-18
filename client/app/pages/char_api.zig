@@ -73,6 +73,7 @@ var deep_pending: []u8 = &.{};
 var deep_personality: []u8 = &.{};
 var deep_scenario: []u8 = &.{};
 var deep_mes_example: []u8 = &.{};
+var deep_system_prompt: []u8 = &.{};
 var deep_in_flight: bool = false;
 
 /// Captured at send so the seal-time assistant append targets the chat the send opened against, even
@@ -98,6 +99,8 @@ var pend_personality: []u8 = &.{};
 var pend_scenario: []u8 = &.{};
 var pend_mes_example: []u8 = &.{};
 var pend_first_mes: []u8 = &.{};
+/// The card's own system_prompt override (deep field), captured at send. Empty = use the global.
+var pend_system_prompt: []u8 = &.{};
 
 fn setOwned(dst: *[]u8, src: []const u8) void {
     if (dst.len > 0) alloc.free(dst.*);
@@ -170,7 +173,7 @@ fn freePending() void {
     }
     pend_tpl = .{};
     pend_note = .{};
-    inline for (.{ &pend_char_name, &pend_char_avatar, &pend_user_name, &pend_user_text, &pend_persona_desc, &pend_description, &pend_personality, &pend_scenario, &pend_mes_example, &pend_first_mes }) |f| {
+    inline for (.{ &pend_char_name, &pend_char_avatar, &pend_user_name, &pend_user_text, &pend_persona_desc, &pend_description, &pend_personality, &pend_scenario, &pend_mes_example, &pend_first_mes, &pend_system_prompt }) |f| {
         if (f.len > 0) alloc.free(f.*);
         f.* = &.{};
     }
@@ -986,6 +989,19 @@ fn cardStr(obj: *const std.json.ObjectMap, key: []const u8) []const u8 {
     };
 }
 
+/// A string from the card's `data.*` object (the v2 home for system_prompt / post_history_instructions,
+/// never mirrored top-level), with a top-level fallback.
+fn cardDataStr(obj: *const std.json.ObjectMap, key: []const u8) []const u8 {
+    if (obj.get("data")) |d| {
+        if (d == .object) {
+            if (d.object.get(key)) |v| {
+                if (v == .string) return v.string;
+            }
+        }
+    }
+    return cardStr(obj, key);
+}
+
 fn fetchDeepCard(avatar: []const u8) void {
     _ = requestDeepCard(avatar);
 }
@@ -1059,6 +1075,7 @@ fn onDeepCardDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     setOwned(&deep_personality, cardStr(obj, "personality"));
     setOwned(&deep_scenario, cardStr(obj, "scenario"));
     setOwned(&deep_mes_example, cardStr(obj, "mes_example"));
+    setOwned(&deep_system_prompt, cardDataStr(obj, "system_prompt"));
     wi_actions.adoptCard(body);
     chars_log.debug("deep card loaded: personality {d}b scenario {d}b examples {d}b", .{ deep_personality.len, deep_scenario.len, deep_mes_example.len });
 }
@@ -1194,6 +1211,7 @@ fn stashSend(conn: generate.Connection, c: char_store.Character, persona: ?perso
     setOwned(&pend_scenario, deepField(c, c.scenario, deep_scenario));
     setOwned(&pend_mes_example, deepField(c, c.mes_example, deep_mes_example));
     setOwned(&pend_first_mes, c.first_mes);
+    setOwned(&pend_system_prompt, deepField(c, "", deep_system_prompt));
     pend_active = true;
     return true;
 }
@@ -1291,6 +1309,8 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
     // The note's anchor positions render through the story string; the in_chat position is inserted
     // into the history by the builder. Both read the same note, so only one of them ever fires.
     const anchors = noteAnchors(pend_note);
+    // Effective system prompt: the card's own system_prompt wins over the global (generate.effectiveSystem).
+    const effective_system = generate.effectiveSystem(pend_tpl.sysprompt_enabled, pend_tpl.prefer_character_prompt, pend_system_prompt, pend_tpl.system_prompt);
     const ctx = generate.Ctx{
         .char = pend_char_name,
         .user = pend_user_name,
@@ -1299,6 +1319,8 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
         .personality = pend_personality,
         .scenario = pend_scenario,
         .mes_example = pend_mes_example,
+        .system = effective_system,
+        .original = pend_tpl.system_prompt,
         .anchor_before = anchors.before,
         .anchor_after = anchors.after,
     };
@@ -1316,7 +1338,16 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
     const prompt = try generate.buildPromptBudgeted(alloc, ctx, history.items, generate.promptCharBudget(conn), shape);
     defer alloc.free(prompt);
     var stop_buf: [1][]const u8 = undefined;
-    const body = try generate.buildRequestBody(alloc, conn, prompt, generate.stopSequences(pend_tpl.instruct, &stop_buf));
+    const raw_stop = generate.stopSequences(pend_tpl.instruct, &stop_buf);
+    // Stock resolves macros in the stop sequence too (instruct-mode.js:321), gated on instruct.macro.
+    var stop_owned: ?[]u8 = null;
+    defer if (stop_owned) |s| alloc.free(s);
+    if (pend_tpl.instruct.macro and raw_stop.len == 1) {
+        stop_owned = try generate.substituteMacros(alloc, raw_stop[0], ctx);
+        stop_buf[0] = stop_owned.?;
+    }
+    const stop = if (stop_owned != null) stop_buf[0..1] else raw_stop;
+    const body = try generate.buildRequestBody(alloc, conn, prompt, stop);
     defer alloc.free(body);
 
     js.global.call(void, "__st_send_stream", .{

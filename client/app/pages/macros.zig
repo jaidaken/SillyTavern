@@ -28,6 +28,9 @@ pub const Ctx = struct {
     scenario: []const u8 = "",
     mes_example: []const u8 = "",
     system: []const u8 = "",
+    /// The global system prompt content, for `{{original}}` inside a card's system_prompt override
+    /// (stock substituteParams `{ original: sysprompt.content }`, script.js:4661).
+    original: []const u8 = "",
     wi_before: []const u8 = "",
     wi_after: []const u8 = "",
     anchor_before: []const u8 = "",
@@ -65,6 +68,7 @@ pub fn resolve(name: []const u8, ctx: Ctx) ?[]const u8 {
     if (std.mem.eql(u8, name, "scenario")) return ctx.scenario;
     if (std.mem.eql(u8, name, "mesExamples")) return ctx.mes_example;
     if (std.mem.eql(u8, name, "system")) return ctx.system;
+    if (std.mem.eql(u8, name, "original")) return ctx.original;
     if (std.mem.eql(u8, name, "wiBefore")) return ctx.wi_before;
     if (std.mem.eql(u8, name, "wiAfter")) return ctx.wi_after;
     if (std.mem.eql(u8, name, "loreBefore")) return ctx.wi_before;
@@ -144,6 +148,13 @@ test "substituteMacros resolves the story-string field names and their lore alia
     const out = try substituteMacros(testing.allocator, "{{system}}|{{wiBefore}}|{{wiAfter}}|{{loreBefore}}|{{loreAfter}}|{{anchorBefore}}|{{anchorAfter}}", ctx);
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("Be terse.|WB|WA|WB|WA|AB|AA", out);
+}
+
+test "substituteMacros resolves {{original}} to the global system prompt" {
+    const ctx = Ctx{ .original = "GLOBAL", .char = "Rita" };
+    const out = try substituteMacros(testing.allocator, "Card says {{original}} for {{char}}", ctx);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("Card says GLOBAL for Rita", out);
 }
 
 test "substituteMacros routes outlet macros per name and blanks an unfed key" {

@@ -510,6 +510,15 @@ pub fn stopSequences(tpl: templates.Instruct, buf: *[1][]const u8) []const []con
     return buf[0..1];
 }
 
+/// The effective main/system prompt, composed as stock does (script.js:4656-4663): a disabled global
+/// drops it entirely; else a card/chat override wins over the global when prefer_character_prompt is on
+/// and the override is non-empty; else the global. Borrowed from the inputs.
+pub fn effectiveSystem(sysprompt_enabled: bool, prefer_character_prompt: bool, override: []const u8, global: []const u8) []const u8 {
+    if (!sysprompt_enabled) return "";
+    if (prefer_character_prompt and override.len > 0) return override;
+    return global;
+}
+
 const testing = std.testing;
 
 test "extractConnection reads type, server_urls, and coerced samplers" {
@@ -674,6 +683,13 @@ test "buildPrompt resolves macros in the instruct wrap sequences" {
     defer testing.allocator.free(out);
     try testing.expect(std.mem.indexOf(u8, out, "{{char}}") == null);
     try testing.expect(std.mem.indexOf(u8, out, "<|im_start|>assistant Lena:") != null);
+}
+
+test "effectiveSystem: card override wins, global falls back, disabled drops" {
+    try testing.expectEqualStrings("", effectiveSystem(false, true, "CARD", "GLOBAL"));
+    try testing.expectEqualStrings("CARD", effectiveSystem(true, true, "CARD", "GLOBAL"));
+    try testing.expectEqualStrings("GLOBAL", effectiveSystem(true, true, "", "GLOBAL"));
+    try testing.expectEqualStrings("GLOBAL", effectiveSystem(true, false, "CARD", "GLOBAL"));
 }
 
 test "buildPrompt gives each example block the context separator" {

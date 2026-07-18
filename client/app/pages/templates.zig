@@ -107,6 +107,14 @@ pub const Context = struct {
 pub const Templates = struct {
     instruct: Instruct = .{},
     context: Context = .{},
+    /// The global main/system prompt content (power_user.sysprompt.content), raw. Whether it is used
+    /// is `sysprompt_enabled`; a per-card/per-chat override may win over it (prefer_character_prompt).
+    /// The send composes the effective {{system}} from these three plus the card/chat override.
+    system_prompt: []const u8 = "",
+    sysprompt_enabled: bool = false,
+    /// power_user.prefer_character_prompt (stock default true): a character's own system_prompt wins
+    /// over the global when set.
+    prefer_character_prompt: bool = true,
 };
 
 /// The story string the classic client ships as its Default context preset, byte-identical to
@@ -148,6 +156,15 @@ pub fn parseTemplates(arena: Allocator, settings_str: []const u8) Allocator.Erro
     if (power_user.get("context")) |v| {
         if (v == .object) out.context = try parseContext(arena, v.object);
     }
+    // The global main/system prompt: keep content + enabled apart so the send can still offer
+    // {{original}} to a card override even when the global itself is not the chosen text.
+    if (power_user.get("sysprompt")) |v| {
+        if (v == .object) {
+            out.system_prompt = try strField(arena, v.object, "content");
+            out.sysprompt_enabled = boolField(v.object, "enabled", true);
+        }
+    }
+    out.prefer_character_prompt = boolField(power_user, "prefer_character_prompt", true);
     return out;
 }
 
@@ -271,6 +288,9 @@ pub fn dupeTemplates(arena: Allocator, t: Templates) Allocator.Error!Templates {
     return .{
         .instruct = try dupeStrings(arena, Instruct, t.instruct),
         .context = try dupeStrings(arena, Context, t.context),
+        .system_prompt = try arena.dupe(u8, t.system_prompt),
+        .sysprompt_enabled = t.sysprompt_enabled,
+        .prefer_character_prompt = t.prefer_character_prompt,
     };
 }
 
@@ -617,6 +637,54 @@ test "parseTemplates mines both halves out of power_user" {
     try testing.expectEqual(NamesBehavior.none, tpl.instruct.names_behavior);
     try testing.expectEqualStrings("ChatML", tpl.context.name);
     try testing.expect(std.mem.indexOf(u8, tpl.context.story_string, "{{#if system}}") != null);
+}
+
+test "parseTemplates sources the global system prompt and its flags" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const on = try parseTemplates(arena.allocator(),
+        \\{"power_user":{"sysprompt":{"enabled":true,"content":"You are {{char}}."}}}
+    );
+    try testing.expectEqualStrings("You are {{char}}.", on.system_prompt);
+    try testing.expect(on.sysprompt_enabled);
+    // Content is kept raw even when disabled (the send gates on the flag, and {{original}} still needs it).
+    const off = try parseTemplates(arena.allocator(),
+        \\{"power_user":{"sysprompt":{"enabled":false,"content":"You are {{char}}."}}}
+    );
+    try testing.expectEqualStrings("You are {{char}}.", off.system_prompt);
+    try testing.expect(!off.sysprompt_enabled);
+    // Absent toggle defaults on (stock); prefer_character_prompt defaults on too.
+    const dflt = try parseTemplates(arena.allocator(),
+        \\{"power_user":{"sysprompt":{"content":"stay in scene"}}}
+    );
+    try testing.expect(dflt.sysprompt_enabled);
+    try testing.expect(dflt.prefer_character_prompt);
+    // Absent sysprompt: empty, disabled, no crash. prefer flag honored when set false.
+    const none = try parseTemplates(arena.allocator(),
+        \\{"power_user":{"prefer_character_prompt":false}}
+    );
+    try testing.expectEqualStrings("", none.system_prompt);
+    try testing.expect(!none.sysprompt_enabled);
+    try testing.expect(!none.prefer_character_prompt);
+}
+
+test "dupeTemplates preserves the system prompt and its flags across the arena" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var duped: Templates = undefined;
+    {
+        var src = std.heap.ArenaAllocator.init(testing.allocator);
+        defer src.deinit();
+        // Non-default flags (enabled true, prefer false) so a dropped field is caught: the send dupes
+        // the live set, and a bool that reverts to its struct default silently empties {{system}}.
+        const parsed = try parseTemplates(src.allocator(),
+            \\{"power_user":{"sysprompt":{"enabled":true,"content":"stay in scene"},"prefer_character_prompt":false}}
+        );
+        duped = try dupeTemplates(arena.allocator(), parsed);
+    }
+    try testing.expectEqualStrings("stay in scene", duped.system_prompt);
+    try testing.expect(duped.sysprompt_enabled);
+    try testing.expect(!duped.prefer_character_prompt);
 }
 
 test "parseTemplates survives the arena outliving the source blob" {

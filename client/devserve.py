@@ -196,6 +196,9 @@ def _default_settings():
                 "example_separator": "***",
                 "story_string_position": 0,
             },
+            # A1: the global main/system prompt. Feeds the story string's {{system}} slot; the client
+            # must source it into every generate body (it went out empty before the fix).
+            "sysprompt": {"enabled": True, "content": "SYSPROMPT PROBE stay in scene."},
         },
     }
 
@@ -1338,7 +1341,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "json_data": json.dumps({"name": avatar, "data": {"character_book": {"entries": []}}}),
                 "data": {
                     "creator_notes": "for the harbour arc",
-                    "system_prompt": "",
+                    # A1: a per-card system_prompt override. Carries {{original}} so one prompt-body
+                    # assertion proves the card wins AND {{original}} expands to the global sysprompt.
+                    "system_prompt": "CARD SAYS {{original}} EXTRA",
                     "post_history_instructions": "",
                     "creator": "jaidaken",
                     "character_version": "1.2",
