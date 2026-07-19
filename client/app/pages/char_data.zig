@@ -176,10 +176,16 @@ pub fn extractPersonas(alloc: Allocator, settings_str: []const u8) PersonasError
             else => "",
         };
         const name_src = if (raw_name.len > 0) raw_name else "Persona";
+        // Modern ST stores a descriptor OBJECT ({description, position, depth, role, lorebook}); a
+        // bare string is the legacy shape. Read the description text out of either (personas.js:1919).
         const desc_src: []const u8 = if (descs) |d| blk: {
             const dv = d.get(avatar_file) orelse break :blk "";
             break :blk switch (dv) {
                 .string => |s| s,
+                .object => |o| if (o.get("description")) |dd| switch (dd) {
+                    .string => |s| s,
+                    else => "",
+                } else "",
                 else => "",
             };
         } else "";
@@ -624,6 +630,17 @@ test "extractPersonas walks personas with descriptions and name fallback" {
     try testing.expectEqualStrings("First persona", list[0].description);
     try testing.expectEqualStrings("Persona", list[1].name);
     try testing.expectEqualStrings("", list[1].description);
+}
+
+test "extractPersonas reads the description out of a modern descriptor object" {
+    const settings =
+        \\{"power_user":{"personas":{"p1.png":"Alice"},
+        \\  "persona_descriptions":{"p1.png":{"description":"A weary traveller","position":4,"depth":2,"role":0}}}}
+    ;
+    const list = try extractPersonas(testing.allocator, settings);
+    defer freePersonas(testing.allocator, list);
+    try testing.expectEqual(@as(usize, 1), list.len);
+    try testing.expectEqualStrings("A weary traveller", list[0].description);
 }
 
 test "extractPersonas distinguishes malformed, non-object, and empty cases" {

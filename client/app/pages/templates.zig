@@ -69,6 +69,41 @@ pub const Position = enum(i64) {
     }
 };
 
+/// Where the persona description lands in the prompt: the classic `persona_description_positions`
+/// (personas.js:89). AFTER_CHAR is deprecated and the classic client migrates it to IN_PROMPT at
+/// settings load (personas.js:627), so both fill the story-string `{{persona}}` slot here. TOP_AN /
+/// BOTTOM_AN join the author's note, AT_DEPTH injects in-chat, NONE drops the persona everywhere.
+pub const PersonaPosition = enum(i64) {
+    in_prompt = 0,
+    after_char = 1,
+    top_an = 2,
+    bottom_an = 3,
+    at_depth = 4,
+    none = 9,
+
+    pub fn fromInt(v: i64) ?PersonaPosition {
+        return switch (v) {
+            0 => .in_prompt,
+            1 => .after_char,
+            2 => .top_an,
+            3 => .bottom_an,
+            4 => .at_depth,
+            9 => .none,
+            else => null,
+        };
+    }
+
+    /// Whether this position fills the story-string persona slot. Stock gates the storyStringParams
+    /// kv on `== IN_PROMPT` (script.js:4677); AFTER_CHAR reaches here already migrated to IN_PROMPT.
+    pub fn fillsStory(self: PersonaPosition) bool {
+        return self == .in_prompt or self == .after_char;
+    }
+};
+
+/// Stock persona DEFAULT_DEPTH / DEFAULT_ROLE (personas.js:105-106) for the AT_DEPTH placement.
+pub const persona_default_depth: i64 = 2;
+pub const persona_default_role: i64 = 0;
+
 /// The turn-wrapping half. Every string is BORROWED from the arena `parseTemplates` filled; the
 /// struct never owns and never frees (probe tear 7: these are 15 borrowed strings, far past what the
 /// two-string Connection dupe pattern could carry, so an arena owns them as a unit).
@@ -139,6 +174,13 @@ pub const Templates = struct {
     /// power_user.custom_stopping_strings_macro (stock default true): run a macro pass over each
     /// custom stopping string.
     custom_stopping_strings_macro: bool = true,
+    /// power_user.persona_description_position (stock default IN_PROMPT): which of the five placements
+    /// the persona description takes this generation.
+    persona_position: PersonaPosition = .in_prompt,
+    /// power_user.persona_description_depth / _role for the AT_DEPTH placement (stock 2 / 0). Role is
+    /// an extension_prompt_roles int (0 system, 1 user, 2 assistant).
+    persona_depth: i64 = persona_default_depth,
+    persona_role: i64 = persona_default_role,
 };
 
 /// The story string the classic client ships as its Default context preset, byte-identical to
@@ -194,6 +236,11 @@ pub fn parseTemplates(arena: Allocator, settings_str: []const u8) Allocator.Erro
     out.single_line = boolField(power_user, "single_line", false);
     out.custom_stopping_strings = try strField(arena, power_user, "custom_stopping_strings");
     out.custom_stopping_strings_macro = boolField(power_user, "custom_stopping_strings_macro", true);
+    if (numField(power_user, "persona_description_position")) |v| {
+        if (PersonaPosition.fromInt(v)) |p| out.persona_position = p;
+    }
+    out.persona_depth = numField(power_user, "persona_description_depth") orelse persona_default_depth;
+    out.persona_role = numField(power_user, "persona_description_role") orelse persona_default_role;
     return out;
 }
 
@@ -290,6 +337,18 @@ fn boolField(o: std.json.ObjectMap, key: []const u8, default: bool) bool {
     };
 }
 
+/// An i64 field tolerating the string spelling the blob has carried historically, null when absent
+/// or unparseable so the caller keeps its default (persona depth/role never revert to a junk value).
+fn numField(o: std.json.ObjectMap, key: []const u8) ?i64 {
+    const v = o.get(key) orelse return null;
+    return switch (v) {
+        .integer => |i| i,
+        .float => |f| if (std.math.isNan(f)) null else @intFromFloat(f),
+        .string => |s| std.fmt.parseInt(i64, std.mem.trim(u8, s, " \t"), 10) catch null,
+        else => null,
+    };
+}
+
 fn boolString(s: []const u8) ?bool {
     const yes = [_][]const u8{ "true", "1", "yes", "on" };
     const no = [_][]const u8{ "false", "0", "no", "off" };
@@ -329,6 +388,9 @@ pub fn dupeTemplates(arena: Allocator, t: Templates) Allocator.Error!Templates {
         .single_line = t.single_line,
         .custom_stopping_strings = try arena.dupe(u8, t.custom_stopping_strings),
         .custom_stopping_strings_macro = t.custom_stopping_strings_macro,
+        .persona_position = t.persona_position,
+        .persona_depth = t.persona_depth,
+        .persona_role = t.persona_role,
     };
 }
 
@@ -1253,4 +1315,36 @@ test "mergeTemplates cleans up on every allocation failure" {
             try mergeTemplates(a, &root.object, t);
         }
     }.run, .{@as([]const u8, chatml_blob)});
+}
+
+test "parseTemplates reads persona position, depth, and role" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const s =
+        \\{"power_user":{"persona_description_position":4,"persona_description_depth":3,"persona_description_role":2}}
+    ;
+    const t = try parseTemplates(arena.allocator(), s);
+    try testing.expectEqual(PersonaPosition.at_depth, t.persona_position);
+    try testing.expectEqual(@as(i64, 3), t.persona_depth);
+    try testing.expectEqual(@as(i64, 2), t.persona_role);
+}
+
+test "parseTemplates defaults persona position to IN_PROMPT and depth/role to 2/0" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const t = try parseTemplates(arena.allocator(), "{\"power_user\":{}}");
+    try testing.expectEqual(PersonaPosition.in_prompt, t.persona_position);
+    try testing.expectEqual(persona_default_depth, t.persona_depth);
+    try testing.expectEqual(persona_default_role, t.persona_role);
+}
+
+test "parseTemplates maps AFTER_CHAR and NONE and keeps default for an unknown position" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const after = try parseTemplates(arena.allocator(), "{\"power_user\":{\"persona_description_position\":1}}");
+    try testing.expectEqual(PersonaPosition.after_char, after.persona_position);
+    const none = try parseTemplates(arena.allocator(), "{\"power_user\":{\"persona_description_position\":9}}");
+    try testing.expectEqual(PersonaPosition.none, none.persona_position);
+    const bad = try parseTemplates(arena.allocator(), "{\"power_user\":{\"persona_description_position\":7}}");
+    try testing.expectEqual(PersonaPosition.in_prompt, bad.persona_position);
 }

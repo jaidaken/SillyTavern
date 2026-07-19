@@ -248,6 +248,14 @@ pub const Shape = struct {
     wi_character_depth_prompt: []const u8 = "",
     wi_scenario: []const u8 = "",
     wi_creator_notes: []const u8 = "",
+    /// Stock power_user.persona_description_position: which of the five placements the persona takes.
+    /// The persona TEXT is `ctx.persona`; the story slot fills only for IN_PROMPT / AFTER_CHAR, and
+    /// AT_DEPTH injects the same text in-chat. TOP_AN / BOTTOM_AN are joined into the note upstream.
+    persona_position: templates.PersonaPosition = .in_prompt,
+    /// Stock power_user.persona_description_depth / _role for the AT_DEPTH placement (2 / 0). Role is
+    /// an extension_prompt_roles int (0 system, 1 user, 2 assistant).
+    persona_depth: i64 = templates.persona_default_depth,
+    persona_role: i64 = templates.persona_default_role,
 };
 
 /// Builds the text-completion prompt with no budget cap. Owned result.
@@ -294,14 +302,82 @@ pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMs
     return result;
 }
 
-/// One in-chat control insertion, pre-wrapped in its instruct sequence at assembly time so its token
-/// cost can be measured independently. `depth` counts back from the newest windowed turn.
+/// One in-chat control turn, already grouped and wrapped at assembly time so its token cost is measured
+/// alone. `depth` counts back from the newest windowed turn; `rank` sets the emit order at a shared
+/// depth (stock doChatInject: ASSISTANT, USER, SYSTEM, then the post-history jailbreak).
 pub const AssembledInjection = struct {
     depth: usize,
-    role: templates.Role,
+    rank: u8,
     wrapped: []u8,
-    is_note: bool,
 };
+
+/// A single depth-injection source before grouping: macro-subbed text with its target depth+role.
+/// Contributions at the same depth+role join into one AssembledInjection (stock getExtensionPrompt).
+const Contribution = struct {
+    depth: usize,
+    role: templates.Role,
+    text: []u8,
+};
+
+/// Stock extension_prompt_roles int (0 system, 1 user, 2 assistant) to a template role.
+fn roleFromInt(v: i64) templates.Role {
+    return switch (v) {
+        1 => .user,
+        2 => .assistant,
+        else => .system,
+    };
+}
+
+/// Emit rank at a shared depth: stock doChatInject pushes [SYSTEM, USER, ASSISTANT] into a reversed
+/// array, so the final order is ASSISTANT, USER, SYSTEM; the jailbreak (post-history) trails them all.
+fn roleRank(role: templates.Role) u8 {
+    return switch (role) {
+        .assistant => 0,
+        .user => 1,
+        .system => 2,
+    };
+}
+
+const jailbreak_rank: u8 = 3;
+
+/// Groups depth-injection contributions to match stock doChatInject (script.js:5599) + getExtensionPrompt
+/// (script.js:3286): all contributions at one depth+role become ONE turn (each value trimmed, joined by
+/// '\n', then leading whitespace stripped), wrapped once. Contributions arrive in stock key order
+/// (2_floating_prompt < DEPTH_PROMPT < PERSONA_DESCRIPTION < customDepthWI), so join order needs no sort.
+fn groupInjections(alloc: Allocator, out: *std.ArrayList(AssembledInjection), instruct: templates.Instruct, contribs: []const Contribution, name1: []const u8, name2: []const u8) Allocator.Error!void {
+    for (contribs, 0..) |c, ci| {
+        var owns = true;
+        for (contribs[0..ci]) |p| {
+            if (p.depth == c.depth and p.role == c.role) {
+                owns = false;
+                break;
+            }
+        }
+        if (!owns) continue;
+
+        var joined: std.ArrayList(u8) = .empty;
+        defer joined.deinit(alloc);
+        var any = false;
+        for (contribs) |m| {
+            if (m.depth != c.depth or m.role != c.role or m.text.len == 0) continue;
+            if (any) try joined.append(alloc, '\n');
+            try joined.appendSlice(alloc, m.text);
+            any = true;
+        }
+        const value = joined.items;
+        if (value.len == 0) continue;
+        // Stock doChatInject names each role turn (USER name1, ASSISTANT name2, SYSTEM none); the wrapper's
+        // names_behavior then decides whether the prefix shows, exactly as it does for a history turn.
+        const name = switch (c.role) {
+            .user => name1,
+            .assistant => name2,
+            .system => "",
+        };
+        const wrapped = try templates.wrapMessage(alloc, instruct, c.role, name, value);
+        errdefer alloc.free(wrapped);
+        try out.append(alloc, .{ .depth = c.depth, .rank = roleRank(c.role), .wrapped = wrapped });
+    }
+}
 
 /// Everything the prompt is made of, as separately-owned strings whose token cost the caller measures
 /// one by one (matching the classic client, which counts each formatMessageHistoryItem and the story
@@ -314,8 +390,6 @@ pub const Pieces = struct {
     /// One pre-wrapped string per input history turn, in input order.
     wrapped_history: [][]u8,
     prefix: []u8,
-    note: Note,
-    an_wrap: bool,
     history_len: usize,
     /// The updated timed-effect state as owned JSON, or null when the caller did not ask for it.
     timed_json: ?[]const u8,
@@ -379,12 +453,24 @@ fn fitWindow(costs: []const usize, budget: usize) usize {
     return i;
 }
 
-fn appendAssembledInjectionsAt(alloc: Allocator, out: *std.ArrayList(u8), injections: []const AssembledInjection, note_live: bool, window_len: usize, at: usize) Allocator.Error!void {
-    for (injections) |inj| {
-        if (inj.is_note and !note_live) continue;
+fn injectionLess(injections: []const AssembledInjection, a: usize, b: usize) bool {
+    const ia = injections[a];
+    const ib = injections[b];
+    if (ia.depth != ib.depth) return ia.depth > ib.depth;
+    return ia.rank < ib.rank;
+}
+
+fn appendAssembledInjectionsAt(alloc: Allocator, out: *std.ArrayList(u8), injections: []const AssembledInjection, window_len: usize, at: usize) Allocator.Error!void {
+    // Injections clamped to the head (depth past the window) keep depth order (deeper first, stock inserts
+    // them oldest); within one depth the role groups run ASSISTANT, USER, SYSTEM, then the jailbreak.
+    var order: std.ArrayList(usize) = .empty;
+    defer order.deinit(alloc);
+    for (injections, 0..) |inj, idx| {
         if (window_len -| inj.depth != at) continue;
-        try out.appendSlice(alloc, inj.wrapped);
+        try order.append(alloc, idx);
     }
+    std.sort.pdq(usize, order.items, injections, injectionLess);
+    for (order.items) |idx| try out.appendSlice(alloc, injections[idx].wrapped);
 }
 
 /// Joins the assembled pieces under `costs` against `budget`: reserves the overhead and every injection
@@ -397,18 +483,16 @@ pub fn fitAndAssemble(alloc: Allocator, pieces: Pieces, costs: CostTable, budget
     for (costs.injections) |c| inj_sum += c;
     const start = fitWindow(costs.history, budget -| costs.overhead -| inj_sum);
     const window_len = pieces.history_len - start;
-    // The note's interval reads the windowed count, as it always has; an_wrap overrides it.
-    const note_live = pieces.an_wrap or authors_note.injectionIndex(pieces.note, window_len) != null;
 
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(alloc);
     try out.appendSlice(alloc, pieces.overhead);
     var i: usize = 0;
     while (i < window_len) : (i += 1) {
-        try appendAssembledInjectionsAt(alloc, &out, pieces.injections, note_live, window_len, i);
+        try appendAssembledInjectionsAt(alloc, &out, pieces.injections, window_len, i);
         try out.appendSlice(alloc, pieces.wrapped_history[start + i]);
     }
-    try appendAssembledInjectionsAt(alloc, &out, pieces.injections, note_live, window_len, window_len);
+    try appendAssembledInjectionsAt(alloc, &out, pieces.injections, window_len, window_len);
     // Classic modifyLastPromptLine adds the cue only for a non-empty windowed history (script.js:4994):
     // a real history trimmed away entirely ships none; a no-history caller still primes the char.
     if (window_len > 0 or pieces.history_len == 0) try out.appendSlice(alloc, pieces.prefix);
@@ -502,7 +586,11 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
     var overhead: std.ArrayList(u8) = .empty;
     errdefer overhead.deinit(alloc);
 
-    const story = try templates.renderStoryString(alloc, shape.tpl.context.story_string, wctx, instruct);
+    // Persona story slot: only IN_PROMPT / AFTER_CHAR fill {{persona}} (stock gates the kv on
+    // == IN_PROMPT, script.js:4677); other positions empty the slot but keep the persona macro elsewhere.
+    var story_ctx = wctx;
+    if (!shape.persona_position.fillsStory()) story_ctx.persona = "";
+    const story = try templates.renderStoryString(alloc, shape.tpl.context.story_string, story_ctx, instruct);
     defer alloc.free(story);
     const wrapped_story = try templates.wrapStoryString(alloc, instruct, story);
     defer alloc.free(wrapped_story);
@@ -516,12 +604,20 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
         try overhead.append(alloc, '\n');
     }
 
-    // The in_chat note plus every atDepth group (probe#3 delta 4), each pre-wrapped so its token cost is
-    // measured alone; ownership moves to the returned Pieces on success (free the wrapped only on error).
+    // Depth injections match stock doChatInject: contributions grouped by depth+role into one wrapped turn
+    // each, jailbreak trailing. Ownership moves to the returned Pieces on success (free wrapped on error).
     var injections: std.ArrayList(AssembledInjection) = .empty;
     errdefer {
         for (injections.items) |inj| alloc.free(inj.wrapped);
         injections.deinit(alloc);
+    }
+
+    // Appended in stock extension_prompts key order (2_floating_prompt < DEPTH_PROMPT < PERSONA_DESCRIPTION
+    // < customDepthWI) so groupInjections joins a shared depth+role the way getExtensionPrompt's .sort() does.
+    var contribs: std.ArrayList(Contribution) = .empty;
+    defer {
+        for (contribs.items) |c| alloc.free(c.text);
+        contribs.deinit(alloc);
     }
     // WI an entries force the note slot to fire even when the note itself is silent this turn
     // (stock shouldWIAddPrompt).
@@ -531,42 +627,37 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
         const joined = try joinNonEmpty(alloc, &.{ wi_act.an_top, note_text, wi_act.an_bottom });
         defer alloc.free(joined);
         const subbed = try substituteMacros(alloc, joined, wctx);
-        defer alloc.free(subbed);
-        const role = shape.note.role.toTemplateRole();
-        const wrapped = try templates.wrapMessage(alloc, instruct, role, "", subbed);
-        errdefer alloc.free(wrapped);
-        try injections.append(alloc, .{ .depth = @intCast(@max(0, shape.note.depth)), .role = role, .wrapped = wrapped, .is_note = true });
+        errdefer alloc.free(subbed);
+        try contribs.append(alloc, .{ .depth = @intCast(@max(0, shape.note.depth)), .role = shape.note.role.toTemplateRole(), .text = subbed });
     }
     // The character's own depth note (stock "character-specific A/N"): always at its own depth+role.
     if (shape.char_note.prompt.len > 0) {
         const subbed = try substituteMacros(alloc, shape.char_note.prompt, wctx);
-        defer alloc.free(subbed);
-        const role = shape.char_note.role.toTemplateRole();
-        const wrapped = try templates.wrapMessage(alloc, instruct, role, "", subbed);
-        errdefer alloc.free(wrapped);
-        try injections.append(alloc, .{ .depth = @intCast(@max(0, shape.char_note.depth)), .role = role, .wrapped = wrapped, .is_note = false });
+        errdefer alloc.free(subbed);
+        try contribs.append(alloc, .{ .depth = @intCast(@max(0, shape.char_note.depth)), .role = shape.char_note.role.toTemplateRole(), .text = subbed });
     }
-    // The jailbreak / post-history instruction: a user turn after the history (depth 0). Its
-    // {{original}} was resolved at composition, so this is a plain macro pass for {{char}} etc.
+    // Persona AT_DEPTH (stock addPersonaDescriptionExtensionPrompt IN_CHAT branch, script.js:3190).
+    if (shape.persona_position == .at_depth and wctx.persona.len > 0) {
+        const subbed = try substituteMacros(alloc, wctx.persona, wctx);
+        errdefer alloc.free(subbed);
+        try contribs.append(alloc, .{ .depth = @intCast(@max(0, shape.persona_depth)), .role = roleFromInt(shape.persona_role), .text = subbed });
+    }
+    for (wi_act.at_depth) |g| {
+        const subbed = try substituteMacros(alloc, g.content, wctx);
+        errdefer alloc.free(subbed);
+        try contribs.append(alloc, .{ .depth = @intCast(@max(0, g.depth)), .role = roleFromInt(g.role), .text = subbed });
+    }
+
+    try groupInjections(alloc, &injections, instruct, contribs.items, ctx.user, ctx.char);
+
+    // The jailbreak / post-history instruction: stock's separate last user turn at depth 0, after the
+    // depth-0 role groups (rank 3). Its {{original}} was resolved at composition.
     if (shape.jailbreak.len > 0) {
         const subbed = try substituteMacros(alloc, shape.jailbreak, wctx);
         defer alloc.free(subbed);
         const wrapped = try templates.wrapMessage(alloc, instruct, .user, "", subbed);
         errdefer alloc.free(wrapped);
-        try injections.append(alloc, .{ .depth = 0, .role = .user, .wrapped = wrapped, .is_note = false });
-    }
-    for (wi_act.at_depth) |g| {
-        const subbed = try substituteMacros(alloc, g.content, wctx);
-        defer alloc.free(subbed);
-        // Stock extension_prompt_roles: 0 system, 1 user, 2 assistant (world-info.js:5115 groups by it).
-        const role: Role = switch (g.role) {
-            1 => .user,
-            2 => .assistant,
-            else => .system,
-        };
-        const wrapped = try templates.wrapMessage(alloc, instruct, role, "", subbed);
-        errdefer alloc.free(wrapped);
-        try injections.append(alloc, .{ .depth = @intCast(@max(0, g.depth)), .role = role, .wrapped = wrapped, .is_note = false });
+        try injections.append(alloc, .{ .depth = 0, .rank = jailbreak_rank, .wrapped = wrapped });
     }
 
     // Each history turn pre-wrapped in its role's sequence, the string the caller tokenizes.
@@ -611,8 +702,6 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
         .injections = inj_slice,
         .wrapped_history = wh_slice,
         .prefix = prefix,
-        .note = shape.note,
-        .an_wrap = an_wrap,
         .history_len = history.len,
         .timed_json = timed_json,
     };
@@ -1823,4 +1912,127 @@ test "buildRequestBody carries the stop sequence under both backend spellings" {
     const o = parsed.value.object;
     try testing.expectEqualStrings("<|im_end|>", o.get("stop").?.array.items[0].string);
     try testing.expectEqualStrings("<|im_end|>", o.get("stopping_strings").?.array.items[0].string);
+}
+
+test "buildPrompt fills the story persona slot for IN_PROMPT and AFTER_CHAR" {
+    const ctx = Ctx{ .char = "Rita", .persona = "Jamie dives too." };
+    const in_prompt = try buildPrompt(testing.allocator, ctx, &.{}, .{ .persona_position = .in_prompt });
+    defer testing.allocator.free(in_prompt);
+    try testing.expect(std.mem.indexOf(u8, in_prompt, "Jamie dives too.") != null);
+    const after_char = try buildPrompt(testing.allocator, ctx, &.{}, .{ .persona_position = .after_char });
+    defer testing.allocator.free(after_char);
+    try testing.expect(std.mem.indexOf(u8, after_char, "Jamie dives too.") != null);
+}
+
+test "buildPrompt empties the story persona slot for NONE, TOP_AN, and BOTTOM_AN" {
+    const ctx = Ctx{ .char = "Rita", .persona = "Jamie dives too." };
+    for ([_]templates.PersonaPosition{ .none, .top_an, .bottom_an }) |pos| {
+        const out = try buildPrompt(testing.allocator, ctx, &.{}, .{ .persona_position = pos });
+        defer testing.allocator.free(out);
+        try testing.expect(std.mem.indexOf(u8, out, "Jamie dives too.") == null);
+    }
+}
+
+test "buildPrompt injects the persona in-chat for AT_DEPTH at its depth and role" {
+    const ctx = Ctx{ .char = "Rita", .user = "Jamie", .persona = "PERSONA_MARK" };
+    const history = [_]PromptMsg{
+        .{ .name = "Jamie", .mes = "Hi.", .role = .user },
+        .{ .name = "Rita", .mes = "Hello.", .role = .assistant },
+    };
+    var shape = chatmlShape();
+    shape.persona_position = .at_depth;
+    shape.persona_depth = 1;
+    shape.persona_role = 1;
+    const out = try buildPrompt(testing.allocator, ctx, &history, shape);
+    defer testing.allocator.free(out);
+    const persona_at = std.mem.indexOf(u8, out, "PERSONA_MARK") orelse return error.PersonaMissing;
+    const first_at = std.mem.indexOf(u8, out, "Hi.").?;
+    const newest_at = std.mem.indexOf(u8, out, "Hello.").?;
+    try testing.expect(persona_at > first_at and persona_at < newest_at);
+    try testing.expect(std.mem.indexOf(u8, out, "<|im_start|>user\nPERSONA_MARK") != null);
+}
+
+test "buildPrompt injects nothing for AT_DEPTH with an empty persona" {
+    const ctx = Ctx{ .char = "Rita", .user = "Jamie", .persona = "" };
+    const history = [_]PromptMsg{.{ .name = "Jamie", .mes = "Hi.", .role = .user }};
+    var shape = chatmlShape();
+    shape.persona_position = .at_depth;
+    const out = try buildPrompt(testing.allocator, ctx, &history, shape);
+    defer testing.allocator.free(out);
+    try testing.expect(std.mem.indexOf(u8, out, "Hi.") != null);
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, out, "<|im_start|>user"));
+}
+
+test "buildPrompt emits shared-depth injections in assistant, user, system order" {
+    const ctx = Ctx{ .char = "Rita" };
+    const history = [_]PromptMsg{
+        .{ .name = "Jamie", .mes = "one", .role = .user },
+        .{ .name = "Rita", .mes = "two", .role = .assistant },
+    };
+    var shape = chatmlShape();
+    shape.tpl.context.story_string = "";
+    shape.note = .{ .prompt = "SYS_NOTE", .interval = 1, .position = .in_chat, .depth = 1, .role = .system };
+    shape.char_note = .{ .prompt = "ASST_NOTE", .depth = 1, .role = .assistant };
+    const out = try buildPrompt(testing.allocator, ctx, &history, shape);
+    defer testing.allocator.free(out);
+    const asst = std.mem.indexOf(u8, out, "ASST_NOTE") orelse return error.NoAsst;
+    const sys = std.mem.indexOf(u8, out, "SYS_NOTE") orelse return error.NoSys;
+    try testing.expect(asst < sys);
+    try testing.expect(std.mem.indexOf(u8, out, "<|im_start|>assistant\nASST_NOTE") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "<|im_start|>system\nSYS_NOTE") != null);
+}
+
+test "buildPrompt joins same-depth same-role injections into one turn" {
+    const ctx = Ctx{ .char = "Rita", .persona = "PERSONA_MARK" };
+    const history = [_]PromptMsg{
+        .{ .name = "Jamie", .mes = "one", .role = .user },
+        .{ .name = "Rita", .mes = "two", .role = .assistant },
+    };
+    var shape = chatmlShape();
+    shape.tpl.context.story_string = "";
+    shape.note = .{ .prompt = "SYS_NOTE", .interval = 1, .position = .in_chat, .depth = 1, .role = .system };
+    shape.persona_position = .at_depth;
+    shape.persona_depth = 1;
+    shape.persona_role = 0;
+    const out = try buildPrompt(testing.allocator, ctx, &history, shape);
+    defer testing.allocator.free(out);
+    try testing.expect(std.mem.indexOf(u8, out, "<|im_start|>system\nSYS_NOTE\nPERSONA_MARK<|im_end|>") != null);
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, out, "<|im_start|>system"));
+}
+
+test "buildPrompt keeps injection value whitespace, matching stock's observed output" {
+    const ctx = Ctx{ .char = "Rita" };
+    const history = [_]PromptMsg{.{ .name = "Jamie", .mes = "one", .role = .user }};
+    var shape = chatmlShape();
+    shape.tpl.context.story_string = "";
+    shape.char_note = .{ .prompt = "note with trailing ", .depth = 0, .role = .system };
+    const out = try buildPrompt(testing.allocator, ctx, &history, shape);
+    defer testing.allocator.free(out);
+    try testing.expect(std.mem.indexOf(u8, out, "<|im_start|>system\nnote with trailing <|im_end|>") != null);
+}
+
+test "buildPrompt names a user-role depth injection like a user turn" {
+    const ctx = Ctx{ .char = "Rita", .user = "Jamie" };
+    const history = [_]PromptMsg{.{ .name = "Jamie", .mes = "hi", .role = .user }};
+    const shape = Shape{
+        .tpl = .{ .context = .{ .story_string = "" } },
+        .char_note = .{ .prompt = "USER_NOTE", .depth = 0, .role = .user },
+    };
+    const out = try buildPrompt(testing.allocator, ctx, &history, shape);
+    defer testing.allocator.free(out);
+    try testing.expect(std.mem.indexOf(u8, out, "Jamie: USER_NOTE") != null);
+}
+
+test "buildPrompt keeps deeper clamped injections before shallower at the head" {
+    const ctx = Ctx{ .char = "Rita", .user = "Jamie" };
+    const history = [_]PromptMsg{.{ .name = "Jamie", .mes = "hi", .role = .user }};
+    var shape = chatmlShape();
+    shape.tpl.context.story_string = "";
+    shape.note = .{ .prompt = "DEEPNOTE", .interval = 1, .position = .in_chat, .depth = 5, .role = .system };
+    shape.char_note = .{ .prompt = "SHALLOWNOTE", .depth = 3, .role = .user };
+    const out = try buildPrompt(testing.allocator, ctx, &history, shape);
+    defer testing.allocator.free(out);
+    const deep = std.mem.indexOf(u8, out, "DEEPNOTE") orelse return error.NoDeep;
+    const shallow = std.mem.indexOf(u8, out, "SHALLOWNOTE") orelse return error.NoShallow;
+    try testing.expect(deep < shallow);
 }

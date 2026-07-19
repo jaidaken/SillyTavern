@@ -1693,9 +1693,20 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
     defer alloc.free(wi_candidates);
     const wi_budget_chars = (generate.promptCharBudget(conn) *| @as(usize, @intCast(wi_store.global.budget))) / 100;
 
+    // Persona TOP_AN / BOTTOM_AN joins the persona into the author's-note text (stock script.js:3179),
+    // gated by the note firing (~ shouldWIAddPrompt, proxied by interval); the join rides the note placement.
+    var eff_note = pend_note;
+    const ppos = pend_tpl.persona_position;
+    if ((ppos == .top_an or ppos == .bottom_an) and pend_persona_desc.len > 0 and authors_note.intervalFires(pend_note, history.items.len)) {
+        if (pend_tpl_arena) |*a| {
+            if (authors_note.joinPersonaNote(a.allocator(), pend_note.prompt, pend_persona_desc, ppos == .top_an)) |s| {
+                eff_note.prompt = s;
+            } else |_| {}
+        }
+    }
     // The note's anchor positions render through the story string; the in_chat position is inserted
     // into the history by the builder. Both read the same note, so only one of them ever fires.
-    const anchors = noteAnchors(pend_note);
+    const anchors = noteAnchors(eff_note);
     // Effective system prompt: the card's own system_prompt wins over the global (generate.effectiveSystem).
     const effective_system = generate.effectiveSystem(pend_tpl.sysprompt_enabled, pend_tpl.prefer_character_prompt, pend_system_prompt, pend_tpl.system_prompt);
     const ctx = generate.Ctx{
@@ -1726,7 +1737,7 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
     // store's hydrated classic settings, the rng is this module's seeded PRNG.
     const shape = generate.Shape{
         .tpl = pend_tpl,
-        .note = pend_note,
+        .note = eff_note,
         .char_note = .{ .prompt = pend_char_note, .depth = pend_char_note_depth, .role = pend_char_note_role },
         .jailbreak = jb_resolved,
         .wi_entries = wi_candidates,
@@ -1751,6 +1762,9 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
         .wi_character_depth_prompt = pend_char_note,
         .wi_scenario = pend_scenario,
         .wi_creator_notes = pend_creator_notes,
+        .persona_position = pend_tpl.persona_position,
+        .persona_depth = pend_tpl.persona_depth,
+        .persona_role = pend_tpl.persona_role,
     };
     // Assemble the prompt into separately-costable pieces. The budget walk waits until each piece has a
     // real token count (or the byte fallback); pieces is owned and outlives this callback in tok_job.
