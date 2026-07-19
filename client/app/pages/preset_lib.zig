@@ -680,8 +680,8 @@ test "with no preset to base on the save carries the modelled fields alone" {
     try testing.expectEqualStrings("<|im_start|>user", preset.get("input_sequence").?.string);
     try testing.expectEqualStrings("Hand Made", preset.get("name").?.string);
     try testing.expect(preset.get("activation_regex") == null);
-    // The 17 modelled fields less the stripped toggle.
-    try testing.expectEqual(@as(usize, 16), preset.count());
+    // The 19 modelled fields less the stripped toggle.
+    try testing.expectEqual(@as(usize, 18), preset.count());
 }
 
 test "a preset saved from a base picks straight back up as the same template" {

@@ -81,6 +81,7 @@ pub const Instruct = struct {
     output_suffix: []const u8 = "",
     system_sequence: []const u8 = "",
     system_suffix: []const u8 = "",
+    last_system_sequence: []const u8 = "",
     first_output_sequence: []const u8 = "",
     last_output_sequence: []const u8 = "",
     stop_sequence: []const u8 = "",
@@ -90,6 +91,9 @@ pub const Instruct = struct {
     macro: bool = true,
     names_behavior: NamesBehavior = .force,
     system_same_as_user: bool = false,
+    /// power_user.instruct.sequences_as_stop_strings: push every wrap sequence as a stopping string,
+    /// not just stop_sequence (instruct-mode.js:343). Default true, matching the classic client.
+    sequences_as_stop_strings: bool = true,
 };
 
 /// The system-block half. Strings borrowed from the same arena as Instruct.
@@ -102,6 +106,12 @@ pub const Context = struct {
     story_string: []const u8 = default_story_string,
     chat_start: []const u8 = "",
     example_separator: []const u8 = "",
+    /// power_user.context.use_stop_strings: append chat_start and example_separator as stopping
+    /// strings (instruct-mode.js:357). Default false, matching the classic client's settingsToUpdate.
+    use_stop_strings: bool = false,
+    /// power_user.context.names_as_stop_strings: push the user/char name strings (script.js:3001).
+    /// Default true, matching the classic client's settingsToUpdate.
+    names_as_stop_strings: bool = true,
 };
 
 pub const Templates = struct {
@@ -121,6 +131,14 @@ pub const Templates = struct {
     /// power_user.prefer_character_jailbreak (stock default true): a character's own
     /// post_history_instructions wins over the global when set.
     prefer_character_jailbreak: bool = true,
+    /// power_user.single_line (global, stock default false): prepend '\n' to the stopping strings.
+    single_line: bool = false,
+    /// power_user.custom_stopping_strings: a JSON-array string of extra stops, raw as stored
+    /// (power-user.js:3058). Parsed lazily when the send composes the stop set.
+    custom_stopping_strings: []const u8 = "",
+    /// power_user.custom_stopping_strings_macro (stock default true): run a macro pass over each
+    /// custom stopping string.
+    custom_stopping_strings_macro: bool = true,
 };
 
 /// The story string the classic client ships as its Default context preset, byte-identical to
@@ -173,6 +191,9 @@ pub fn parseTemplates(arena: Allocator, settings_str: []const u8) Allocator.Erro
     }
     out.prefer_character_prompt = boolField(power_user, "prefer_character_prompt", true);
     out.prefer_character_jailbreak = boolField(power_user, "prefer_character_jailbreak", true);
+    out.single_line = boolField(power_user, "single_line", false);
+    out.custom_stopping_strings = try strField(arena, power_user, "custom_stopping_strings");
+    out.custom_stopping_strings_macro = boolField(power_user, "custom_stopping_strings_macro", true);
     return out;
 }
 
@@ -186,6 +207,7 @@ fn parseInstruct(arena: Allocator, o: std.json.ObjectMap) Allocator.Error!Instru
         .output_suffix = try strField(arena, o, "output_suffix"),
         .system_sequence = try strField(arena, o, "system_sequence"),
         .system_suffix = try strField(arena, o, "system_suffix"),
+        .last_system_sequence = try strField(arena, o, "last_system_sequence"),
         .first_output_sequence = try strField(arena, o, "first_output_sequence"),
         .last_output_sequence = try strField(arena, o, "last_output_sequence"),
         .stop_sequence = try strField(arena, o, "stop_sequence"),
@@ -195,6 +217,7 @@ fn parseInstruct(arena: Allocator, o: std.json.ObjectMap) Allocator.Error!Instru
         .macro = boolField(o, "macro", true),
         .names_behavior = namesBehavior(o),
         .system_same_as_user = boolField(o, "system_same_as_user", false),
+        .sequences_as_stop_strings = boolField(o, "sequences_as_stop_strings", true),
     };
 }
 
@@ -211,6 +234,8 @@ fn parseContext(arena: Allocator, o: std.json.ObjectMap) Allocator.Error!Context
         .story_string = story,
         .chat_start = try strField(arena, o, "chat_start"),
         .example_separator = try strField(arena, o, "example_separator"),
+        .use_stop_strings = boolField(o, "use_stop_strings", false),
+        .names_as_stop_strings = boolField(o, "names_as_stop_strings", true),
     };
 }
 
@@ -301,6 +326,9 @@ pub fn dupeTemplates(arena: Allocator, t: Templates) Allocator.Error!Templates {
         .prefer_character_prompt = t.prefer_character_prompt,
         .sysprompt_post_history = try arena.dupe(u8, t.sysprompt_post_history),
         .prefer_character_jailbreak = t.prefer_character_jailbreak,
+        .single_line = t.single_line,
+        .custom_stopping_strings = try arena.dupe(u8, t.custom_stopping_strings),
+        .custom_stopping_strings_macro = t.custom_stopping_strings_macro,
     };
 }
 
@@ -338,6 +366,7 @@ fn instructObject(a: Allocator, t: Instruct) Allocator.Error!std.json.ObjectMap 
     try o.put(a, "wrap", .{ .bool = t.wrap });
     try o.put(a, "macro", .{ .bool = t.macro });
     try o.put(a, "system_same_as_user", .{ .bool = t.system_same_as_user });
+    try o.put(a, "sequences_as_stop_strings", .{ .bool = t.sequences_as_stop_strings });
     try o.put(a, "names_behavior", .{ .string = @tagName(t.names_behavior) });
     return o;
 }
@@ -347,6 +376,8 @@ fn contextObject(a: Allocator, c: Context) Allocator.Error!std.json.ObjectMap {
     inline for (std.meta.fields(Context)) |f| {
         if (f.type == []const u8) try o.put(a, f.name, .{ .string = try a.dupe(u8, @field(c, f.name)) });
     }
+    try o.put(a, "use_stop_strings", .{ .bool = c.use_stop_strings });
+    try o.put(a, "names_as_stop_strings", .{ .bool = c.names_as_stop_strings });
     // The marker the classic client keys its one-time anchor migration on: what we write already
     // carries the anchors, so stock must not insert a second pair on top.
     try o.put(a, "story_string_position", .{ .integer = 0 });

@@ -775,6 +775,190 @@ pub fn stopSequences(tpl: templates.Instruct, buf: *[1][]const u8) []const []con
     return buf[0..1];
 }
 
+/// The full stopping-string set the classic client sends for a SOLO text-completion send, replicating
+/// getStoppingStrings (script.js:2993) for the non-openai, non-impersonate, non-continue, non-group
+/// path. Order and dedup match the reference so the emitted array is byte-identical to the old
+/// frontend's: names (script.js:3001) -> instruct sequences + chat_start/example_separator
+/// (instruct-mode.js:302) -> custom stopping strings (power-user.js:3058), single_line prepends '\n',
+/// then falsy-drop + onlyUnique over the whole list. Impersonate/continue/group are out of scope.
+///
+/// `name1` is the user/persona name, `name2` the character name. Returns an owned array of owned
+/// strings (each independent of `tpl` and `ctx`); the caller frees each element then the array.
+pub fn buildStoppingStrings(alloc: Allocator, tpl: templates.Templates, ctx: Ctx, name1: []const u8, name2: []const u8) Allocator.Error![][]u8 {
+    var list: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (list.items) |s| alloc.free(s);
+        list.deinit(alloc);
+    }
+
+    if (tpl.context.names_as_stop_strings) {
+        // The reference pushes the user string twice (isImpersonate false -> userString, then userString
+        // again); the trailing onlyUnique collapses them. Two owned copies keep the pre-dedup shape.
+        try pushOwned(alloc, &list, try std.fmt.allocPrint(alloc, "\n{s}:", .{name1}));
+        try pushOwned(alloc, &list, try std.fmt.allocPrint(alloc, "\n{s}:", .{name1}));
+    }
+
+    try appendInstructStops(alloc, &list, tpl.instruct, ctx, name1, name2);
+
+    if (tpl.context.use_stop_strings) {
+        if (tpl.context.chat_start.len > 0) try appendPrefixedMacro(alloc, &list, tpl.context.chat_start, ctx);
+        if (tpl.context.example_separator.len > 0) try appendPrefixedMacro(alloc, &list, tpl.context.example_separator, ctx);
+    }
+
+    try appendCustomStops(alloc, &list, tpl, ctx);
+
+    if (tpl.single_line) {
+        const nl = try alloc.dupe(u8, "\n");
+        list.insert(alloc, 0, nl) catch |e| {
+            alloc.free(nl);
+            return e;
+        };
+    }
+
+    // filter(x => x).filter(onlyUnique): drop empties, keep the first of each duplicate, in place.
+    var w: usize = 0;
+    outer: for (list.items) |s| {
+        if (s.len == 0) {
+            alloc.free(s);
+            continue;
+        }
+        for (list.items[0..w]) |kept| {
+            if (std.mem.eql(u8, kept, s)) {
+                alloc.free(s);
+                continue :outer;
+            }
+        }
+        list.items[w] = s;
+        w += 1;
+    }
+    list.shrinkRetainingCapacity(w);
+    return list.toOwnedSlice(alloc);
+}
+
+/// Appends an already-owned string to `list`, freeing it if the append itself fails so a mid-build
+/// OOM leaks nothing. On success `list` owns the string and the caller's outer errdefer covers it.
+fn pushOwned(alloc: Allocator, list: *std.ArrayList([]u8), s: []u8) Allocator.Error!void {
+    errdefer alloc.free(s);
+    try list.append(alloc, s);
+}
+
+/// One stopping string prefixed with '\n' and macro-substituted, pushed to `list`. Matches the
+/// `\n${substituteParams(x)}` the reference uses for chat_start and example_separator.
+fn appendPrefixedMacro(alloc: Allocator, list: *std.ArrayList([]u8), raw: []const u8, ctx: Ctx) Allocator.Error!void {
+    const subbed = try substituteMacros(alloc, raw, ctx);
+    defer alloc.free(subbed);
+    try pushOwned(alloc, list, try std.fmt.allocPrint(alloc, "\n{s}", .{subbed}));
+}
+
+/// The instruct-mode stopping sequences (getInstructStoppingSequences, instruct-mode.js:302): the
+/// stop_sequence plus, when sequences_as_stop_strings is set, every wrap sequence with its {{name}}
+/// token resolved per family (input -> user, output -> char, system -> "System"). The combined set is
+/// joined on '\n', re-split, deduped, and each non-blank line is wrapped ('\n' prefix when wrap) and
+/// macro-substituted, exactly as addInstructSequence does.
+fn appendInstructStops(alloc: Allocator, list: *std.ArrayList([]u8), ins: templates.Instruct, ctx: Ctx, name1: []const u8, name2: []const u8) Allocator.Error!void {
+    if (!ins.enabled) return;
+
+    var joined: std.ArrayList(u8) = .empty;
+    defer joined.deinit(alloc);
+    // The reference does not resolve {{name}} in stop_sequence, only in the wrap sequences.
+    try joined.appendSlice(alloc, ins.stop_sequence);
+    if (ins.sequences_as_stop_strings) {
+        const mapped = [_]struct { seq: []const u8, name: []const u8 }{
+            .{ .seq = ins.input_sequence, .name = name1 },
+            .{ .seq = ins.output_sequence, .name = name2 },
+            .{ .seq = ins.first_output_sequence, .name = name2 },
+            .{ .seq = ins.last_output_sequence, .name = name2 },
+            .{ .seq = ins.system_sequence, .name = "System" },
+            .{ .seq = ins.last_system_sequence, .name = "System" },
+        };
+        for (mapped) |m| {
+            const resolved = try replaceNameToken(alloc, m.seq, m.name);
+            defer alloc.free(resolved);
+            try joined.append(alloc, '\n');
+            try joined.appendSlice(alloc, resolved);
+        }
+    }
+
+    var seen: std.ArrayList([]const u8) = .empty;
+    defer seen.deinit(alloc);
+    var it = std.mem.splitScalar(u8, joined.items, '\n');
+    while (it.next()) |line| {
+        var dup = false;
+        for (seen.items) |prev| {
+            if (std.mem.eql(u8, prev, line)) {
+                dup = true;
+                break;
+            }
+        }
+        if (dup) continue;
+        try seen.append(alloc, line);
+        if (isBlank(line)) continue;
+        const wrapped = if (ins.wrap)
+            try std.fmt.allocPrint(alloc, "\n{s}", .{line})
+        else
+            try alloc.dupe(u8, line);
+        if (ins.macro) {
+            defer alloc.free(wrapped);
+            try pushOwned(alloc, list, try substituteMacros(alloc, wrapped, ctx));
+        } else {
+            try pushOwned(alloc, list, wrapped);
+        }
+    }
+}
+
+/// The custom stopping strings (getCustomStoppingStrings, power-user.js:3058): the JSON-array string
+/// parsed, non-string and empty entries dropped, each macro-substituted when the macro toggle is set.
+/// A malformed JSON string yields no custom stops, as the reference's try/catch does.
+fn appendCustomStops(alloc: Allocator, list: *std.ArrayList([]u8), tpl: templates.Templates, ctx: Ctx) Allocator.Error!void {
+    if (tpl.custom_stopping_strings.len == 0) return;
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, tpl.custom_stopping_strings, .{}) catch return;
+    defer parsed.deinit();
+    const arr = switch (parsed.value) {
+        .array => |a| a,
+        else => return,
+    };
+    for (arr.items) |item| {
+        const s = switch (item) {
+            .string => |str| str,
+            else => continue,
+        };
+        if (s.len == 0) continue;
+        if (tpl.custom_stopping_strings_macro) {
+            try pushOwned(alloc, list, try substituteMacros(alloc, s, ctx));
+        } else {
+            try pushOwned(alloc, list, try alloc.dupe(u8, s));
+        }
+    }
+}
+
+/// A copy of `input` with every case-insensitive `{{name}}` token replaced by `name`. Matches the
+/// reference's `.replace(/{{name}}/gi, name)`. Owned.
+fn replaceNameToken(alloc: Allocator, input: []const u8, name: []const u8) Allocator.Error![]u8 {
+    const token = "{{name}}";
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(alloc);
+    var i: usize = 0;
+    while (i < input.len) {
+        if (i + token.len <= input.len and std.ascii.eqlIgnoreCase(input[i .. i + token.len], token)) {
+            try out.appendSlice(alloc, name);
+            i += token.len;
+        } else {
+            try out.append(alloc, input[i]);
+            i += 1;
+        }
+    }
+    return out.toOwnedSlice(alloc);
+}
+
+/// True when every byte is ASCII whitespace, so the reference's `sequence.trim().length > 0` guard
+/// would drop it. A blank line contributes no stopping string.
+fn isBlank(s: []const u8) bool {
+    for (s) |c| {
+        if (!std.ascii.isWhitespace(c)) return false;
+    }
+    return true;
+}
+
 /// The effective main/system prompt, composed as stock does (script.js:4656-4663): a disabled global
 /// drops it entirely; else a card/chat override wins over the global when prefer_character_prompt is on
 /// and the override is non-empty; else the global. Borrowed from the inputs.
@@ -1477,6 +1661,110 @@ test "stopSequences carries the template stop or nothing at all" {
 
     try testing.expectEqual(@as(usize, 0), stopSequences(.{ .enabled = false, .stop_sequence = "<|im_end|>" }, &buf).len);
     try testing.expectEqual(@as(usize, 0), stopSequences(.{ .enabled = true, .stop_sequence = "" }, &buf).len);
+}
+
+fn freeStops(a: Allocator, stops: [][]u8) void {
+    for (stops) |s| a.free(s);
+    a.free(stops);
+}
+
+fn expectStops(want: []const []const u8, got: [][]u8) !void {
+    try testing.expectEqual(want.len, got.len);
+    for (want, got) |w, g| try testing.expectEqualStrings(w, g);
+}
+
+test "buildStoppingStrings matches the classic frontend for the ChatML instruct path" {
+    const tpl = templates.Templates{
+        .instruct = chatml,
+        .context = .{ .names_as_stop_strings = true, .use_stop_strings = false },
+        .custom_stopping_strings = "[\"ZSTOP_A\",\"ZSTOP_B\"]",
+        .custom_stopping_strings_macro = true,
+    };
+    const ctx = Ctx{ .char = "Seraphina", .user = "Tester" };
+    const stops = try buildStoppingStrings(testing.allocator, tpl, ctx, "Tester", "Seraphina");
+    defer freeStops(testing.allocator, stops);
+    try expectStops(&.{
+        "\nTester:",
+        "\n<|im_end|>",
+        "\n<|im_start|>user",
+        "\n<|im_start|>assistant",
+        "\n<|im_start|>system",
+        "ZSTOP_A",
+        "ZSTOP_B",
+    }, stops);
+}
+
+test "buildStoppingStrings unwraps sequences and prepends single_line" {
+    var ins = chatml;
+    ins.wrap = false;
+    const tpl = templates.Templates{
+        .instruct = ins,
+        .context = .{ .names_as_stop_strings = false },
+        .single_line = true,
+    };
+    const stops = try buildStoppingStrings(testing.allocator, tpl, .{ .char = "Bob" }, "Alice", "Bob");
+    defer freeStops(testing.allocator, stops);
+    try expectStops(&.{
+        "\n",
+        "<|im_end|>",
+        "<|im_start|>user",
+        "<|im_start|>assistant",
+        "<|im_start|>system",
+    }, stops);
+}
+
+test "buildStoppingStrings appends chat_start and example_separator when use_stop_strings" {
+    const tpl = templates.Templates{
+        .instruct = .{ .enabled = true, .stop_sequence = "<|im_end|>", .wrap = true, .sequences_as_stop_strings = false },
+        .context = .{ .names_as_stop_strings = false, .use_stop_strings = true, .chat_start = "***", .example_separator = "<START>" },
+    };
+    const stops = try buildStoppingStrings(testing.allocator, tpl, .{}, "Alice", "Bob");
+    defer freeStops(testing.allocator, stops);
+    try expectStops(&.{ "\n<|im_end|>", "\n***", "\n<START>" }, stops);
+}
+
+test "buildStoppingStrings resolves the name token per sequence family" {
+    const tpl = templates.Templates{
+        .instruct = .{
+            .enabled = true,
+            .input_sequence = "{{name}}:",
+            .output_sequence = "{{Name}}:",
+            .wrap = false,
+            .macro = false,
+            .sequences_as_stop_strings = true,
+        },
+        .context = .{ .names_as_stop_strings = false },
+    };
+    const stops = try buildStoppingStrings(testing.allocator, tpl, .{}, "Alice", "Bob");
+    defer freeStops(testing.allocator, stops);
+    try expectStops(&.{ "Alice:", "Bob:" }, stops);
+}
+
+test "buildStoppingStrings drops the instruct set entirely when disabled" {
+    const tpl = templates.Templates{
+        .instruct = .{ .enabled = false, .stop_sequence = "<|im_end|>" },
+        .context = .{ .names_as_stop_strings = true },
+    };
+    const stops = try buildStoppingStrings(testing.allocator, tpl, .{}, "Alice", "Bob");
+    defer freeStops(testing.allocator, stops);
+    try expectStops(&.{"\nAlice:"}, stops);
+}
+
+fn buildStoppingStringsAndFree(a: Allocator, tpl: templates.Templates, ctx: Ctx, name1: []const u8, name2: []const u8) Allocator.Error!void {
+    const stops = try buildStoppingStrings(a, tpl, ctx, name1, name2);
+    freeStops(a, stops);
+}
+
+test "buildStoppingStrings cleans up on every alloc failure" {
+    const tpl = templates.Templates{
+        .instruct = chatml,
+        .context = .{ .names_as_stop_strings = true, .use_stop_strings = true, .chat_start = "***", .example_separator = "<START>" },
+        .custom_stopping_strings = "[\"ZSTOP_A\",\"ZSTOP_B\"]",
+        .custom_stopping_strings_macro = true,
+        .single_line = true,
+    };
+    const ctx = Ctx{ .char = "Seraphina", .user = "Tester" };
+    try testing.checkAllAllocationFailures(testing.allocator, buildStoppingStringsAndFree, .{ tpl, ctx, @as([]const u8, "Tester"), @as([]const u8, "Seraphina") });
 }
 
 test "buildRequestBody carries the connection, prompt, and stream flag" {

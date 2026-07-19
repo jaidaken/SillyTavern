@@ -1363,8 +1363,9 @@ const TokJob = struct {
     disc: u64 = 0,
     encode_path: []const u8 = "",
     remote: bool = false,
-    /// The resolved stop sequence, owned so it survives freePending; null = no stop.
-    stop: ?[]u8 = null,
+    /// The resolved stopping-string set, each element owned so it survives freePending; empty = no
+    /// stops. Composed by generate.buildStoppingStrings to match the classic frontend's array.
+    stop: [][]u8 = &.{},
     /// CR-stripped copies of every piece (overhead, then injections, then history), the strings the
     /// classic client counts (item.replace(/\r/g,'')). Owned. Parallel to `counts`/`filled`.
     texts: [][]u8 = &.{},
@@ -1404,7 +1405,8 @@ fn freeTokJob() void {
         tok_job = .{};
         return;
     }
-    if (tok_job.stop) |s| alloc.free(s);
+    for (tok_job.stop) |s| alloc.free(s);
+    if (tok_job.stop.len > 0) alloc.free(tok_job.stop);
     for (tok_job.texts) |t| alloc.free(t);
     if (tok_job.texts.len > 0) alloc.free(tok_job.texts);
     if (tok_job.counts.len > 0) alloc.free(tok_job.counts);
@@ -1426,12 +1428,7 @@ fn endSend() void {
 fn finishSend(prompt: []const u8) void {
     defer endSend();
     const conn = pend_conn orelse return;
-    var stop_buf: [1][]const u8 = undefined;
-    const stop: []const []const u8 = if (tok_job.stop) |s| blk: {
-        stop_buf[0] = s;
-        break :blk stop_buf[0..1];
-    } else &.{};
-    const body = generate.buildRequestBody(alloc, conn, prompt, stop) catch {
+    const body = generate.buildRequestBody(alloc, conn, prompt, tok_job.stop) catch {
         net_log.warn("send: request-body build failed", .{});
         return;
     };
@@ -1546,7 +1543,7 @@ fn onTokenCountDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
 
 /// Stashes the assembled pieces and tokenizes each (cache first, then bounded fetches). On a setup OOM
 /// it degrades to the byte-cost path rather than dropping the send.
-fn startTokenJob(pieces: generate.Pieces, token_budget: usize, char_budget: usize, kind: tokenizer.Tokenizer, disc: u64, encode_path: []const u8, remote: bool, stop: ?[]u8) void {
+fn startTokenJob(pieces: generate.Pieces, token_budget: usize, char_budget: usize, kind: tokenizer.Tokenizer, disc: u64, encode_path: []const u8, remote: bool, stop: [][]u8) void {
     const n = pieces.injections.len;
     const total = 1 + n + pieces.wrapped_history.len;
     tok_epoch_seq +%= 1;
@@ -1768,25 +1765,13 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
     if (pieces.timed_json) |tj| if (tj.len > 0) wi_timed.advance(tj);
     pend_timed_persist = had_timed or wi_timed.hasState();
 
-    // Stock resolves macros in the stop sequence too (instruct-mode.js:321), gated on instruct.macro.
-    // Own the resolved sequence so it survives to finishSend past freePending.
-    var stop_buf: [1][]const u8 = undefined;
-    const raw_stop = generate.stopSequences(pend_tpl.instruct, &stop_buf);
-    var stop_owned: ?[]u8 = null;
-    if (raw_stop.len == 1) {
-        stop_owned = if (pend_tpl.instruct.macro)
-            generate.substituteMacros(alloc, raw_stop[0], ctx) catch {
-                generate.freePieces(alloc, &pieces);
-                endSend();
-                return;
-            }
-        else
-            alloc.dupe(u8, raw_stop[0]) catch {
-                generate.freePieces(alloc, &pieces);
-                endSend();
-                return;
-            };
-    }
+    // The full stopping-string set the classic frontend sends (names + instruct sequences + custom),
+    // owned so it survives to finishSend past freePending. pend_user_name = name1, pend_char_name = name2.
+    const stop_owned = generate.buildStoppingStrings(alloc, pend_tpl, ctx, pend_user_name, pend_char_name) catch {
+        generate.freePieces(alloc, &pieces);
+        endSend();
+        return;
+    };
 
     // Resolve the tokenizer the classic client would use, then count each piece. A configured backend
     // with a supported type uses its own remote tokenizer (exact for llama.cpp); else a local model.
