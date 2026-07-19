@@ -602,7 +602,7 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
     defer alloc.free(wrapped_story);
     try overhead.appendSlice(alloc, wrapped_story);
 
-    try appendExamples(alloc, &overhead, wctx, shape.tpl.context.example_separator, wi_act.em_top, wi_act.em_bottom);
+    try appendExamples(alloc, &overhead, wctx, shape.tpl.instruct, shape.tpl.context.example_separator, wi_act.em_top, wi_act.em_bottom);
     if (shape.tpl.context.chat_start.len > 0) {
         const start = try substituteMacros(alloc, shape.tpl.context.chat_start, wctx);
         defer alloc.free(start);
@@ -821,37 +821,249 @@ fn joinNonEmpty(alloc: Allocator, parts: []const []const u8) Allocator.Error![]u
     return buf.toOwnedSlice(alloc);
 }
 
-/// The example section: WI em_top entries, then the card's example dialogue split on `<START>`
-/// (instruct-mode.js:513), then em_bottom, every block under the context template's example
-/// separator so a multi-block example never reads as one run-on exchange.
-fn appendExamples(alloc: Allocator, out: *std.ArrayList(u8), ctx: Ctx, separator: []const u8, em_top: []const []const u8, em_bottom: []const []const u8) Allocator.Error!void {
-    for (em_top) |b| try appendExampleBlock(alloc, out, ctx, separator, b);
+/// The example section, ported from the classic two-stage pipeline: parseMesExamples (script.js:3469)
+/// normalizes the card + WI example entries into `<START>`-delimited blocks, then
+/// formatInstructModeExamples (instruct-mode.js:512) wraps each example turn in the instruct
+/// input/output sequences the same way a real chat turn is wrapped. WI em_top entries come first, then
+/// the card's example dialogue, then em_bottom, matching the classic unshift/push order into
+/// mesExamplesArray (script.js:4619-4624). All intermediate allocation lives in a scratch arena; only
+/// the final joined section is copied into `out`. Solo path only: group names are never appended.
+fn appendExamples(alloc: Allocator, out: *std.ArrayList(u8), ctx: Ctx, tpl: templates.Instruct, example_separator: []const u8, em_top: []const []const u8, em_bottom: []const []const u8) Allocator.Error!void {
+    var arena_state = std.heap.ArenaAllocator.init(alloc);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+
+    // blockHeading in both stages keys on the RAW separator being non-empty, then uses its resolved
+    // value plus '\n' (instruct-mode.js:513 + script.js:3478). parseMesExamples uses '<START>\n' in
+    // instruct mode instead, so the tag survives into formatInstructModeExamples' cleanedItem step.
+    const sep_resolved = try substituteMacros(a, example_separator, ctx);
+    const sep_heading: []const u8 = if (example_separator.len > 0)
+        try std.fmt.allocPrint(a, "{s}\n", .{sep_resolved})
+    else
+        "";
+    const pme_heading: []const u8 = if (tpl.enabled) "<START>\n" else sep_heading;
+
+    var blocks: std.ArrayList([]const u8) = .empty;
+    for (em_top) |e| {
+        const subbed = try subAndStripCR(a, e, ctx);
+        for (try parseMesExamples(a, subbed, pme_heading)) |p| try blocks.append(a, p);
+    }
     if (ctx.mes_example.len > 0) {
-        const subbed = try substituteMacros(alloc, ctx.mes_example, ctx);
-        defer alloc.free(subbed);
-        if (std.mem.trim(u8, subbed, " \t\r\n").len != 0) {
-            var it = std.mem.splitSequence(u8, subbed, "<START>");
-            while (it.next()) |raw| try appendBlockRaw(alloc, out, separator, raw);
+        const trimmed = std.mem.trim(u8, ctx.mes_example, &std.ascii.whitespace);
+        const subbed = try subAndStripCR(a, trimmed, ctx);
+        for (try parseMesExamples(a, subbed, pme_heading)) |p| try blocks.append(a, p);
+    }
+    for (em_bottom) |e| {
+        const subbed = try subAndStripCR(a, e, ctx);
+        for (try parseMesExamples(a, subbed, pme_heading)) |p| try blocks.append(a, p);
+    }
+    if (blocks.items.len == 0) return;
+
+    const section: []const u8 = if (tpl.enabled)
+        try formatInstructModeExamples(a, blocks.items, ctx.user, ctx.char, tpl, sep_heading, ctx, false)
+    else blk: {
+        var o: std.ArrayList(u8) = .empty;
+        for (blocks.items) |b| try o.appendSlice(a, b);
+        break :blk try o.toOwnedSlice(a);
+    };
+    try out.appendSlice(alloc, section);
+}
+
+/// baseChatReplace (script.js:3309) for an example field: resolve macros, then strip every CR. The
+/// caller trims the card field first; WI entries pass through untrimmed, matching the reference.
+fn subAndStripCR(a: Allocator, s: []const u8, ctx: Ctx) Allocator.Error![]u8 {
+    const subbed = try substituteMacros(a, s, ctx);
+    return stripCR(a, subbed);
+}
+
+/// A copy of `s` with every CR removed (JS `.replace(/\r/gm, '')`). Owned.
+fn stripCR(a: Allocator, s: []const u8) Allocator.Error![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (s) |c| {
+        if (c != '\r') try out.append(a, c);
+    }
+    return out.toOwnedSlice(a);
+}
+
+/// The index of the first case-insensitive `needle` in `s` at or after `start`, or null.
+fn indexOfCI(s: []const u8, needle: []const u8, start: usize) ?usize {
+    if (needle.len == 0) return start;
+    if (needle.len > s.len) return null;
+    var i = start;
+    while (i + needle.len <= s.len) : (i += 1) {
+        if (std.ascii.eqlIgnoreCase(s[i .. i + needle.len], needle)) return i;
+    }
+    return null;
+}
+
+/// A copy of `s` with the first case-insensitive `needle` replaced by `repl` (JS `.replace(/needle/i,
+/// repl)`). Unmatched returns a plain copy. Owned.
+fn replaceFirstCI(a: Allocator, s: []const u8, needle: []const u8, repl: []const u8) Allocator.Error![]u8 {
+    if (indexOfCI(s, needle, 0)) |idx| {
+        var out: std.ArrayList(u8) = .empty;
+        try out.appendSlice(a, s[0..idx]);
+        try out.appendSlice(a, repl);
+        try out.appendSlice(a, s[idx + needle.len ..]);
+        return out.toOwnedSlice(a);
+    }
+    return a.dupe(u8, s);
+}
+
+/// A copy of `s` with the first exact `needle` removed (JS `.replace(needle, '')`). Owned.
+fn removeFirstLiteral(a: Allocator, s: []const u8, needle: []const u8) Allocator.Error![]u8 {
+    if (std.mem.indexOf(u8, s, needle)) |idx| {
+        var out: std.ArrayList(u8) = .empty;
+        try out.appendSlice(a, s[0..idx]);
+        try out.appendSlice(a, s[idx + needle.len ..]);
+        return out.toOwnedSlice(a);
+    }
+    return a.dupe(u8, s);
+}
+
+/// parseMesExamples (script.js:3469): normalize `examplesStr` to a `<START>`-prefixed string, split on
+/// every case-insensitive `<START>`, drop the leading segment, and re-tag each block with `heading`
+/// (`<START>\n` in instruct mode, else the resolved example separator). Owned array of owned blocks.
+fn parseMesExamples(a: Allocator, examples_str: []const u8, heading: []const u8) Allocator.Error![]const []const u8 {
+    if (examples_str.len == 0 or std.mem.eql(u8, examples_str, "<START>")) return &.{};
+
+    var s = examples_str;
+    if (!std.mem.startsWith(u8, s, "<START>")) {
+        const t = std.mem.trim(u8, s, &std.ascii.whitespace);
+        s = try std.fmt.allocPrint(a, "<START>\n{s}", .{t});
+    }
+
+    var result: std.ArrayList([]const u8) = .empty;
+    var seg_start: usize = 0;
+    var first = true;
+    var i: usize = 0;
+    while (true) {
+        const found = indexOfCI(s, "<START>", i);
+        const cut = found orelse s.len;
+        if (first) {
+            first = false;
+        } else {
+            const bt = std.mem.trim(u8, s[seg_start..cut], &std.ascii.whitespace);
+            try result.append(a, try std.fmt.allocPrint(a, "{s}{s}\n", .{ heading, bt }));
+        }
+        if (found == null) break;
+        seg_start = cut + "<START>".len;
+        i = seg_start;
+    }
+    return result.toOwnedSlice(a);
+}
+
+const ExampleTurn = struct { is_user: bool, content: []const u8 };
+
+/// parseExampleIntoIndividual (openai.js:724) for the solo case: split a cleaned block into user/char
+/// turns on the `name1:` / `name2:` line prefixes, strip the name prefix from each turn's content, and
+/// trim. The first line is always the "This is how X should talk" heading and is skipped. Owned.
+fn parseExampleIntoIndividual(a: Allocator, s: []const u8, name1: []const u8, name2: []const u8) Allocator.Error![]const ExampleTurn {
+    const user_prefix = try std.fmt.allocPrint(a, "{s}:", .{name1});
+    const bot_prefix = try std.fmt.allocPrint(a, "{s}:", .{name2});
+
+    var result: std.ArrayList(ExampleTurn) = .empty;
+    var cur: std.ArrayList([]const u8) = .empty;
+    var in_user = false;
+    var in_bot = false;
+
+    var it = std.mem.splitScalar(u8, s, '\n');
+    _ = it.next();
+    while (it.next()) |line| {
+        if (std.mem.startsWith(u8, line, user_prefix)) {
+            in_user = true;
+            if (in_bot) try addExampleTurn(a, &result, &cur, name2, false);
+            in_bot = false;
+        } else if (std.mem.startsWith(u8, line, bot_prefix)) {
+            in_bot = true;
+            if (in_user) try addExampleTurn(a, &result, &cur, name1, true);
+            in_user = false;
+        }
+        try cur.append(a, line);
+    }
+    if (in_user) {
+        try addExampleTurn(a, &result, &cur, name1, true);
+    } else if (in_bot) {
+        try addExampleTurn(a, &result, &cur, name2, false);
+    }
+    return result.toOwnedSlice(a);
+}
+
+fn addExampleTurn(a: Allocator, result: *std.ArrayList(ExampleTurn), cur: *std.ArrayList([]const u8), name: []const u8, is_user: bool) Allocator.Error!void {
+    const joined = try std.mem.join(a, "\n", cur.items);
+    const name_colon = try std.fmt.allocPrint(a, "{s}:", .{name});
+    const removed = try removeFirstLiteral(a, joined, name_colon);
+    const content = std.mem.trim(u8, removed, &std.ascii.whitespace);
+    try result.append(a, .{ .is_user = is_user, .content = content });
+    cur.clearRetainingCapacity();
+}
+
+/// formatInstructModeExamples (instruct-mode.js:512) for the solo path. Each block's turns are wrapped
+/// in the instruct input/output sequences; the block heading precedes every non-empty block. When
+/// `skip_examples` is set the reference does no wrapping, only swapping `<START>\n` for the heading.
+/// `skip_examples` is threaded as an argument rather than a template field because this client leaves
+/// power_user.instruct.skip_examples unmodelled (preset_lib.zig: at type default in every shipped
+/// preset bar one); production always passes false. Owned joined section.
+fn formatInstructModeExamples(a: Allocator, blocks: []const []const u8, name1: []const u8, name2: []const u8, tpl: templates.Instruct, block_heading: []const u8, ctx: Ctx, skip_examples: bool) Allocator.Error![]u8 {
+    if (skip_examples) return replaceStartHeadings(a, blocks, block_heading);
+
+    const include_names = tpl.names_behavior == .always;
+    var input_prefix: []const u8 = tpl.input_sequence;
+    var output_prefix: []const u8 = tpl.output_sequence;
+    var input_suffix: []const u8 = tpl.input_suffix;
+    var output_suffix: []const u8 = tpl.output_suffix;
+    if (tpl.macro) {
+        input_prefix = try replaceNameToken(a, try substituteMacros(a, input_prefix, ctx), name1);
+        output_prefix = try replaceNameToken(a, try substituteMacros(a, output_prefix, ctx), name2);
+        input_suffix = try replaceNameToken(a, try substituteMacros(a, input_suffix, ctx), name1);
+        output_suffix = try replaceNameToken(a, try substituteMacros(a, output_suffix, ctx), name2);
+        if (input_suffix.len == 0 and tpl.wrap) input_suffix = "\n";
+        if (output_suffix.len == 0 and tpl.wrap) output_suffix = "\n";
+    }
+    const separator: []const u8 = if (tpl.wrap) "\n" else "";
+
+    var formatted: std.ArrayList([]const u8) = .empty;
+    for (blocks) |item| {
+        const swapped = try replaceFirstCI(a, item, "<START>", "{Example Dialogue:}");
+        const cleaned = try stripCR(a, swapped);
+        const turns = try parseExampleIntoIndividual(a, cleaned, name1, name2);
+        if (turns.len == 0) continue;
+        if (block_heading.len > 0) try formatted.append(a, block_heading);
+        for (turns) |t| {
+            const include_this = include_names or (tpl.names_behavior == .force and t.is_user);
+            const prefix = if (t.is_user) input_prefix else output_prefix;
+            const suffix = if (t.is_user) input_suffix else output_suffix;
+            const nm = if (t.is_user) name1 else name2;
+            const msg_content: []const u8 = if (include_this)
+                try std.fmt.allocPrint(a, "{s}: {s}", .{ nm, t.content })
+            else
+                t.content;
+            const content_plus = try std.fmt.allocPrint(a, "{s}{s}", .{ msg_content, suffix });
+            try formatted.append(a, try filterJoin(a, prefix, content_plus, separator));
         }
     }
-    for (em_bottom) |b| try appendExampleBlock(alloc, out, ctx, separator, b);
+
+    if (formatted.items.len == 0) return replaceStartHeadings(a, blocks, block_heading);
+
+    var out: std.ArrayList(u8) = .empty;
+    for (formatted.items) |f| try out.appendSlice(a, f);
+    return out.toOwnedSlice(a);
 }
 
-fn appendExampleBlock(alloc: Allocator, out: *std.ArrayList(u8), ctx: Ctx, separator: []const u8, raw: []const u8) Allocator.Error!void {
-    const subbed = try substituteMacros(alloc, raw, ctx);
-    defer alloc.free(subbed);
-    try appendBlockRaw(alloc, out, separator, subbed);
-}
-
-fn appendBlockRaw(alloc: Allocator, out: *std.ArrayList(u8), separator: []const u8, raw: []const u8) Allocator.Error!void {
-    const block = std.mem.trim(u8, raw, " \t\r\n");
-    if (block.len == 0) return;
-    if (separator.len > 0) {
-        try out.appendSlice(alloc, separator);
-        try out.append(alloc, '\n');
+/// The reference's fallback join: `blocks.map(x => x.replace(/<START>\n/i, blockHeading)).join('')`.
+fn replaceStartHeadings(a: Allocator, blocks: []const []const u8, block_heading: []const u8) Allocator.Error![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (blocks) |item| {
+        const r = try replaceFirstCI(a, item, "<START>\n", block_heading);
+        try out.appendSlice(a, r);
     }
-    try out.appendSlice(alloc, block);
-    try out.append(alloc, '\n');
+    return out.toOwnedSlice(a);
+}
+
+/// JS `[p1, p2].filter(x => x).join(sep)`: empty strings are dropped before the join. Owned.
+fn filterJoin(a: Allocator, p1: []const u8, p2: []const u8, sep: []const u8) Allocator.Error![]u8 {
+    if (p1.len > 0 and p2.len > 0) return std.fmt.allocPrint(a, "{s}{s}{s}", .{ p1, sep, p2 });
+    if (p1.len > 0) return a.dupe(u8, p1);
+    return a.dupe(u8, p2);
 }
 
 /// Builds the JSON body for POST /api/backends/text-completions/generate. `stream` is always true:
@@ -1213,6 +1425,139 @@ fn chatmlShape() Shape {
         .instruct = chatml,
         .context = .{ .story_string = templates.default_story_string },
     } };
+}
+
+const example_ctx = Ctx{ .user = "User", .char = "Char" };
+const one_block = "<START>\nUser: hi\nChar: hello there\n";
+
+test "formatInstructModeExamples wraps force-mode turns, user name only" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tpl = chatml;
+    tpl.names_behavior = .force;
+    const out = try formatInstructModeExamples(a, &.{one_block}, "User", "Char", tpl, "***\n", example_ctx, false);
+    try testing.expectEqualStrings(
+        "***\n" ++
+            "<|im_start|>user\nUser: hi<|im_end|>\n" ++
+            "<|im_start|>assistant\nhello there<|im_end|>\n",
+        out,
+    );
+}
+
+test "formatInstructModeExamples always-mode names both speakers" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tpl = chatml;
+    tpl.names_behavior = .always;
+    const out = try formatInstructModeExamples(a, &.{one_block}, "User", "Char", tpl, "***\n", example_ctx, false);
+    try testing.expectEqualStrings(
+        "***\n" ++
+            "<|im_start|>user\nUser: hi<|im_end|>\n" ++
+            "<|im_start|>assistant\nChar: hello there<|im_end|>\n",
+        out,
+    );
+}
+
+test "formatInstructModeExamples none-mode names neither speaker" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tpl = chatml;
+    tpl.names_behavior = .none;
+    const out = try formatInstructModeExamples(a, &.{one_block}, "User", "Char", tpl, "***\n", example_ctx, false);
+    try testing.expectEqualStrings(
+        "***\n" ++
+            "<|im_start|>user\nhi<|im_end|>\n" ++
+            "<|im_start|>assistant\nhello there<|im_end|>\n",
+        out,
+    );
+}
+
+test "formatInstructModeExamples drops the wrap separator when wrap is off" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tpl = chatml;
+    tpl.names_behavior = .force;
+    tpl.wrap = false;
+    const out = try formatInstructModeExamples(a, &.{one_block}, "User", "Char", tpl, "***\n", example_ctx, false);
+    try testing.expectEqualStrings(
+        "***\n" ++
+            "<|im_start|>userUser: hi<|im_end|>\n" ++
+            "<|im_start|>assistanthello there<|im_end|>\n",
+        out,
+    );
+}
+
+test "formatInstructModeExamples skip_examples only swaps the START heading" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tpl = chatml;
+    tpl.names_behavior = .force;
+    const out = try formatInstructModeExamples(a, &.{one_block}, "User", "Char", tpl, "***\n", example_ctx, true);
+    try testing.expectEqualStrings("***\nUser: hi\nChar: hello there\n", out);
+}
+
+test "formatInstructModeExamples emits the block heading before every non-empty block" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tpl = chatml;
+    tpl.names_behavior = .force;
+    const blocks = [_][]const u8{ "<START>\nUser: a\nChar: b\n", "<START>\nUser: c\nChar: d\n" };
+    const out = try formatInstructModeExamples(a, &blocks, "User", "Char", tpl, "***\n", example_ctx, false);
+    try testing.expectEqualStrings(
+        "***\n<|im_start|>user\nUser: a<|im_end|>\n<|im_start|>assistant\nb<|im_end|>\n" ++
+            "***\n<|im_start|>user\nUser: c<|im_end|>\n<|im_start|>assistant\nd<|im_end|>\n",
+        out,
+    );
+}
+
+test "formatInstructModeExamples omits headings when the separator is empty" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tpl = chatml;
+    tpl.names_behavior = .force;
+    const out = try formatInstructModeExamples(a, &.{one_block}, "User", "Char", tpl, "", example_ctx, false);
+    try testing.expectEqualStrings(
+        "<|im_start|>user\nUser: hi<|im_end|>\n<|im_start|>assistant\nhello there<|im_end|>\n",
+        out,
+    );
+}
+
+test "parseMesExamples tags the block with the instruct heading" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const blocks = try parseMesExamples(a, "<START>\nUser: hi\nChar: hello there", "<START>\n");
+    try testing.expectEqual(@as(usize, 1), blocks.len);
+    try testing.expectEqualStrings("<START>\nUser: hi\nChar: hello there\n", blocks[0]);
+}
+
+test "parseMesExamples prepends START and splits multiple blocks" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const blocks = try parseMesExamples(a, "User: a\nChar: b\n<START>\nUser: c\nChar: d", "<START>\n");
+    try testing.expectEqual(@as(usize, 2), blocks.len);
+    try testing.expectEqualStrings("<START>\nUser: a\nChar: b\n", blocks[0]);
+    try testing.expectEqualStrings("<START>\nUser: c\nChar: d\n", blocks[1]);
+}
+
+test "parseExampleIntoIndividual splits turns and strips the name prefix" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const turns = try parseExampleIntoIndividual(a, "{Example Dialogue:}\nUser: hi\nChar: hello there", "User", "Char");
+    try testing.expectEqual(@as(usize, 2), turns.len);
+    try testing.expect(turns[0].is_user);
+    try testing.expectEqualStrings("hi", turns[0].content);
+    try testing.expect(!turns[1].is_user);
+    try testing.expectEqualStrings("hello there", turns[1].content);
 }
 
 test "buildPrompt assembles system block, history, and the char prefix untemplated" {
