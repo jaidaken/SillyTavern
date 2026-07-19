@@ -501,6 +501,13 @@
     padding-left: 1.6em;
 }
 
+/* A speech turn that ends its paragraph reads as a new line, not a set-apart block: the paragraph's
+   0.7em trailing margin would otherwise leave a blank-line gap under the speech, so tighten it to the
+   turn's own 0.2em rhythm. Narration-only paragraphs keep their normal spacing. */
+#chat-root[data-reading-indent="blockquote"] .mes_text p:has(> q.custom-q-turn:last-child) {
+    margin-bottom: 0.2em;
+}
+
 /* Stage: the NAME. and the spoken line sit flush at the left margin; the direction beneath is the
    indented block. This is the inverse of blockquote, which insets the speech and leaves narration
    flush. The name prints inline before the speech (no column), quote marks hidden. */
