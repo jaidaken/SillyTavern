@@ -39,8 +39,16 @@ pub const Ctx = struct {
     alt_greetings: []const []const u8 = &.{},
     char_version: []const u8 = "",
     /// The {{mesExamples}} formatted value, precomputed by the caller (macros.zig cannot reach the
-    /// generate.zig example pipeline); {{mesExamplesRaw}} maps to mes_example.
+    /// generate.zig example pipeline). In a story-template pass this carries the WI-inclusive section
+    /// (mesExamplesArray.join, script.js:4688); in a card-field/greeting pass, the card-only value.
     mes_example_formatted: []const u8 = "",
+    /// The story-template {{mesExamplesRaw}} value = mesExamplesRawArray.join('') (script.js:4689): the
+    /// parsed <START> blocks (WI em_top + card + em_bottom) verbatim. Used only when use_raw_parsed is
+    /// set (the story pass); a card-field/greeting keeps mes_example (the raw trimmed field).
+    mes_example_raw_parsed: []const u8 = "",
+    /// True only in renderStoryString's story-template pass, so {{mesExamplesRaw}} resolves to the
+    /// WI-inclusive parsed blocks there and to the raw field everywhere else (env.character parity).
+    use_raw_parsed: bool = false,
     system: []const u8 = "",
     /// The global system prompt content, for `{{original}}` inside a card's system_prompt override
     /// (stock substituteParams `{ original: sysprompt.content }`, script.js:4661).
@@ -131,7 +139,7 @@ fn charMacro(inner: []const u8, ctx: Ctx) ?[]const u8 {
     else if (std.mem.eql(u8, name, "persona"))
         ctx.persona
     else if (std.mem.eql(u8, name, "mesExamplesRaw"))
-        ctx.mes_example
+        if (ctx.use_raw_parsed) ctx.mes_example_raw_parsed else ctx.mes_example
     else if (std.mem.eql(u8, name, "mesExamples"))
         ctx.mes_example_formatted
     else if (std.mem.eql(u8, name, "charDepthPrompt"))

@@ -620,17 +620,27 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
     var overhead: std.ArrayList(u8) = .empty;
     errdefer overhead.deinit(alloc);
 
+    // The example section (WI em_top + card + em_bottom) built once: its formatted join is both the
+    // prompt example body AND the story-template {{mesExamples}}; the raw join is {{mesExamplesRaw}}.
+    const examples = try buildExampleSection(alloc, wctx, shape.tpl.instruct, shape.tpl.context.example_separator, wi_act.em_top, wi_act.em_bottom);
+    defer examples.deinit(alloc);
+
     // Persona story slot: only IN_PROMPT / AFTER_CHAR fill {{persona}} (stock gates the kv on
     // == IN_PROMPT, script.js:4677); other positions empty the slot but keep the persona macro elsewhere.
     var story_ctx = wctx;
     if (!shape.persona_position.fillsStory()) story_ctx.persona = "";
+    // Story-template {{mesExamplesRaw}}/{{mesExamples}} = the WI-inclusive storyStringParams values
+    // (script.js:4688-4689), not the card-only env.character values a card field/greeting resolves.
+    story_ctx.mes_example_raw_parsed = examples.raw;
+    story_ctx.mes_example_formatted = examples.section;
+    story_ctx.use_raw_parsed = true;
     const story = try templates.renderStoryString(alloc, shape.tpl.context.story_string, story_ctx, instruct);
     defer alloc.free(story);
     const wrapped_story = try templates.wrapStoryString(alloc, instruct, story);
     defer alloc.free(wrapped_story);
     try overhead.appendSlice(alloc, wrapped_story);
 
-    try appendExamples(alloc, &overhead, wctx, shape.tpl.instruct, shape.tpl.context.example_separator, wi_act.em_top, wi_act.em_bottom);
+    try overhead.appendSlice(alloc, examples.section);
     if (shape.tpl.context.chat_start.len > 0) {
         const start = try substituteMacros(alloc, shape.tpl.context.chat_start, wctx);
         defer alloc.free(start);
@@ -858,14 +868,24 @@ fn buildNoteBlock(alloc: Allocator, an_top: []const u8, note: []const u8, an_bot
         std.fmt.allocPrint(alloc, "{s}\n{s}", .{ wi, persona });
 }
 
-/// The example section, ported from the classic two-stage pipeline: parseMesExamples (script.js:3469)
-/// normalizes the card + WI example entries into `<START>`-delimited blocks, then
-/// formatInstructModeExamples (instruct-mode.js:512) wraps each example turn in the instruct
-/// input/output sequences the same way a real chat turn is wrapped. WI em_top entries come first, then
-/// the card's example dialogue, then em_bottom, matching the classic unshift/push order into
-/// mesExamplesArray (script.js:4619-4624). All intermediate allocation lives in a scratch arena; only
-/// the final joined section is copied into `out`. Solo path only: group names are never appended.
-fn appendExamples(alloc: Allocator, out: *std.ArrayList(u8), ctx: Ctx, tpl: templates.Instruct, example_separator: []const u8, em_top: []const []const u8, em_bottom: []const []const u8) Allocator.Error!void {
+/// The two joined example values (owned): `.raw` = mesExamplesRawArray.join('') (script.js:4629,4689),
+/// `.section` = mesExamplesArray.join('') (script.js:4688).
+const ExampleSection = struct {
+    raw: []u8,
+    section: []u8,
+
+    fn deinit(self: ExampleSection, alloc: Allocator) void {
+        alloc.free(self.raw);
+        alloc.free(self.section);
+    }
+};
+
+/// Ports the classic two-stage example pipeline: parseMesExamples (script.js:3469) normalizes the card
+/// + WI example entries into `<START>`-delimited blocks, then formatInstructModeExamples
+/// (instruct-mode.js:512) wraps each turn in the instruct input/output sequences. WI em_top entries come
+/// first, then card dialogue, then em_bottom (unshift/push order, script.js:4619-4624). Intermediate
+/// allocation lives in a scratch arena; both joins are copied out. Solo path only (no group names).
+fn buildExampleSection(alloc: Allocator, ctx: Ctx, tpl: templates.Instruct, example_separator: []const u8, em_top: []const []const u8, em_bottom: []const []const u8) Allocator.Error!ExampleSection {
     var arena_state = std.heap.ArenaAllocator.init(alloc);
     defer arena_state.deinit();
     const a = arena_state.allocator();
@@ -880,6 +900,8 @@ fn appendExamples(alloc: Allocator, out: *std.ArrayList(u8), ctx: Ctx, tpl: temp
         "";
     const pme_heading: []const u8 = if (tpl.enabled) "<START>\n" else sep_heading;
 
+    // stock mesExamplesArray: parseMesExamples(card) then WI examples unshift(em_top)/push(em_bottom)
+    // (script.js:4619-4624); the engine already ordered em_top/em_bottom, so front-then-card-then-back.
     var blocks: std.ArrayList([]const u8) = .empty;
     for (em_top) |e| {
         const subbed = try subAndStripCR(a, e, ctx);
@@ -894,22 +916,26 @@ fn appendExamples(alloc: Allocator, out: *std.ArrayList(u8), ctx: Ctx, tpl: temp
         const subbed = try subAndStripCR(a, e, ctx);
         for (try parseMesExamples(a, subbed, pme_heading)) |p| try blocks.append(a, p);
     }
-    if (blocks.items.len == 0) return;
 
-    const section: []const u8 = if (tpl.enabled)
+    var raw_join: std.ArrayList(u8) = .empty;
+    for (blocks.items) |b| try raw_join.appendSlice(a, b);
+    const raw = try alloc.dupe(u8, raw_join.items);
+    errdefer alloc.free(raw);
+
+    const section: []const u8 = if (blocks.items.len == 0)
+        ""
+    else if (tpl.enabled)
         try formatInstructModeExamples(a, blocks.items, ctx.user, ctx.char, tpl, sep_heading, ctx, false)
-    else blk: {
-        var o: std.ArrayList(u8) = .empty;
-        for (blocks.items) |b| try o.appendSlice(a, b);
-        break :blk try o.toOwnedSlice(a);
-    };
-    try out.appendSlice(alloc, section);
+    else
+        raw_join.items;
+    const section_owned = try alloc.dupe(u8, section);
+    return .{ .raw = raw, .section = section_owned };
 }
 
 /// The {{mesExamples}} macro value (env-macros.js:105): parse the raw card examples, then join them -
 /// instruct-wrapped via formatInstructModeExamples when instruct is enabled, else the parsed blocks
 /// verbatim. Empty when the raw yields no block. Owned. Mirrors the story-string example pipeline
-/// (appendExamples) minus the WI em_top/em_bottom entries; the macro always joins on ''.
+/// (buildExampleSection) minus the WI em_top/em_bottom entries; the macro always joins on ''.
 pub fn renderMesExamplesMacro(alloc: Allocator, raw: []const u8, name1: []const u8, name2: []const u8, tpl: templates.Instruct, example_separator: []const u8, ctx: Ctx) Allocator.Error![]u8 {
     if (raw.len == 0) return alloc.dupe(u8, "");
     var arena_state = std.heap.ArenaAllocator.init(alloc);
