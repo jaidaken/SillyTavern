@@ -1758,17 +1758,9 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
     defer alloc.free(wi_candidates);
     const wi_budget_chars = (generate.promptCharBudget(conn) *| @as(usize, @intCast(wi_store.global.budget))) / 100;
 
-    // Persona TOP_AN / BOTTOM_AN joins the persona into the author's-note text (stock script.js:3179),
-    // gated by the note firing (~ shouldWIAddPrompt, proxied by interval); the join rides the note placement.
-    var eff_note = pend_note;
-    const ppos = pend_tpl.persona_position;
-    if ((ppos == .top_an or ppos == .bottom_an) and pend_persona_desc.len > 0 and authors_note.intervalFires(pend_note, history.items.len)) {
-        if (pend_tpl_arena) |*a| {
-            if (authors_note.joinPersonaNote(a.allocator(), pend_note.prompt, pend_persona_desc, ppos == .top_an)) |s| {
-                eff_note.prompt = s;
-            } else |_| {}
-        }
-    }
+    // Persona TOP_AN / BOTTOM_AN attaches in generate.assemblePieces, OUTSIDE the WI an-anchors (stock
+    // addPersonaDescriptionExtensionPrompt runs after the WI an-merge, script.js:3183 vs world-info.js:5149).
+    const eff_note = pend_note;
     // The note's anchor positions render through the story string; the in_chat position is inserted
     // into the history by the builder. Both read the same note, so only one of them ever fires.
     const anchors = noteAnchors(eff_note);

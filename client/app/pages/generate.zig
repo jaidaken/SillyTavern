@@ -573,17 +573,28 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
         std.log.scoped(.wi).warn("the story string has no wi slot; activated world info is dropped", .{});
     }
 
+    // Persona TOP_AN / BOTTOM_AN is the note's OUTERMOST element, outside the WI an-anchors: stock wraps
+    // persona around the WI-wrapped note (script.js:3183 after world-info.js:5149), gated on interval firing.
+    const persona_an = (shape.persona_position == .top_an or shape.persona_position == .bottom_an) and
+        wctx.persona.len > 0 and authors_note.intervalFires(shape.note, history.len);
+    const persona_an_top = shape.persona_position == .top_an;
+    const persona_an_txt: []const u8 = if (persona_an) wctx.persona else "";
+
     // Pre-resolve the anchor as stock's getExtensionPrompt(position).trim() (script.js:4671-4687), so a
     // {{pick}} in the note seeds off THIS wrapped block and its offset, not off the whole story string.
     var anchor_owned: ?[]u8 = null;
     defer if (anchor_owned) |s| alloc.free(s);
     switch (shape.note.position) {
         .before_prompt => {
-            anchor_owned = try resolveAnchorBlock(alloc, &.{ wi_act.an_top, wctx.anchor_before, wi_act.an_bottom }, wctx);
+            const block = try buildNoteBlock(alloc, wi_act.an_top, wctx.anchor_before, wi_act.an_bottom, persona_an_txt, persona_an_top);
+            defer alloc.free(block);
+            anchor_owned = try resolveAnchorBlock(alloc, &.{block}, wctx);
             if (anchor_owned) |s| wctx.anchor_before = s;
         },
         .in_prompt => {
-            anchor_owned = try resolveAnchorBlock(alloc, &.{ wi_act.an_top, wctx.anchor_after, wi_act.an_bottom }, wctx);
+            const block = try buildNoteBlock(alloc, wi_act.an_top, wctx.anchor_after, wi_act.an_bottom, persona_an_txt, persona_an_top);
+            defer alloc.free(block);
+            anchor_owned = try resolveAnchorBlock(alloc, &.{block}, wctx);
             if (anchor_owned) |s| wctx.anchor_after = s;
         },
         .in_chat => {},
@@ -630,9 +641,11 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
     // Contributions carry RAW text; groupInjections trims, joins, and substitutes the block once, so a
     // {{pick}} seeds off the joined block the way stock getExtensionPrompt does, not off one value alone.
     const an_wrap = shape.note.position == .in_chat and (wi_act.an_top.len > 0 or wi_act.an_bottom.len > 0);
-    if (an_wrap or authors_note.injectionIndex(shape.note, history.len) != null) {
+    const persona_an_in_chat = persona_an and shape.note.position == .in_chat;
+    if (an_wrap or persona_an_in_chat or authors_note.injectionIndex(shape.note, history.len) != null) {
         const note_text = if (authors_note.injectionIndex(shape.note, history.len) != null) shape.note.prompt else "";
-        const joined = try joinNonEmpty(alloc, &.{ wi_act.an_top, note_text, wi_act.an_bottom });
+        const inchat_persona: []const u8 = if (persona_an_in_chat) persona_an_txt else "";
+        const joined = try buildNoteBlock(alloc, wi_act.an_top, note_text, wi_act.an_bottom, inchat_persona, persona_an_top);
         errdefer alloc.free(joined);
         try contribs.append(alloc, .{ .depth = @intCast(@max(0, shape.note.depth)), .role = shape.note.role.toTemplateRole(), .text = joined });
     }
@@ -810,15 +823,21 @@ fn resolveAnchorBlock(alloc: Allocator, values: []const []const u8, ctx: Ctx) Al
     return try alloc.dupe(u8, std.mem.trim(u8, resolved, " \t\r\n"));
 }
 
-fn joinNonEmpty(alloc: Allocator, parts: []const []const u8) Allocator.Error![]u8 {
-    var buf: std.ArrayList(u8) = .empty;
-    errdefer buf.deinit(alloc);
-    for (parts) |p| {
-        if (p.len == 0) continue;
-        if (buf.items.len > 0) try buf.append(alloc, '\n');
-        try buf.appendSlice(alloc, p);
-    }
-    return buf.toOwnedSlice(alloc);
+/// Builds the author's-note block in stock's two stages. World-info.js:5149 wraps the WI an_top/an_bottom
+/// around the note as `${top}\n${note}\n${bottom}` with exactly one leading and one trailing '\n' stripped,
+/// so an empty note between two anchors leaves a blank line (the double '\n'). Script.js:3184 then wraps the
+/// TOP_AN / BOTTOM_AN persona OUTSIDE that; an empty `persona` skips the persona stage. Owned result.
+fn buildNoteBlock(alloc: Allocator, an_top: []const u8, note: []const u8, an_bottom: []const u8, persona: []const u8, persona_top: bool) Allocator.Error![]u8 {
+    const s1 = try std.fmt.allocPrint(alloc, "{s}\n{s}\n{s}", .{ an_top, note, an_bottom });
+    defer alloc.free(s1);
+    var wi = s1;
+    if (wi.len > 0 and wi[0] == '\n') wi = wi[1..];
+    if (wi.len > 0 and wi[wi.len - 1] == '\n') wi = wi[0 .. wi.len - 1];
+    if (persona.len == 0) return alloc.dupe(u8, wi);
+    return if (persona_top)
+        std.fmt.allocPrint(alloc, "{s}\n{s}", .{ persona, wi })
+    else
+        std.fmt.allocPrint(alloc, "{s}\n{s}", .{ wi, persona });
 }
 
 /// The example section, ported from the classic two-stage pipeline: parseMesExamples (script.js:3469)
@@ -2117,6 +2136,51 @@ test "an-anchored wi wraps the note's anchor slot" {
     try testing.expectEqualStrings("TOP\nNOTE\nBOTTOM\nA diver.\nRita:", out);
 }
 
+test "persona TOP_AN and BOTTOM_AN wrap OUTSIDE the wi an-anchors on the note slot" {
+    const entries = [_]wi_engine.Entry{ wiTestEntry(0, .an_top, "TOP"), wiTestEntry(1, .an_bottom, "BOTTOM") };
+    const story = "{{#if anchorBefore}}{{anchorBefore}}\n{{/if}}{{#if description}}{{description}}\n{{/if}}";
+    const ctx = Ctx{ .char = "Rita", .description = "A diver.", .anchor_before = "NOTE", .persona = "PERSONA" };
+    const base = Shape{
+        .tpl = .{ .context = .{ .story_string = story } },
+        .note = .{ .prompt = "NOTE", .interval = 1, .position = .before_prompt },
+        .wi_entries = &entries,
+    };
+
+    var top = base;
+    top.persona_position = .top_an;
+    const out_top = try buildPrompt(testing.allocator, ctx, &.{}, top);
+    defer testing.allocator.free(out_top);
+    try testing.expectEqualStrings("PERSONA\nTOP\nNOTE\nBOTTOM\nA diver.\nRita:", out_top);
+
+    var bot = base;
+    bot.persona_position = .bottom_an;
+    const out_bot = try buildPrompt(testing.allocator, ctx, &.{}, bot);
+    defer testing.allocator.free(out_bot);
+    try testing.expectEqualStrings("TOP\nNOTE\nBOTTOM\nPERSONA\nA diver.\nRita:", out_bot);
+}
+
+test "an empty note between two wi an-anchors keeps stock's blank line" {
+    const entries = [_]wi_engine.Entry{ wiTestEntry(0, .an_top, "TOP"), wiTestEntry(1, .an_bottom, "BOTTOM") };
+    const story = "{{#if anchorBefore}}{{anchorBefore}}\n{{/if}}{{#if description}}{{description}}\n{{/if}}";
+    const ctx = Ctx{ .char = "Rita", .description = "A diver.", .persona = "PERSONA" };
+    const base = Shape{
+        .tpl = .{ .context = .{ .story_string = story } },
+        .note = .{ .prompt = "", .interval = 1, .position = .before_prompt },
+        .wi_entries = &entries,
+    };
+
+    // Stock's `${top}\n${note}\n${bottom}` leaves a blank line when the note is empty (world-info.js:5149).
+    const plain = try buildPrompt(testing.allocator, ctx, &.{}, base);
+    defer testing.allocator.free(plain);
+    try testing.expectEqualStrings("TOP\n\nBOTTOM\nA diver.\nRita:", plain);
+
+    var top = base;
+    top.persona_position = .bottom_an;
+    const out = try buildPrompt(testing.allocator, ctx, &.{}, top);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("TOP\n\nBOTTOM\nPERSONA\nA diver.\nRita:", out);
+}
+
 test "resolveAnchorBlock seeds a note {{pick}} off the wrapped block, not the bare note" {
     const rng = @import("./rng.zig");
     const chat_id = "Chat_2024-01-15@10h30m";
@@ -2379,7 +2443,9 @@ test "buildPrompt fills the story persona slot for IN_PROMPT and AFTER_CHAR" {
 test "buildPrompt empties the story persona slot for NONE, TOP_AN, and BOTTOM_AN" {
     const ctx = Ctx{ .char = "Rita", .persona = "Jamie dives too." };
     for ([_]templates.PersonaPosition{ .none, .top_an, .bottom_an }) |pos| {
-        const out = try buildPrompt(testing.allocator, ctx, &.{}, .{ .persona_position = pos });
+        // Note disabled (interval 0) so the persona cannot ride the author's-note slot; its only other
+        // home is the story {{persona}} slot, which fillsStory() empties for these three positions.
+        const out = try buildPrompt(testing.allocator, ctx, &.{}, .{ .persona_position = pos, .note = .{ .interval = 0 } });
         defer testing.allocator.free(out);
         try testing.expect(std.mem.indexOf(u8, out, "Jamie dives too.") == null);
     }

@@ -160,16 +160,6 @@ pub fn injectionIndex(note: Note, history_len: usize) ?usize {
     return history_len -| depth;
 }
 
-/// Joins the persona into the author's-note text for the TOP_AN / BOTTOM_AN persona positions (stock
-/// addPersonaDescriptionExtensionPrompt, script.js:3179). TOP prepends, BOTTOM appends, each with one
-/// '\n'; the joined note keeps the note's own placement. Owned result, caller frees.
-pub fn joinPersonaNote(alloc: Allocator, note_prompt: []const u8, persona: []const u8, top: bool) Allocator.Error![]u8 {
-    return if (top)
-        std.fmt.allocPrint(alloc, "{s}\n{s}", .{ persona, note_prompt })
-    else
-        std.fmt.allocPrint(alloc, "{s}\n{s}", .{ note_prompt, persona });
-}
-
 const testing = std.testing;
 
 fn parseStr(s: []const u8) !std.json.Parsed(std.json.Value) {
@@ -355,33 +345,6 @@ test "merge cleans up on every allocation failure" {
             const a = arena.allocator();
             var root = std.json.Value{ .object = .empty };
             try merge(a, &root.object, .{ .prompt = "note" });
-        }
-    }.run, .{@as(u8, 0)});
-}
-
-test "joinPersonaNote prepends for TOP_AN and appends for BOTTOM_AN" {
-    const top = try joinPersonaNote(testing.allocator, "the wind rises", "the traveller", true);
-    defer testing.allocator.free(top);
-    try testing.expectEqualStrings("the traveller\nthe wind rises", top);
-    const bot = try joinPersonaNote(testing.allocator, "the wind rises", "the traveller", false);
-    defer testing.allocator.free(bot);
-    try testing.expectEqualStrings("the wind rises\nthe traveller", bot);
-}
-
-test "joinPersonaNote keeps the separator when the note is empty" {
-    const top = try joinPersonaNote(testing.allocator, "", "P", true);
-    defer testing.allocator.free(top);
-    try testing.expectEqualStrings("P\n", top);
-    const bot = try joinPersonaNote(testing.allocator, "", "P", false);
-    defer testing.allocator.free(bot);
-    try testing.expectEqualStrings("\nP", bot);
-}
-
-test "joinPersonaNote cleans up on every allocation failure" {
-    try testing.checkAllAllocationFailures(testing.allocator, struct {
-        fn run(alloc: Allocator, _: u8) !void {
-            const s = try joinPersonaNote(alloc, "note", "persona", true);
-            alloc.free(s);
         }
     }.run, .{@as(u8, 0)});
 }
