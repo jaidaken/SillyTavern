@@ -104,6 +104,13 @@ pub fn substituteMacros(alloc: Allocator, text: []const u8, ctx: Ctx) Allocator.
 
     var i: usize = 0;
     while (i < text.len) {
+        if (text[i] == '<') {
+            if (matchAngleTag(text[i..], ctx)) |m| {
+                try out.appendSlice(alloc, m.val);
+                i += m.len;
+                continue;
+            }
+        }
         if (i + 1 < text.len and text[i] == '{' and text[i + 1] == '{') {
             if (std.mem.indexOfPos(u8, text, i + 2, "}}")) |close| {
                 const raw = text[i + 2 .. close];
@@ -111,6 +118,10 @@ pub fn substituteMacros(alloc: Allocator, text: []const u8, ctx: Ctx) Allocator.
                 // original-text offset, see section-file IMPURE MACROS. Isolated for a later swap.
                 const pick_offset = i;
                 if (try tryImpureMacro(alloc, &out, raw, text, pick_offset, ctx)) {
+                    i = close + 2;
+                    continue;
+                }
+                if (try tryPureMacro(alloc, &out, raw)) {
                     i = close + 2;
                     continue;
                 }
@@ -170,6 +181,102 @@ fn tryImpureMacro(alloc: Allocator, out: *std.ArrayList(u8), raw: []const u8, te
         return true;
     }
     return false;
+}
+
+/// The legacy non-curly `<USER>`/`<BOT>`/`<CHAR>` tags (stock macros.js:571-573, `/<USER>/gi` etc.,
+/// case-insensitive, replaced in every substituteParams pass). `<BOT>` and `<CHAR>` both map to the
+/// character name. Returns the value plus the tag length so the caller can advance past it. The
+/// group aliases `<GROUP>`/`<CHARIFNOTGROUP>` are deliberately absent (group-chat, out of scope).
+fn matchAngleTag(text: []const u8, ctx: Ctx) ?struct { val: []const u8, len: usize } {
+    if (text.len >= 6 and std.ascii.eqlIgnoreCase(text[0..6], "<user>")) return .{ .val = ctx.user, .len = 6 };
+    if (text.len >= 5 and std.ascii.eqlIgnoreCase(text[0..5], "<bot>")) return .{ .val = ctx.char, .len = 5 };
+    if (text.len >= 6 and std.ascii.eqlIgnoreCase(text[0..6], "<char>")) return .{ .val = ctx.char, .len = 6 };
+    return null;
+}
+
+/// Handles the pure argument-taking utility macros `{{noop}}`, `{{space}}`/`{{space::N}}`, and
+/// `{{reverse:X}}`/`{{reverse::X}}` (stock core-macros.js:33/69/267, legacy macros.js:582/605),
+/// appending the result and returning true. Returns false when `raw` is none of them, so the caller
+/// falls through to the card/outlet resolver. `raw` is the text between `{{` and `}}`, untrimmed to
+/// mirror the impure matchers.
+fn tryPureMacro(alloc: Allocator, out: *std.ArrayList(u8), raw: []const u8) Allocator.Error!bool {
+    if (std.ascii.eqlIgnoreCase(raw, "noop")) return true;
+    if (matchReverse(raw)) |value| {
+        try appendReversed(alloc, out, value);
+        return true;
+    }
+    if (matchSpace(raw)) |count| {
+        var k: usize = 0;
+        while (k < count) : (k += 1) try out.append(alloc, ' ');
+        return true;
+    }
+    return false;
+}
+
+/// The captured value of a `{{reverse<sep>X}}`, or null. Separator is `\s?::?` (stock `::` plus the
+/// legacy single-colon regex), capture is `[^}]+`. Untrimmed, matching stock's raw capture.
+fn matchReverse(raw: []const u8) ?[]const u8 {
+    const kw = "reverse";
+    if (raw.len < kw.len) return null;
+    if (!std.ascii.eqlIgnoreCase(raw[0..kw.len], kw)) return null;
+    var p = kw.len;
+    if (p < raw.len and std.ascii.isWhitespace(raw[p])) p += 1;
+    if (p >= raw.len or raw[p] != ':') return null;
+    p += 1;
+    if (p < raw.len and raw[p] == ':') p += 1;
+    const cap = raw[p..];
+    if (cap.len == 0 or std.mem.indexOfScalar(u8, cap, '}') != null) return null;
+    return cap;
+}
+
+/// The space count of a `{{space}}` (1) or `{{space<sep>N}}` (`String.repeat(Number(N))`), or null
+/// when `raw` is not a space macro. `Number('')` and `Number('abc')` -> 0 (stock repeat coerces NaN
+/// to 0); a fractional count truncates toward zero, a negative count is clamped to 0.
+fn matchSpace(raw: []const u8) ?usize {
+    const kw = "space";
+    if (raw.len < kw.len) return null;
+    if (!std.ascii.eqlIgnoreCase(raw[0..kw.len], kw)) return null;
+    var p = kw.len;
+    if (p == raw.len) return 1;
+    if (std.ascii.isWhitespace(raw[p])) p += 1;
+    if (p >= raw.len or raw[p] != ':') return null;
+    p += 1;
+    if (p < raw.len and raw[p] == ':') p += 1;
+    const cap = raw[p..];
+    if (std.mem.indexOfScalar(u8, cap, '}') != null) return null;
+    return jsRepeatCount(cap);
+}
+
+/// Mirrors `String.prototype.repeat(Number(s))`'s count coercion: trims, empty -> 0, non-numeric ->
+/// 0 (NaN), fractional truncates toward zero, negative clamps to 0.
+fn jsRepeatCount(s: []const u8) usize {
+    const t = std.mem.trim(u8, s, &std.ascii.whitespace);
+    if (t.len == 0) return 0;
+    const f = std.fmt.parseFloat(f64, t) catch return 0;
+    if (!(f >= 1)) return 0;
+    return @intFromFloat(@floor(f));
+}
+
+/// Appends `s` reversed by Unicode code point (stock `Array.from(str).reverse().join('')`, which
+/// iterates code points, not bytes). Invalid UTF-8 falls back to a byte reversal so no input panics.
+fn appendReversed(alloc: Allocator, out: *std.ArrayList(u8), s: []const u8) Allocator.Error!void {
+    const view = std.unicode.Utf8View.init(s) catch {
+        var k: usize = s.len;
+        while (k > 0) {
+            k -= 1;
+            try out.append(alloc, s[k]);
+        }
+        return;
+    };
+    var slices: std.ArrayList([]const u8) = .empty;
+    defer slices.deinit(alloc);
+    var it = view.iterator();
+    while (it.nextCodepointSlice()) |cp| try slices.append(alloc, cp);
+    var idx: usize = slices.items.len;
+    while (idx > 0) {
+        idx -= 1;
+        try out.appendSlice(alloc, slices.items[idx]);
+    }
 }
 
 /// The formula of a `{{roll<sep>F}}`, or null. Separator is one space or colon (stock `[ : ]`), the
@@ -557,6 +664,79 @@ test "the impure macros clean up on every allocation failure" {
     try testing.checkAllAllocationFailures(testing.allocator, struct {
         fn run(alloc: Allocator, c: Ctx) !void {
             const out = try substituteMacros(alloc, "roll {{roll:2d6+1}} rand {{random: a\\,b, c}} pick {{pick::x::y::z}} done", c);
+            alloc.free(out);
+        }
+    }.run, .{ctx});
+}
+
+test "legacy angle tags resolve to the persona and character names, case-insensitively" {
+    const ctx = Ctx{ .char = "Rita", .user = "Jamie" };
+    const out = try substituteMacros(testing.allocator, "<USER> meets <BOT>; <char> greets <User>.", ctx);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("Jamie meets Rita; Rita greets Jamie.", out);
+}
+
+test "a lone or unknown angle bracket is left verbatim" {
+    const ctx = Ctx{ .char = "Rita", .user = "Jamie" };
+    const out = try substituteMacros(testing.allocator, "1 < 2 and <GROUP> and <use", ctx);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("1 < 2 and <GROUP> and <use", out);
+}
+
+test "noop resolves to empty and consumes only the exact macro" {
+    const ctx = Ctx{ .char = "Rita" };
+    const out = try substituteMacros(testing.allocator, "a{{noop}}b {{NOOP}} {{noop::x}}", ctx);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("ab  {{noop::x}}", out);
+}
+
+test "space resolves to one space by default and to the counted number of spaces" {
+    const ctx = Ctx{};
+    const out = try substituteMacros(testing.allocator, "[{{space}}][{{space::4}}][{{space::0}}][{{space::x}}]", ctx);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("[ ][    ][][]", out);
+}
+
+test "space truncates a fractional count and clamps a negative count to zero" {
+    const ctx = Ctx{};
+    const out = try substituteMacros(testing.allocator, "[{{space::2.9}}][{{space::-3}}]", ctx);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("[  ][]", out);
+}
+
+test "reverse flips an ascii value for both the single and double colon forms" {
+    const ctx = Ctx{};
+    const out = try substituteMacros(testing.allocator, "{{reverse::I am Lana}}|{{reverse:abc}}", ctx);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("anaL ma I|cba", out);
+}
+
+test "reverse flips by unicode code point, not by byte" {
+    const ctx = Ctx{};
+    const out = try substituteMacros(testing.allocator, "{{reverse::áé}}", ctx);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("éá", out);
+}
+
+test "reverse of invalid utf8 falls back to a byte reversal without panicking" {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(testing.allocator);
+    try appendReversed(testing.allocator, &out, "\xff\xfeA");
+    try testing.expectEqualStrings("A\xfe\xff", out.items);
+}
+
+test "an empty-capture reverse or a bare space with junk stays verbatim" {
+    const ctx = Ctx{};
+    const out = try substituteMacros(testing.allocator, "{{reverse}}|{{reverse:}}|{{spacex}}", ctx);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("{{reverse}}|{{reverse:}}|{{spacex}}", out);
+}
+
+test "the pure argument macros clean up on every allocation failure" {
+    const ctx = Ctx{ .char = "Rita", .user = "Jamie" };
+    try testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn run(alloc: Allocator, c: Ctx) !void {
+            const out = try substituteMacros(alloc, "<USER> {{space::3}} {{reverse::mesa áé}} {{noop}} <BOT>", c);
             alloc.free(out);
         }
     }.run, .{ctx});
