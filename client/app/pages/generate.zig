@@ -869,6 +869,36 @@ fn appendExamples(alloc: Allocator, out: *std.ArrayList(u8), ctx: Ctx, tpl: temp
     try out.appendSlice(alloc, section);
 }
 
+/// The {{mesExamples}} macro value (env-macros.js:105): parse the raw card examples, then join them -
+/// instruct-wrapped via formatInstructModeExamples when instruct is enabled, else the parsed blocks
+/// verbatim. Empty when the raw yields no block. Owned. Mirrors the story-string example pipeline
+/// (appendExamples) minus the WI em_top/em_bottom entries; the macro always joins on ''.
+pub fn renderMesExamplesMacro(alloc: Allocator, raw: []const u8, name1: []const u8, name2: []const u8, tpl: templates.Instruct, example_separator: []const u8, ctx: Ctx) Allocator.Error![]u8 {
+    if (raw.len == 0) return alloc.dupe(u8, "");
+    var arena_state = std.heap.ArenaAllocator.init(alloc);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+
+    const sep_resolved = try substituteMacros(a, example_separator, ctx);
+    const sep_heading: []const u8 = if (example_separator.len > 0)
+        try std.fmt.allocPrint(a, "{s}\n", .{sep_resolved})
+    else
+        "";
+    const pme_heading: []const u8 = if (tpl.enabled) "<START>\n" else sep_heading;
+
+    const trimmed = std.mem.trim(u8, raw, &std.ascii.whitespace);
+    const blocks = try parseMesExamples(a, trimmed, pme_heading);
+    if (blocks.len == 0) return alloc.dupe(u8, "");
+
+    if (!tpl.enabled) {
+        var o: std.ArrayList(u8) = .empty;
+        for (blocks) |b| try o.appendSlice(a, b);
+        return alloc.dupe(u8, o.items);
+    }
+    const formatted = try formatInstructModeExamples(a, blocks, name1, name2, tpl, sep_heading, ctx, false);
+    return alloc.dupe(u8, formatted);
+}
+
 /// baseChatReplace (script.js:3309) for an example field: resolve macros, then strip every CR. The
 /// caller trims the card field first; WI entries pass through untrimmed, matching the reference.
 fn subAndStripCR(a: Allocator, s: []const u8, ctx: Ctx) Allocator.Error![]u8 {
@@ -1546,6 +1576,28 @@ test "parseMesExamples prepends START and splits multiple blocks" {
     try testing.expectEqual(@as(usize, 2), blocks.len);
     try testing.expectEqualStrings("<START>\nUser: a\nChar: b\n", blocks[0]);
     try testing.expectEqualStrings("<START>\nUser: c\nChar: d\n", blocks[1]);
+}
+
+test "renderMesExamplesMacro joins parsed blocks verbatim when instruct is off" {
+    const ctx = Ctx{};
+    const out = try renderMesExamplesMacro(testing.allocator, "<START>\nA: x\nB: y", "A", "B", .{ .enabled = false }, "", ctx);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("A: x\nB: y\n", out);
+}
+
+test "renderMesExamplesMacro instruct-wraps each example turn" {
+    const ctx = Ctx{ .user = "User", .char = "Char" };
+    const out = try renderMesExamplesMacro(testing.allocator, "<START>\nUser: hi\nChar: hello", "User", "Char", chatml, "", ctx);
+    defer testing.allocator.free(out);
+    try testing.expect(std.mem.indexOf(u8, out, "<|im_start|>user\nhi<|im_end|>") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "<|im_start|>assistant\nhello<|im_end|>") != null);
+}
+
+test "renderMesExamplesMacro is empty for empty raw" {
+    const ctx = Ctx{};
+    const out = try renderMesExamplesMacro(testing.allocator, "", "A", "B", .{ .enabled = true }, "", ctx);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("", out);
 }
 
 test "parseExampleIntoIndividual splits turns and strips the name prefix" {

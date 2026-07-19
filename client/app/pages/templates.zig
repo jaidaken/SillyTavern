@@ -494,7 +494,10 @@ pub fn renderStoryString(alloc: Allocator, story: []const u8, ctx: Ctx, instruct
     // seeds off that field's own text+offset (measured: rawContent = the field), not the whole story.
     var resolved = try resolveCardFields(alloc, ctx);
     defer resolved.deinit(alloc);
-    const rctx = resolved.ctx;
+    // The template render IS stock's replaceCharacterCard=true context; card-field macros resolve here,
+    // after resolveCardFields already blanked them inside each field (its per-field pass ran with false).
+    var rctx = resolved.ctx;
+    rctx.replace_character_card = true;
 
     const structured = try renderBlocks(alloc, story, rctx);
     defer alloc.free(structured);

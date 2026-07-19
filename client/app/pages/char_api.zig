@@ -82,6 +82,9 @@ var deep_char_note_depth: i64 = authors_note.default_depth;
 var deep_char_note_role: authors_note.Role = .system;
 // chunk-4: the card's creator notes, so world-info matchCreatorNotes can scan them.
 var deep_creator_notes: []u8 = &.{};
+// The card's version + alternate greetings, for {{charVersion}} / {{greeting::N}}; deep-only fields.
+var deep_char_version: []u8 = &.{};
+var deep_alt_greetings: [][]u8 = &.{};
 var deep_in_flight: bool = false;
 
 /// Captured at send so the seal-time assistant append targets the chat the send opened against, even
@@ -117,6 +120,9 @@ var pend_post_history: []u8 = &.{};
 var pend_char_note: []u8 = &.{};
 /// The card's creator notes, captured at send for world-info matchCreatorNotes scanning.
 var pend_creator_notes: []u8 = &.{};
+/// The card's version + alternate greetings, captured at send for {{charVersion}} / {{greeting::N}}.
+var pend_char_version: []u8 = &.{};
+var pend_alt_greetings: [][]u8 = &.{};
 var pend_char_note_depth: i64 = authors_note.default_depth;
 var pend_char_note_role: authors_note.Role = .system;
 
@@ -200,10 +206,11 @@ fn freePending() void {
     }
     pend_tpl = .{};
     pend_note = .{};
-    inline for (.{ &pend_char_name, &pend_char_avatar, &pend_user_name, &pend_user_text, &pend_persona_desc, &pend_description, &pend_personality, &pend_scenario, &pend_mes_example, &pend_first_mes, &pend_system_prompt, &pend_post_history, &pend_char_note, &pend_creator_notes }) |f| {
+    inline for (.{ &pend_char_name, &pend_char_avatar, &pend_user_name, &pend_user_text, &pend_persona_desc, &pend_description, &pend_personality, &pend_scenario, &pend_mes_example, &pend_first_mes, &pend_system_prompt, &pend_post_history, &pend_char_note, &pend_creator_notes, &pend_char_version }) |f| {
         if (f.len > 0) alloc.free(f.*);
         f.* = &.{};
     }
+    freeAltGreetings(&pend_alt_greetings);
     pend_active = false;
 }
 
@@ -1078,6 +1085,57 @@ fn roleFromName(s: []const u8) authors_note.Role {
     return .system;
 }
 
+fn freeAltGreetings(list: *[][]u8) void {
+    for (list.*) |s| alloc.free(s);
+    if (list.*.len > 0) alloc.free(list.*);
+    list.* = &.{};
+}
+
+/// Dupes `src` into `dst`, replacing its prior contents. On any OOM `dst` ends empty rather than partial.
+fn dupeGreetings(dst: *[][]u8, src: []const []const u8) void {
+    freeAltGreetings(dst);
+    if (src.len == 0) return;
+    const list = alloc.alloc([]u8, src.len) catch return;
+    var n: usize = 0;
+    for (src) |s| {
+        list[n] = alloc.dupe(u8, s) catch {
+            for (list[0..n]) |g| alloc.free(g);
+            alloc.free(list);
+            return;
+        };
+        n += 1;
+    }
+    dst.* = list;
+}
+
+/// Loads `data.alternate_greetings` (array of strings) into deep_alt_greetings, counting strings first
+/// so the owned slice is exactly sized (free needs the real length). Non-string entries are skipped.
+fn setDeepAltGreetings(obj: *const std.json.ObjectMap) void {
+    freeAltGreetings(&deep_alt_greetings);
+    const card_data = obj.get("data") orelse return;
+    if (card_data != .object) return;
+    const ag = card_data.object.get("alternate_greetings") orelse return;
+    if (ag != .array) return;
+    const items = ag.array.items;
+    var count: usize = 0;
+    for (items) |item| {
+        if (item == .string) count += 1;
+    }
+    if (count == 0) return;
+    const list = alloc.alloc([]u8, count) catch return;
+    var n: usize = 0;
+    for (items) |item| {
+        if (item != .string) continue;
+        list[n] = alloc.dupe(u8, item.string) catch {
+            for (list[0..n]) |g| alloc.free(g);
+            alloc.free(list);
+            return;
+        };
+        n += 1;
+    }
+    deep_alt_greetings = list;
+}
+
 fn fetchDeepCard(avatar: []const u8) void {
     _ = requestDeepCard(avatar);
 }
@@ -1158,6 +1216,8 @@ fn onDeepCardDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     deep_char_note_depth = dp.depth;
     deep_char_note_role = dp.role;
     setOwned(&deep_creator_notes, cardDataStr(obj, "creator_notes"));
+    setOwned(&deep_char_version, cardDataStr(obj, "character_version"));
+    setDeepAltGreetings(obj);
     wi_actions.adoptCard(body);
     chars_log.debug("deep card loaded: personality {d}b scenario {d}b examples {d}b", .{ deep_personality.len, deep_scenario.len, deep_mes_example.len });
 }
@@ -1298,6 +1358,8 @@ fn stashSend(conn: generate.Connection, c: char_store.Character, persona: ?perso
     setOwned(&pend_char_note, deepField(c, "", deep_char_note));
     setOwned(&pend_creator_notes, deepField(c, "", deep_creator_notes));
     const deep_match = deep_avatar.len > 0 and std.mem.eql(u8, deep_avatar, c.avatar);
+    setOwned(&pend_char_version, if (deep_match) deep_char_version else "");
+    dupeGreetings(&pend_alt_greetings, if (deep_match) deep_alt_greetings else &.{});
     pend_char_note_depth = if (deep_match) deep_char_note_depth else authors_note.default_depth;
     pend_char_note_role = if (deep_match) deep_char_note_role else .system;
     pend_active = true;
@@ -1712,7 +1774,7 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
     const anchors = noteAnchors(eff_note);
     // Effective system prompt: the card's own system_prompt wins over the global (generate.effectiveSystem).
     const effective_system = generate.effectiveSystem(pend_tpl.sysprompt_enabled, pend_tpl.prefer_character_prompt, pend_system_prompt, pend_tpl.system_prompt);
-    const ctx = generate.Ctx{
+    var ctx = generate.Ctx{
         .char = pend_char_name,
         .user = pend_user_name,
         .persona = pend_persona_desc,
@@ -1720,6 +1782,15 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
         .personality = pend_personality,
         .scenario = pend_scenario,
         .mes_example = pend_mes_example,
+        // Card-field macros ({{charPrompt}}/{{greeting}}/...); charPrompt/charInstruction gate on the
+        // prefer_character_* flags exactly like stock getCharacterCardFields (script.js:3384/3388).
+        .char_prompt = if (pend_tpl.prefer_character_prompt) pend_system_prompt else "",
+        .char_instruction = if (pend_tpl.prefer_character_jailbreak) pend_post_history else "",
+        .char_depth_prompt = pend_char_note,
+        .creator_notes = pend_creator_notes,
+        .first_mes = pend_first_mes,
+        .alt_greetings = pend_alt_greetings,
+        .char_version = pend_char_version,
         .system = effective_system,
         .original = pend_tpl.system_prompt,
         .anchor_before = anchors.before,
@@ -1729,6 +1800,10 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
         .chat_id = send_file,
         .rng = wiRandom(),
     };
+    // {{mesExamples}} formatted value: precomputed here (macros.zig cannot reach the example pipeline).
+    const mes_fmt = generate.renderMesExamplesMacro(alloc, pend_mes_example, pend_char_name, pend_user_name, pend_tpl.instruct, pend_tpl.context.example_separator, ctx) catch "";
+    defer if (mes_fmt.len > 0) alloc.free(mes_fmt);
+    ctx.mes_example_formatted = mes_fmt;
     // Jailbreak / post-history: card override wins over the global (same sysprompt gate). Its
     // {{original}} means the global POST_HISTORY here, so resolve against that before it injects.
     const effective_jb = generate.effectiveSystem(pend_tpl.sysprompt_enabled, pend_tpl.prefer_character_jailbreak, pend_post_history, pend_tpl.sysprompt_post_history);

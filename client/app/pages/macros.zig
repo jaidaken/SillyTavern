@@ -29,6 +29,18 @@ pub const Ctx = struct {
     personality: []const u8 = "",
     scenario: []const u8 = "",
     mes_example: []const u8 = "",
+    /// The card-field macro values (env-macros.js CHARACTER category). Live only when
+    /// replace_character_card is set; a card-field (baseChatReplace) pass leaves them "".
+    char_prompt: []const u8 = "",
+    char_instruction: []const u8 = "",
+    char_depth_prompt: []const u8 = "",
+    creator_notes: []const u8 = "",
+    first_mes: []const u8 = "",
+    alt_greetings: []const []const u8 = &.{},
+    char_version: []const u8 = "",
+    /// The {{mesExamples}} formatted value, precomputed by the caller (macros.zig cannot reach the
+    /// generate.zig example pipeline); {{mesExamplesRaw}} maps to mes_example.
+    mes_example_formatted: []const u8 = "",
     system: []const u8 = "",
     /// The global system prompt content, for `{{original}}` inside a card's system_prompt override
     /// (stock substituteParams `{ original: sysprompt.content }`, script.js:4661).
@@ -45,6 +57,9 @@ pub const Ctx = struct {
     /// Entropy for the genuinely-random `{{roll}}`/`{{random}}`. Null draws deterministically (0.0),
     /// mirroring the world-info engine's null-rng fallback (world_info_engine.zig:414).
     rng: ?std.Random = null,
+    /// Card-field macros resolve to values only when set (stock replaceCharacterCard, MacroEnvBuilder.js:96);
+    /// renderStoryString's template passes set it, every baseChatReplace-equivalent pass leaves it false.
+    replace_character_card: bool = false,
 
     fn outletByName(self: Ctx, name: []const u8) ?[]const u8 {
         for (self.outlets) |o| {
@@ -91,6 +106,63 @@ pub fn resolve(name: []const u8, ctx: Ctx) ?[]const u8 {
     return null;
 }
 
+/// The CHARACTER-category card-field macros (env-macros.js): charPrompt/charInstruction/charDescription/
+/// charPersonality/charScenario/persona/mesExamplesRaw/mesExamples/charDepthPrompt/charCreatorNotes/
+/// charFirstMessage/charVersion and their aliases. Each resolves to a card field, but ONLY when
+/// ctx.replace_character_card is set: stock populates env.character solely under replaceCharacterCard
+/// (MacroEnvBuilder.js:96), so inside a card field (baseChatReplace passes false) they render "" like
+/// stock's `?? ''`. Returns null when `inner` names none of them, so the caller falls through to the
+/// story-string resolver. `inner` is the trimmed macro body; charFirstMessage/greeting read an index arg.
+fn charMacro(inner: []const u8, ctx: Ctx) ?[]const u8 {
+    const name = std.mem.trim(u8, if (std.mem.indexOfScalar(u8, inner, ':')) |c| inner[0..c] else inner, " \t");
+    if (std.mem.eql(u8, name, "charFirstMessage") or std.mem.eql(u8, name, "greeting")) {
+        return if (ctx.replace_character_card) greetingValue(inner, ctx) else "";
+    }
+    const val: []const u8 = if (std.mem.eql(u8, name, "charPrompt"))
+        ctx.char_prompt
+    else if (std.mem.eql(u8, name, "charInstruction"))
+        ctx.char_instruction
+    else if (std.mem.eql(u8, name, "charDescription") or std.mem.eql(u8, name, "description"))
+        ctx.description
+    else if (std.mem.eql(u8, name, "charPersonality") or std.mem.eql(u8, name, "personality"))
+        ctx.personality
+    else if (std.mem.eql(u8, name, "charScenario") or std.mem.eql(u8, name, "scenario"))
+        ctx.scenario
+    else if (std.mem.eql(u8, name, "persona"))
+        ctx.persona
+    else if (std.mem.eql(u8, name, "mesExamplesRaw"))
+        ctx.mes_example
+    else if (std.mem.eql(u8, name, "mesExamples"))
+        ctx.mes_example_formatted
+    else if (std.mem.eql(u8, name, "charDepthPrompt"))
+        ctx.char_depth_prompt
+    else if (std.mem.eql(u8, name, "charCreatorNotes") or std.mem.eql(u8, name, "creatorNotes"))
+        ctx.creator_notes
+    else if (std.mem.eql(u8, name, "charVersion") or std.mem.eql(u8, name, "version") or std.mem.eql(u8, name, "char_version"))
+        ctx.char_version
+    else
+        return null;
+    return if (ctx.replace_character_card) val else "";
+}
+
+/// The {{charFirstMessage}}/{{greeting}} value at the arg index (env-macros.js:158): Number(index ?? 0),
+/// 0 -> firstMessage, N>=1 -> alternateGreetings[N-1], out of bounds / non-integer / negative -> "".
+/// Only reached under replace_character_card (charMacro gates the empty case).
+fn greetingValue(inner: []const u8, ctx: Ctx) []const u8 {
+    var idx: f64 = 0;
+    if (std.mem.indexOfScalar(u8, inner, ':')) |c| {
+        var arg = inner[c + 1 ..];
+        if (arg.len > 0 and arg[0] == ':') arg = arg[1..];
+        const t = std.mem.trim(u8, arg, &std.ascii.whitespace);
+        if (t.len > 0) idx = std.fmt.parseFloat(f64, t) catch return "";
+    }
+    if (idx == 0) return ctx.first_mes;
+    if (idx < 1 or @floor(idx) != idx) return "";
+    const k: usize = @as(usize, @intFromFloat(idx)) - 1;
+    if (k >= ctx.alt_greetings.len) return "";
+    return ctx.alt_greetings[k];
+}
+
 /// Substitutes every known `{{macro}}` in `text` in one pass. An unknown macro is left verbatim, an
 /// unterminated `{{` is copied through, and a `name:args` form resolves on the bare name (args are
 /// ignored this phase). Owned result.
@@ -127,6 +199,11 @@ pub fn substituteMacros(alloc: Allocator, text: []const u8, ctx: Ctx) Allocator.
                     continue;
                 }
                 const inner = std.mem.trim(u8, text[i + 2 .. close], " \t");
+                if (charMacro(inner, ctx)) |val| {
+                    try out.appendSlice(alloc, val);
+                    i = close + 2;
+                    continue;
+                }
                 if (outletKey(inner)) |key| {
                     // Stock renders '' for a key no outlet feeds (macros.js:615 getOutletPrompt).
                     try out.appendSlice(alloc, ctx.outletByName(key) orelse "");
@@ -478,10 +555,48 @@ fn doubleColonItem(s: []const u8, idx: usize) []const u8 {
 const testing = std.testing;
 
 test "substituteMacros resolves the card and persona set every occurrence" {
-    const ctx = Ctx{ .char = "Rita", .user = "Jamie", .persona = "a diver", .description = "d", .personality = "warm", .scenario = "a wreck", .mes_example = "ex" };
+    const ctx = Ctx{ .char = "Rita", .user = "Jamie", .persona = "a diver", .description = "d", .personality = "warm", .scenario = "a wreck", .mes_example = "ex", .replace_character_card = true };
     const out = try substituteMacros(testing.allocator, "{{char}} to {{user}} ({{persona}}); {{char}} waits.{{newline}}end", ctx);
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("Rita to Jamie (a diver); Rita waits.\nend", out);
+}
+
+test "card-field macros resolve under replace_character_card and blank without it" {
+    const alts = [_][]const u8{ "alt one", "alt two" };
+    const on = Ctx{
+        .char_prompt = "MAIN",
+        .char_instruction = "POST",
+        .description = "DESC",
+        .personality = "PERS",
+        .scenario = "SCEN",
+        .persona = "PSNA",
+        .mes_example = "RAWEX",
+        .mes_example_formatted = "FMTEX",
+        .char_depth_prompt = "DEPTH",
+        .creator_notes = "NOTES",
+        .first_mes = "FIRST",
+        .alt_greetings = &alts,
+        .char_version = "9.9",
+        .replace_character_card = true,
+    };
+    const tpl = "{{charPrompt}}|{{charInstruction}}|{{charDescription}}|{{description}}|{{charPersonality}}|{{personality}}|{{charScenario}}|{{scenario}}|{{persona}}|{{mesExamplesRaw}}|{{mesExamples}}|{{charDepthPrompt}}|{{charCreatorNotes}}|{{creatorNotes}}|{{charFirstMessage}}|{{greeting}}|{{charVersion}}|{{version}}|{{char_version}}";
+    const out_on = try substituteMacros(testing.allocator, tpl, on);
+    defer testing.allocator.free(out_on);
+    try testing.expectEqualStrings("MAIN|POST|DESC|DESC|PERS|PERS|SCEN|SCEN|PSNA|RAWEX|FMTEX|DEPTH|NOTES|NOTES|FIRST|FIRST|9.9|9.9|9.9", out_on);
+
+    var off = on;
+    off.replace_character_card = false;
+    const out_off = try substituteMacros(testing.allocator, tpl, off);
+    defer testing.allocator.free(out_off);
+    try testing.expectEqualStrings("||||||||||||||||||", out_off);
+}
+
+test "greeting index selects the main message, an alternate, and blanks out of bounds" {
+    const alts = [_][]const u8{ "ALT1", "ALT2" };
+    const ctx = Ctx{ .first_mes = "MAIN", .alt_greetings = &alts, .replace_character_card = true };
+    const out = try substituteMacros(testing.allocator, "{{greeting}}|{{greeting::0}}|{{greeting::1}}|{{greeting::2}}|{{greeting::3}}|{{charFirstMessage::1}}", ctx);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("MAIN|MAIN|ALT1|ALT2||ALT1", out);
 }
 
 test "substituteMacros keeps an unknown macro and a dangling brace verbatim" {
@@ -532,7 +647,7 @@ test "a bare or empty-keyed outlet macro stays verbatim like any unknown macro" 
 }
 
 test "substituteMacros does not recurse into a resolved value" {
-    const ctx = Ctx{ .char = "Rita", .description = "{{char}}" };
+    const ctx = Ctx{ .char = "Rita", .description = "{{char}}", .replace_character_card = true };
     const out = try substituteMacros(testing.allocator, "{{description}}", ctx);
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("{{char}}", out);

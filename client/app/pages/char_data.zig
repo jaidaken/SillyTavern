@@ -478,7 +478,11 @@ pub fn pageBody(alloc: Allocator, ref: ChatRef, opts: PageOpts) Allocator.Error!
 /// the first message: beyond the {{char}}/{{user}} pair the old glue handled, cards carry
 /// {{//comment}} (stripped), {{persona}}, and the card-field macros. Owned result.
 pub fn renderGreeting(alloc: Allocator, first_mes: []const u8, ctx: macros.Ctx) Allocator.Error![]u8 {
-    return macros.substituteMacros(alloc, first_mes, ctx);
+    // The greeting is stock's `chat[0].mes = substituteParams(chat[0].mes)` (script.js:4461), which
+    // defaults replaceCharacterCard=true, so card-field macros resolve here.
+    var c = ctx;
+    c.replace_character_card = true;
+    return macros.substituteMacros(alloc, first_mes, c);
 }
 
 /// Index of the most recently chatted character (ties keep the first, as the old glue's
