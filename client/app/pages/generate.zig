@@ -397,6 +397,9 @@ pub const Pieces = struct {
     wrapped_history: [][]u8,
     prefix: []u8,
     history_len: usize,
+    /// power_user.collapse_newlines: fitAndAssemble collapses the joined prompt's newline runs to one
+    /// (script.js:5171). A scalar, so freePieces ignores it.
+    collapse_newlines: bool,
     /// The updated timed-effect state as owned JSON, or null when the caller did not ask for it.
     timed_json: ?[]const u8,
 };
@@ -513,6 +516,20 @@ pub fn fitAndAssemble(alloc: Allocator, pieces: Pieces, costs: CostTable, budget
         w += 1;
     }
     out.shrinkRetainingCapacity(w);
+
+    // Stock's collapseNewlines on the final combined prompt (script.js:5171): every run of newlines
+    // becomes one. Runs AFTER the CR strip, matching stock's 5075-then-5171 order. Position-independent.
+    if (pieces.collapse_newlines) {
+        var cw: usize = 0;
+        var prev_nl = false;
+        for (out.items) |b| {
+            if (b == '\n' and prev_nl) continue;
+            prev_nl = b == '\n';
+            out.items[cw] = b;
+            cw += 1;
+        }
+        out.shrinkRetainingCapacity(cw);
+    }
     return out.toOwnedSlice(alloc);
 }
 
@@ -722,6 +739,7 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
         .wrapped_history = wh_slice,
         .prefix = prefix,
         .history_len = history.len,
+        .collapse_newlines = shape.tpl.collapse_newlines,
         .timed_json = timed_json,
     };
 }

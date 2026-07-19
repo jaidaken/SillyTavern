@@ -168,6 +168,9 @@ pub const Templates = struct {
     prefer_character_jailbreak: bool = true,
     /// power_user.single_line (global, stock default false): prepend '\n' to the stopping strings.
     single_line: bool = false,
+    /// power_user.collapse_newlines (global, stock default false): collapse every run of newlines in
+    /// the final assembled prompt to a single '\n' (script.js:5171, getCombinedPrompt).
+    collapse_newlines: bool = false,
     /// power_user.custom_stopping_strings: a JSON-array string of extra stops, raw as stored
     /// (power-user.js:3058). Parsed lazily when the send composes the stop set.
     custom_stopping_strings: []const u8 = "",
@@ -234,6 +237,7 @@ pub fn parseTemplates(arena: Allocator, settings_str: []const u8) Allocator.Erro
     out.prefer_character_prompt = boolField(power_user, "prefer_character_prompt", true);
     out.prefer_character_jailbreak = boolField(power_user, "prefer_character_jailbreak", true);
     out.single_line = boolField(power_user, "single_line", false);
+    out.collapse_newlines = boolField(power_user, "collapse_newlines", false);
     out.custom_stopping_strings = try strField(arena, power_user, "custom_stopping_strings");
     out.custom_stopping_strings_macro = boolField(power_user, "custom_stopping_strings_macro", true);
     if (numField(power_user, "persona_description_position")) |v| {
@@ -386,6 +390,7 @@ pub fn dupeTemplates(arena: Allocator, t: Templates) Allocator.Error!Templates {
         .sysprompt_post_history = try arena.dupe(u8, t.sysprompt_post_history),
         .prefer_character_jailbreak = t.prefer_character_jailbreak,
         .single_line = t.single_line,
+        .collapse_newlines = t.collapse_newlines,
         .custom_stopping_strings = try arena.dupe(u8, t.custom_stopping_strings),
         .custom_stopping_strings_macro = t.custom_stopping_strings_macro,
         .persona_position = t.persona_position,
