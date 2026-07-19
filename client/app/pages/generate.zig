@@ -573,21 +573,21 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
         std.log.scoped(.wi).warn("the story string has no wi slot; activated world info is dropped", .{});
     }
 
-    // an_top/an_bottom entries wrap the note wherever it lands (stock ANWithWI); for the anchor
-    // positions that is the anchor slot, for in_chat it is the injection built below.
+    // Pre-resolve the anchor as stock's getExtensionPrompt(position).trim() (script.js:4671-4687), so a
+    // {{pick}} in the note seeds off THIS wrapped block and its offset, not off the whole story string.
     var anchor_owned: ?[]u8 = null;
     defer if (anchor_owned) |s| alloc.free(s);
-    if (wi_act.an_top.len > 0 or wi_act.an_bottom.len > 0) switch (shape.note.position) {
+    switch (shape.note.position) {
         .before_prompt => {
-            anchor_owned = try joinNonEmpty(alloc, &.{ wi_act.an_top, wctx.anchor_before, wi_act.an_bottom });
-            wctx.anchor_before = anchor_owned.?;
+            anchor_owned = try resolveAnchorBlock(alloc, &.{ wi_act.an_top, wctx.anchor_before, wi_act.an_bottom }, wctx);
+            if (anchor_owned) |s| wctx.anchor_before = s;
         },
         .in_prompt => {
-            anchor_owned = try joinNonEmpty(alloc, &.{ wi_act.an_top, wctx.anchor_after, wi_act.an_bottom });
-            wctx.anchor_after = anchor_owned.?;
+            anchor_owned = try resolveAnchorBlock(alloc, &.{ wi_act.an_top, wctx.anchor_after, wi_act.an_bottom }, wctx);
+            if (anchor_owned) |s| wctx.anchor_after = s;
         },
         .in_chat => {},
-    };
+    }
 
     var overhead: std.ArrayList(u8) = .empty;
     errdefer overhead.deinit(alloc);
@@ -787,6 +787,29 @@ fn storyHasSlot(story: []const u8, slot: []const u8, legacy: []const u8) bool {
 }
 
 /// The non-empty parts joined with newlines. Owned result, possibly empty.
+/// Resolves an author's-note anchor the way stock getExtensionPrompt(position).trim() does: trim each
+/// value, drop the empties, join with '\n', wrap with a leading and trailing '\n', run one macro pass
+/// over the wrapped block, then trim. Wrapping first gives a {{pick}} the block-relative offset stock
+/// seeds it on (script.js:3286-3298 + 4687). Null when every value is empty, so the caller leaves the
+/// slot untouched and its `{{#if}}` drops. Owned result.
+fn resolveAnchorBlock(alloc: Allocator, values: []const []const u8, ctx: Ctx) Allocator.Error!?[]u8 {
+    var joined: std.ArrayList(u8) = .empty;
+    defer joined.deinit(alloc);
+    for (values) |v| {
+        const t = std.mem.trim(u8, v, " \t\r\n");
+        if (t.len == 0) continue;
+        if (joined.items.len > 0) try joined.append(alloc, '\n');
+        try joined.appendSlice(alloc, t);
+    }
+    if (joined.items.len == 0) return null;
+
+    const wrapped = try std.fmt.allocPrint(alloc, "\n{s}\n", .{joined.items});
+    defer alloc.free(wrapped);
+    const resolved = try macros.substituteMacros(alloc, wrapped, ctx);
+    defer alloc.free(resolved);
+    return try alloc.dupe(u8, std.mem.trim(u8, resolved, " \t\r\n"));
+}
+
 fn joinNonEmpty(alloc: Allocator, parts: []const []const u8) Allocator.Error![]u8 {
     var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(alloc);
@@ -1695,6 +1718,32 @@ test "an-anchored wi wraps the note's anchor slot" {
     const out = try buildPrompt(testing.allocator, ctx, &.{}, shape);
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("TOP\nNOTE\nBOTTOM\nA diver.\nRita:", out);
+}
+
+test "resolveAnchorBlock seeds a note {{pick}} off the wrapped block, not the bare note" {
+    const rng = @import("./rng.zig");
+    const chat_id = "Chat_2024-01-15@10h30m";
+    const an_top = "WI-9302 lore entry 9302";
+    const note = "AN the wind rises {{pick::one,two,three}} tail";
+    const out = (try resolveAnchorBlock(testing.allocator, &.{ an_top, note, "" }, .{ .chat_id = chat_id })).?;
+    defer testing.allocator.free(out);
+
+    // Stock seeds the pick off the wrapped getExtensionPrompt block and its offset inside it, not off
+    // the bare note. Rebuild that block and offset here; the resolved word must match.
+    const wrapped = try std.fmt.allocPrint(testing.allocator, "\n{s}\n{s}\n", .{ an_top, note });
+    defer testing.allocator.free(wrapped);
+    const words = [_][]const u8{ "one", "two", "three" };
+    const want = words[rng.pickIndex(chat_id, wrapped, std.mem.indexOf(u8, wrapped, "{{pick").?, words.len)];
+    const expect = try std.fmt.allocPrint(testing.allocator, "WI-9302 lore entry 9302\nAN the wind rises {s} tail", .{want});
+    defer testing.allocator.free(expect);
+    try testing.expectEqualStrings(expect, out);
+}
+
+test "resolveAnchorBlock trims the block and returns null for an all-empty set" {
+    const trimmed = (try resolveAnchorBlock(testing.allocator, &.{ "  \n", "  hi  ", "" }, .{})).?;
+    defer testing.allocator.free(trimmed);
+    try testing.expectEqualStrings("hi", trimmed);
+    try testing.expectEqual(@as(?[]u8, null), try resolveAnchorBlock(testing.allocator, &.{ "", "  ", "\n\t" }, .{}));
 }
 
 test "an-position wi fires the in-chat note slot even when the note is silent" {
