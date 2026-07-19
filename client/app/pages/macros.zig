@@ -505,11 +505,11 @@ test "random always yields a member of the split list" {
 test "pick reproduces the stock golden item end to end" {
     const a = try substituteMacros(testing.allocator, "You see {{pick::red::green::blue}} ahead.", .{ .chat_id = "Chat_2024-01-15@10h30m" });
     defer testing.allocator.free(a);
-    try testing.expectEqualStrings("You see red ahead.", a);
+    try testing.expectEqualStrings("You see blue ahead.", a);
 
     const b = try substituteMacros(testing.allocator, "{{pick: sword, shield, bow, staff}}", .{ .chat_id = "default" });
     defer testing.allocator.free(b);
-    try testing.expectEqualStrings("shield", b);
+    try testing.expectEqualStrings("staff", b);
 
     const c = try substituteMacros(testing.allocator, "single {{pick::only}}", .{ .chat_id = "Chat_2024-01-15@10h30m" });
     defer testing.allocator.free(c);

@@ -311,8 +311,9 @@ pub const AssembledInjection = struct {
     wrapped: []u8,
 };
 
-/// A single depth-injection source before grouping: macro-subbed text with its target depth+role.
-/// Contributions at the same depth+role join into one AssembledInjection (stock getExtensionPrompt).
+/// A single depth-injection source before grouping: RAW (unsubstituted) text with its target
+/// depth+role. Contributions at the same depth+role are trimmed, joined, and substituted as one block
+/// in groupInjections, then wrapped into one AssembledInjection (stock getExtensionPrompt).
 const Contribution = struct {
     depth: usize,
     role: templates.Role,
@@ -344,7 +345,7 @@ const jailbreak_rank: u8 = 3;
 /// (script.js:3286): all contributions at one depth+role become ONE turn (each value trimmed, joined by
 /// '\n', then leading whitespace stripped), wrapped once. Contributions arrive in stock key order
 /// (2_floating_prompt < DEPTH_PROMPT < PERSONA_DESCRIPTION < customDepthWI), so join order needs no sort.
-fn groupInjections(alloc: Allocator, out: *std.ArrayList(AssembledInjection), instruct: templates.Instruct, contribs: []const Contribution, name1: []const u8, name2: []const u8) Allocator.Error!void {
+fn groupInjections(alloc: Allocator, out: *std.ArrayList(AssembledInjection), instruct: templates.Instruct, contribs: []const Contribution, mctx: Ctx) Allocator.Error!void {
     for (contribs, 0..) |c, ci| {
         var owns = true;
         for (contribs[0..ci]) |p| {
@@ -355,22 +356,27 @@ fn groupInjections(alloc: Allocator, out: *std.ArrayList(AssembledInjection), in
         }
         if (!owns) continue;
 
+        // Stock getExtensionPrompt trims each RAW value then joins with '\n' (script.js:3286).
         var joined: std.ArrayList(u8) = .empty;
         defer joined.deinit(alloc);
         var any = false;
         for (contribs) |m| {
             if (m.depth != c.depth or m.role != c.role or m.text.len == 0) continue;
             if (any) try joined.append(alloc, '\n');
-            try joined.appendSlice(alloc, m.text);
+            try joined.appendSlice(alloc, std.mem.trim(u8, m.text, &std.ascii.whitespace));
             any = true;
         }
-        const value = joined.items;
+        if (!any) continue;
+
+        // substituteParams runs ONCE over the JOINED block (script.js:3294), so a {{pick}} seeds off
+        // that block; doChatInject then trimStarts the result (script.js:5618).
+        const subbed = try substituteMacros(alloc, joined.items, mctx);
+        defer alloc.free(subbed);
+        const value = std.mem.trimStart(u8, subbed, &std.ascii.whitespace);
         if (value.len == 0) continue;
-        // Stock doChatInject names each role turn (USER name1, ASSISTANT name2, SYSTEM none); the wrapper's
-        // names_behavior then decides whether the prefix shows, exactly as it does for a history turn.
         const name = switch (c.role) {
-            .user => name1,
-            .assistant => name2,
+            .user => mctx.user,
+            .assistant => mctx.char,
             .system => "",
         };
         const wrapped = try templates.wrapMessage(alloc, instruct, c.role, name, value);
@@ -621,34 +627,34 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
     }
     // WI an entries force the note slot to fire even when the note itself is silent this turn
     // (stock shouldWIAddPrompt).
+    // Contributions carry RAW text; groupInjections trims, joins, and substitutes the block once, so a
+    // {{pick}} seeds off the joined block the way stock getExtensionPrompt does, not off one value alone.
     const an_wrap = shape.note.position == .in_chat and (wi_act.an_top.len > 0 or wi_act.an_bottom.len > 0);
     if (an_wrap or authors_note.injectionIndex(shape.note, history.len) != null) {
         const note_text = if (authors_note.injectionIndex(shape.note, history.len) != null) shape.note.prompt else "";
         const joined = try joinNonEmpty(alloc, &.{ wi_act.an_top, note_text, wi_act.an_bottom });
-        defer alloc.free(joined);
-        const subbed = try substituteMacros(alloc, joined, wctx);
-        errdefer alloc.free(subbed);
-        try contribs.append(alloc, .{ .depth = @intCast(@max(0, shape.note.depth)), .role = shape.note.role.toTemplateRole(), .text = subbed });
+        errdefer alloc.free(joined);
+        try contribs.append(alloc, .{ .depth = @intCast(@max(0, shape.note.depth)), .role = shape.note.role.toTemplateRole(), .text = joined });
     }
     // The character's own depth note (stock "character-specific A/N"): always at its own depth+role.
     if (shape.char_note.prompt.len > 0) {
-        const subbed = try substituteMacros(alloc, shape.char_note.prompt, wctx);
-        errdefer alloc.free(subbed);
-        try contribs.append(alloc, .{ .depth = @intCast(@max(0, shape.char_note.depth)), .role = shape.char_note.role.toTemplateRole(), .text = subbed });
+        const t = try alloc.dupe(u8, shape.char_note.prompt);
+        errdefer alloc.free(t);
+        try contribs.append(alloc, .{ .depth = @intCast(@max(0, shape.char_note.depth)), .role = shape.char_note.role.toTemplateRole(), .text = t });
     }
     // Persona AT_DEPTH (stock addPersonaDescriptionExtensionPrompt IN_CHAT branch, script.js:3190).
     if (shape.persona_position == .at_depth and wctx.persona.len > 0) {
-        const subbed = try substituteMacros(alloc, wctx.persona, wctx);
-        errdefer alloc.free(subbed);
-        try contribs.append(alloc, .{ .depth = @intCast(@max(0, shape.persona_depth)), .role = roleFromInt(shape.persona_role), .text = subbed });
+        const t = try alloc.dupe(u8, wctx.persona);
+        errdefer alloc.free(t);
+        try contribs.append(alloc, .{ .depth = @intCast(@max(0, shape.persona_depth)), .role = roleFromInt(shape.persona_role), .text = t });
     }
     for (wi_act.at_depth) |g| {
-        const subbed = try substituteMacros(alloc, g.content, wctx);
-        errdefer alloc.free(subbed);
-        try contribs.append(alloc, .{ .depth = @intCast(@max(0, g.depth)), .role = roleFromInt(g.role), .text = subbed });
+        const t = try alloc.dupe(u8, g.content);
+        errdefer alloc.free(t);
+        try contribs.append(alloc, .{ .depth = @intCast(@max(0, g.depth)), .role = roleFromInt(g.role), .text = t });
     }
 
-    try groupInjections(alloc, &injections, instruct, contribs.items, ctx.user, ctx.char);
+    try groupInjections(alloc, &injections, instruct, contribs.items, wctx);
 
     // The jailbreak / post-history instruction: stock's separate last user turn at depth 0, after the
     // depth-0 role groups (rank 3). Its {{original}} was resolved at composition.
@@ -2000,7 +2006,7 @@ test "buildPrompt joins same-depth same-role injections into one turn" {
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, out, "<|im_start|>system"));
 }
 
-test "buildPrompt keeps injection value whitespace, matching stock's observed output" {
+test "buildPrompt trims injection value whitespace, matching stock getExtensionPrompt" {
     const ctx = Ctx{ .char = "Rita" };
     const history = [_]PromptMsg{.{ .name = "Jamie", .mes = "one", .role = .user }};
     var shape = chatmlShape();
@@ -2008,7 +2014,38 @@ test "buildPrompt keeps injection value whitespace, matching stock's observed ou
     shape.char_note = .{ .prompt = "note with trailing ", .depth = 0, .role = .system };
     const out = try buildPrompt(testing.allocator, ctx, &history, shape);
     defer testing.allocator.free(out);
-    try testing.expect(std.mem.indexOf(u8, out, "<|im_start|>system\nnote with trailing <|im_end|>") != null);
+    // Stock trims each value both ends before wrapping (script.js:3286); the old note here kept the
+    // trailing space, which diverged from the old frontend by one byte.
+    try testing.expect(std.mem.indexOf(u8, out, "<|im_start|>system\nnote with trailing<|im_end|>") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "trailing <|im_end|>") == null);
+}
+
+test "groupInjections joins same-depth values then resolves {{pick}} off the whole block" {
+    const mctx = Ctx{ .chat_id = "room-7", .user = "U", .char = "C" };
+    const t0 = try testing.allocator.dupe(u8, "prefix line");
+    defer testing.allocator.free(t0);
+    const t1 = try testing.allocator.dupe(u8, "{{pick::a::b::c::d::e}}");
+    defer testing.allocator.free(t1);
+    const contribs = [_]Contribution{
+        .{ .depth = 0, .role = .system, .text = t0 },
+        .{ .depth = 0, .role = .system, .text = t1 },
+    };
+    const tpl = templates.Instruct{ .enabled = true, .system_sequence = "<sys>", .system_suffix = "<end>", .wrap = false, .names_behavior = .none };
+    var out: std.ArrayList(AssembledInjection) = .empty;
+    defer {
+        for (out.items) |x| testing.allocator.free(x.wrapped);
+        out.deinit(testing.allocator);
+    }
+    try groupInjections(testing.allocator, &out, tpl, &contribs, mctx);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+
+    // The pick must seed off the JOINED+trimmed block "prefix line\n{{pick...}}" (offset 12), which is
+    // what substituteMacros over that same block yields. Resolving t1 alone (offset 0) would differ.
+    const block_resolved = try substituteMacros(testing.allocator, "prefix line\n{{pick::a::b::c::d::e}}", mctx);
+    defer testing.allocator.free(block_resolved);
+    const want = try std.fmt.allocPrint(testing.allocator, "<sys>{s}<end>", .{block_resolved});
+    defer testing.allocator.free(want);
+    try testing.expectEqualStrings(want, out.items[0].wrapped);
 }
 
 test "buildPrompt names a user-role depth injection like a user turn" {

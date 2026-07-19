@@ -448,6 +448,37 @@ fn contextObject(a: Allocator, c: Context) Allocator.Error!std.json.ObjectMap {
 
 // ---- the story string (Handlebars subset) -----------------------------------------------------
 
+/// The card fields resolved field-by-field, so each field's `{{pick}}` seeds off its own text rather
+/// than the whole story string. Only these six are owned; every other Ctx field stays borrowed from
+/// the caller.
+const ResolvedFields = struct {
+    ctx: Ctx,
+    owned: [6][]u8,
+
+    fn deinit(self: *ResolvedFields, alloc: Allocator) void {
+        for (self.owned) |b| alloc.free(b);
+    }
+};
+
+/// Runs a standalone macro pass over each card field, matching stock's per-field baseChatReplace
+/// (script.js:3400-3420). A field's `{{pick}}` then sees rawContent = that field and its own offset.
+fn resolveCardFields(alloc: Allocator, ctx: Ctx) Allocator.Error!ResolvedFields {
+    const sources = [6][]const u8{ ctx.description, ctx.personality, ctx.scenario, ctx.persona, ctx.mes_example, ctx.system };
+    var owned: [6][]u8 = undefined;
+    var n: usize = 0;
+    errdefer for (owned[0..n]) |b| alloc.free(b);
+    while (n < sources.len) : (n += 1) owned[n] = try macros.substituteMacros(alloc, sources[n], ctx);
+
+    var c = ctx;
+    c.description = owned[0];
+    c.personality = owned[1];
+    c.scenario = owned[2];
+    c.persona = owned[3];
+    c.mes_example = owned[4];
+    c.system = owned[5];
+    return .{ .ctx = c, .owned = owned };
+}
+
 /// Renders a context template's story string against the ctx, then runs a macro pass over the
 /// result, strips leading newlines, and guarantees a single trailing newline. Owned result.
 ///
@@ -459,15 +490,20 @@ fn contextObject(a: Allocator, c: Context) Allocator.Error!std.json.ObjectMap {
 /// a template this renderer cannot read degrades visibly in the prompt rather than silently blanking
 /// the system block. An unterminated `{{#if}}` keeps its literal text for the same reason.
 pub fn renderStoryString(alloc: Allocator, story: []const u8, ctx: Ctx, instruct: Instruct) Allocator.Error![]u8 {
-    const structured = try renderBlocks(alloc, story, ctx);
+    // Stock resolves each card field ALONE through baseChatReplace before rendering, so a {{pick}}
+    // seeds off that field's own text+offset (measured: rawContent = the field), not the whole story.
+    var resolved = try resolveCardFields(alloc, ctx);
+    defer resolved.deinit(alloc);
+    const rctx = resolved.ctx;
+
+    const structured = try renderBlocks(alloc, story, rctx);
     defer alloc.free(structured);
 
-    // Two stages, as the classic client does it: Handlebars resolves the story string's own vars
-    // (power-user.js:2231), THEN substituteParams runs over the RESULT (:2237), which is what makes
-    // a system prompt of "You are {{char}}." finish resolving. One pass ships the literal macro.
-    const fields = try macros.substituteMacros(alloc, structured, ctx);
+    // Two passes: pass one inserts field/WI/outlet values, pass two resolves the macros those values
+    // carry ("The realm of {{char}}."). Card-field {{pick}}s are pre-resolved, so pass two cannot re-pick.
+    const fields = try macros.substituteMacros(alloc, structured, rctx);
     defer alloc.free(fields);
-    const substituted = try macros.substituteMacros(alloc, fields, ctx);
+    const substituted = try macros.substituteMacros(alloc, fields, rctx);
     defer alloc.free(substituted);
 
     const trimmed = try applyTrim(alloc, substituted);
@@ -1347,4 +1383,32 @@ test "parseTemplates maps AFTER_CHAR and NONE and keeps default for an unknown p
     try testing.expectEqual(PersonaPosition.none, none.persona_position);
     const bad = try parseTemplates(arena.allocator(), "{\"power_user\":{\"persona_description_position\":7}}");
     try testing.expectEqual(PersonaPosition.in_prompt, bad.persona_position);
+}
+
+test "renderStoryString resolves a card field's {{pick}} against the field, not the whole story" {
+    // This exact field at offset 8 with this chat id picks index 2 ("blue"), no-NUL convention. The
+    // "prefix " before {{description}} would shift rawContent+offset if the pick saw the whole story.
+    const ctx = Ctx{ .chat_id = "Chat_2024-01-15@10h30m", .description = "You see {{pick::red::green::blue}} ahead." };
+    const out = try renderStoryString(testing.allocator, "prefix {{description}}", ctx, .{});
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("prefix You see blue ahead.\n", out);
+}
+
+test "resolveCardFields resolves each field alone and owns the six results" {
+    const ctx = Ctx{ .char = "Rita", .user = "Jamie", .description = "{{char}} waits", .persona = "{{user}} arrives", .system = "be terse" };
+    var resolved = try resolveCardFields(testing.allocator, ctx);
+    defer resolved.deinit(testing.allocator);
+    try testing.expectEqualStrings("Rita waits", resolved.ctx.description);
+    try testing.expectEqualStrings("Jamie arrives", resolved.ctx.persona);
+    try testing.expectEqualStrings("be terse", resolved.ctx.system);
+}
+
+test "resolveCardFields cleans up on every allocation failure" {
+    const ctx = Ctx{ .char = "Rita", .description = "{{char}} d", .personality = "p", .persona = "s", .system = "y" };
+    try testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn run(alloc: Allocator, c: Ctx) !void {
+            var r = try resolveCardFields(alloc, c);
+            r.deinit(alloc);
+        }
+    }.run, .{ctx});
 }

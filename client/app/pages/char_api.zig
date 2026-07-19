@@ -751,7 +751,7 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         if (c.first_mes.len > 0) {
             const user_name = if (persona) |p| p.name else "You";
             const persona_desc = if (persona) |p| p.description else "";
-            if (data.renderGreeting(alloc, c.first_mes, .{ .char = c.name, .user = user_name, .persona = persona_desc })) |greeting| {
+            if (data.renderGreeting(alloc, c.first_mes, .{ .char = c.name, .user = user_name, .persona = persona_desc, .chat_id = c.chat })) |greeting| {
                 defer alloc.free(greeting);
                 store.global.appendCopy(c.name, greeting, char_avatar orelse "") catch |err| {
                     chars_log.err("append greeting: {s}", .{@errorName(err)});
@@ -1669,6 +1669,9 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
             .personality = pend_personality,
             .scenario = pend_scenario,
             .mes_example = pend_mes_example,
+            // {{pick}} in the greeting seeds off the chat id (stock getChatIdHash); without it the pick
+            // hashes an empty chat id and diverges from the old frontend.
+            .chat_id = send_file,
         }) catch null;
         if (greeting) |g| try history.append(alloc, .{ .name = pend_char_name, .mes = g });
     }
