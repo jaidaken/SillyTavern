@@ -67,6 +67,16 @@ pub fn getStringHash(str: []const u8, seed: u32) i64 {
     return hi + @as(i64, h1);
 }
 
+/// Number of UTF-16 code units in a UTF-8 slice, matching a JS string's `.length`. `{{pick}}`'s stock
+/// offset is a JS string index, so a byte offset over-counts multi-byte codepoints (an em-dash is 3
+/// bytes but one unit); the pick seed must count units, not bytes.
+pub fn utf16Len(str: []const u8) usize {
+    var it = Utf16Units{ .bytes = str };
+    var n: usize = 0;
+    while (it.next()) |_| n += 1;
+    return n;
+}
+
 /// seedrandom's default ARC4 generator, seeded as the deployed CST macro engine does it:
 /// `seedrandom(String(finalSeed))`. A STRING seed's `flatten` is the digits with NO trailing NUL
 /// (a number seed would append one); `mixkey` folds it into the ARC4 key, the key schedule runs, and

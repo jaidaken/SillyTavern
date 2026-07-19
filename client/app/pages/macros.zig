@@ -102,11 +102,15 @@ pub fn substituteMacros(alloc: Allocator, text: []const u8, ctx: Ctx) Allocator.
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(alloc);
 
+    // Stock seeds {{pick}} at its offset in the angle->macro NORMALIZED text, so a legacy tag before a
+    // pick shifts that offset by norm_len-tag_len (0 when the pick leads its field).
+    var angle_delta: usize = 0;
     var i: usize = 0;
     while (i < text.len) {
         if (text[i] == '<') {
             if (matchAngleTag(text[i..], ctx)) |m| {
                 try out.appendSlice(alloc, m.val);
+                angle_delta += m.norm_len - m.len;
                 i += m.len;
                 continue;
             }
@@ -114,10 +118,7 @@ pub fn substituteMacros(alloc: Allocator, text: []const u8, ctx: Ctx) Allocator.
         if (i + 1 < text.len and text[i] == '{' and text[i + 1] == '{') {
             if (std.mem.indexOfPos(u8, text, i + 2, "}}")) |close| {
                 const raw = text[i + 2 .. close];
-                // stock computes {{pick}}'s offset post-earlier-macro-expansion; single-pass uses the
-                // original-text offset, see section-file IMPURE MACROS. Isolated for a later swap.
-                const pick_offset = i;
-                if (try tryImpureMacro(alloc, &out, raw, text, pick_offset, ctx)) {
+                if (try tryImpureMacro(alloc, &out, raw, text, i, angle_delta, ctx)) {
                     i = close + 2;
                     continue;
                 }
@@ -160,9 +161,10 @@ fn outletKey(inner: []const u8) ?[]const u8 {
 
 /// Handles a `{{roll}}`/`{{random}}`/`{{pick}}` at `raw` (the text between `{{` and `}}`), appending
 /// its result and returning true. Returns false when `raw` is not one of these, so the caller falls
-/// through to the card/outlet resolver. `text`+`offset` seed `{{pick}}`; `ctx.rng` drives the random
-/// pair (stock getDiceRollMacro/getRandomReplaceMacro/getPickReplaceMacro, macros.js:438-519).
-fn tryImpureMacro(alloc: Allocator, out: *std.ArrayList(u8), raw: []const u8, text: []const u8, offset: usize, ctx: Ctx) Allocator.Error!bool {
+/// through to the card/outlet resolver. `{{pick}}` seeds on `text` at the stock string-index offset:
+/// the UTF-16 unit count of `text` up to `byte_offset` plus `angle_delta` (the angle->macro expansion
+/// of prior tags). `ctx.rng` drives the random pair (stock getPickReplaceMacro, core-macros.js:375).
+fn tryImpureMacro(alloc: Allocator, out: *std.ArrayList(u8), raw: []const u8, text: []const u8, byte_offset: usize, angle_delta: usize, ctx: Ctx) Allocator.Error!bool {
     if (matchRoll(raw)) |formula_raw| {
         try appendRoll(alloc, out, formula_raw, ctx);
         return true;
@@ -176,6 +178,7 @@ fn tryImpureMacro(alloc: Allocator, out: *std.ArrayList(u8), raw: []const u8, te
     }
     if (matchListMacro(raw, "pick")) |list_string| {
         const count = listItemCount(list_string);
+        const offset = rng.utf16Len(text[0..byte_offset]) + angle_delta;
         const idx = rng.pickIndex(ctx.chat_id, text, offset, count);
         try appendListItem(alloc, out, list_string, if (idx >= count) count - 1 else idx);
         return true;
@@ -187,10 +190,12 @@ fn tryImpureMacro(alloc: Allocator, out: *std.ArrayList(u8), raw: []const u8, te
 /// case-insensitive, replaced in every substituteParams pass). `<BOT>` and `<CHAR>` both map to the
 /// character name. Returns the value plus the tag length so the caller can advance past it. The
 /// group aliases `<GROUP>`/`<CHARIFNOTGROUP>` are deliberately absent (group-chat, out of scope).
-fn matchAngleTag(text: []const u8, ctx: Ctx) ?struct { val: []const u8, len: usize } {
-    if (text.len >= 6 and std.ascii.eqlIgnoreCase(text[0..6], "<user>")) return .{ .val = ctx.user, .len = 6 };
-    if (text.len >= 5 and std.ascii.eqlIgnoreCase(text[0..5], "<bot>")) return .{ .val = ctx.char, .len = 5 };
-    if (text.len >= 6 and std.ascii.eqlIgnoreCase(text[0..6], "<char>")) return .{ .val = ctx.char, .len = 6 };
+fn matchAngleTag(text: []const u8, ctx: Ctx) ?struct { val: []const u8, len: usize, norm_len: usize } {
+    // norm_len = the length stock's angle->macro normalization ({{user}}/{{char}}, both 8) leaves in
+    // place; the pick offset counts that, not the tag or the resolved name (see substituteMacros).
+    if (text.len >= 6 and std.ascii.eqlIgnoreCase(text[0..6], "<user>")) return .{ .val = ctx.user, .len = 6, .norm_len = 8 };
+    if (text.len >= 5 and std.ascii.eqlIgnoreCase(text[0..5], "<bot>")) return .{ .val = ctx.char, .len = 5, .norm_len = 8 };
+    if (text.len >= 6 and std.ascii.eqlIgnoreCase(text[0..6], "<char>")) return .{ .val = ctx.char, .len = 6, .norm_len = 8 };
     return null;
 }
 
