@@ -43,6 +43,13 @@ pub fn active() ?generate.Connection {
     return conn;
 }
 
+/// The last model the backend reported from a status probe (stock online_status). The tokenizer
+/// resolver uses it as the fallback when the settings blob configured no explicit model name. Empty
+/// until a probe has run this session.
+pub fn probedModel() []const u8 {
+    return pending_model_buf[0..pending_model_len];
+}
+
 /// Mutate the live connection in place, for the config panel's samplers. Handed a pointer rather
 /// than a setter per field so the sampler model stays in samplers.zig; the URLs are this module's
 /// and the callback never touches them. A no-op when no backend is configured.
@@ -240,10 +247,22 @@ fn applyConnection(api_type: []const u8, api_server: []const u8) void {
         alloc.free(t);
         return;
     };
+    // The interactive Connect just probed the backend, so adopt its reported model (stock online_status)
+    // as the tokenizer hint; an empty probe leaves it "" and the resolver falls to the llama default.
+    const m = alloc.dupe(u8, pending_model_buf[0..pending_model_len]) catch {
+        alloc.free(t);
+        alloc.free(s);
+        return;
+    };
+    // Preserve the padding mined from the settings blob across an interactive reconnect; the next boot
+    // re-mines it. Default to the classic 64 when nothing has been mined yet.
+    const padding: i64 = if (conn) |c| c.token_padding else 64;
     if (conn) |c| generate.freeConnection(alloc, c);
     conn = .{
         .api_type = t,
         .api_server = s,
+        .model = m,
+        .token_padding = padding,
         .max_context = 8192,
         .max_tokens = 512,
         .temperature = 1.0,

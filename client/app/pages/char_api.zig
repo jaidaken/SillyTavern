@@ -15,6 +15,7 @@ const js = zx.client.js;
 const net = @import("./net.zig");
 const data = @import("./char_data.zig");
 const generate = @import("./generate.zig");
+const tokenizer = @import("./tokenizer.zig");
 const templates = @import("./templates.zig");
 const authors_note = @import("./authors_note.zig");
 const an_state = @import("./authors_note_state.zig");
@@ -132,10 +133,19 @@ fn stashConn(conn: generate.Connection) bool {
         alloc.free(t);
         return false;
     };
+    // The tokenizer resolver reads the settings model first, then the probed one (stock online_status).
+    const configured = if (conn.model.len > 0) conn.model else conn_mod.probedModel();
+    const m = alloc.dupe(u8, configured) catch {
+        alloc.free(t);
+        alloc.free(s);
+        return false;
+    };
     if (pend_conn) |c| generate.freeConnection(alloc, c);
     pend_conn = .{
         .api_type = t,
         .api_server = s,
+        .model = m,
+        .token_padding = conn.token_padding,
         .max_context = conn.max_context,
         .max_tokens = conn.max_tokens,
         .temperature = conn.temperature,
@@ -1322,12 +1332,301 @@ fn noteAnchors(note: authors_note.Note) Anchors {
     };
 }
 
+// ---- token counting: each piece counted independently (classic script.js:4890), fetch failure
+// degrades to the byte-length char budget so a send never hangs. ----
+
+/// Persists across sends so a steady-state send re-fetches only the turns new since the last one, like
+/// the classic tokenCache. Keyed by tokenizer identity (and model for the remote tier).
+var tok_cache: tokenizer.TokenCache = .{};
+
+/// Concurrent encode fetches in flight. net.zig has 8 slots; this leaves headroom for other traffic
+/// while still overlapping round-trips the way the classic client's async getTokenCountAsync calls do.
+const TOK_CONCURRENCY: usize = 4;
+
+/// Bumped per job so a straggler encode-completion from an aborted send (a token-fetch failure ends the
+/// job via finishByteFallback while its other fetches stay inflight; net.zig does not cancel them) cannot
+/// write into a NEW job's arrays. The epoch rides the fetch tag; a mismatch is ignored wholesale.
+var tok_epoch_seq: u64 = 0;
+
+/// Bits reserved for the piece index in the fetch tag; the epoch takes the rest. A job has 1 + injections
+/// + history pieces, far under 2^20, so 20 bits is ample.
+const TOK_INDEX_BITS: u6 = 20;
+const TOK_INDEX_MASK: u64 = (1 << TOK_INDEX_BITS) - 1;
+
+const TokJob = struct {
+    active: bool = false,
+    epoch: u64 = 0,
+    pieces: generate.Pieces = undefined,
+    token_budget: usize = 0,
+    char_budget: usize = 0,
+    kind: tokenizer.Tokenizer = .none,
+    disc: u64 = 0,
+    encode_path: []const u8 = "",
+    remote: bool = false,
+    /// The resolved stop sequence, owned so it survives freePending; null = no stop.
+    stop: ?[]u8 = null,
+    /// CR-stripped copies of every piece (overhead, then injections, then history), the strings the
+    /// classic client counts (item.replace(/\r/g,'')). Owned. Parallel to `counts`/`filled`.
+    texts: [][]u8 = &.{},
+    counts: []usize = &.{},
+    filled: []bool = &.{},
+    n_inj: usize = 0,
+    /// Indices still needing a fetch (kept at full allocation length; `q_len` is the valid count so the
+    /// slice is never resliced before free). `q_next` is the next to dispatch, `remaining` the unresolved.
+    queue: []usize = &.{},
+    q_len: usize = 0,
+    q_next: usize = 0,
+    remaining: usize = 0,
+    inflight: usize = 0,
+};
+var tok_job: TokJob = .{};
+
+/// Strip every CR, owned. The classic client counts `item.replace(/\r/g,'')`, so the count must be over
+/// the CR-free bytes; fitAndAssemble strips the joined prompt to the same end.
+fn stripCR(s: []const u8) std.mem.Allocator.Error![]u8 {
+    var out = try alloc.alloc(u8, s.len);
+    var w: usize = 0;
+    for (s) |b| {
+        if (b == '\r') continue;
+        out[w] = b;
+        w += 1;
+    }
+    if (w != s.len) {
+        const shrunk = alloc.realloc(out, w) catch out[0..w];
+        return shrunk;
+    }
+    return out;
+}
+
+fn freeTokJob() void {
+    // A default job (no send ever launched here) has `pieces` undefined; only free a job that started.
+    if (!tok_job.active) {
+        tok_job = .{};
+        return;
+    }
+    if (tok_job.stop) |s| alloc.free(s);
+    for (tok_job.texts) |t| alloc.free(t);
+    if (tok_job.texts.len > 0) alloc.free(tok_job.texts);
+    if (tok_job.counts.len > 0) alloc.free(tok_job.counts);
+    if (tok_job.filled.len > 0) alloc.free(tok_job.filled);
+    if (tok_job.queue.len > 0) alloc.free(tok_job.queue);
+    generate.freePieces(alloc, &tok_job.pieces);
+    tok_job = .{};
+}
+
+/// The single terminal for a send: releases the token job (pieces + fetch buffers) and the pending
+/// send state. Every finish and abort path routes here so nothing leaks across the async gap.
+fn endSend() void {
+    freeTokJob();
+    freePending();
+}
+
+/// Opens the generate stream from a finished prompt, then ends the send. Reads the connection and the
+/// character identity from the still-live pending state (endSend frees them last).
+fn finishSend(prompt: []const u8) void {
+    defer endSend();
+    const conn = pend_conn orelse return;
+    var stop_buf: [1][]const u8 = undefined;
+    const stop: []const []const u8 = if (tok_job.stop) |s| blk: {
+        stop_buf[0] = s;
+        break :blk stop_buf[0..1];
+    } else &.{};
+    const body = generate.buildRequestBody(alloc, conn, prompt, stop) catch {
+        net_log.warn("send: request-body build failed", .{});
+        return;
+    };
+    defer alloc.free(body);
+    js.global.call(void, "__st_send_stream", .{
+        js.string("/api/backends/text-completions/generate"),
+        js.string(pend_char_name),
+        js.string(pend_char_avatar),
+        js.string(body),
+    }) catch {
+        net_log.warn("send: __st_send_stream helper missing", .{});
+    };
+}
+
+/// Trim on byte lengths against the char budget: the classic pre-token behavior and the fallback when a
+/// tokenizer is unavailable or an encode fetch fails. Builds the prompt and finishes the send.
+fn finishByteFallback() void {
+    const costs = generate.byteCostTable(alloc, tok_job.pieces) catch {
+        chars_log.err("send: fallback cost build failed", .{});
+        endSend();
+        return;
+    };
+    defer generate.freeCostTable(alloc, costs);
+    const prompt = generate.fitAndAssemble(alloc, tok_job.pieces, costs, tok_job.char_budget) catch {
+        chars_log.err("send: fallback prompt build failed", .{});
+        endSend();
+        return;
+    };
+    defer alloc.free(prompt);
+    finishSend(prompt);
+}
+
+/// All token counts are in: split them into the story/injection/history cost table and trim on real
+/// tokens against the token budget, then open the stream.
+fn finishTokenJob() void {
+    const n = tok_job.n_inj;
+    const costs = generate.CostTable{
+        .overhead = tok_job.counts[0],
+        .injections = tok_job.counts[1 .. 1 + n],
+        .history = tok_job.counts[1 + n ..],
+    };
+    const prompt = generate.fitAndAssemble(alloc, tok_job.pieces, costs, tok_job.token_budget) catch {
+        chars_log.err("send: token prompt build failed", .{});
+        endSend();
+        return;
+    };
+    defer alloc.free(prompt);
+    finishSend(prompt);
+}
+
+fn tokBody(index: usize) std.mem.Allocator.Error![]u8 {
+    const conn = pend_conn.?;
+    if (tok_job.remote) {
+        return std.json.Stringify.valueAlloc(alloc, .{
+            .text = tok_job.texts[index],
+            .url = conn.api_server,
+            .model = conn.model,
+            .api_type = conn.api_type,
+        }, .{});
+    }
+    return std.json.Stringify.valueAlloc(alloc, .{ .text = tok_job.texts[index] }, .{});
+}
+
+fn fireNextTokenFetch() void {
+    // net.request can complete SYNCHRONOUSLY on slot exhaustion (its on_done fires inline), which routes
+    // through onTokenCountDone and can tear the job down mid-loop; re-check `active` before each step.
+    while (tok_job.active and tok_job.inflight < TOK_CONCURRENCY and tok_job.q_next < tok_job.q_len) {
+        const index = tok_job.queue[tok_job.q_next];
+        tok_job.q_next += 1;
+        const body = tokBody(index) catch {
+            finishByteFallback();
+            return;
+        };
+        tok_job.inflight += 1;
+        net.request(tok_job.encode_path, body, (tok_job.epoch << TOK_INDEX_BITS) | @as(u64, index), onTokenCountDone, .{});
+        alloc.free(body);
+    }
+}
+
+fn onTokenCountDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
+    // A straggler from an aborted send carries that job's epoch; ignore it entirely (no inflight
+    // decrement, no array write) so it can never touch a newer job's state.
+    if (!tok_job.active or (tag >> TOK_INDEX_BITS) != tok_job.epoch) return;
+    tok_job.inflight -|= 1;
+    const index: usize = @intCast(tag & TOK_INDEX_MASK);
+    var count: ?usize = null;
+    if (res != null and status >= 200 and status < 300) {
+        if (res.?.json(struct { count: ?i64 = null, @"error": ?bool = null })) |parsed| {
+            defer parsed.deinit();
+            if ((parsed.value.@"error" orelse false) == false) {
+                if (parsed.value.count) |c| if (c >= 0) {
+                    count = @intCast(c);
+                };
+            }
+        } else |_| {}
+    }
+    const c = count orelse {
+        net_log.warn("send: token count fetch failed ({d}) - falling back to the char estimate", .{status});
+        finishByteFallback();
+        return;
+    };
+    tok_job.counts[index] = c;
+    tok_job.filled[index] = true;
+    tok_cache.put(alloc, tok_job.texts[index], tok_job.disc, c);
+    tok_job.remaining -= 1;
+    if (tok_job.remaining == 0) {
+        finishTokenJob();
+        return;
+    }
+    fireNextTokenFetch();
+}
+
+/// Stashes the assembled pieces and tokenizes each (cache first, then bounded fetches). On a setup OOM
+/// it degrades to the byte-cost path rather than dropping the send.
+fn startTokenJob(pieces: generate.Pieces, token_budget: usize, char_budget: usize, kind: tokenizer.Tokenizer, disc: u64, encode_path: []const u8, remote: bool, stop: ?[]u8) void {
+    const n = pieces.injections.len;
+    const total = 1 + n + pieces.wrapped_history.len;
+    tok_epoch_seq +%= 1;
+    tok_job = .{
+        .active = true,
+        .epoch = tok_epoch_seq,
+        .pieces = pieces,
+        .token_budget = token_budget,
+        .char_budget = char_budget,
+        .kind = kind,
+        .disc = disc,
+        .encode_path = encode_path,
+        .remote = remote,
+        .stop = stop,
+        .n_inj = n,
+    };
+    // No tokenizer resolved (a non-textgen or unknown backend): trim on the char estimate.
+    if (kind == .none) return finishByteFallback();
+    tok_job.texts = alloc.alloc([]u8, total) catch return startupFail(0);
+    // Track how many texts are filled so a mid-loop OOM frees exactly those.
+    var built: usize = 0;
+    tok_job.counts = alloc.alloc(usize, total) catch return startupFail(built);
+    tok_job.filled = alloc.alloc(bool, total) catch return startupFail(built);
+    tok_job.queue = alloc.alloc(usize, total) catch return startupFail(built);
+    @memset(tok_job.filled, false);
+
+    while (built < total) : (built += 1) {
+        const src = pieceText(pieces, n, built);
+        tok_job.texts[built] = stripCR(src) catch return startupFail(built);
+    }
+
+    tok_job.remaining = 0;
+    tok_job.q_next = 0;
+    var q: usize = 0;
+    for (0..total) |i| {
+        if (tok_cache.get(tok_job.texts[i], disc)) |hit| {
+            tok_job.counts[i] = hit;
+            tok_job.filled[i] = true;
+        } else {
+            tok_job.queue[q] = i;
+            q += 1;
+            tok_job.remaining += 1;
+        }
+    }
+    tok_job.q_len = q;
+    if (tok_job.remaining == 0) {
+        finishTokenJob();
+        return;
+    }
+    fireNextTokenFetch();
+}
+
+/// The source string for job unit `i`: index 0 is the overhead, 1..n the injections, the rest history.
+fn pieceText(pieces: generate.Pieces, n: usize, i: usize) []const u8 {
+    if (i == 0) return pieces.overhead;
+    if (i <= n) return pieces.injections[i - 1].wrapped;
+    return pieces.wrapped_history[i - 1 - n];
+}
+
+/// A token-job setup allocation failed after `built` texts were stripped: free the partial job and
+/// degrade to the byte-cost path so the send still goes out.
+fn startupFail(built: usize) void {
+    for (0..built) |i| alloc.free(tok_job.texts[i]);
+    if (tok_job.texts.len > 0) alloc.free(tok_job.texts);
+    if (tok_job.counts.len > 0) alloc.free(tok_job.counts);
+    if (tok_job.filled.len > 0) alloc.free(tok_job.filled);
+    if (tok_job.queue.len > 0) alloc.free(tok_job.queue);
+    tok_job.texts = &.{};
+    tok_job.counts = &.{};
+    tok_job.filled = &.{};
+    tok_job.queue = &.{};
+    finishByteFallback();
+}
+
 /// Prompt-window fetch completion: parse the spine page (a failure degrades to a null page), then
-/// assemble and dispatch the generate. Always frees the pending state.
+/// assemble and dispatch the generate. The pending state is freed by the send's terminal (endSend),
+/// not here, because the token-count round-trip outlives this callback.
 fn onPromptWindowDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     _ = tag;
     if (!pend_active) return;
-    defer freePending();
     var page: ?data.ChatPage = null;
     if (res != null and status >= 200 and status < 300) {
         if (res.?.json(std.json.Value)) |parsed| {
@@ -1340,18 +1639,21 @@ fn onPromptWindowDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         net_log.warn("send: prompt window fetch returned {d} - degrading to the user turn", .{status});
     }
     defer if (page) |p| data.freeChatPage(alloc, p);
+    // An error here means the send failed BEFORE the token job launched (nothing async in flight), so the
+    // terminal cleanup is ours; a launched job frees itself through endSend when it settles.
     dispatchGenerate(page) catch |err| {
         chars_log.err("send: prompt/body build failed: {s}", .{@errorName(err)});
+        endSend();
     };
 }
 
-/// Builds the prompt history from the fetched spine window and opens the generate stream. The window
-/// is the deep history (may exceed the display); the greeting is reconstructed when the fetch reached
-/// the head of the file (it is display-only, never persisted), and the just-sent user turn is appended
-/// unless the race already put it at the window tail (dedup). buildPromptBudgeted trims to the char
-/// budget, so nothing here is bounded by what is on screen (invariant 2).
+/// Builds the prompt history from the fetched spine window, assembles the prompt pieces, and kicks off
+/// the token-count job that trims and opens the stream. The window is the deep history (may exceed the
+/// display); the greeting is reconstructed when the fetch reached the head of the file, and the just-sent
+/// user turn is appended unless the race already put it at the window tail (dedup). An error is returned
+/// only for a pre-job failure, whose cleanup the caller owns; nothing on screen bounds the window (inv 2).
 fn dispatchGenerate(page: ?data.ChatPage) !void {
-    const conn = pend_conn orelse return;
+    const conn = pend_conn orelse return error.MissingConnection;
     var history: std.ArrayList(generate.PromptMsg) = .empty;
     defer history.deinit(alloc);
 
@@ -1453,38 +1755,46 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
         .wi_scenario = pend_scenario,
         .wi_creator_notes = pend_creator_notes,
     };
+    // Assemble the prompt into separately-costable pieces. The budget walk waits until each piece has a
+    // real token count (or the byte fallback); pieces is owned and outlives this callback in tok_job.
     const had_timed = wi_timed.hasState();
-    var timed_out_json: []const u8 = "";
-    const prompt = try generate.buildPromptBudgeted(alloc, ctx, history.items, generate.promptCharBudget(conn), shape, &timed_out_json);
-    defer alloc.free(prompt);
+    var pieces = generate.assemblePieces(alloc, ctx, history.items, shape, true) catch |err| {
+        chars_log.err("send: prompt assembly failed: {s}", .{@errorName(err)});
+        endSend();
+        return;
+    };
     // wi-timed: advance the in-memory state now so the NEXT send reads this send's outcome before the
     // server persist. Persist when a window is live now or was before (so an expiry still clears it).
-    if (timed_out_json.len > 0) {
-        wi_timed.advance(timed_out_json);
-        alloc.free(timed_out_json);
-    }
+    if (pieces.timed_json) |tj| if (tj.len > 0) wi_timed.advance(tj);
     pend_timed_persist = had_timed or wi_timed.hasState();
+
+    // Stock resolves macros in the stop sequence too (instruct-mode.js:321), gated on instruct.macro.
+    // Own the resolved sequence so it survives to finishSend past freePending.
     var stop_buf: [1][]const u8 = undefined;
     const raw_stop = generate.stopSequences(pend_tpl.instruct, &stop_buf);
-    // Stock resolves macros in the stop sequence too (instruct-mode.js:321), gated on instruct.macro.
     var stop_owned: ?[]u8 = null;
-    defer if (stop_owned) |s| alloc.free(s);
-    if (pend_tpl.instruct.macro and raw_stop.len == 1) {
-        stop_owned = try generate.substituteMacros(alloc, raw_stop[0], ctx);
-        stop_buf[0] = stop_owned.?;
+    if (raw_stop.len == 1) {
+        stop_owned = if (pend_tpl.instruct.macro)
+            generate.substituteMacros(alloc, raw_stop[0], ctx) catch {
+                generate.freePieces(alloc, &pieces);
+                endSend();
+                return;
+            }
+        else
+            alloc.dupe(u8, raw_stop[0]) catch {
+                generate.freePieces(alloc, &pieces);
+                endSend();
+                return;
+            };
     }
-    const stop = if (stop_owned != null) stop_buf[0..1] else raw_stop;
-    const body = try generate.buildRequestBody(alloc, conn, prompt, stop);
-    defer alloc.free(body);
 
-    js.global.call(void, "__st_send_stream", .{
-        js.string("/api/backends/text-completions/generate"),
-        js.string(pend_char_name),
-        js.string(pend_char_avatar),
-        js.string(body),
-    }) catch {
-        net_log.warn("send: __st_send_stream helper missing", .{});
-    };
+    // Resolve the tokenizer the classic client would use, then count each piece. A configured backend
+    // with a supported type uses its own remote tokenizer (exact for llama.cpp); else a local model.
+    const kind = tokenizer.bestMatch(conn.api_type, conn.model, conn.api_server.len > 0, false);
+    const remote = kind == .remote_textgen;
+    const encode_path = if (remote) tokenizer.remote_encode_path else tokenizer.localEncodePath(kind);
+    const disc = tokenizer.cacheDisc(kind, conn.model);
+    startTokenJob(pieces, generate.promptTokenBudget(conn), generate.promptCharBudget(conn), kind, disc, encode_path, remote, stop_owned);
 }
 
 /// Called by the JS pump on stream seal (via the __st_persist_turns export): persist the assistant

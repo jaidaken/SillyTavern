@@ -24,6 +24,7 @@ comptime {
     _ = @import("ui_state.zig");
     _ = @import("char_data.zig");
     _ = @import("generate.zig");
+    _ = @import("tokenizer.zig");
     _ = @import("log_spec.zig");
     _ = @import("dropdown_nav.zig");
     _ = @import("background_store.zig");

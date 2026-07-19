@@ -230,6 +230,8 @@ test "fromConnection and applyToConnection round-trip every sampler" {
     const conn = generate.Connection{
         .api_type = "",
         .api_server = "",
+        .model = "",
+        .token_padding = 0,
         .max_context = 16384,
         .max_tokens = 320,
         .temperature = 0.8,
@@ -260,6 +262,8 @@ test "fromConnection clamps a hostile stored connection" {
     const conn = generate.Connection{
         .api_type = "",
         .api_server = "",
+        .model = "",
+        .token_padding = 0,
         .max_context = -5,
         .max_tokens = 1 << 40,
         .temperature = 900,

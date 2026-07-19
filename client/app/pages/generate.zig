@@ -32,6 +32,14 @@ pub const Note = authors_note.Note;
 pub const Connection = struct {
     api_type: []u8,
     api_server: []u8,
+    /// The user-configured model name (stock getTextGenModel: the per-type `*_model` field). Owned,
+    /// possibly empty when the backend carries none (koboldcpp, or an unset field); the tokenizer
+    /// resolver then defers to the probed model and finally the llama default. Feeds getTokenizerBestMatch.
+    model: []u8,
+    /// Stock power_user.token_padding (default 64): tokens the classic client reserves out of the history
+    /// budget (getMessagesTokenCount adds it to the overhead seed, tokenizers.js:482). promptTokenBudget
+    /// subtracts it so the trim boundary matches.
+    token_padding: i64,
     max_context: i64,
     max_tokens: i64,
     temperature: f64,
@@ -44,6 +52,7 @@ pub const Connection = struct {
 pub fn freeConnection(alloc: Allocator, conn: Connection) void {
     alloc.free(conn.api_type);
     alloc.free(conn.api_server);
+    alloc.free(conn.model);
 }
 
 pub const ConnectionError = error{ ParseFailed, NotAnObject, UnsupportedApi, MissingConnection } || Allocator.Error;
@@ -82,10 +91,14 @@ pub fn extractConnection(alloc: Allocator, settings_str: []const u8) ConnectionE
     errdefer alloc.free(api_type);
     const api_server = try alloc.dupe(u8, server);
     errdefer alloc.free(api_server);
+    const model = try alloc.dupe(u8, textGenModel(tg, type_str));
+    errdefer alloc.free(model);
 
     return .{
         .api_type = api_type,
         .api_server = api_server,
+        .model = model,
+        .token_padding = tokenPadding(root),
         .max_context = numI64(root, "max_context", 8192),
         .max_tokens = numI64(root, "amount_gen", 512),
         .temperature = numF64(tg, "temp", 1.0),
@@ -109,6 +122,29 @@ fn serverUrl(tg: std.json.ObjectMap, type_str: []const u8) []const u8 {
         else => return "",
     };
     return strField(urls, type_str);
+}
+
+/// The configured model name for this backend, mirroring the classic getTextGenModel
+/// (textgen-settings.js:1479): ooba reads `custom_model`, huggingface is the fixed "tgi", koboldcpp
+/// carries none, and the rest read `<type>_model` (llamacpp_model, vllm_model, ...). Borrowed from the
+/// blob. Empty means the caller defers to the connection probe's reported model.
+fn textGenModel(tg: std.json.ObjectMap, type_str: []const u8) []const u8 {
+    if (std.mem.eql(u8, type_str, "huggingface")) return "tgi";
+    if (std.mem.eql(u8, type_str, "ooba")) return strField(tg, "custom_model");
+    if (std.mem.eql(u8, type_str, "koboldcpp")) return "";
+    var buf: [64]u8 = undefined;
+    const key = std.fmt.bufPrint(&buf, "{s}_model", .{type_str}) catch return "";
+    return strField(tg, key);
+}
+
+/// Stock power_user.token_padding (default 64), read from the settings blob's power_user object. A
+/// missing or non-object power_user, or an absent field, yields the classic default.
+fn tokenPadding(root: std.json.ObjectMap) i64 {
+    const pu = switch (root.get("power_user") orelse return 64) {
+        .object => |o| o,
+        else => return 64,
+    };
+    return numI64(pu, "token_padding", 64);
 }
 
 fn numF64(obj: std.json.ObjectMap, key: []const u8, default: f64) f64 {
@@ -148,33 +184,18 @@ const TOKEN_CHARS_DEN: usize = 2;
 /// `max_context` is mined from the settings blob (the classic client writes the user's configured
 /// size there); a missing or non-positive value falls back to the classic 8192 default.
 pub fn promptCharBudget(conn: Connection) usize {
-    const ctx_tokens: usize = if (conn.max_context > 0) @intCast(conn.max_context) else 8192;
-    const resp_tokens: usize = if (conn.max_tokens > 0) @intCast(conn.max_tokens) else 0;
-    const hist_tokens = ctx_tokens -| resp_tokens;
+    const hist_tokens = budgetTokens(conn);
     return (hist_tokens *| TOKEN_CHARS_NUM) / TOKEN_CHARS_DEN;
 }
 
-/// The newest suffix of `history` whose cumulative WRAPPED length fits `budget_chars`. Walks
-/// oldest-first from the tail so the freshest turns survive a tight budget; always keeps at least the
-/// last message so a send never ships an empty history. This is what decouples the prompt from the
-/// display window (invariant 2): the caller feeds the full spine window, not the on-screen tail.
-///
-/// The cost is TEMPLATE-AWARE (probe tear 6). Charging every turn a flat `name + ": " + mes + "\n"`
-/// under-counts a ChatML turn nearly 3x, so the window over-fills, the backend truncates the OLDEST
-/// history to fit its real context, and the prompt silently loses the turns this function exists to
-/// protect. `tpl` must be the same template the assembly wraps with, or the count is fiction.
-pub fn selectWindow(history: []const PromptMsg, budget_chars: usize, tpl: templates.Instruct) []const PromptMsg {
-    if (history.len == 0) return history;
-    var used: usize = 0;
-    var i: usize = history.len;
-    while (i > 0) {
-        const m = history[i - 1];
-        const cost = templates.wrapCost(tpl, m.role, m.name, m.mes);
-        if (i != history.len and used + cost > budget_chars) break;
-        used += cost;
-        i -= 1;
-    }
-    return history[i..];
+/// The history token budget shared by both budgets: context minus the response reserve minus the stock
+/// token_padding the classic client holds back (getMessagesTokenCount seeds the count with it). A
+/// missing or non-positive context falls back to the classic 8192 default.
+fn budgetTokens(conn: Connection) usize {
+    const ctx_tokens: usize = if (conn.max_context > 0) @intCast(conn.max_context) else 8192;
+    const resp_tokens: usize = if (conn.max_tokens > 0) @intCast(conn.max_tokens) else 0;
+    const padding: usize = if (conn.token_padding > 0) @intCast(conn.token_padding) else 0;
+    return ctx_tokens -| resp_tokens -| padding;
 }
 
 /// Everything about prompt SHAPE that is not the card content or the history: the instruct/context
@@ -255,6 +276,161 @@ pub fn buildPrompt(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, shape
 /// chat_metadata.timedWorldInfo) as an owned JSON string the caller persists then frees. It is the
 /// last thing set, so an error anywhere leaves it untouched and the caller frees nothing.
 pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, budget_chars: usize, shape: Shape, timed_out_json: ?*[]const u8) Allocator.Error![]u8 {
+    var pieces = try assemblePieces(alloc, ctx, history, shape, timed_out_json != null);
+    defer freePieces(alloc, &pieces);
+
+    // The all-in-one / fallback path: cost every piece at its BYTE length. wrapMessage's length equals
+    // the wrapCost the pre-token walk charged, and the overhead byte length equals the old accumulator
+    // size, so this reproduces the char-budget trim boundary byte-for-byte. The real token path lives
+    // in char_api, which tokenizes each piece and calls fitAndAssemble with a token budget instead.
+    const costs = try byteCostTable(alloc, pieces);
+    defer freeCostTable(alloc, costs);
+    const result = try fitAndAssemble(alloc, pieces, costs, budget_chars);
+    errdefer alloc.free(result);
+    if (timed_out_json) |slot| {
+        slot.* = pieces.timed_json.?;
+        pieces.timed_json = null; // ownership moves to the caller's slot; freePieces must not touch it
+    }
+    return result;
+}
+
+/// One in-chat control insertion, pre-wrapped in its instruct sequence at assembly time so its token
+/// cost can be measured independently. `depth` counts back from the newest windowed turn.
+pub const AssembledInjection = struct {
+    depth: usize,
+    role: templates.Role,
+    wrapped: []u8,
+    is_note: bool,
+};
+
+/// Everything the prompt is made of, as separately-owned strings whose token cost the caller measures
+/// one by one (matching the classic client, which counts each formatMessageHistoryItem and the story
+/// overhead independently). `assemblePieces` produces it; `fitAndAssemble` walks the budget and joins.
+/// All fields are allocator-owned and survive an async token-count round-trip; free with `freePieces`.
+pub const Pieces = struct {
+    /// The story block plus example dialogue plus chat_start: the fixed prompt prefix before history.
+    overhead: []u8,
+    injections: []AssembledInjection,
+    /// One pre-wrapped string per input history turn, in input order.
+    wrapped_history: [][]u8,
+    prefix: []u8,
+    note: Note,
+    an_wrap: bool,
+    history_len: usize,
+    /// The updated timed-effect state as owned JSON, or null when the caller did not ask for it.
+    timed_json: ?[]const u8,
+};
+
+pub fn freePieces(alloc: Allocator, p: *Pieces) void {
+    alloc.free(p.overhead);
+    for (p.injections) |inj| alloc.free(inj.wrapped);
+    alloc.free(p.injections);
+    for (p.wrapped_history) |w| alloc.free(w);
+    alloc.free(p.wrapped_history);
+    alloc.free(p.prefix);
+    if (p.timed_json) |j| alloc.free(j);
+}
+
+/// Per-piece costs the budget walk sums, in whatever unit the caller measured (bytes for the fallback,
+/// real tokens for the send path). Parallel to `Pieces.injections` and `Pieces.wrapped_history`.
+pub const CostTable = struct {
+    overhead: usize,
+    injections: []const usize,
+    history: []const usize,
+};
+
+/// The prompt's token budget: context size minus the response reserve minus token_padding, matching the
+/// classic effective history budget (this_max_context = max_context - amount_gen, with token_padding
+/// held back in the seed). The send path passes this to fitAndAssemble alongside real per-piece counts.
+pub fn promptTokenBudget(conn: Connection) usize {
+    return budgetTokens(conn);
+}
+
+/// A cost table where each piece is charged its BYTE length: the fallback / char-budget path, and the
+/// unit the pre-token builder used (wrapMessage length == wrapCost). Free with freeCostTable.
+pub fn byteCostTable(alloc: Allocator, pieces: Pieces) Allocator.Error!CostTable {
+    const inj = try alloc.alloc(usize, pieces.injections.len);
+    errdefer alloc.free(inj);
+    for (pieces.injections, 0..) |x, i| inj[i] = x.wrapped.len;
+    const his = try alloc.alloc(usize, pieces.wrapped_history.len);
+    for (pieces.wrapped_history, 0..) |w, i| his[i] = w.len;
+    return .{ .overhead = pieces.overhead.len, .injections = inj, .history = his };
+}
+
+pub fn freeCostTable(alloc: Allocator, c: CostTable) void {
+    alloc.free(c.injections);
+    alloc.free(c.history);
+}
+
+/// The newest suffix of history whose cumulative cost stays strictly under `budget`, as a START index
+/// into the cost array. Walks oldest-first from the tail so the freshest turns survive a tight budget.
+/// A turn is kept only if it fits (classic `tokenCount < this_max_context`, script.js:4891): the newest
+/// turn is NOT forced, so an overhead that alone fills the budget yields an empty history exactly as the
+/// classic client does. Cost-unit agnostic (bytes or tokens).
+fn fitWindow(costs: []const usize, budget: usize) usize {
+    var used: usize = 0;
+    var i: usize = costs.len;
+    while (i > 0) {
+        const cost = costs[i - 1];
+        if (used + cost >= budget) break;
+        used += cost;
+        i -= 1;
+    }
+    return i;
+}
+
+fn appendAssembledInjectionsAt(alloc: Allocator, out: *std.ArrayList(u8), injections: []const AssembledInjection, note_live: bool, window_len: usize, at: usize) Allocator.Error!void {
+    for (injections) |inj| {
+        if (inj.is_note and !note_live) continue;
+        if (window_len -| inj.depth != at) continue;
+        try out.appendSlice(alloc, inj.wrapped);
+    }
+}
+
+/// Joins the assembled pieces under `costs` against `budget`: reserves the overhead and every injection
+/// out of the budget, trims history oldest-first over what remains, then emits overhead, the surviving
+/// history with each injection at its depth, and the continuation prefix. Every CR is stripped last
+/// (script.js:5075). The injections are reserved before the history walk, so a tight budget sheds
+/// history, never a control instruction. Owned result.
+pub fn fitAndAssemble(alloc: Allocator, pieces: Pieces, costs: CostTable, budget: usize) Allocator.Error![]u8 {
+    var inj_sum: usize = 0;
+    for (costs.injections) |c| inj_sum += c;
+    const start = fitWindow(costs.history, budget -| costs.overhead -| inj_sum);
+    const window_len = pieces.history_len - start;
+    // The note's interval reads the windowed count, as it always has; an_wrap overrides it.
+    const note_live = pieces.an_wrap or authors_note.injectionIndex(pieces.note, window_len) != null;
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(alloc);
+    try out.appendSlice(alloc, pieces.overhead);
+    var i: usize = 0;
+    while (i < window_len) : (i += 1) {
+        try appendAssembledInjectionsAt(alloc, &out, pieces.injections, note_live, window_len, i);
+        try out.appendSlice(alloc, pieces.wrapped_history[start + i]);
+    }
+    try appendAssembledInjectionsAt(alloc, &out, pieces.injections, note_live, window_len, window_len);
+    // Classic modifyLastPromptLine adds the cue only for a non-empty windowed history (script.js:4994):
+    // a real history trimmed away entirely ships none; a no-history caller still primes the char.
+    if (window_len > 0 or pieces.history_len == 0) try out.appendSlice(alloc, pieces.prefix);
+
+    // Stock strips every CR from the assembled prompt (script.js:5075, .replace(/\r/gm, '')); card
+    // fields routinely carry CRLF and the wire prompt is LF-only. Position-independent, so stripping the
+    // joined buffer once equals stripping each piece, which is what the token counter does per piece.
+    var w: usize = 0;
+    for (out.items) |b| {
+        if (b == '\r') continue;
+        out.items[w] = b;
+        w += 1;
+    }
+    out.shrinkRetainingCapacity(w);
+    return out.toOwnedSlice(alloc);
+}
+
+/// Assembles the prompt into separately-costable pieces WITHOUT applying the budget: the story-block
+/// overhead, each in-chat injection pre-wrapped, and each history turn pre-wrapped. World info activates
+/// here (it feeds the story string and the injections), and the timed-effect state is stringified while
+/// its arena is still alive when `want_timed`. The caller measures each piece and calls fitAndAssemble.
+pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, shape: Shape, want_timed: bool) Allocator.Error!Pieces {
     // The world-info scan reads the PROMPT window tail, so the display window never bounds what
     // can activate (invariant 2).
     const scan_texts = try alloc.alloc([]const u8, history.len);
@@ -323,28 +499,28 @@ pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMs
         .in_chat => {},
     };
 
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(alloc);
+    var overhead: std.ArrayList(u8) = .empty;
+    errdefer overhead.deinit(alloc);
 
     const story = try templates.renderStoryString(alloc, shape.tpl.context.story_string, wctx, instruct);
     defer alloc.free(story);
     const wrapped_story = try templates.wrapStoryString(alloc, instruct, story);
     defer alloc.free(wrapped_story);
-    try out.appendSlice(alloc, wrapped_story);
+    try overhead.appendSlice(alloc, wrapped_story);
 
-    try appendExamples(alloc, &out, wctx, shape.tpl.context.example_separator, wi_act.em_top, wi_act.em_bottom);
+    try appendExamples(alloc, &overhead, wctx, shape.tpl.context.example_separator, wi_act.em_top, wi_act.em_bottom);
     if (shape.tpl.context.chat_start.len > 0) {
         const start = try substituteMacros(alloc, shape.tpl.context.chat_start, wctx);
         defer alloc.free(start);
-        try out.appendSlice(alloc, start);
-        try out.append(alloc, '\n');
+        try overhead.appendSlice(alloc, start);
+        try overhead.append(alloc, '\n');
     }
 
-    // The generalized injection list (probe#3 delta 4): the in_chat note plus every atDepth group,
-    // reserved out of the budget pre-walk so a tight budget sheds history, never an injection.
-    var injections: std.ArrayList(Injection) = .empty;
-    defer {
-        for (injections.items) |inj| alloc.free(inj.text);
+    // The in_chat note plus every atDepth group (probe#3 delta 4), each pre-wrapped so its token cost is
+    // measured alone; ownership moves to the returned Pieces on success (free the wrapped only on error).
+    var injections: std.ArrayList(AssembledInjection) = .empty;
+    errdefer {
+        for (injections.items) |inj| alloc.free(inj.wrapped);
         injections.deinit(alloc);
     }
     // WI an entries force the note slot to fire even when the note itself is silent this turn
@@ -355,80 +531,91 @@ pub fn buildPromptBudgeted(alloc: Allocator, ctx: Ctx, history: []const PromptMs
         const joined = try joinNonEmpty(alloc, &.{ wi_act.an_top, note_text, wi_act.an_bottom });
         defer alloc.free(joined);
         const subbed = try substituteMacros(alloc, joined, wctx);
-        errdefer alloc.free(subbed);
-        try injections.append(alloc, .{
-            .depth = @intCast(@max(0, shape.note.depth)),
-            .role = shape.note.role.toTemplateRole(),
-            .text = subbed,
-            .is_note = true,
-        });
+        defer alloc.free(subbed);
+        const role = shape.note.role.toTemplateRole();
+        const wrapped = try templates.wrapMessage(alloc, instruct, role, "", subbed);
+        errdefer alloc.free(wrapped);
+        try injections.append(alloc, .{ .depth = @intCast(@max(0, shape.note.depth)), .role = role, .wrapped = wrapped, .is_note = true });
     }
     // The character's own depth note (stock "character-specific A/N"): always at its own depth+role.
     if (shape.char_note.prompt.len > 0) {
         const subbed = try substituteMacros(alloc, shape.char_note.prompt, wctx);
-        errdefer alloc.free(subbed);
-        try injections.append(alloc, .{
-            .depth = @intCast(@max(0, shape.char_note.depth)),
-            .role = shape.char_note.role.toTemplateRole(),
-            .text = subbed,
-            .is_note = false,
-        });
+        defer alloc.free(subbed);
+        const role = shape.char_note.role.toTemplateRole();
+        const wrapped = try templates.wrapMessage(alloc, instruct, role, "", subbed);
+        errdefer alloc.free(wrapped);
+        try injections.append(alloc, .{ .depth = @intCast(@max(0, shape.char_note.depth)), .role = role, .wrapped = wrapped, .is_note = false });
     }
     // The jailbreak / post-history instruction: a user turn after the history (depth 0). Its
     // {{original}} was resolved at composition, so this is a plain macro pass for {{char}} etc.
     if (shape.jailbreak.len > 0) {
         const subbed = try substituteMacros(alloc, shape.jailbreak, wctx);
-        errdefer alloc.free(subbed);
-        try injections.append(alloc, .{ .depth = 0, .role = .user, .text = subbed, .is_note = false });
+        defer alloc.free(subbed);
+        const wrapped = try templates.wrapMessage(alloc, instruct, .user, "", subbed);
+        errdefer alloc.free(wrapped);
+        try injections.append(alloc, .{ .depth = 0, .role = .user, .wrapped = wrapped, .is_note = false });
     }
     for (wi_act.at_depth) |g| {
         const subbed = try substituteMacros(alloc, g.content, wctx);
-        errdefer alloc.free(subbed);
+        defer alloc.free(subbed);
         // Stock extension_prompt_roles: 0 system, 1 user, 2 assistant (world-info.js:5115 groups by it).
         const role: Role = switch (g.role) {
             1 => .user,
             2 => .assistant,
             else => .system,
         };
-        try injections.append(alloc, .{ .depth = @intCast(@max(0, g.depth)), .role = role, .text = subbed, .is_note = false });
+        const wrapped = try templates.wrapMessage(alloc, instruct, role, "", subbed);
+        errdefer alloc.free(wrapped);
+        try injections.append(alloc, .{ .depth = @intCast(@max(0, g.depth)), .role = role, .wrapped = wrapped, .is_note = false });
     }
-    var inj_cost: usize = 0;
-    for (injections.items) |inj| inj_cost += templates.wrapCost(instruct, inj.role, "", inj.text);
 
-    const windowed = selectWindow(history, budget_chars -| out.items.len -| inj_cost, instruct);
-    // The note's interval reads the windowed count, as it always has; an_wrap overrides it.
-    const note_live = an_wrap or authors_note.injectionIndex(shape.note, windowed.len) != null;
-    for (windowed, 0..) |m, i| {
-        try appendInjectionsAt(alloc, &out, instruct, injections.items, note_live, windowed.len, i);
-        try templates.appendWrapped(alloc, &out, instruct, m.role, m.name, m.mes);
+    // Each history turn pre-wrapped in its role's sequence, the string the caller tokenizes.
+    var wh: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (wh.items) |x| alloc.free(x);
+        wh.deinit(alloc);
     }
-    try appendInjectionsAt(alloc, &out, instruct, injections.items, note_live, windowed.len, windowed.len);
+    for (history) |m| {
+        const wrapped = try templates.wrapMessage(alloc, instruct, m.role, m.name, m.mes);
+        errdefer alloc.free(wrapped);
+        try wh.append(alloc, wrapped);
+    }
 
     const prefix = try templates.continuationPrefix(alloc, instruct, ctx.char);
-    defer alloc.free(prefix);
-    try out.appendSlice(alloc, prefix);
+    errdefer alloc.free(prefix);
 
-    // Stock strips every CR from the assembled prompt (script.js:5075, .replace(/\r/gm, '')); card
-    // fields routinely carry CRLF and the wire prompt is LF-only.
-    var w: usize = 0;
-    for (out.items) |b| {
-        if (b == '\r') continue;
-        out.items[w] = b;
-        w += 1;
-    }
-    out.shrinkRetainingCapacity(w);
-
-    const result = try out.toOwnedSlice(alloc);
-    errdefer alloc.free(result);
-    // Stringify while wi_act's arena still backs the timed-effect keys (freed on scope exit). Set
-    // last so an OOM frees `result` and leaves the caller's slot untouched, never a partial state.
-    if (timed_out_json) |slot| {
+    // Stringify while wi_act's arena still backs the timed-effect keys (freed on scope exit).
+    var timed_json: ?[]const u8 = null;
+    errdefer if (timed_json) |j| alloc.free(j);
+    if (want_timed) {
         var ja = std.heap.ArenaAllocator.init(alloc);
         defer ja.deinit();
         const v = try wi_engine.writeTimedState(ja.allocator(), wi_act.timed_out);
-        slot.* = try std.json.Stringify.valueAlloc(alloc, v, .{});
+        timed_json = try std.json.Stringify.valueAlloc(alloc, v, .{});
     }
-    return result;
+
+    const overhead_slice = try overhead.toOwnedSlice(alloc);
+    errdefer alloc.free(overhead_slice);
+    const inj_slice = try injections.toOwnedSlice(alloc);
+    errdefer {
+        for (inj_slice) |inj| alloc.free(inj.wrapped);
+        alloc.free(inj_slice);
+    }
+    const wh_slice = try wh.toOwnedSlice(alloc);
+    errdefer {
+        for (wh_slice) |x| alloc.free(x);
+        alloc.free(wh_slice);
+    }
+    return .{
+        .overhead = overhead_slice,
+        .injections = inj_slice,
+        .wrapped_history = wh_slice,
+        .prefix = prefix,
+        .note = shape.note,
+        .an_wrap = an_wrap,
+        .history_len = history.len,
+        .timed_json = timed_json,
+    };
 }
 
 /// An owned macro-resolved copy of the value, or the value itself when empty (no macro possible, no
@@ -498,23 +685,6 @@ fn freeInstructMacros(alloc: Allocator, orig: templates.Instruct, r: templates.I
     freeSeq(alloc, orig.stop_sequence, r.stop_sequence);
     freeSeq(alloc, orig.story_string_prefix, r.story_string_prefix);
     freeSeq(alloc, orig.story_string_suffix, r.story_string_suffix);
-}
-
-/// One in-chat control insertion: the author's note, or a merged WI atDepth group. `depth` counts
-/// back from the newest windowed turn (the authors_note.injectionIndex convention).
-const Injection = struct {
-    depth: usize,
-    role: templates.Role,
-    text: []const u8,
-    is_note: bool,
-};
-
-fn appendInjectionsAt(alloc: Allocator, out: *std.ArrayList(u8), tpl: templates.Instruct, injections: []const Injection, note_live: bool, window_len: usize, at: usize) Allocator.Error!void {
-    for (injections) |inj| {
-        if (inj.is_note and !note_live) continue;
-        if (window_len -| inj.depth != at) continue;
-        try templates.appendWrapped(alloc, out, tpl, inj.role, "", inj.text);
-    }
 }
 
 fn storyHasSlot(story: []const u8, slot: []const u8, legacy: []const u8) bool {
@@ -627,6 +797,7 @@ test "extractConnection reads type, server_urls, and coerced samplers" {
     defer freeConnection(testing.allocator, conn);
     try testing.expectEqualStrings("llamacpp", conn.api_type);
     try testing.expectEqualStrings("http://127.0.0.1:8080", conn.api_server);
+    try testing.expectEqualStrings("", conn.model);
     try testing.expectEqual(@as(i64, 16384), conn.max_context);
     try testing.expectEqual(@as(i64, 320), conn.max_tokens);
     try testing.expectEqual(@as(f64, 0.8), conn.temperature);
@@ -663,6 +834,34 @@ test "extractConnection rejects other families and malformed blobs" {
     ));
     try testing.expectError(error.ParseFailed, extractConnection(testing.allocator, "{nope"));
     try testing.expectError(error.NotAnObject, extractConnection(testing.allocator, "42"));
+}
+
+test "extractConnection mines the per-type model field like getTextGenModel" {
+    const cases = .{
+        .{ "{\"main_api\":\"textgenerationwebui\",\"textgenerationwebui_settings\":{\"type\":\"llamacpp\",\"llamacpp_model\":\"Llama-3.1-8B.gguf\",\"server_urls\":{}}}", "Llama-3.1-8B.gguf" },
+        .{ "{\"main_api\":\"textgenerationwebui\",\"textgenerationwebui_settings\":{\"type\":\"ooba\",\"custom_model\":\"mistral-nemo\",\"server_urls\":{}}}", "mistral-nemo" },
+        .{ "{\"main_api\":\"textgenerationwebui\",\"textgenerationwebui_settings\":{\"type\":\"vllm\",\"vllm_model\":\"Qwen2-7B\",\"server_urls\":{}}}", "Qwen2-7B" },
+        .{ "{\"main_api\":\"textgenerationwebui\",\"textgenerationwebui_settings\":{\"type\":\"huggingface\",\"server_urls\":{}}}", "tgi" },
+        .{ "{\"main_api\":\"textgenerationwebui\",\"textgenerationwebui_settings\":{\"type\":\"koboldcpp\",\"server_urls\":{}}}", "" },
+        .{ "{\"main_api\":\"textgenerationwebui\",\"textgenerationwebui_settings\":{\"type\":\"llamacpp\",\"server_urls\":{}}}", "" },
+    };
+    inline for (cases) |c| {
+        const conn = try extractConnection(testing.allocator, c[0]);
+        defer freeConnection(testing.allocator, conn);
+        try testing.expectEqualStrings(c[1], conn.model);
+    }
+}
+
+test "extractConnection mines power_user.token_padding, defaulting to 64" {
+    const with = "{\"main_api\":\"textgenerationwebui\",\"power_user\":{\"token_padding\":128},\"textgenerationwebui_settings\":{\"type\":\"llamacpp\",\"server_urls\":{}}}";
+    const c1 = try extractConnection(testing.allocator, with);
+    defer freeConnection(testing.allocator, c1);
+    try testing.expectEqual(@as(i64, 128), c1.token_padding);
+
+    const without = "{\"main_api\":\"textgenerationwebui\",\"textgenerationwebui_settings\":{\"type\":\"llamacpp\",\"server_urls\":{}}}";
+    const c2 = try extractConnection(testing.allocator, without);
+    defer freeConnection(testing.allocator, c2);
+    try testing.expectEqual(@as(i64, 64), c2.token_padding);
 }
 
 test "extractConnection cleans up on every allocation failure" {
@@ -834,46 +1033,97 @@ test "buildPrompt places chat_start between the examples and the history" {
     try testing.expectEqualStrings("A diver.\n***\nJamie: Hi.\nRita:", out);
 }
 
-test "selectWindow keeps the newest suffix that fits the budget" {
-    const h = [_]PromptMsg{
-        .{ .name = "A", .mes = "xx" },
-        .{ .name = "A", .mes = "xx" },
-        .{ .name = "A", .mes = "xx" },
-        .{ .name = "A", .mes = "xx" },
-        .{ .name = "A", .mes = "xx" },
-    };
-    const off = templates.Instruct{ .enabled = false };
-    try testing.expectEqual(@as(usize, 3), selectWindow(&h, 18, off).len);
-    try testing.expectEqual(@as(usize, 2), selectWindow(&h, 17, off).len);
-    try testing.expectEqual(@as(usize, 5), selectWindow(&h, 1000, off).len);
-    try testing.expectEqualStrings(h[2].mes, selectWindow(&h, 18, off)[0].mes);
+test "fitWindow keeps the newest suffix strictly under the budget as a start index" {
+    const costs = [_]usize{ 6, 6, 6, 6, 6 };
+    try testing.expectEqual(@as(usize, 2), fitWindow(&costs, 19)); // 18 < 19 -> keeps 3
+    // Strict: a cumulative that exactly equals the budget is excluded (classic tokenCount < ctx).
+    try testing.expectEqual(@as(usize, 3), fitWindow(&costs, 18)); // 18 == 18 -> keeps 2
+    try testing.expectEqual(@as(usize, 0), fitWindow(&costs, 1000)); // keeps all 5
 }
 
-test "selectWindow keeps at least the newest message under a tiny budget" {
-    const h = [_]PromptMsg{
-        .{ .name = "Old", .mes = "gone" },
-        .{ .name = "New", .mes = "kept" },
-    };
-    const off = templates.Instruct{ .enabled = false };
-    const w = selectWindow(&h, 0, off);
-    try testing.expectEqual(@as(usize, 1), w.len);
-    try testing.expectEqualStrings("New", w[0].name);
-    try testing.expectEqual(@as(usize, 0), selectWindow(&.{}, 100, off).len);
+test "fitWindow drops even the newest turn when it does not fit (no forced keep)" {
+    const costs = [_]usize{ 5, 4 }; // index 1 is the newest (cost 4)
+    try testing.expectEqual(@as(usize, 2), fitWindow(&costs, 0)); // budget 0 -> empty history
+    try testing.expectEqual(@as(usize, 2), fitWindow(&costs, 4)); // newest 4 == 4 excluded -> empty
+    try testing.expectEqual(@as(usize, 1), fitWindow(&costs, 5)); // newest 4 < 5 kept, older 9 dropped
+    const empty = [_]usize{};
+    try testing.expectEqual(@as(usize, 0), fitWindow(&empty, 100));
 }
 
-test "selectWindow charges a templated turn its wrapped cost not the bare line" {
-    const h = [_]PromptMsg{
-        .{ .name = "A", .mes = "xx", .role = .user },
-        .{ .name = "A", .mes = "xx", .role = .user },
-        .{ .name = "A", .mes = "xx", .role = .user },
-    };
-    const off = templates.Instruct{ .enabled = false };
-    // Untemplated each turn is 6 bytes, so 18 fits all three.
-    try testing.expectEqual(@as(usize, 3), selectWindow(&h, 18, off).len);
-    // ChatML each turn is 30, so the SAME budget fits one. The old fixed cost kept all three and
-    // shipped 90 bytes into an 18-byte budget: a 5x over-fill the backend would truncate.
+test "fitWindow charges each entry its own cost so a costlier wrap keeps fewer" {
+    const cheap = [_]usize{ 6, 6, 6 };
+    try testing.expectEqual(@as(usize, 0), fitWindow(&cheap, 31)); // 18 < 31 -> all three
+    // Same budget, ChatML-sized turns (30 each) keep only the newest; wrapMessage length (== wrapCost)
+    // is the byte-cost path's input, so the fallback trim stays template-aware.
+    const heavy = [_]usize{ 30, 30, 30 };
+    try testing.expectEqual(@as(usize, 2), fitWindow(&heavy, 31));
     try testing.expectEqual(@as(usize, 30), templates.wrapCost(chatml, .user, "A", "xx"));
-    try testing.expectEqual(@as(usize, 1), selectWindow(&h, 18, chatml).len);
+}
+
+test "fitAndAssemble trims history on a real per-turn token-cost table" {
+    const ctx = Ctx{ .char = "Rita", .description = "A diver." };
+    const history = [_]PromptMsg{
+        .{ .name = "R", .mes = "oldest" },
+        .{ .name = "J", .mes = "middle" },
+        .{ .name = "R", .mes = "newest" },
+    };
+    var pieces = try assemblePieces(testing.allocator, ctx, &history, .{}, false);
+    defer freePieces(testing.allocator, &pieces);
+    const hist_costs = [_]usize{ 10, 10, 10 };
+    const costs = CostTable{ .overhead = 2, .injections = &.{}, .history = &hist_costs };
+
+    const tight = try fitAndAssemble(testing.allocator, pieces, costs, 15);
+    defer testing.allocator.free(tight);
+    try testing.expect(std.mem.startsWith(u8, tight, "A diver.\n"));
+    try testing.expect(std.mem.indexOf(u8, tight, "newest") != null);
+    try testing.expect(std.mem.indexOf(u8, tight, "middle") == null);
+    try testing.expect(std.mem.indexOf(u8, tight, "oldest") == null);
+
+    const roomy = try fitAndAssemble(testing.allocator, pieces, costs, 25);
+    defer testing.allocator.free(roomy);
+    try testing.expect(std.mem.indexOf(u8, roomy, "middle") != null);
+    try testing.expect(std.mem.indexOf(u8, roomy, "oldest") == null);
+}
+
+test "assemblePieces cleans up on every allocation failure" {
+    const ctx = Ctx{ .char = "Rita", .description = "A diver.", .system = "You are {{char}}." };
+    const history = [_]PromptMsg{
+        .{ .name = "Jamie", .mes = "Hi there.", .role = .user },
+        .{ .name = "Rita", .mes = "Hello.", .role = .assistant },
+    };
+    const shape = Shape{
+        .tpl = .{ .instruct = chatml, .context = .{ .story_string = templates.default_story_string } },
+        .note = .{ .prompt = "Be terse.", .interval = 1, .position = .in_chat, .depth = 0, .role = .system },
+        .char_note = .{ .prompt = "Depth note.", .depth = 1, .role = .system },
+        .jailbreak = "Stay in character.",
+    };
+    const Runner = struct {
+        fn run(alloc: Allocator, c: Ctx, h: []const PromptMsg, s: Shape) !void {
+            var pieces = try assemblePieces(alloc, c, h, s, true);
+            freePieces(alloc, &pieces);
+        }
+    };
+    try testing.checkAllAllocationFailures(testing.allocator, Runner.run, .{ ctx, @as([]const PromptMsg, &history), shape });
+}
+
+test "fitAndAssemble cleans up on every allocation failure" {
+    const ctx = Ctx{ .char = "Rita", .description = "A diver." };
+    const history = [_]PromptMsg{
+        .{ .name = "R", .mes = "oldest" },
+        .{ .name = "J", .mes = "middle" },
+        .{ .name = "R", .mes = "newest" },
+    };
+    var pieces = try assemblePieces(testing.allocator, ctx, &history, .{}, false);
+    defer freePieces(testing.allocator, &pieces);
+    const hist_costs = [_]usize{ 10, 10, 10 };
+    const costs = CostTable{ .overhead = 2, .injections = &.{}, .history = &hist_costs };
+    const Runner = struct {
+        fn run(alloc: Allocator, p: Pieces, c: CostTable) !void {
+            const r = try fitAndAssemble(alloc, p, c, 25);
+            alloc.free(r);
+        }
+    };
+    try testing.checkAllAllocationFailures(testing.allocator, Runner.run, .{ pieces, costs });
 }
 
 test "buildPromptBudgeted trims history oldest-first but keeps the card block" {
@@ -892,10 +1142,16 @@ test "buildPromptBudgeted trims history oldest-first but keeps the card block" {
 }
 
 test "promptCharBudget reserves the response and applies the char ratio" {
-    const base = Connection{ .api_type = "", .api_server = "", .max_context = 8192, .max_tokens = 512, .temperature = 0, .top_p = 0, .top_k = 0, .min_p = 0, .rep_pen = 0 };
+    const base = Connection{ .api_type = "", .api_server = "", .model = "", .token_padding = 0, .max_context = 8192, .max_tokens = 512, .temperature = 0, .top_p = 0, .top_k = 0, .min_p = 0, .rep_pen = 0 };
     try testing.expectEqual(@as(usize, (8192 - 512) * 7 / 2), promptCharBudget(base));
-    const unset = Connection{ .api_type = "", .api_server = "", .max_context = 0, .max_tokens = 0, .temperature = 0, .top_p = 0, .top_k = 0, .min_p = 0, .rep_pen = 0 };
+    const unset = Connection{ .api_type = "", .api_server = "", .model = "", .token_padding = 0, .max_context = 0, .max_tokens = 0, .temperature = 0, .top_p = 0, .top_k = 0, .min_p = 0, .rep_pen = 0 };
     try testing.expectEqual(@as(usize, 8192 * 7 / 2), promptCharBudget(unset));
+}
+
+test "both budgets reserve token_padding out of the history budget" {
+    const conn = Connection{ .api_type = "", .api_server = "", .model = "", .token_padding = 64, .max_context = 8192, .max_tokens = 512, .temperature = 0, .top_p = 0, .top_k = 0, .min_p = 0, .rep_pen = 0 };
+    try testing.expectEqual(@as(usize, 8192 - 512 - 64), promptTokenBudget(conn));
+    try testing.expectEqual(@as(usize, (8192 - 512 - 64) * 7 / 2), promptCharBudget(conn));
 }
 
 test "an in_chat note lands at its depth in the history" {
@@ -939,8 +1195,9 @@ test "the anchor positions ride the story string instead of the history" {
     try testing.expectEqualStrings("BEFORE\nA diver.\nAFTER\nRita:", out);
 }
 
-test "a note is never trimmed away by a tight budget" {
-    // The note is a control instruction, not history: it is reserved before the walk.
+test "a note survives even when a tight budget trims all history" {
+    // Reserved note vs a budget too small even for the newest turn: the whole history drops (classic
+    // script.js:4891 keeps a turn only if it fits, newest not forced) but the reserved note still lands.
     const ctx = Ctx{ .char = "Rita" };
     const history = [_]PromptMsg{
         .{ .name = "Jamie", .mes = "an old line", .role = .user },
@@ -954,7 +1211,20 @@ test "a note is never trimmed away by a tight budget" {
     defer testing.allocator.free(out);
     try testing.expect(std.mem.indexOf(u8, out, "Keep it short.") != null);
     try testing.expect(std.mem.indexOf(u8, out, "an old line") == null);
-    try testing.expect(std.mem.indexOf(u8, out, "a new line") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "a new line") == null);
+}
+
+test "an empty windowed history ships no continuation cue" {
+    // Story block alone exceeds the budget -> whole history drops -> no cue (classic modifyLastPromptLine
+    // runs only for a non-empty history, script.js:4994). Non-empty path still primes, per other tests.
+    const ctx = Ctx{ .char = "Rita", .description = "A long diver biography that will not fit." };
+    const history = [_]PromptMsg{.{ .name = "Jamie", .mes = "Hi.", .role = .user }};
+    const shape = Shape{ .tpl = .{ .context = .{ .story_string = templates.default_story_string } } };
+    const out = try buildPromptBudgeted(testing.allocator, ctx, &history, 5, shape, null);
+    defer testing.allocator.free(out);
+    try testing.expect(std.mem.indexOf(u8, out, "Hi.") == null); // history dropped
+    try testing.expect(!std.mem.endsWith(u8, out, "Rita:")); // no continuation cue
+    try testing.expectEqualStrings("A long diver biography that will not fit.\n", out);
 }
 
 test "an inactive note reaches the prompt nowhere" {
@@ -1213,6 +1483,8 @@ test "buildRequestBody carries the connection, prompt, and stream flag" {
     const conn = Connection{
         .api_type = try testing.allocator.dupe(u8, "llamacpp"),
         .api_server = try testing.allocator.dupe(u8, "http://127.0.0.1:8080"),
+        .model = try testing.allocator.dupe(u8, ""),
+        .token_padding = 0,
         .max_context = 8192,
         .max_tokens = 256,
         .temperature = 0.8,
@@ -1243,6 +1515,8 @@ test "buildRequestBody carries the stop sequence under both backend spellings" {
     const conn = Connection{
         .api_type = try testing.allocator.dupe(u8, "llamacpp"),
         .api_server = try testing.allocator.dupe(u8, "http://x"),
+        .model = try testing.allocator.dupe(u8, ""),
+        .token_padding = 0,
         .max_context = 8192,
         .max_tokens = 256,
         .temperature = 0.8,
