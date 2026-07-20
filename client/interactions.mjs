@@ -734,6 +734,24 @@ async function main() {
         row('must', highlighted && roundTrip, 'R5c highlight styles content while the markers stay in the saved text', `bold=${highlighted} roundtrip=${roundTrip}`);
         row('must', r5ok, 'R5 edit/save round-trip keeps the reasoning block on the edited message', `edited=${r5ok}`);
 
+        // R5-cancel: reopen the editor, type, then discard with the cross. The box closes and the typed
+        // text never reaches the message (cancel is pure client, no mutation).
+        let cancelOk = false;
+        let cancelMenu = false;
+        for (let attempt = 0; attempt < 3 && !cancelMenu; attempt += 1) {
+            await page.eval(`(function(){var m=document.querySelector('${reasonTrigger}'); if(m) m.click();})()`);
+            cancelMenu = await page.waitFor("document.querySelector('#msg-menu')", 3000);
+        }
+        if (cancelMenu) {
+            await page.eval("(function(){var e=document.querySelector('#msg-menu [data-msg-action=\"edit\"]'); if(e) e.click();})()");
+            if (await page.waitFor("document.querySelector('.mes_edit_field')", 4000)) {
+                await page.eval("(function(){var f=document.querySelector('.mes_edit_field'); if(f){ f.textContent='DISCARD-THIS-GATE'; f.dispatchEvent(new Event('input',{bubbles:true})); }})()");
+                await page.eval("(function(){var e=document.querySelector('.mes_edit_cancel'); if(e) e.click();})()");
+                cancelOk = await page.waitFor("!document.querySelector('.mes_edit_field') && !document.body.textContent.includes('DISCARD-THIS-GATE')", 4000);
+            }
+        }
+        row('must', cancelOk, 'R5-cancel discards the edit and restores the body (no mutation)', `cancelled=${cancelOk}`);
+
         // --- tags (w3-reason 3d): manager create/assign persists via the settings blob; chips
         // filter on the card tags the 3d data fix made live. Rita Recent = char41.png.
         console.log('== tags (w3-reason 3d) ==');

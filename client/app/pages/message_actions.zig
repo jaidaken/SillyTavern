@@ -205,12 +205,13 @@ fn saveEdit(abs: usize) void {
     const text = message_editor.readText() orelse return cancelEdit();
     defer alloc.free(text);
     if (std.mem.trim(u8, text, " \t\r\n").len == 0) return cancelEdit();
-    message_editor.close();
+    // The editor stays open (state intact) until onMutateDone hears success: a failed save must leave
+    // the box editable so cancel still restores and a retry still works. The route reads `text`.
     const body = std.json.Stringify.valueAlloc(alloc, .{
         .avatar_url = id.avatar,
         .file_name = id.file,
         .index = abs,
-        .mes = text,
+        .text = text,
         .change_token = pager.fullToken(),
     }, .{}) catch return;
     defer alloc.free(body);
@@ -265,11 +266,13 @@ fn onMutateDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     _ = tag;
     if (status == 409) {
         net_log.info("message mutation: file changed (409), re-syncing to the tail", .{});
+        message_editor.close();
         pager.beginResync();
         char_api.reloadCurrentChat();
         return;
     }
     if (status < 200 or status >= 300) {
+        // Leave any open editor in place: the save did not take, so the box stays editable.
         net_log.warn("message mutation failed: {d} - chat unchanged", .{status});
         return;
     }
@@ -280,6 +283,8 @@ fn onMutateDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
             if (parsed.value.tail_token.len > 0) pager.adoptToken(parsed.value.tail_token);
         } else |_| {}
     }
+    // The reload rebuilds the message node fresh, so drop the editor state it replaces.
+    message_editor.close();
     pager.beginResync();
     char_api.reloadCurrentChat();
 }

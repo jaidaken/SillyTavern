@@ -1633,7 +1633,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if not (isinstance(idx, int) and 0 <= idx < len(reader)):
             return self.mock_status(400, {"error": "target_not_found"})
         if op == "edit":
-            reader[idx]["mes"] = req.get("mes", reader[idx]["mes"])
+            # The real /message/edit route reads `text` (chats.js), so the mock must too, or a
+            # client sending the wrong field passes here and 400s only in production.
+            reader[idx]["mes"] = req.get("text", reader[idx]["mes"])
         elif op == "delete":
             reader.pop(idx)
         elif op == "hide":
