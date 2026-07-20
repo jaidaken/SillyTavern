@@ -248,7 +248,9 @@ describe('chat append (cf_id flag off)', () => {
             avatar_url: 'CardTok.png', file_name: 'chatTok', paged: true, limit: 50,
         });
         const getBody = await getResponse.json();
-        expect(appendBody.change_token).toBe(getBody.change_token);
+        expect(appendBody.tail_token).toBe(getBody.change_token);
+        expect(appendBody.change_token).toBe(getBody.full_token);
+        expect(appendBody.change_token).not.toBe(getBody.change_token);
         expect(getBody.total_items).toBe(121);
         expect(getBody.messages[49].mes).toBe('fresh');
     }, CASE_TIMEOUT_MS);
@@ -264,7 +266,7 @@ describe('chat append (cf_id flag off)', () => {
         const token = tail.change_token;
 
         const appendResponse = await client.postJson('/api/chats/append', {
-            avatar_url: 'CardNo409.png', file_name: 'chatNo409', limit: 50, change_token: token,
+            avatar_url: 'CardNo409.png', file_name: 'chatNo409', limit: 50, change_token: tail.full_token,
             messages: [newMessage('one', true, 1700000003000), newMessage('two', false, 1700000003001)],
         });
         expect(appendResponse.status).toBe(200);
@@ -306,11 +308,59 @@ describe('chat append (cf_id flag off)', () => {
         })).json();
 
         const response = await client.postJson('/api/chats/append', {
-            avatar_url: 'CardCur.png', file_name: 'chatCur', limit: 100, change_token: tail.change_token,
+            avatar_url: 'CardCur.png', file_name: 'chatCur', limit: 100, change_token: tail.full_token,
             messages: [newMessage('accepted', true, 1700000005000)],
         });
         expect(response.status).toBe(200);
         expect(readChatLines(filePath)).toHaveLength(12);
+    }, CASE_TIMEOUT_MS);
+
+    test('append_after_a_larger_limit_resync_still_persists', async () => {
+        const filePath = soloChatPath(server, 'CardResync', 'chatResync');
+        writeChatFile(filePath, chatHeader('CardResync'), buildMessages(120));
+
+        // A re-sync loads a large window (loaded + BATCH), so the client holds the full-file token
+        // minted alongside a limit-150 read; the append then declares the fixed TAIL_LIMIT of 50.
+        const resync = await (await client.postJson('/api/chats/get', {
+            avatar_url: 'CardResync.png', file_name: 'chatResync', paged: true, limit: 150,
+        })).json();
+        const tail50 = await (await client.postJson('/api/chats/get', {
+            avatar_url: 'CardResync.png', file_name: 'chatResync', paged: true, limit: 50,
+        })).json();
+        // The two reads share one full token but differ on the limit-dependent tail token: the old
+        // tail-token gate would 409 this append forever; the full-token gate must accept it.
+        expect(resync.full_token).toBe(tail50.full_token);
+        expect(resync.change_token).not.toBe(tail50.change_token);
+
+        const response = await client.postJson('/api/chats/append', {
+            avatar_url: 'CardResync.png', file_name: 'chatResync', limit: 50, change_token: resync.full_token,
+            messages: [newMessage('after resync', true, 1700000006000)],
+        });
+        expect(response.status).toBe(200);
+        expect(readChatLines(filePath)).toHaveLength(122);
+        expect(readChatLines(filePath)[121].mes).toBe('after resync');
+    }, CASE_TIMEOUT_MS);
+
+    test('append_still_409s_when_the_file_changed_under_the_client', async () => {
+        const filePath = soloChatPath(server, 'CardRace', 'chatRace');
+        writeChatFile(filePath, chatHeader('CardRace'), buildMessages(20));
+
+        const view = await (await client.postJson('/api/chats/get', {
+            avatar_url: 'CardRace.png', file_name: 'chatRace', paged: true, limit: 50,
+        })).json();
+
+        // A concurrent writer appends a line after the client took its view, so the held full token
+        // is now stale; the guard must still reject rather than silently write onto a changed file.
+        fs.appendFileSync(filePath, '\n' + JSON.stringify(newMessage('outside writer', false, 1700000007000)), 'utf8');
+        const before = fs.readFileSync(filePath, 'utf8');
+
+        const response = await client.postJson('/api/chats/append', {
+            avatar_url: 'CardRace.png', file_name: 'chatRace', limit: 50, change_token: view.full_token,
+            messages: [newMessage('should be rejected', true, 1700000007001)],
+        });
+        expect(response.status).toBe(409);
+        expect((await response.json()).error).toBe('version_mismatch');
+        expect(fs.readFileSync(filePath, 'utf8')).toBe(before);
     }, CASE_TIMEOUT_MS);
 
     test('the_backup_written_on_append_holds_the_full_chat_not_just_the_new_lines', async () => {

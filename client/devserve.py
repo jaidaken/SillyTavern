@@ -1537,8 +1537,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 Handler.append_409_count += 1
                 return self.mock_status(409, {"error": "version_mismatch", "change_token": Handler.append_token or f"v1.{MOCK_CHAT_TOTAL}.mock"})
             Handler.appended_messages.extend(msgs)
-            Handler.append_token = f"v1.{MOCK_CHAT_TOTAL + len(Handler.appended_messages)}.mock"
-            return self.mock_json({"ok": True, "appended": len(msgs), "change_token": Handler.append_token})
+            # Real route shape: change_token IS the whole-file token (the append gate), tail_token the
+            # reader's. bump_full_token mints both (full_token + append_token) since the file changed.
+            Handler.bump_full_token()
+            return self.mock_json({
+                "ok": True,
+                "appended": len(msgs),
+                "change_token": Handler.full_token,
+                "tail_token": Handler.append_token,
+            })
         if path == "/api/backends/text-completions/generate":
             Handler.last_generate_server = req.get("api_server")
             Handler.last_generate_prompt = req.get("prompt")  # J1 invariant-2

@@ -1941,9 +1941,11 @@ router.post('/append', async function (request, response) {
                 return response.status(404).send({ error: 'not_found' });
             }
             const parsed = parseChatContent(raw);
-            const currentToken = tailToken(parsed.headerRaw, parsed.messages, request.body.limit);
-            if (typeof request.body.change_token === 'string' && request.body.change_token !== currentToken) {
-                return response.status(409).send({ error: 'version_mismatch', change_token: currentToken });
+            // Gate on the whole-file token, not the tail token: the tail token depends on the window
+            // limit, so a client that re-synced at one limit and appends at another would 409 forever.
+            const entryToken = computeFullToken(parsed.headerRaw, parsed.messages);
+            if (typeof request.body.change_token === 'string' && request.body.change_token !== entryToken) {
+                return response.status(409).send({ error: 'version_mismatch', change_token: entryToken });
             }
             if (cfIdEnabled) {
                 mintChatIds(messages);
@@ -1955,8 +1957,14 @@ router.post('/append', async function (request, response) {
             getBackupFunction(handle)(backupsDir, resolved.cardName, `${base}\n${appendedRaw}`);
             bustCharacterListCacheForCharacter(handle, resolved.cardName);
             const after = await readChatFile(resolved.ref.filePath);
-            const changeToken = tailToken(after.headerRaw, after.messages, request.body.limit);
-            return response.send({ ok: true, appended: messages.length, change_token: changeToken });
+            // change_token is the whole-file token (the append gate); tail_token refreshes the reader's
+            // window path in the same response, mirroring runMutation's edit/delete contract.
+            return response.send({
+                ok: true,
+                appended: messages.length,
+                change_token: computeFullToken(after.headerRaw, after.messages),
+                tail_token: tailToken(after.headerRaw, after.messages, request.body.limit),
+            });
         });
     } catch (error) {
         log.chat.error(error);

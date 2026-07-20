@@ -1899,7 +1899,9 @@ fn appendTurn(name: []const u8, mes: []const u8, is_user: bool, reasoning_text: 
         .avatar_url = send_avatar,
         .file_name = send_file,
         .limit = pager.TAIL_LIMIT,
-        .change_token = pager.currentToken(),
+        // The append gate is the whole-file token (limit-invariant), matching edit/delete; the tail
+        // token would 409 whenever the held window limit differs from TAIL_LIMIT (e.g. after a resync).
+        .change_token = pager.fullToken(),
         .messages = .{
             .{
                 .name = name,
@@ -1931,9 +1933,11 @@ fn onAppendDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         return;
     }
     if (res) |r| {
-        if (r.json(struct { ok: ?bool = null, appended: ?i64 = null, change_token: []const u8 = "" })) |parsed| {
+        if (r.json(struct { ok: ?bool = null, appended: ?i64 = null, change_token: []const u8 = "", tail_token: []const u8 = "" })) |parsed| {
             defer parsed.deinit();
-            if (parsed.value.change_token.len > 0) pager.adoptToken(parsed.value.change_token);
+            // change_token is the whole-file token (the append gate); tail_token refreshes the reader.
+            if (parsed.value.change_token.len > 0) pager.setFullToken(parsed.value.change_token);
+            if (parsed.value.tail_token.len > 0) pager.adoptToken(parsed.value.tail_token);
         } else |_| {}
     }
     chars_log.debug("chat append ({s}) persisted", .{which});

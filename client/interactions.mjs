@@ -2209,7 +2209,9 @@ async function main() {
 
             // The stop sequence: the tear that let the model run past its own end-of-turn.
             const sentStop = genBody.last_generate_body && JSON.parse(genBody.last_generate_body).stop;
-            row('must', Array.isArray(sentStop) && sentStop[0] === '<|im_end|>',
+            // The classic-parity array leads with the \nName: stops (names_as_stop_strings), so assert
+            // the ChatML end-of-turn stop is PRESENT, not at index 0.
+            row('must', Array.isArray(sentStop) && sentStop.some(s => s.includes('<|im_end|>')),
                 'C-CFG-5 the instruct stop sequence reaches the request', `stop=${JSON.stringify(sentStop)}`);
 
             // The prompt must carry the ChatML wrappers AND no literal handlebars. Both tears at once:
@@ -2413,7 +2415,8 @@ async function main() {
             // own end-of-turn, so it must move with the pick too.
             const genBody = await (await fetch(`${args.base}/dev/state`)).json();
             const stop = genBody.last_generate_body && JSON.parse(genBody.last_generate_body).stop;
-            row('must', Array.isArray(stop) && stop[0] === '### Instruction:',
+            // Same as C-CFG-5: the name-stops lead the array, so assert the Alpaca stop is present.
+            row('must', Array.isArray(stop) && stop.some(s => s.includes('### Instruction:')),
                 'C-PRE-TPL-5 the picked preset\'s stop sequence reaches the request', `stop=${JSON.stringify(stop)}`);
 
             // HOSTILE. Its two good fields must apply, its five bad ones must cost only themselves,
