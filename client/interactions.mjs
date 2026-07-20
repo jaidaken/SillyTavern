@@ -641,6 +641,14 @@ async function main() {
         // Let the first reply finish so the stream is idle before the next send.
         await page.waitFor(`document.body.textContent.includes('FIN') && ${idle}`, 8000);
 
+        // SL-scroll: a send jumps to the bottom and pins the reply to follow, even from scrolled up.
+        // Scroll to the top, send, and the sealed view must sit at the bottom (streamPinned forced).
+        const scrollable = await page.eval("(function(){var c=document.getElementById('chat');return (c.scrollHeight - c.clientHeight) > 120;})()");
+        await page.eval("document.getElementById('chat').scrollTop = 0");
+        await sendProbe('SCROLL FOLLOW PROBE');
+        const followedToBottom = await page.waitFor("(function(){var c=document.getElementById('chat');return (c.scrollHeight - c.scrollTop - c.clientHeight) < 80;})()", 3000);
+        row('must', scrollable && followedToBottom, 'SL-send jumps to the bottom and the reply follows', `scrollable=${scrollable} atBottom=${followedToBottom}`);
+
         // STOP: send, wait for a few tokens, stop, assert the reply sealed PARTIAL (no FIN) and idle.
         await page.focus('#send_textarea');
         await page.insertText('STOP PROBE');
@@ -696,21 +704,35 @@ async function main() {
         row('must', await page.waitFor("document.querySelector('#chat .chat-history .mes .mes_reasoning:not(.mes_reasoning-empty)')", 6000),
             'R4 chat-load lifts extra.reasoning into a collapsed block');
 
-        // Edit the reasoning-carrying message; the block must survive the save round-trip.
-        await page.eval("window.prompt = function(){ return 'Edited body, reasoning kept.'; }");
+        // Inline editor (replaces the old prompt): open it on the reasoning message, confirm it shows
+        // the RAW markdown with live highlight, edit it, and save via the tick. The block must survive.
+        // The trigger is opacity-0 until hover/focus, so a coordinate click flakes; fire its click
+        // directly (the delegate resolves off event.target either way).
         const reasonTrigger = "#chat .mes:has(.mes_reasoning:not(.mes_reasoning-empty)) .msg-menu-trigger";
         let menuOpen = false;
-        for (let attempt = 0; attempt < 2 && !menuOpen; attempt += 1) {
-            try { await page.click(reasonTrigger); } catch (_) { /* retried below */ }
+        for (let attempt = 0; attempt < 3 && !menuOpen; attempt += 1) {
+            await page.eval(`(function(){var m=document.querySelector('${reasonTrigger}'); if(m) m.click();})()`);
             menuOpen = await page.waitFor("document.querySelector('#msg-menu')", 3000);
         }
-        let r5ok = false;
+        let editorUp = false, rawShown = false, highlighted = false, roundTrip = false, r5ok = false;
         if (menuOpen) {
-            try { await page.click('#msg-menu [data-msg-action="edit"]'); } catch (_) { /* row fails below */ }
+            // The popped menu can sit partly off-viewport (fixed + max-height), which makes a CDP
+            // coordinate click miss; a real bubbling click event via el.click() reaches the delegate.
+            await page.eval("(function(){var e=document.querySelector('#msg-menu [data-msg-action=\"edit\"]'); if(e) e.click();})()");
+            editorUp = await page.waitFor("document.querySelector('.mes_edit_field') && document.querySelector('.mes_edit_field').getAttribute('contenteditable') === 'true'", 4000);
+            // The field carries the raw source and the highlight has run (a .md-line per line).
+            rawShown = await page.eval("(function(){var f=document.querySelector('.mes_edit_field'); return !!f && f.textContent.length > 0 && !!f.querySelector('.md-line');})()");
+            // Type markdown with markers; the markers MUST stay in the text (round-trip) while it styles.
+            await page.eval("(function(){var f=document.querySelector('.mes_edit_field'); if(!f) return; f.textContent='Edited **body**, reasoning kept.'; f.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            highlighted = await page.eval("!!document.querySelector('.mes_edit_field .md-bold')");
+            roundTrip = await page.eval("(document.querySelector('.mes_edit_field')||{}).textContent === 'Edited **body**, reasoning kept.'");
+            try { await page.click('.mes_edit_save'); } catch (_) { /* row fails below */ }
             r5ok = await page.waitFor("(function(){var w=document.querySelector('#chat .mes .mes_reasoning:not(.mes_reasoning-empty)'); if(!w) return false; var mes=w.closest('.mes'); return mes.textContent.includes('Edited body, reasoning kept.')})()", 8000);
         }
-        const r5dump = r5ok ? '' : await page.eval(`(function(){var t=document.querySelector('${reasonTrigger}');return 'menu=${menuOpen} trigger='+(t?'yes':'no')+' edited='+document.body.textContent.includes('Edited body')})()`);
-        row('must', r5ok, 'R5 edit/save round-trip keeps the reasoning block on the edited message', r5dump);
+        row('must', editorUp, 'R5a clicking Edit opens the inline live-markdown editor', `menu=${menuOpen} editor=${editorUp}`);
+        row('must', rawShown, 'R5b the editor shows the raw markdown source with live highlight', `raw=${rawShown}`);
+        row('must', highlighted && roundTrip, 'R5c highlight styles content while the markers stay in the saved text', `bold=${highlighted} roundtrip=${roundTrip}`);
+        row('must', r5ok, 'R5 edit/save round-trip keeps the reasoning block on the edited message', `edited=${r5ok}`);
 
         // --- tags (w3-reason 3d): manager create/assign persists via the settings blob; chips
         // filter on the card tags the 3d data fix made live. Rita Recent = char41.png.
@@ -1250,14 +1272,21 @@ async function main() {
             'C-MSG-T0 reader opens windowed (tail of a 300-message file, window_offset>0)',
             `firstAbs=${firstAbs} readerTotal=${mst0.reader_total}`);
 
-        // EDIT the topmost visible message. The edit must land at firstAbs (server-probed by the exact
-        // absolute index) and leave index 0 untouched. A store-relative index would miss firstAbs entirely.
-        await page.eval("window.prompt = function(){ return 'EDITED-BY-GATE-T0'; };");
-        const stubOk = await page.eval("window.prompt() === 'EDITED-BY-GATE-T0'");
+        // EDIT the topmost visible message via the inline editor. The edit must land at firstAbs
+        // (server-probed by the exact absolute index) and leave index 0 untouched. A store-relative
+        // index would miss firstAbs entirely.
         const editMenuOpen = await openMenu(firstAbs);
         const getBeforeEdit = (await (await fetch(`${args.base}/dev/state`)).json()).get_count;
-        if (editMenuOpen) await page.click("#msg-menu [data-msg-action='edit']");
-        const editLanded = editMenuOpen && await (async () => {
+        let editorOpened = false;
+        if (editMenuOpen) {
+            await page.eval("(function(){var e=document.querySelector('#msg-menu [data-msg-action=\"edit\"]'); if(e) e.click();})()");
+            editorOpened = await page.waitFor("document.querySelector('.mes_edit_field')", 4000);
+            if (editorOpened) {
+                await page.eval("(function(){var f=document.querySelector('.mes_edit_field'); f.textContent='EDITED-BY-GATE-T0'; f.dispatchEvent(new Event('input',{bubbles:true}));})()");
+                await page.click('.mes_edit_save');
+            }
+        }
+        const editLanded = editorOpened && await (async () => {
             const deadline = Date.now() + 12000;
             while (Date.now() < deadline) {
                 const r = await (await fetch(`${args.base}/dev/reader-at?i=${firstAbs}`)).json();
@@ -1271,13 +1300,13 @@ async function main() {
         const mst1 = await (await fetch(`${args.base}/dev/state`)).json();
         row('must', editLanded && mst1.reader_total === 300 && mst1.reader_above_probe === mst0.reader_above_probe,
             'C-MSG-T0 edit hits the absolute index; above-window history untouched',
-            `landed=${editLanded} stub=${stubOk} menu=${editMenuOpen} ft=${mst0.full_token}->${mst1.full_token} readerTotal=${mst1.reader_total}`);
+            `landed=${editLanded} editor=${editorOpened} menu=${editMenuOpen} ft=${mst0.full_token}->${mst1.full_token} readerTotal=${mst1.reader_total}`);
 
         // DELETE the topmost visible message. reader base drops by one; index 0 must stay put.
         await page.eval("window.confirm = () => true;");
         const delAbs = await pickBaseAbs();
         const delMenuOpen = await openMenu(delAbs);
-        if (delMenuOpen) await page.click("#msg-menu [data-msg-action='delete']");
+        if (delMenuOpen) await page.eval("(function(){var e=document.querySelector('#msg-menu [data-msg-action=\"delete\"]'); if(e) e.click();})()");
         const mst2 = delMenuOpen ? await (async () => {
             const deadline = Date.now() + 10000;
             while (Date.now() < deadline) {

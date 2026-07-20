@@ -339,9 +339,10 @@
     async function startStream(url, name, avatar, opts) {
         if (streamActive) throw new Error('stream already running');
         streamActive = true;
-        // A reply follows the bottom only if you were already there; scrolled up, it stays put and the
-        // chip appears. Your own send re-pins first (the composer calls scroll_bottom on send).
-        streamPinned = readerNearBottom();
+        // Follows the bottom only if you were already there (scrolled up -> stays, chip appears); your
+        // own send forces the pin so the reply follows no matter where the send scroll had settled.
+        streamPinned = sendForcedPin || readerNearBottom();
+        sendForcedPin = false;
 
         let pending = [];
         let pendingLen = 0;
@@ -840,6 +841,9 @@
     let readerPumping = false;
     let readerScheduled = false;
     let streamPinned = false;
+    // Set by your own send: the next stream stays pinned to the bottom no matter where the scroll
+    // settled when it began (the send scroll lands across frames, so readerNearBottom can read false).
+    let sendForcedPin = false;
     // The scrolled-up anchor a 409 re-sync must restore: its absolute chat index and its pixel offset
     // from the scroller top. -1 = no anchor (reader was near the bottom, so the re-sync tail-jumps).
     let resyncAnchorIndex = -1;
@@ -865,6 +869,16 @@
             scrollSettleRaf = (stable < 3 && iters < 40) ? requestAnimationFrame(settle) : 0;
         }
         scrollSettleRaf = requestAnimationFrame(settle);
+    };
+
+    // Your own send: jump to the bottom now and force the reply to follow. Snaps synchronously so the
+    // jump is immediate, then arms the settle loop and the forced pin the next startStream honors.
+    window.__st_reader_pin_bottom = function () {
+        sendForcedPin = true;
+        streamPinned = true;
+        const chat = document.getElementById('chat');
+        if (chat) chat.scrollTop = chat.scrollHeight;
+        window.__st_reader_scroll_bottom();
     };
 
     function readerNearBottom() {

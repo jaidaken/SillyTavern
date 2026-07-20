@@ -857,6 +857,13 @@ fn scrollChatToNewest() void {
     js.global.call(void, "__st_reader_scroll_bottom", .{}) catch return;
 }
 
+/// The user's own send: jump to the bottom and pin the reply to follow (glue-owned), independent of
+/// where the scroll settled when the stream begins. Open uses scrollChatToNewest (no forced pin).
+fn pinChatToBottom() void {
+    if (zx.platform.role != .client) return;
+    js.global.call(void, "__st_reader_pin_bottom", .{}) catch return;
+}
+
 // ---- character CRUD ------------------------------------------------------------------------
 
 /// New character via window.prompt (jsz reflection, S1 probe finding f); cancel aborts.
@@ -1276,7 +1283,7 @@ pub fn sendMessage() void {
         return;
     };
     regions.bumpMessageLog();
-    scrollChatToNewest();
+    pinChatToBottom();
 
     // Capture the append context, then persist the user turn now so a failed generation still keeps
     // it. The assistant turn persists on stream seal (persistNewTurns via the __st_persist_turns hook).

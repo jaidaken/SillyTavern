@@ -14,6 +14,7 @@ const zx = @import("zx");
 const js = zx.client.js;
 
 const store = @import("./store.zig");
+const message_editor = @import("./message_editor.zig");
 const undo = @import("./undo.zig");
 const regions = @import("./regions.zig");
 const dom_event = @import("./dom_event.zig");
@@ -85,6 +86,26 @@ pub fn onLogClick(ev: zx.client.Event) void {
 /// The region's keydown delegate: Escape closes an open action menu first, then undo.onLogKey runs.
 pub fn onLogKey(ev: zx.client.Event) void {
     if (zx.platform.role != .client) return;
+
+    // While the inline editor is open its keys win: Escape cancels, Ctrl/Cmd+Enter saves, and every
+    // other key is left to the contenteditable (plain Enter inserts a newline).
+    if (message_editor.currentAbs()) |abs| {
+        const key = ev.key() orelse return;
+        defer zx.allocator.free(key);
+        if (std.mem.eql(u8, key, "Escape")) {
+            ev.preventDefault();
+            cancelEdit();
+        } else if (std.mem.eql(u8, key, "Enter")) {
+            const ctrl = ev.getEvent().ref.get(bool, "ctrlKey") catch false;
+            const meta = ev.getEvent().ref.get(bool, "metaKey") catch false;
+            if (ctrl or meta) {
+                ev.preventDefault();
+                saveEdit(abs);
+            }
+        }
+        return;
+    }
+
     if (store.menu.open_index != null) {
         const key = ev.key() orelse {
             undo.onLogKey(ev);
@@ -104,8 +125,16 @@ fn dispatch(action: []const u8, abs: ?usize) void {
     if (std.mem.eql(u8, action, "copy")) {
         copyMessage(abs);
     } else if (abs) |a| {
+        // edit/save/cancel drive their own render (the in-place editor), so they skip the trailing bump.
         if (std.mem.eql(u8, action, "edit")) {
             editMessage(a);
+            return;
+        } else if (std.mem.eql(u8, action, "save-edit")) {
+            saveEdit(a);
+            return;
+        } else if (std.mem.eql(u8, action, "cancel-edit")) {
+            cancelEdit();
+            return;
         } else if (std.mem.eql(u8, action, "delete")) {
             deleteMessage(a);
         } else if (std.mem.eql(u8, action, "hide")) {
@@ -149,12 +178,34 @@ fn post(route: []const u8, body: []const u8) void {
     net.request(route, body, 0, onMutateDone, .{});
 }
 
+/// Open the inline live-markdown editor over message `abs`. message_editor turns the body node into a
+/// contenteditable in place (no vdom swap); the bump closes the action menu first. Its save/cancel
+/// buttons carry data-msg-action, so they dispatch straight back through onLogClick.
 fn editMessage(abs: usize) void {
     if (zx.platform.role != .client) return;
-    const id = ident() orelse return;
-    const current = bodyAt(abs) orelse "";
-    const text = promptString("Edit message:", current) orelse return;
+    const raw = bodyAt(abs) orelse return;
+    const raw_copy = alloc.dupe(u8, raw) catch return;
+    defer alloc.free(raw_copy);
+    store.menu.close();
+    regions.bumpMessageLog();
+    message_editor.open(abs, raw_copy);
+}
+
+/// Close the editor without writing; message_editor restores the rendered body it captured on open.
+fn cancelEdit() void {
+    if (zx.platform.role != .client) return;
+    message_editor.cancel();
+}
+
+/// Persist the editor's raw text via the edit route. An empty result cancels rather than blanking the
+/// message. onMutateDone re-syncs, which rebuilds the node fresh, so the editor node is dropped there.
+fn saveEdit(abs: usize) void {
+    if (zx.platform.role != .client) return;
+    const id = ident() orelse return cancelEdit();
+    const text = message_editor.readText() orelse return cancelEdit();
     defer alloc.free(text);
+    if (std.mem.trim(u8, text, " \t\r\n").len == 0) return cancelEdit();
+    message_editor.close();
     const body = std.json.Stringify.valueAlloc(alloc, .{
         .avatar_url = id.avatar,
         .file_name = id.file,
@@ -233,19 +284,6 @@ fn onMutateDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     char_api.reloadCurrentChat();
 }
 
-/// window.prompt; JS null (cancel) and the empty string both come back as null (matching the CRUD
-/// dialogs), so a cleared edit box is treated as a cancel rather than an empty save.
-fn promptString(msg: []const u8, default_value: []const u8) ?[]u8 {
-    if (zx.platform.role != .client) return null;
-    const out = js.global.callAlloc(?js.String, alloc, "prompt", .{ js.string(msg), js.string(default_value) }) catch return null;
-    const s = out orelse return null;
-    if (s.len == 0) {
-        alloc.free(s);
-        return null;
-    }
-    return s;
-}
-
 fn confirmDialog(msg: []const u8) bool {
     if (zx.platform.role != .client) return false;
     return js.global.call(bool, "confirm", .{js.string(msg)}) catch false;
@@ -285,19 +323,34 @@ fn writeClipboard(text: []const u8) void {
 /// Record where the popped list should sit: under the trigger, right-aligned to it. Read from the
 /// trigger's viewport rect because the list renders fixed at the MessageLog root (a `.mes`-local
 /// absolute popover is clipped by the message's paint containment).
+/// The action list runs ~240px tall (7 items); used to decide whether it fits below the trigger.
+const MENU_EST_PX: f64 = 240;
+
 fn captureAnchor(el: js.Object) void {
     if (zx.platform.role != .client) return;
     const rect = el.call(js.Object, "getBoundingClientRect", .{}) catch return;
     defer rect.deinit();
+    const top = rect.get(f64, "top") catch return;
     const bottom = rect.get(f64, "bottom") catch return;
     const right = rect.get(f64, "right") catch return;
     const inner_w = js.global.get(f64, "innerWidth") catch return;
-    store.menu.setAnchor(@floatCast(bottom + 4), @floatCast(inner_w - right));
+    const inner_h = js.global.get(f64, "innerHeight") catch return;
+    const right_gap: f32 = @floatCast(inner_w - right);
+    // Open upward (anchor the list's bottom above the trigger) when it would run off the viewport
+    // bottom and there is more room above, so a message near the bottom keeps Delete reachable.
+    const space_below = inner_h - bottom;
+    if (space_below < MENU_EST_PX and top > space_below) {
+        store.menu.setAnchor(@floatCast(inner_h - top + 4), right_gap, true);
+    } else {
+        store.menu.setAnchor(@floatCast(bottom + 4), right_gap, false);
+    }
 }
 
-/// Inline `position: fixed` placement for the popped action list, from the captured anchor.
-pub fn anchorStyle(allocator: std.mem.Allocator, top: f32, right: f32) []const u8 {
-    return std.fmt.allocPrint(allocator, "position:fixed;top:{d}px;right:{d}px", .{
-        @as(i32, @intFromFloat(top)), @as(i32, @intFromFloat(right)),
-    }) catch "position:fixed;top:64px;right:16px";
+/// Inline `position: fixed` placement for the popped action list, from the captured anchor. `up`
+/// anchors the list's bottom above the trigger; a viewport-bounded max-height keeps it fully scrollable.
+pub fn anchorStyle(allocator: std.mem.Allocator, offset: f32, right: f32, up: bool) []const u8 {
+    const edge: []const u8 = if (up) "bottom" else "top";
+    return std.fmt.allocPrint(allocator, "position:fixed;{s}:{d}px;right:{d}px;max-height:calc(100dvh - 16px);overflow-y:auto", .{
+        edge, @as(i32, @intFromFloat(offset)), @as(i32, @intFromFloat(right)),
+    }) catch "position:fixed;top:64px;right:16px;max-height:calc(100dvh - 16px);overflow-y:auto";
 }

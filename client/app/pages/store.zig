@@ -579,9 +579,12 @@ pub var undo: UndoState = .{ .allocator = page_gpa };
 pub const MenuState = struct {
     /// Absolute index of the message whose action menu is open, or null when none is.
     open_index: ?usize = null,
-    /// Viewport anchor for the popped list (px): its top edge and its gap from the viewport right.
+    /// Viewport anchor for the popped list (px): its offset edge and its gap from the viewport right.
+    /// When `anchor_up` is false the offset is the list's top; when true it is its gap from the bottom
+    /// (the list opens upward from the trigger, so a message near the viewport bottom stays reachable).
     anchor_top: f32 = 0,
     anchor_right: f32 = 0,
+    anchor_up: bool = false,
     /// Bumped on every open/close so `signalFor` re-renders the open message's trigger; see signalFor.
     epoch: u64 = 0,
 
@@ -602,9 +605,10 @@ pub const MenuState = struct {
         self.epoch +%= 1;
     }
 
-    pub fn setAnchor(self: *MenuState, top: f32, right: f32) void {
+    pub fn setAnchor(self: *MenuState, top: f32, right: f32, up: bool) void {
         self.anchor_top = top;
         self.anchor_right = right;
+        self.anchor_up = up;
     }
 
     pub fn isOpenFor(self: *const MenuState, abs: usize) bool {

@@ -245,7 +245,7 @@ fn appendUserTurn(text: []const u8) void {
         return;
     };
     regions.bumpMessageLog();
-    js.global.call(void, "__st_reader_scroll_bottom", .{}) catch {};
+    js.global.call(void, "__st_reader_pin_bottom", .{}) catch {};
     appendGroupTurn(user_name, text, true);
 }
 

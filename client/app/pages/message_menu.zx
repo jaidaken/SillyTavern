@@ -38,7 +38,7 @@ pub fn MessageMenu(allocator: zx.Allocator) zx.Component {
             id="msg-menu"
             role="menu"
             aria-label="Message actions"
-            style={actions.anchorStyle(allocator, store.menu.anchor_top, store.menu.anchor_right)}
+            style={actions.anchorStyle(allocator, store.menu.anchor_top, store.menu.anchor_right, store.menu.anchor_up)}
             class="z-40 flex min-w-[10rem] animate-drawer-in flex-col gap-0.5 rounded-lg border border-border bg-surface p-1 outline-none"
         >
             <button type="button" role="menuitem" class={item} data-msg-action="edit" data-msg-index={abs}>Edit</button>

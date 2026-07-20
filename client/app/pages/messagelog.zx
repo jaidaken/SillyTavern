@@ -25,6 +25,7 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
             class="group/chat col-start-2 row-start-2 min-h-0 min-w-0 overflow-y-auto [overscroll-behavior:contain] [scrollbar-color:var(--color-border)_transparent] [scrollbar-width:thin]"
             onclick={message_actions.onLogClick}
             onkeydown={message_actions.onLogKey}
+            oninput={message_editor.onInput}
         >
             <div
                 class="chat-inner relative mx-auto max-w-[var(--reading-measure,var(--measure))] px-4 pt-6 pb-8 group-aria-busy/chat:opacity-55 max-[640px]:px-2 max-[640px]:pt-3 max-[640px]:pb-4"
@@ -62,6 +63,7 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
 
 const zx = @import("zx");
 const message_actions = @import("./message_actions.zig");
+const message_editor = @import("./message_editor.zig");
 const sanitized = @import("./sanitized.zig");
 const store = @import("./store.zig");
 const regions = @import("./regions.zig");

@@ -439,6 +439,132 @@
     margin-inline-end: 0.4rem;
 }
 
+/* Inline message editor: a live-markdown contenteditable in place of the rendered body. It keeps
+   .mes_text so the source sits at the same measure and family; pre-wrap preserves the raw whitespace
+   (so markdown indentation shows as typed) and the highlight styles content while the markers stay. */
+.mes_edit {
+    grid-column: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+.mes_edit_field {
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    outline: none;
+    border-radius: var(--radius-md);
+    padding: 0.55rem 0.7rem;
+    background: var(--color-code-bg);
+    border: 1px solid var(--color-control-border);
+    caret-color: var(--color-accent);
+    font-variant-numeric: normal;
+    text-box: normal;
+}
+
+.mes_edit_field:focus-visible {
+    border-color: var(--color-accent);
+}
+
+.mes_edit_field .md-mark {
+    color: var(--color-faint);
+    opacity: 0.65;
+}
+
+.mes_edit_field .md-bold {
+    font-weight: 700;
+    color: var(--color-text);
+}
+
+.mes_edit_field .md-italic {
+    font-style: italic;
+    color: var(--color-st-em);
+}
+
+.mes_edit_field .md-strike {
+    text-decoration: line-through;
+    color: var(--color-muted);
+}
+
+.mes_edit_field .md-code,
+.mes_edit_field .md-fence {
+    font-family: var(--font-mono);
+    color: var(--color-st-quote);
+}
+
+.mes_edit_field .md-link {
+    color: var(--color-accent);
+    text-decoration: underline;
+}
+
+.mes_edit_field .md-url {
+    color: var(--color-faint);
+}
+
+.mes_edit_field .md-h1,
+.mes_edit_field .md-h2 {
+    font-weight: 600;
+    font-size: var(--text-lg);
+    color: color-mix(in oklch, var(--color-accent) 30%, var(--color-text));
+}
+
+.mes_edit_field .md-h3,
+.mes_edit_field .md-h4,
+.mes_edit_field .md-h5,
+.mes_edit_field .md-h6 {
+    font-weight: 600;
+    color: color-mix(in oklch, var(--color-accent) 20%, var(--color-text));
+}
+
+.mes_edit_field .md-bq {
+    color: var(--color-muted);
+    font-style: italic;
+}
+
+.mes_edit_actions {
+    display: flex;
+    gap: 0.4rem;
+}
+
+.mes_edit_save,
+.mes_edit_cancel {
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    width: 1.9rem;
+    height: 1.9rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-2);
+    font-size: 0.95rem;
+    line-height: 1;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.mes_edit_save {
+    color: color-mix(in oklch, var(--color-accent) 60%, var(--color-text));
+}
+
+.mes_edit_save:hover {
+    background: var(--color-tool-on);
+    border-color: var(--color-accent);
+}
+
+.mes_edit_cancel {
+    color: var(--color-muted);
+}
+
+.mes_edit_cancel:hover {
+    background: var(--color-surface);
+    color: var(--color-text);
+}
+
+.mes_edit_save:focus-visible,
+.mes_edit_cancel:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
 /* ---- Reading controls ----
    The client sets data-reading-* on #chat-root, which does NOT re-render with the Shell region, so
    the values (and the control highlights keyed off them) survive a settings re-render. Every rule is

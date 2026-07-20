@@ -20,6 +20,8 @@ comptime {
     _ = @import("utf8.zig");
     _ = @import("stream.zig");
     _ = @import("html.zig");
+    // The inline message editor's pure highlighter (message_editor.zig is the zx-importing DOM half).
+    _ = @import("md_highlight.zig");
     _ = @import("completion.zig");
     _ = @import("ui_state.zig");
     _ = @import("char_data.zig");
