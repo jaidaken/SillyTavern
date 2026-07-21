@@ -129,6 +129,9 @@ pub const Instruct = struct {
     /// power_user.instruct.sequences_as_stop_strings: push every wrap sequence as a stopping string,
     /// not just stop_sequence (instruct-mode.js:343). Default true, matching the classic client.
     sequences_as_stop_strings: bool = true,
+    /// power_user.instruct.user_alignment_message: a canned user turn prepended to the chat block when
+    /// the oldest included message is not a user turn (script.js:4789). Empty on most presets.
+    user_alignment_message: []const u8 = "",
 };
 
 /// The system-block half. Strings borrowed from the same arena as Instruct.
@@ -269,6 +272,7 @@ fn parseInstruct(arena: Allocator, o: std.json.ObjectMap) Allocator.Error!Instru
         .names_behavior = namesBehavior(o),
         .system_same_as_user = boolField(o, "system_same_as_user", false),
         .sequences_as_stop_strings = boolField(o, "sequences_as_stop_strings", true),
+        .user_alignment_message = try strField(arena, o, "user_alignment_message"),
     };
 }
 
@@ -645,6 +649,24 @@ fn includeName(tpl: Instruct, role: Role) bool {
     return tpl.names_behavior == .always;
 }
 
+/// Append `seq` to `out`, swapping the per-turn `{{name}}` token (case-insensitive) for `name`. The
+/// wrap sequences resolve {{char}}/{{user}} upstream (resolveInstructMacros, global ctx), but {{name}}
+/// is the turn's own speaker, known only here (instruct-mode.js substitutes it per turn).
+fn appendSeqName(alloc: Allocator, out: *std.ArrayList(u8), seq: []const u8, name: []const u8) Allocator.Error!void {
+    const token = "{{name}}";
+    const nm = if (name.len > 0) name else "System"; // stock `name || 'System'` (instruct-mode.js:637)
+    var i: usize = 0;
+    while (i < seq.len) {
+        if (i + token.len <= seq.len and std.ascii.eqlIgnoreCase(seq[i .. i + token.len], token)) {
+            try out.appendSlice(alloc, nm);
+            i += token.len;
+        } else {
+            try out.append(alloc, seq[i]);
+            i += 1;
+        }
+    }
+}
+
 /// Appends one wrapped turn straight onto `out`. With `wrap` on, an empty suffix becomes a newline
 /// and the prefix is separated from the body by a newline, which is what makes an Alpaca-style
 /// template (`### Instruction:` with no suffix) produce readable turns.
@@ -671,7 +693,7 @@ pub fn appendWrapped(alloc: Allocator, out: *std.ArrayList(u8), tpl: Instruct, r
     const sep: []const u8 = if (tpl.wrap) "\n" else "";
 
     if (prefix.len > 0) {
-        try out.appendSlice(alloc, prefix);
+        try appendSeqName(alloc, out, prefix, name);
         try out.appendSlice(alloc, sep);
     }
     if (includeName(tpl, role) and name.len > 0) {
@@ -679,7 +701,7 @@ pub fn appendWrapped(alloc: Allocator, out: *std.ArrayList(u8), tpl: Instruct, r
         try out.appendSlice(alloc, ": ");
     }
     try out.appendSlice(alloc, mes);
-    try out.appendSlice(alloc, suffix);
+    try appendSeqName(alloc, out, suffix, name);
 }
 
 /// `appendWrapped` into a buffer of its own. The prompt builder does NOT use this (see above); it is
@@ -736,13 +758,41 @@ pub fn wrapStoryString(alloc: Allocator, tpl: Instruct, story: []const u8) Alloc
 pub fn continuationPrefix(alloc: Allocator, tpl: Instruct, char_name: []const u8) Allocator.Error![]u8 {
     if (!tpl.enabled) return std.fmt.allocPrint(alloc, "{s}:", .{char_name});
 
-    const seq = if (tpl.last_output_sequence.len > 0) tpl.last_output_sequence else tpl.output_sequence;
-    if (seq.len == 0) return std.fmt.allocPrint(alloc, "{s}:", .{char_name});
+    const raw_seq = if (tpl.last_output_sequence.len > 0) tpl.last_output_sequence else tpl.output_sequence;
     const sep: []const u8 = if (tpl.wrap) "\n" else "";
-    if (includeName(tpl, .assistant) and char_name.len > 0) {
-        return std.fmt.allocPrint(alloc, "{s}{s}{s}:", .{ seq, sep, char_name });
+    // solo: names appear only when names_behavior is ALWAYS (FORCE is group-only, instruct-mode.js:596).
+    const include_names = tpl.names_behavior == .always and char_name.len > 0;
+
+    var seqbuf: std.ArrayList(u8) = .empty;
+    defer seqbuf.deinit(alloc);
+    try appendSeqName(alloc, &seqbuf, raw_seq, char_name); // {{name}} in the final sequence -> char
+    const seq = seqbuf.items;
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(alloc);
+    if (include_names) {
+        // Mistral hack (instruct-mode.js:622): when the last_output_sequence dropped the trailing space
+        // that output_sequence keeps, refill that one char so `Char:` is spaced as the format intends.
+        var filler: []const u8 = "";
+        if (tpl.last_output_sequence.len > 0 and tpl.output_sequence.len > 0 and
+            std.mem.eql(u8, raw_seq, tpl.last_output_sequence) and
+            std.ascii.isWhitespace(tpl.output_sequence[tpl.output_sequence.len - 1]) and
+            !std.ascii.isWhitespace(tpl.last_output_sequence[tpl.last_output_sequence.len - 1]))
+        {
+            filler = tpl.output_sequence[tpl.output_sequence.len - 1 ..];
+        }
+        try out.appendSlice(alloc, seq);
+        try out.appendSlice(alloc, sep);
+        try out.appendSlice(alloc, filler);
+        try out.appendSlice(alloc, char_name);
+        try out.append(alloc, ':');
+    } else {
+        // stock trims the sequence's trailing whitespace when wrapping (formatInstructModePrompt tail).
+        const body = if (tpl.wrap) std.mem.trimEnd(u8, seq, &std.ascii.whitespace) else seq;
+        try out.appendSlice(alloc, body);
+        try out.appendSlice(alloc, sep);
     }
-    return std.fmt.allocPrint(alloc, "{s}{s}", .{ seq, sep });
+    return out.toOwnedSlice(alloc);
 }
 
 const testing = std.testing;
@@ -1153,11 +1203,13 @@ test "continuationPrefix prefers last_output_sequence when the template sets one
     try testing.expectEqualStrings("<|im_start|>assistant_final\n", out);
 }
 
-test "continuationPrefix falls back to the char colon when instruct has no output sequence" {
+test "continuationPrefix on an empty output sequence is a bare wrap newline, not a name colon" {
+    // Corrected 2026-07-21 (was "Rita:", contradicted formatInstructModePrompt): enabled + empty sequence
+    // + names!=always emits (sep+seq).trimEnd()+sep = "\n"; the name colon is only the !enabled fallback.
     const tpl = Instruct{ .enabled = true, .input_sequence = "U:", .output_sequence = "" };
     const out = try continuationPrefix(testing.allocator, tpl, "Rita");
     defer testing.allocator.free(out);
-    try testing.expectEqualStrings("Rita:", out);
+    try testing.expectEqualStrings("\n", out);
 }
 
 test "parseTemplates migrates the anchors into a story string that predates them" {

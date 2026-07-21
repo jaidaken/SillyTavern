@@ -583,7 +583,9 @@ test "a saved preset keeps every field the client does not model" {
 
     // And by name and by value, because "the key is present" would pass on a key set to null.
     try testing.expectEqualStrings("UNMODELLED-REGEX", preset.get("activation_regex").?.string);
-    try testing.expectEqualStrings("UNMODELLED-ALIGNMENT", preset.get("user_alignment_message").?.string);
+    // user_alignment_message is now MODELLED (client resolves it for the prompt), so the live value
+    // wins over the base; liveChatml carries none, so the modelled empty string overwrites the base's.
+    try testing.expectEqualStrings("", preset.get("user_alignment_message").?.string);
     try testing.expectEqual(true, preset.get("skip_examples").?.bool);
     try testing.expectEqual(true, preset.get("sequences_as_stop_strings").?.bool);
     // 23 keys: the shape of a shipped file, not a 16-key subset of one.
@@ -680,8 +682,8 @@ test "with no preset to base on the save carries the modelled fields alone" {
     try testing.expectEqualStrings("<|im_start|>user", preset.get("input_sequence").?.string);
     try testing.expectEqualStrings("Hand Made", preset.get("name").?.string);
     try testing.expect(preset.get("activation_regex") == null);
-    // The 19 modelled fields less the stripped toggle.
-    try testing.expectEqual(@as(usize, 18), preset.count());
+    // The 20 modelled fields (user_alignment_message added) less the stripped toggle.
+    try testing.expectEqual(@as(usize, 19), preset.count());
 }
 
 test "a preset saved from a base picks straight back up as the same template" {
