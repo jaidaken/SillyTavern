@@ -1,0 +1,16 @@
+diff --git i/src/runtime/client/Client.zig w/src/runtime/client/Client.zig
+index efe794e3..96834e68 100644
+--- i/src/runtime/client/Client.zig
++++ w/src/runtime/client/Client.zig
+@@ -140,6 +140,11 @@ pub const EventType = enum(u8) {
+     touchend,
+     touchmove,
+     scroll,
++    // Ordinals 19-22 must stay in lockstep with the door's Ne delegation table (patch-door D5).
++    pointerdown,
++    pointermove,
++    pointerup,
++    pointercancel,
+ 
+     /// Parse event type from attribute name (e.g., "onclick" -> .click)
+     pub fn fromAttributeName(name: []const u8) ?EventType {

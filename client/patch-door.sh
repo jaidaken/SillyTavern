@@ -561,6 +561,78 @@ else:
     notes.append("patch-door: D4 scroll delegation bound with capture, "
                  "child #chat scroll now reaches its onscroll handler")
 
+# ---------------------------------------------------------------------------
+# D5: pointer events are not in the delegation table -> add them
+# ---------------------------------------------------------------------------
+# The resize drags (reading width, panel dock) need pointerdown/move/up/cancel to reach their Zig
+# handlers. setPointerCapture retargets move/up to the handle, which still bubbles to <body>, so no
+# capture phase is needed (unlike scroll). Ordinals 19-22 stay in lockstep with the EventType enum
+# (source patch 21).
+
+ptr_old = """  { domType: "scroll", eventTypeId: 18 }
+];"""
+ptr_new = """  { domType: "scroll", eventTypeId: 18 },
+  { domType: "pointerdown", eventTypeId: 19 },
+  { domType: "pointermove", eventTypeId: 20 },
+  { domType: "pointerup", eventTypeId: 21 },
+  { domType: "pointercancel", eventTypeId: 22 }
+];"""
+
+D5_SENTINEL = 'domType: "pointerdown"'
+
+if D5_SENTINEL in s:
+    notes.append("patch-door: D5 already patched, nothing to do")
+elif s.count(ptr_old) != 1:
+    errors.append("patch-door: D5 could not find the DELEGATED_EVENTS scroll tail verbatim "
+                  "(found %d, want 1); door version changed, update patch-door.sh" % s.count(ptr_old))
+else:
+    s = s.replace(ptr_old, ptr_new, 1)
+    changed = True
+    notes.append("patch-door: D5 pointer events delegated "
+                 "(pointerdown/move/up/cancel, ids 19-22)")
+
+# ---------------------------------------------------------------------------
+# D6: gate the ambient pointermove delegation to active drags
+# ---------------------------------------------------------------------------
+# The door stores a jsz slot per delegated dispatch and never reclaims it (measured: 600 ambient
+# pointermove = +2400 live slots, idPool never refilled). pointermove fires on every cursor move over
+# the app, so it is gated behind a flag the Zig drag handlers set on pointerdown and clear on
+# pointerup/cancel: with no active drag the walk (and its slot leak) never runs. pointerdown/up/cancel
+# stay ungated - they fire once per press, like the mousedown/mouseup already in the table.
+
+gate_decl_old = """var eventHandlerModes = new Map;
+function initEventDelegation(bridge, rootSelector = "body") {"""
+gate_decl_new = """var eventHandlerModes = new Map;
+var __stPtrDragActive = false;
+globalThis.__stSetPtrDrag = (on) => { __stPtrDragActive = on !== 0; };
+function initEventDelegation(bridge, rootSelector = "body") {"""
+
+gate_body_old = """    const listener = (event) => {
+      let target = event.target;"""
+gate_body_new = """    const listener = (event) => {
+      if (delegatedEvent.domType === "pointermove" && !__stPtrDragActive)
+        return;
+      let target = event.target;"""
+
+D6_SENTINEL = "__stSetPtrDrag"
+
+if D6_SENTINEL in s:
+    notes.append("patch-door: D6 already patched, nothing to do")
+else:
+    d6missing = []
+    if s.count(gate_decl_old) != 1:
+        d6missing.append("the eventHandlerModes/initEventDelegation head (found %d, want 1)" % s.count(gate_decl_old))
+    if s.count(gate_body_old) != 1:
+        d6missing.append("the delegation listener head (found %d, want 1)" % s.count(gate_body_old))
+    if d6missing:
+        errors.append("patch-door: D6 could not find " + " and ".join(d6missing) +
+                      " verbatim; door version changed, update patch-door.sh")
+    else:
+        s = s.replace(gate_decl_old, gate_decl_new, 1)
+        s = s.replace(gate_body_old, gate_body_new, 1)
+        changed = True
+        notes.append("patch-door: D6 pointermove delegation gated behind an active-drag flag")
+
 # All-or-nothing: any stale expectation aborts before the write, so a door bump can never ship a
 # half-patched door.
 if errors:

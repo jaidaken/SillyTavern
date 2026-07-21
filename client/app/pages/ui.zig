@@ -158,10 +158,90 @@ pub fn onResizeKey(ev: zx.client.Event) void {
     log.debug("panel {s} resized by key: {s}", .{ ui_state.sideStr(side), key });
 }
 
-/// Called from the resize glue with the new pixel width for a side. Clamps and re-renders the Shell
-/// region, which re-publishes aria-valuenow on the separator from the clamped state.
-pub export fn __st_set_panel_width(is_left: u32, width: f64) callconv(.c) void {
-    setWidth(if (is_left != 0) .left else .right, @floatCast(width));
+// ---- the panel dock drag (ziex, client-only; door delegates pointer via patch-door D5) ---------
+// setPointerCapture keeps the drag alive when the cursor leaves the separator (plain delegation
+// cannot), so the gesture is Zig, not glue. onResizeKey above is the keyboard twin.
+
+const PanelDrag = struct { start_x: f64, start_w: f64, left: bool, last: ?f64, panel: js.Object, handle: js.Object };
+var panel_drag: ?PanelDrag = null;
+
+/// A left dock widens as the separator moves right; a right dock does the opposite. Clamped to the
+/// allowed range and rounded, matching the keyboard path's bounds.
+fn panelWidthAt(drag: PanelDrag, cx: f64) f64 {
+    const dx = cx - drag.start_x;
+    const raw = if (drag.left) drag.start_w + dx else drag.start_w - dx;
+    return @round(std.math.clamp(raw, @as(f64, min_width), @as(f64, max_width)));
+}
+
+/// Pointerdown on the .panel-resize separator inside #panel-view: capture start geometry + which
+/// side, take pointer capture, suppress selection.
+pub fn onResizeDown(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    defer target.deinit();
+    const handle = (target.call(?js.Object, "closest", .{js.string(".panel-resize")}) catch return) orelse return;
+    const panel = (handle.call(?js.Object, "closest", .{js.string("#panel-view")}) catch null) orelse {
+        handle.deinit();
+        return;
+    };
+    ev.preventDefault();
+    const side_str = dom_event.datasetUp(handle, "side") orelse {
+        handle.deinit();
+        panel.deinit();
+        return;
+    };
+    defer zx.allocator.free(side_str);
+    panel_drag = .{
+        .start_x = dom_event.eventNum(ev, "clientX") orelse 0,
+        .start_w = dom_event.rectWidth(panel) orelse 0,
+        .left = std.mem.eql(u8, side_str, "left"),
+        .last = null,
+        .panel = panel,
+        .handle = handle,
+    };
+    dom_event.addClass(handle, "is-dragging");
+    if (dom_event.eventNum(ev, "pointerId")) |pid| handle.call(void, "setPointerCapture", .{pid}) catch {};
+    dom_event.setBodyUserSelect(true);
+    dom_event.setPtrDrag(true);
+}
+
+/// Pointermove: paint the inline width for feedback (no rerender until release).
+pub fn onResizeMove(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    if (panel_drag == null) return;
+    const cx = dom_event.eventNum(ev, "clientX") orelse return;
+    const w = panelWidthAt(panel_drag.?, cx);
+    panel_drag.?.last = w;
+    const style = panel_drag.?.panel.get(js.Object, "style") catch return;
+    defer style.deinit();
+    var buf: [24]u8 = undefined;
+    const val = std.fmt.bufPrint(&buf, "{d}px", .{@as(i64, @intFromFloat(w))}) catch return;
+    style.call(void, "setProperty", .{ js.string("width"), js.string(val) }) catch {};
+}
+
+pub fn onResizeUp(ev: zx.client.Event) void {
+    endPanelDrag(ev);
+}
+
+pub fn onResizeCancel(ev: zx.client.Event) void {
+    endPanelDrag(ev);
+}
+
+/// Pointerup/cancel: hand the final width to setWidth (clamps + rerenders, which replaces the inline
+/// width with the computed style), and clear the drag state.
+fn endPanelDrag(_: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const drag = panel_drag orelse return;
+    panel_drag = null;
+    defer drag.panel.deinit();
+    defer drag.handle.deinit();
+    dom_event.removeClass(drag.handle, "is-dragging");
+    dom_event.setBodyUserSelect(false);
+    dom_event.setPtrDrag(false);
+    if (drag.last) |w| {
+        setWidth(if (drag.left) .left else .right, @floatCast(w));
+        log.debug("panel width set: {d}", .{@as(i64, @intFromFloat(w))});
+    }
 }
 
 /// The motion preference. `set` is the boot path (the value already came from storage); `select` is

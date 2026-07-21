@@ -58,6 +58,10 @@ pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
                 aria-valuemin={ui.min_width}
                 aria-valuemax={ui.max_width}
                 onkeydown={ui.onResizeKey}
+                onpointerdown={ui.onResizeDown}
+                onpointermove={ui.onResizeMove}
+                onpointerup={ui.onResizeUp}
+                onpointercancel={ui.onResizeCancel}
             ></div>
         </aside>
     );

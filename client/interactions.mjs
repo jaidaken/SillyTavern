@@ -317,7 +317,7 @@ async function main() {
         // gate stayed green: that call only throws at runtime, on a path one real upload reaches.
         // Call sites come from SOURCE (dist is minified, which renames the `wasm` local); the
         // denominator is the built module's OWN export table, because a source-side grep lies here:
-        // __st_set_panel_width is a `pub export fn` in ui.zig, not in bridge.zig's comptime block.
+        // __st_reader_stream_begin is a `pub export fn` in reader.zig, not in bridge.zig's comptime block.
         // Every glue file, not just custom.js: today it is the only one, so naming it would make this
         // denominator right by luck and silently blind to the second.
         const glueDir = join(dirname(fileURLToPath(import.meta.url)), 'glue');

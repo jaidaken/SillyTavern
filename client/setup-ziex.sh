@@ -39,9 +39,11 @@ fi
 # exposes it as js.test_support so the H1 boundary suite can assert handle accounting.
 # 18 extracts RenderGate.recover() (the pure half of 15's __zx_render_recover); applies AFTER 15.
 # 19 adds test/boundary.zig, the H1 suite; client/build.zig wires it into `zig build test`.
-for p in "$PATCHES"/01-*.patch "$PATCHES"/02-*.patch "$PATCHES"/04-*.patch "$PATCHES"/05-*.patch "$PATCHES"/06-*.patch "$PATCHES"/10-*.patch "$PATCHES"/11-*.patch "$PATCHES"/12-*.patch "$PATCHES"/13-*.patch "$PATCHES"/14-*.patch "$PATCHES"/15-*.patch "$PATCHES"/16-*.patch "$PATCHES"/17-*.patch "$PATCHES"/18-*.patch "$PATCHES"/19-*.patch; do
+# 21 extends the EventType delegation enum with pointerdown/move/up/cancel (ordinals 19-22), in
+# lockstep with the door's Ne table (patch-door D5), so a Zig onpointerdown handler can bind.
+for p in "$PATCHES"/01-*.patch "$PATCHES"/02-*.patch "$PATCHES"/04-*.patch "$PATCHES"/05-*.patch "$PATCHES"/06-*.patch "$PATCHES"/10-*.patch "$PATCHES"/11-*.patch "$PATCHES"/12-*.patch "$PATCHES"/13-*.patch "$PATCHES"/14-*.patch "$PATCHES"/15-*.patch "$PATCHES"/16-*.patch "$PATCHES"/17-*.patch "$PATCHES"/18-*.patch "$PATCHES"/19-*.patch "$PATCHES"/21-*.patch; do
     git -C "$ZIEX_DIR" apply "../$p"
     echo "setup-ziex: applied $(basename "$p")"
 done
 
-echo "setup-ziex: $ZIEX_DIR ready at $ZIEX_REV + 15 patches"
+echo "setup-ziex: $ZIEX_DIR ready at $ZIEX_REV + 16 patches"

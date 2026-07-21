@@ -105,3 +105,56 @@ pub fn isActivationKey(e: *zx.client.Event.Stateful) bool {
     defer zx.allocator.free(key);
     return std.mem.eql(u8, key, "Enter") or std.mem.eql(u8, key, " ");
 }
+
+// ---- pointer-capture drag helpers (shared by reading_prefs + ui) ------------------------------
+
+/// A numeric property off a raw pointer/keyboard event (clientX, clientY, pointerId).
+pub fn eventNum(ev: zx.client.Event, comptime name: []const u8) ?f64 {
+    if (zx.platform.role != .client) return null;
+    return ev.getEvent().ref.get(f64, name) catch null;
+}
+
+/// getBoundingClientRect().width for an element, or null.
+pub fn rectWidth(el: js.Object) ?f64 {
+    const rect = el.call(js.Object, "getBoundingClientRect", .{}) catch return null;
+    defer rect.deinit();
+    return rect.get(f64, "width") catch null;
+}
+
+pub fn addClass(el: js.Object, comptime name: []const u8) void {
+    const cl = el.get(js.Object, "classList") catch return;
+    defer cl.deinit();
+    cl.call(void, "add", .{js.string(name)}) catch {};
+}
+
+pub fn removeClass(el: js.Object, comptime name: []const u8) void {
+    const cl = el.get(js.Object, "classList") catch return;
+    defer cl.deinit();
+    cl.call(void, "remove", .{js.string(name)}) catch {};
+}
+
+/// Suppress text selection on <body> for the duration of a drag.
+pub fn setBodyUserSelect(on: bool) void {
+    if (zx.platform.role != .client) return;
+    const doc = js.global.get(js.Object, "document") catch return;
+    defer doc.deinit();
+    const body = doc.get(js.Object, "body") catch return;
+    defer body.deinit();
+    const style = body.get(js.Object, "style") catch return;
+    defer style.deinit();
+    if (on) {
+        style.call(void, "setProperty", .{ js.string("user-select"), js.string("none") }) catch {};
+    } else {
+        // removeProperty hands back the old value, so a void call would error on the way out.
+        const ret = style.call(?js.Value, "removeProperty", .{js.string("user-select")}) catch null;
+        if (ret) |r| r.deinit();
+    }
+}
+
+/// Gate the door's ambient pointermove delegation to active drags (patch-door D6). The door leaks
+/// one jsz event slot per delegated dispatch and never reclaims it (measured: 600 ambient moves =
+/// +2400 live slots), so pointermove stays delegated only between a drag's start and end.
+pub fn setPtrDrag(on: bool) void {
+    if (zx.platform.role != .client) return;
+    js.global.call(void, "__stSetPtrDrag", .{@as(f64, if (on) 1 else 0)}) catch {};
+}

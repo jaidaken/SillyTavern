@@ -48,6 +48,12 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
                     tabindex="0"
                     aria-label="Resize reading width"
                     aria-orientation="vertical"
+                    onpointerdown={reading_prefs.onMeasureDown}
+                    onpointermove={reading_prefs.onMeasureMove}
+                    onpointerup={reading_prefs.onMeasureUp}
+                    onpointercancel={reading_prefs.onMeasureCancel}
+                    onkeydown={reading_prefs.onMeasureKey}
+                    ondblclick={reading_prefs.onMeasureDblclick}
                 ></div>
             </div>
             <button type="button" class={reader.chipClass()} onclick={reader.onChipClick}>New message</button>
@@ -67,6 +73,7 @@ const zx = @import("zx");
 const message_actions = @import("./message_actions.zig");
 const message_editor = @import("./message_editor.zig");
 const reader = @import("./reader.zig");
+const reading_prefs = @import("./reading_prefs.zig");
 const sanitized = @import("./sanitized.zig");
 const store = @import("./store.zig");
 const regions = @import("./regions.zig");

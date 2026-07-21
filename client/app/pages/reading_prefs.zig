@@ -34,10 +34,15 @@ const log = std.log.scoped(.panels);
 /// reading state too (which sub-panel shows), keyed by CSS off the same attribute.
 pub const keys = [_][]const u8{ "size", "measure", "lh", "justify", "indent", "font", "theme", "tab", "avatars" };
 
-/// The pixel width the reading-width drag persists (the gesture stays in the glue per ZX7). A
-/// measure PRESET click drops it, inline custom property and stored pixels together, so the preset
-/// governs again; the server copy carries it so the width follows the account.
+/// The pixel width the reading-width drag persists (the drag gesture lives in this module, driven by
+/// the pointer events the door delegates via patch-door D5). A measure PRESET click drops it, inline
+/// custom property and stored pixels together, so the preset governs again; the server copy carries
+/// it so the width follows the account.
 const measure_px_key = "st-reading-measurepx";
+
+/// The reading-width drag floor. Below this the column is unreadably narrow; the drag and the
+/// keyboard nudges both clamp here, and a stored width below it is ignored at boot.
+const measure_min_w: f64 = 320;
 
 fn defaultFor(comptime key: []const u8) []const u8 {
     if (std.mem.eql(u8, key, "size")) return "m";
@@ -118,6 +123,13 @@ pub fn applyAll() void {
         defer if (stored) |s| alloc.free(s);
         root.setAttribute("data-reading-" ++ key, stored orelse defaultFor(key));
     }
+    // The persisted drag width is a pixel value, not a preset, so it rides its own key and lands as
+    // the inline --reading-measure override (which beats the preset rules) before the first paint.
+    if (getItem(alloc, measure_px_key)) |px| {
+        defer alloc.free(px);
+        const n = std.fmt.parseInt(i64, px, 10) catch 0;
+        if (@as(f64, @floatFromInt(n)) >= measure_min_w) setMeasure(@floatFromInt(n), false);
+    }
     log.debug("reading prefs applied", .{});
 }
 
@@ -187,6 +199,129 @@ fn clearMeasureOverride(root: zx.client.Document.HTMLElement) void {
     const ret = style.call(?js.Value, "removeProperty", .{js.string("--reading-measure")}) catch null;
     if (ret) |r| r.deinit();
     removeItem(measure_px_key);
+}
+
+// ---- the reading-width drag (ziex, client-only; door delegates pointer via patch-door D5) ------
+
+/// Set the inline --reading-measure override on #chat-root, clamped to [320, #chat width - 32].
+/// `persist` also writes the pixel width to localStorage; a measure preset click drops both.
+fn setMeasure(px: f64, persist: bool) void {
+    if (zx.platform.role != .client) return;
+    const root = chatRoot() orelse return;
+    defer root.deinit();
+    var max_w: f64 = 1200;
+    if (dom_event.elementById(alloc, "chat")) |chat| {
+        defer chat.deinit();
+        if (chat.ref.get(f64, "clientWidth")) |cw| {
+            max_w = cw - 32;
+        } else |_| {}
+    }
+    const wi: i64 = @intFromFloat(@round(std.math.clamp(px, measure_min_w, max_w)));
+    const style = root.ref.get(js.Object, "style") catch return;
+    defer style.deinit();
+    var buf: [24]u8 = undefined;
+    const val = std.fmt.bufPrint(&buf, "{d}px", .{wi}) catch return;
+    style.call(void, "setProperty", .{ js.string("--reading-measure"), js.string(val) }) catch {};
+    if (persist) {
+        var kb: [16]u8 = undefined;
+        const ks = std.fmt.bufPrint(&kb, "{d}", .{wi}) catch return;
+        setItem(measure_px_key, ks);
+    }
+}
+
+/// Drop the drag override entirely (inline property + stored pixels), so the measure preset rules
+/// govern again. The Home key and a dblclick on the separator both land here.
+fn clearMeasure() void {
+    if (zx.platform.role != .client) return;
+    const root = chatRoot() orelse return;
+    defer root.deinit();
+    clearMeasureOverride(root);
+}
+
+const MeasureDrag = struct { start_x: f64, start_w: f64, handle: js.Object };
+var measure_drag: ?MeasureDrag = null;
+
+/// Pointerdown on the .chat-resize separator: capture the start geometry, take pointer capture so the
+/// move survives the cursor leaving the handle, and suppress selection.
+pub fn onMeasureDown(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    defer target.deinit();
+    const handle = (target.call(?js.Object, "closest", .{js.string(".chat-resize")}) catch return) orelse return;
+    ev.preventDefault();
+    var start_w: f64 = 640;
+    if (handle.call(?js.Object, "closest", .{js.string(".chat-inner")}) catch null) |inner| {
+        defer inner.deinit();
+        if (dom_event.rectWidth(inner)) |w| start_w = w;
+    }
+    measure_drag = .{ .start_x = dom_event.eventNum(ev, "clientX") orelse 0, .start_w = start_w, .handle = handle };
+    dom_event.addClass(handle, "is-dragging");
+    if (dom_event.eventNum(ev, "pointerId")) |pid| handle.call(void, "setPointerCapture", .{pid}) catch {};
+    dom_event.setBodyUserSelect(true);
+    dom_event.setPtrDrag(true);
+}
+
+/// Pointermove: centered column, so moving the edge by dx widens the measure by 2dx (not persisted).
+pub fn onMeasureMove(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const drag = measure_drag orelse return;
+    const cx = dom_event.eventNum(ev, "clientX") orelse return;
+    setMeasure(@round(drag.start_w + (cx - drag.start_x) * 2), false);
+}
+
+pub fn onMeasureUp(ev: zx.client.Event) void {
+    endMeasureDrag(ev);
+}
+
+pub fn onMeasureCancel(ev: zx.client.Event) void {
+    endMeasureDrag(ev);
+}
+
+/// Pointerup/cancel: persist the separator's landed width and clear the drag state.
+fn endMeasureDrag(_: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const drag = measure_drag orelse return;
+    measure_drag = null;
+    defer drag.handle.deinit();
+    if (drag.handle.call(?js.Object, "closest", .{js.string(".chat-inner")}) catch null) |inner| {
+        defer inner.deinit();
+        if (dom_event.rectWidth(inner)) |w| setMeasure(@round(w), true);
+    }
+    dom_event.removeClass(drag.handle, "is-dragging");
+    dom_event.setBodyUserSelect(false);
+    dom_event.setPtrDrag(false);
+    log.debug("reading width set", .{});
+}
+
+/// Keyboard on the focusable separator (WCAG 2.1.1): arrows nudge 16px, Home returns to the preset.
+pub fn onMeasureKey(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    defer target.deinit();
+    const handle = (target.call(?js.Object, "closest", .{js.string(".chat-resize")}) catch return) orelse return;
+    defer handle.deinit();
+    const key = ev.key() orelse return;
+    defer zx.allocator.free(key);
+    var cur: f64 = 640;
+    if (handle.call(?js.Object, "closest", .{js.string(".chat-inner")}) catch null) |inner| {
+        defer inner.deinit();
+        if (dom_event.rectWidth(inner)) |w| cur = w;
+    }
+    if (std.mem.eql(u8, key, "ArrowRight") or std.mem.eql(u8, key, "ArrowUp")) {
+        setMeasure(@round(cur + 16), true);
+        ev.preventDefault();
+    } else if (std.mem.eql(u8, key, "ArrowLeft") or std.mem.eql(u8, key, "ArrowDown")) {
+        setMeasure(@round(cur - 16), true);
+        ev.preventDefault();
+    } else if (std.mem.eql(u8, key, "Home")) {
+        clearMeasure();
+        ev.preventDefault();
+    }
+}
+
+/// Dblclick on the separator resets the reading width to the preset.
+pub fn onMeasureDblclick(_: zx.client.Event) void {
+    clearMeasure();
 }
 
 // ---- the debounced server save ----------------------------------------------------------------
