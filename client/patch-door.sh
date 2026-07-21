@@ -538,6 +538,29 @@ else:
         notes.append("patch-door: D3 wasm entrypoints recover the render gate on a throw, "
                      "and _forgetNode prunes the registry the rebuild strands")
 
+# ---------------------------------------------------------------------------
+# D4: scroll delegation binds without capture -> child scroll never delivered
+# ---------------------------------------------------------------------------
+# Delegation binds on <body>; scroll does NOT bubble so a nested #chat scroll never reaches it, but
+# scroll DOES fire in the CAPTURE phase, so capture:true delivers it (shared opts fix remove too).
+
+scroll_old = 'const options = { passive: delegatedEvent.domType.startsWith("touch") || delegatedEvent.domType === "scroll" };'
+scroll_new = 'const options = { passive: delegatedEvent.domType.startsWith("touch") || delegatedEvent.domType === "scroll", capture: delegatedEvent.domType === "scroll" };'
+
+D4_SENTINEL = 'capture: delegatedEvent.domType === "scroll"'
+
+if D4_SENTINEL in s:
+    notes.append("patch-door: D4 already patched, nothing to do")
+elif s.count(scroll_old) != 1:
+    errors.append("patch-door: D4 could not find the scroll delegation options object "
+                  "verbatim (found %d, want 1); door version changed, update patch-door.sh"
+                  % s.count(scroll_old))
+else:
+    s = s.replace(scroll_old, scroll_new, 1)
+    changed = True
+    notes.append("patch-door: D4 scroll delegation bound with capture, "
+                 "child #chat scroll now reaches its onscroll handler")
+
 # All-or-nothing: any stale expectation aborts before the write, so a door bump can never ship a
 # half-patched door.
 if errors:

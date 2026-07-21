@@ -26,6 +26,7 @@ const character_view = @import("./character_view.zig");
 const tag_store = @import("./tag_store.zig"); // w3-reason 3d tags
 const persona_store = @import("./persona_store.zig");
 const persona_actions = @import("./persona_actions.zig");
+const reader = @import("./reader.zig");
 const store = @import("./store.zig");
 const wi_actions = @import("./world_info_actions.zig"); // w3-wi
 const wi_store = @import("./world_info.zig"); // w3-wi-engine
@@ -857,11 +858,10 @@ fn scrollChatToNewest() void {
     js.global.call(void, "__st_reader_scroll_bottom", .{}) catch return;
 }
 
-/// The user's own send: jump to the bottom and pin the reply to follow (glue-owned), independent of
-/// where the scroll settled when the stream begins. Open uses scrollChatToNewest (no forced pin).
+/// The user's own send: jump to the bottom and pin the reply to follow (reader.zig owns the pin),
+/// independent of where the scroll settled when the stream begins. Open uses scrollChatToNewest.
 fn pinChatToBottom() void {
-    if (zx.platform.role != .client) return;
-    js.global.call(void, "__st_reader_pin_bottom", .{}) catch return;
+    reader.pinBottom();
 }
 
 // ---- character CRUD ------------------------------------------------------------------------

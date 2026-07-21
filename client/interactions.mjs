@@ -649,6 +649,24 @@ async function main() {
         const followedToBottom = await page.waitFor("(function(){var c=document.getElementById('chat');return (c.scrollHeight - c.scrollTop - c.clientHeight) < 80;})()", 3000);
         row('must', scrollable && followedToBottom, 'SL-send jumps to the bottom and the reply follows', `scrollable=${scrollable} atBottom=${followedToBottom}`);
 
+        // SL-chip: scroll up mid-stream -> "New message" chip; scroll back to bottom -> hidden (reader.zig).
+        // Own-send stream force-pins, so hold scrollTop=0 across ticks (sustained scroll) to beat the pinned tick.
+        await page.focus('#send_textarea');
+        await page.insertText('CHIP PROBE');
+        await page.click('#composer button[aria-label="Send"]');
+        await page.waitFor("(function(){var m=document.querySelectorAll('#chat .mes');return m.length && m[m.length-1].textContent.includes('lantern')})()", 8000);
+        let chipShown = false;
+        for (let i = 0; i < 14 && !chipShown; i++) {
+            await page.eval("document.getElementById('chat').scrollTop = 0");
+            chipShown = await page.eval("!!document.querySelector('.chat-newmsg-chip.is-visible')");
+            await sleep(60);
+        }
+        const chipExists = await page.eval("!!document.querySelector('.chat-newmsg-chip')");
+        await page.eval("(function(){var c=document.getElementById('chat');c.scrollTop = c.scrollHeight;})()");
+        const chipHidBack = await page.waitFor("!document.querySelector('.chat-newmsg-chip.is-visible')", 3000);
+        row('must', chipShown && chipHidBack, 'SL-chip shows scrolled-up mid-stream, hides back at the bottom', `exists=${chipExists} shown=${chipShown} hidBack=${chipHidBack}`);
+        await page.waitFor(`document.body.textContent.includes('FIN') && ${idle}`, 8000);
+
         // STOP: send, wait for a few tokens, stop, assert the reply sealed PARTIAL (no FIN) and idle.
         await page.focus('#send_textarea');
         await page.insertText('STOP PROBE');

@@ -339,10 +339,9 @@
     async function startStream(url, name, avatar, opts) {
         if (streamActive) throw new Error('stream already running');
         streamActive = true;
-        // Follows the bottom only if you were already there (scrolled up -> stays, chip appears); your
-        // own send forces the pin so the reply follows no matter where the send scroll had settled.
-        streamPinned = sendForcedPin || readerNearBottom();
-        sendForcedPin = false;
+        // Zig (reader.zig) owns the follow decision: pin if this was your own send (pinBottom set the
+        // force flag) or you were already near the bottom.
+        wasm.__st_reader_stream_begin();
 
         let pending = [];
         let pendingLen = 0;
@@ -381,7 +380,7 @@
                 } finally {
                     streamRender = false;
                 }
-                readerStreamTick();
+                wasm.__st_reader_stream_tick();
 
                 if (wasm.__st_stream_done && wasm.__st_stream_done()) {
                     ended = true;
@@ -439,7 +438,7 @@
             currentReader = null;
             if (begun) {
                 wasm.__st_stream_end();
-                if (streamPinned) window.__st_reader_scroll_bottom();
+                wasm.__st_reader_stream_end();
                 const chat = document.getElementById('chat');
                 const mes = chat ? chat.querySelectorAll('.mes') : null;
                 if (mes && mes.length) highlightSealedBlocks(mes[mes.length - 1]);
@@ -834,16 +833,11 @@
 
     // Reverse-lazy reader (ZX16 pump): scroll watcher + older-page fetch here, Zig owns window+parse+prepend.
     // Prepend holds position by ELEMENT-ANCHORED correction (2px), not scrollHeight-delta (~8px under content-visibility).
+    // reader.zig owns the follow/chip/near-bottom policy; this file keeps only the IO it drives.
     const READER_PREFETCH_MARGIN = 600;
-    const READER_BOTTOM_SLOP = 80;
     let readerChat = null;
-    let readerChip = null;
     let readerPumping = false;
     let readerScheduled = false;
-    let streamPinned = false;
-    // Set by your own send: the next stream stays pinned to the bottom no matter where the scroll
-    // settled when it began (the send scroll lands across frames, so readerNearBottom can read false).
-    let sendForcedPin = false;
     // The scrolled-up anchor a 409 re-sync must restore: its absolute chat index and its pixel offset
     // from the scroller top. -1 = no anchor (reader was near the bottom, so the re-sync tail-jumps).
     let resyncAnchorIndex = -1;
@@ -871,55 +865,11 @@
         scrollSettleRaf = requestAnimationFrame(settle);
     };
 
-    // Your own send: jump to the bottom now and force the reply to follow. Snaps synchronously so the
-    // jump is immediate, then arms the settle loop and the forced pin the next startStream honors.
-    window.__st_reader_pin_bottom = function () {
-        sendForcedPin = true;
-        streamPinned = true;
-        const chat = document.getElementById('chat');
-        if (chat) chat.scrollTop = chat.scrollHeight;
-        window.__st_reader_scroll_bottom();
-    };
-
-    function readerNearBottom() {
-        if (!readerChat) return true;
-        return (readerChat.scrollHeight - readerChat.scrollTop - readerChat.clientHeight) < READER_BOTTOM_SLOP;
-    }
-
     function readerSetState(state) {
         const root = document.getElementById('chat-root');
         if (!root) return;
         if (state) root.setAttribute('data-reader-state', state);
         else root.removeAttribute('data-reader-state');
-    }
-
-    function readerEnsureChip() {
-        if (readerChip) return readerChip;
-        readerChip = document.createElement('button');
-        readerChip.type = 'button';
-        readerChip.className = 'chat-newmsg-chip';
-        readerChip.textContent = 'New message';
-        readerChip.addEventListener('click', function () {
-            streamPinned = true;
-            readerHideChip();
-            window.__st_reader_scroll_bottom();
-        });
-        const host = document.getElementById('chat-root') || document.body;
-        host.appendChild(readerChip);
-        if (globalThis.__zx_debug) {
-            zxDomTrace('app.appendChild', zxDomName(host), 'button.chat-newmsg-chip (app-created node into a framework-owned subtree)');
-        }
-        return readerChip;
-    }
-    function readerShowChip() { readerEnsureChip().classList.add('is-visible'); }
-    function readerHideChip() { if (readerChip) readerChip.classList.remove('is-visible'); }
-
-    // A streamed reply follows the bottom only if you were already there; scrolled up, it stays put
-    // and raises the chip. Called on every stream flush and once on seal.
-    function readerStreamTick() {
-        if (!readerChat) return;
-        if (streamPinned) readerChat.scrollTop = readerChat.scrollHeight;
-        else readerShowChip();
     }
 
     // The first message whose bottom is below the scroller's top edge: the on-screen anchor whose
@@ -937,7 +887,7 @@
     // Snapshot the on-screen anchor before a 409 re-sync reload rebuilds the window (Zig calls this
     // from reloadCurrentChat). A near-bottom reader captures nothing, so the re-sync tail-jumps.
     window.__st_reader_capture_anchor = function () {
-        if (!readerChat || readerNearBottom()) { resyncAnchorIndex = -1; return; }
+        if (!readerChat || !wasm || wasm.__st_reader_near_bottom()) { resyncAnchorIndex = -1; return; }
         const a = readerAnchorMes();
         const idx = a ? parseInt(a.getAttribute('data-abs-index'), 10) : NaN;
         if (a && Number.isFinite(idx)) {
@@ -1043,14 +993,11 @@
         });
     }
 
+    // reader.zig's onScroll (ziex-delegated via patch-door D4) owns every scroll decision; the
+    // prefetch trigger calls back here. This resolves the scroller and exposes the fetch scheduler.
     function initReaderPaging() {
         readerChat = document.getElementById('chat');
-        if (!readerChat) return;
-        readerChat.addEventListener('scroll', function () {
-            if (readerChat.scrollTop < READER_PREFETCH_MARGIN) readerSchedulePrefetch();
-            if (streamActive && streamPinned && !readerNearBottom()) streamPinned = false;
-            if (readerNearBottom()) readerHideChip();
-        }, { passive: true });
+        window.__st_reader_prefetch_schedule = readerSchedulePrefetch;
     }
 
     // Initialize: load deps, then init wasm

@@ -14,10 +14,10 @@
 
 const std = @import("std");
 const zx = @import("zx");
-const js = zx.client.js;
 
 const rotation = @import("./group_rotation.zig");
 const char_api = @import("./char_api.zig");
+const reader = @import("./reader.zig");
 const char_store = @import("./character_store.zig");
 const store = @import("./store.zig");
 const pager = @import("./pager.zig");
@@ -245,7 +245,7 @@ fn appendUserTurn(text: []const u8) void {
         return;
     };
     regions.bumpMessageLog();
-    js.global.call(void, "__st_reader_pin_bottom", .{}) catch {};
+    reader.pinBottom();
     appendGroupTurn(user_name, text, true);
 }
 
