@@ -315,11 +315,6 @@
                 return 0n;
             }
         },
-        sse_start: function (ptr, len) {
-            startStream(readString(ptr, len), 'Seraphina').catch(function (err) {
-                log.stream.error('stream failed:', err);
-            });
-        },
     };
 
     const stats = { chunks: 0, tokens: 0, flushes: 0, sanitizes: 0, mdBytes: 0 };
