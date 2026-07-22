@@ -309,10 +309,16 @@ pub const AssembledInjection = struct {
     depth: usize,
     rank: u8,
     wrapped: []u8,
+    role: templates.Role = .system,
     /// The injection's role is user. Used by the alignment-message predicate: stock suppresses the
     /// user_alignment_message when the OLDEST chat-block element (a deep injection or the oldest history
     /// turn) is a user turn (script.js:4901 stoppedAtUser over the injection-interleaved chat2).
     is_user: bool = false,
+    /// The same block wrapped with first_output_sequence instead of output_sequence, non-null only for an
+    /// assistant injection when the template sets first_output_sequence. fitAndAssemble emits it in place
+    /// of `wrapped` when this injection is the oldest chat-block element (stock force_output_sequence.FIRST
+    /// on coreChat[0], script.js:4757). Owned; freed in freePieces.
+    first_variant: ?[]u8 = null,
 };
 
 /// A single depth-injection source before grouping: RAW (unsubstituted) text with its target
@@ -386,8 +392,20 @@ fn groupInjections(alloc: Allocator, out: *std.ArrayList(AssembledInjection), in
         };
         const wrapped = try templates.wrapMessage(alloc, instruct, c.role, name, value);
         errdefer alloc.free(wrapped);
-        try out.append(alloc, .{ .depth = c.depth, .rank = roleRank(c.role), .wrapped = wrapped, .is_user = c.role == .user });
+        const first_variant = try firstOutputVariant(alloc, instruct, c.role, name, value);
+        errdefer if (first_variant) |fv| alloc.free(fv);
+        try out.append(alloc, .{ .depth = c.depth, .rank = roleRank(c.role), .wrapped = wrapped, .role = c.role, .is_user = c.role == .user, .first_variant = first_variant });
     }
+}
+
+/// The turn wrapped with first_output_sequence swapped in for output_sequence, or null when the template
+/// sets no first_output_sequence or the turn is not an assistant turn (stock applies FIRST only on the
+/// non-narrator, non-user branch of getPrefix, instruct-mode.js:413). Owned when non-null.
+fn firstOutputVariant(alloc: Allocator, instruct: templates.Instruct, role: templates.Role, name: []const u8, value: []const u8) Allocator.Error!?[]u8 {
+    if (instruct.first_output_sequence.len == 0 or role != .assistant) return null;
+    var first_tpl = instruct;
+    first_tpl.output_sequence = instruct.first_output_sequence;
+    return try templates.wrapMessage(alloc, first_tpl, role, name, value);
 }
 
 /// Everything the prompt is made of, as separately-owned strings whose token cost the caller measures
@@ -406,6 +424,10 @@ pub const Pieces = struct {
     /// power_user.instruct.user_alignment_message wrapped as a first user turn ("" when none). Emitted at
     /// the front of the chat block unless the oldest chat-block element is a user turn; cost reserved in overhead.
     alignment: []u8,
+    /// history[0] wrapped with first_output_sequence, non-null only when the oldest turn is an assistant
+    /// turn and the template sets first_output_sequence and there is no deep injection to precede it.
+    /// fitAndAssemble emits it in place of wrapped_history[0] when history[0] is the oldest surviving turn.
+    history0_first: ?[]u8,
     prefix: []u8,
     history_len: usize,
     /// power_user.collapse_newlines: fitAndAssemble collapses the joined prompt's newline runs to one
@@ -417,12 +439,16 @@ pub const Pieces = struct {
 
 pub fn freePieces(alloc: Allocator, p: *Pieces) void {
     alloc.free(p.overhead);
-    for (p.injections) |inj| alloc.free(inj.wrapped);
+    for (p.injections) |inj| {
+        alloc.free(inj.wrapped);
+        if (inj.first_variant) |fv| alloc.free(fv);
+    }
     alloc.free(p.injections);
     for (p.wrapped_history) |w| alloc.free(w);
     alloc.free(p.wrapped_history);
     alloc.free(p.history_is_user);
     alloc.free(p.alignment);
+    if (p.history0_first) |h| alloc.free(h);
     alloc.free(p.prefix);
     if (p.timed_json) |j| alloc.free(j);
 }
@@ -483,7 +509,7 @@ fn injectionLess(injections: []const AssembledInjection, a: usize, b: usize) boo
     return ia.rank < ib.rank;
 }
 
-fn appendAssembledInjectionsAt(alloc: Allocator, out: *std.ArrayList(u8), injections: []const AssembledInjection, window_len: usize, at: usize) Allocator.Error!void {
+fn appendAssembledInjectionsAt(alloc: Allocator, out: *std.ArrayList(u8), injections: []const AssembledInjection, window_len: usize, at: usize, first_idx: ?usize) Allocator.Error!void {
     // Injections clamped to the head (depth past the window) keep depth order (deeper first, stock inserts
     // them oldest); within one depth the role groups run ASSISTANT, USER, SYSTEM, then the jailbreak.
     var order: std.ArrayList(usize) = .empty;
@@ -493,21 +519,33 @@ fn appendAssembledInjectionsAt(alloc: Allocator, out: *std.ArrayList(u8), inject
         try order.append(alloc, idx);
     }
     std.sort.pdq(usize, order.items, injections, injectionLess);
-    for (order.items) |idx| try out.appendSlice(alloc, injections[idx].wrapped);
+    for (order.items) |idx| {
+        const emit = if (first_idx != null and first_idx.? == idx) (injections[idx].first_variant orelse injections[idx].wrapped) else injections[idx].wrapped;
+        try out.appendSlice(alloc, emit);
+    }
 }
 
-/// Whether the OLDEST element of the assembled chat block is a user turn: the first head injection (depth
-/// past the window, emitted before any history), else the oldest surviving history turn. Feeds the
-/// user_alignment_message predicate (stock stoppedAtUser over the injection-interleaved chat2, script.js:4901).
-fn oldestChatIsUser(pieces: Pieces, window_len: usize, start: usize) bool {
+/// Identifies the OLDEST element of the assembled chat block: the deepest head injection (depth past the
+/// window, emitted before any history), else the oldest surviving history turn, else none (empty block).
+const OldestRef = union(enum) { injection: usize, history: usize };
+fn oldestChat(pieces: Pieces, window_len: usize, start: usize) ?OldestRef {
     var best: ?usize = null;
     for (pieces.injections, 0..) |inj, idx| {
         if (window_len -| inj.depth != 0) continue;
         if (best == null or injectionLess(pieces.injections, idx, best.?)) best = idx;
     }
-    if (best) |b| return pieces.injections[b].is_user;
-    if (window_len > 0) return pieces.history_is_user[start];
-    return false;
+    if (best) |b| return .{ .injection = b };
+    if (window_len > 0) return .{ .history = start };
+    return null;
+}
+
+/// Whether the OLDEST chat-block element is a user turn. Feeds the user_alignment_message predicate (stock
+/// stoppedAtUser over the injection-interleaved chat2, script.js:4901).
+fn oldestChatIsUser(pieces: Pieces, window_len: usize, start: usize) bool {
+    return switch (oldestChat(pieces, window_len, start) orelse return false) {
+        .injection => |b| pieces.injections[b].is_user,
+        .history => |h| pieces.history_is_user[h],
+    };
 }
 
 /// Joins the assembled pieces under `costs` against `budget`: reserves the overhead and every injection
@@ -528,12 +566,25 @@ pub fn fitAndAssemble(alloc: Allocator, pieces: Pieces, costs: CostTable, budget
     // deep injection or the oldest history turn) is a user turn (script.js:4901); cost reserved in overhead.
     if (pieces.alignment.len > 0 and (window_len > 0 or pieces.injections.len > 0) and !oldestChatIsUser(pieces, window_len, start))
         try out.appendSlice(alloc, pieces.alignment);
+    // first_output_sequence (force FIRST) applies to coreChat[0], the oldest chat-block element, and only
+    // when it is an assistant turn (script.js:4757); swap in that turn's first-output variant below.
+    var first_inj: ?usize = null;
+    var first_hist0 = false;
+    if (oldestChat(pieces, window_len, start)) |o| switch (o) {
+        .injection => |b| {
+            if (pieces.injections[b].first_variant != null) first_inj = b;
+        },
+        .history => |h| {
+            first_hist0 = h == start and start == 0 and pieces.history0_first != null;
+        },
+    };
     var i: usize = 0;
     while (i < window_len) : (i += 1) {
-        try appendAssembledInjectionsAt(alloc, &out, pieces.injections, window_len, i);
-        try out.appendSlice(alloc, pieces.wrapped_history[start + i]);
+        try appendAssembledInjectionsAt(alloc, &out, pieces.injections, window_len, i, first_inj);
+        const hist = if (i == 0 and first_hist0) pieces.history0_first.? else pieces.wrapped_history[start + i];
+        try out.appendSlice(alloc, hist);
     }
-    try appendAssembledInjectionsAt(alloc, &out, pieces.injections, window_len, window_len);
+    try appendAssembledInjectionsAt(alloc, &out, pieces.injections, window_len, window_len, first_inj);
     // Classic modifyLastPromptLine adds the cue only for a non-empty windowed history (script.js:4994):
     // a real history trimmed away entirely ships none; a no-history caller still primes the char.
     if (window_len > 0 or pieces.history_len == 0) try out.appendSlice(alloc, pieces.prefix);
@@ -735,7 +786,7 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
         defer alloc.free(subbed);
         const wrapped = try templates.wrapMessage(alloc, instruct, .user, "", subbed);
         errdefer alloc.free(wrapped);
-        try injections.append(alloc, .{ .depth = 0, .rank = jailbreak_rank, .wrapped = wrapped, .is_user = true });
+        try injections.append(alloc, .{ .depth = 0, .rank = jailbreak_rank, .wrapped = wrapped, .role = .user, .is_user = true });
     }
 
     // Each history turn pre-wrapped in its role's sequence, the string the caller tokenizes.
@@ -753,6 +804,14 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
     const hist_is_user = try alloc.alloc(bool, history.len);
     errdefer alloc.free(hist_is_user);
     for (history, 0..) |m, i| hist_is_user[i] = m.role == .user;
+
+    // history[0]'s first-output variant, for when the greeting (or oldest turn) is the oldest chat element
+    // and no deep injection precedes it (stock force FIRST on coreChat[0], script.js:4757).
+    const history0_first: ?[]u8 = if (history.len > 0)
+        try firstOutputVariant(alloc, instruct, history[0].role, history[0].name, history[0].mes)
+    else
+        null;
+    errdefer if (history0_first) |h| alloc.free(h);
 
     // user_alignment_message (script.js:4789): a first user turn built now; fitAndAssemble emits it unless
     // the oldest chat-block element is a user turn. force_output_sequence.FIRST resolves to input_sequence here.
@@ -780,7 +839,10 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
     errdefer alloc.free(overhead_slice);
     const inj_slice = try injections.toOwnedSlice(alloc);
     errdefer {
-        for (inj_slice) |inj| alloc.free(inj.wrapped);
+        for (inj_slice) |inj| {
+            alloc.free(inj.wrapped);
+            if (inj.first_variant) |fv| alloc.free(fv);
+        }
         alloc.free(inj_slice);
     }
     const wh_slice = try wh.toOwnedSlice(alloc);
@@ -794,6 +856,7 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
         .wrapped_history = wh_slice,
         .history_is_user = hist_is_user,
         .alignment = alignment,
+        .history0_first = history0_first,
         .prefix = prefix,
         .history_len = history.len,
         .collapse_newlines = shape.tpl.collapse_newlines,
@@ -2251,6 +2314,28 @@ test "persona TOP_AN and BOTTOM_AN wrap OUTSIDE the wi an-anchors on the note sl
     const out_bot = try buildPrompt(testing.allocator, ctx, &.{}, bot);
     defer testing.allocator.free(out_bot);
     try testing.expectEqualStrings("TOP\nNOTE\nBOTTOM\nPERSONA\nA diver.\nRita:", out_bot);
+}
+
+test "first_output_sequence primes the oldest assistant turn, not a user oldest turn" {
+    // Alpaca-Single-Turn shape: empty per-turn sequences, first_output_sequence set (stock force FIRST on
+    // coreChat[0], script.js:4757). The greeting is the oldest turn with no deep injection before it.
+    const ctx = Ctx{ .char = "Rita" };
+    const inst = templates.Instruct{ .enabled = true, .wrap = true, .input_sequence = "", .output_sequence = "", .first_output_sequence = "<START>" };
+    const shape = Shape{ .tpl = .{ .instruct = inst, .context = .{ .story_string = "" } } };
+
+    const greet_first = [_]PromptMsg{
+        .{ .name = "Rita", .mes = "hello", .role = .assistant },
+        .{ .name = "Jamie", .mes = "hi", .role = .user },
+    };
+    const out = try buildPrompt(testing.allocator, ctx, &greet_first, shape);
+    defer testing.allocator.free(out);
+    try testing.expect(std.mem.startsWith(u8, out, "<START>\nhello"));
+
+    // A user oldest turn takes first_input (empty here), never the output cue: no <START>.
+    const user_first = [_]PromptMsg{.{ .name = "Jamie", .mes = "hi", .role = .user }};
+    const out_u = try buildPrompt(testing.allocator, ctx, &user_first, shape);
+    defer testing.allocator.free(out_u);
+    try testing.expect(!std.mem.startsWith(u8, out_u, "<START>"));
 }
 
 test "an empty note between two wi an-anchors keeps stock's blank line" {
