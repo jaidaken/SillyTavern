@@ -19,6 +19,7 @@ const regions = @import("./regions.zig");
 const char_api = @import("./char_api.zig");
 const group_send = @import("./group_send.zig");
 const char_data = @import("./char_data.zig");
+const html = @import("./html.zig");
 
 const log = std.log.scoped(.stream);
 const gpa = store.page_gpa;
@@ -190,8 +191,10 @@ pub export fn __st_stream_closed(status: u32) callconv(.c) void {
     const kind = s.kind;
     // A spun-down .43 behind Pocket-ID answers 502/504 at the edge before ST is reached.
     if (status == 502 or status == 504) setSendStatus("Backend asleep - unlock at silly");
-    // Seal the highlight + fill the dev metrics block (held hljs, so JS owns the how, Zig the when).
-    js.global.call(void, "__st_stream_sealed", .{@as(f64, if (dev_metrics) 1 else 0)}) catch {};
+    // Seal the highlight (held hljs, so JS owns the how, Zig the when); the dev metrics block is now
+    // filled Zig-side below, so JS is left with nothing but the hljs call.
+    js.global.call(void, "__st_stream_sealed", .{}) catch {};
+    if (dev_metrics) writeProbeMetrics();
 
     resetSession();
 
@@ -207,16 +210,22 @@ pub export fn __st_stream_rendering() callconv(.c) u32 {
     return @intFromBool(s.flushing);
 }
 
-pub export fn __st_stream_tokens() callconv(.c) usize {
-    return live.tokens;
-}
-
-pub export fn __st_stream_chunks() callconv(.c) usize {
-    return s.chunks;
-}
-
-pub export fn __st_stream_flushes() callconv(.c) usize {
-    return s.flushes;
+/// Fill the verify gate's #probe-metrics with the seal-time stream stats. Zig owns every field now
+/// (chunks/flushes on the session, tokens on the Stream, sanitizes from html.zig), so the whole block
+/// is built and written here rather than gathered back across the boundary by the JS seal glue. Reads
+/// happen before resetSession, so the session counters are still live.
+fn writeProbeMetrics() void {
+    const doc = js.global.get(js.Object, "document") catch return;
+    defer doc.deinit();
+    const el = (doc.call(?js.Object, "getElementById", .{js.string("probe-metrics")}) catch return) orelse return;
+    defer el.deinit();
+    var buf: [192]u8 = undefined;
+    const json = std.fmt.bufPrint(
+        &buf,
+        "{{\"chunks\":{d},\"tokens\":{d},\"flushes\":{d},\"sanitizes\":{d}}}",
+        .{ s.chunks, live.tokens, s.flushes, html.sanitizes() },
+    ) catch return;
+    el.set("textContent", js.string(json)) catch {};
 }
 
 // ---- rAF flush batching ------------------------------------------------------------------------

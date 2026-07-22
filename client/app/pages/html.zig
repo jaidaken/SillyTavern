@@ -24,6 +24,14 @@ pub const ssr_placeholder = "<span hidden>ST_SSR_PLACEHOLDER</span>";
 
 extern "env" fn sanitize(ptr: [*]const u8, len: usize) u64;
 
+/// Count of real env.sanitize invocations (raw.len > 0), read by stream_drive to fill the verify
+/// gate's #probe-metrics render-cache budget. The empty-raw fast path below never calls the extern,
+/// so it never counts, matching what the JS-side counter observed.
+var sanitize_count: usize = 0;
+pub fn sanitizes() usize {
+    return sanitize_count;
+}
+
 const Witness = opaque {};
 var witness_anchor: u8 = 0;
 
@@ -83,6 +91,7 @@ fn adopt(allocator: std.mem.Allocator, packed_result: u64) []const u8 {
 pub fn sanitizeHtml(allocator: std.mem.Allocator, raw: []const u8) SanitizedHtml {
     if (comptime !is_wasm) return .{ .bytes = ssr_placeholder, .witness_token = witness() };
     if (raw.len == 0) return .{ .bytes = "", .witness_token = witness() };
+    sanitize_count += 1;
     return .{ .bytes = adopt(allocator, sanitize(raw.ptr, raw.len)), .witness_token = witness() };
 }
 

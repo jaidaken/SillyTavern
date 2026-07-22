@@ -224,10 +224,6 @@
     // feed is in progress, so the growing last code block is left un-highlighted until the stream seals.
     function streamRendering() { return !!(wasm && wasm.__st_stream_rendering && wasm.__st_stream_rendering()); }
 
-    // env.sanitize invocation count, the render-cache gate's oracle (a streaming tail that re-sanitized
-    // every message per flush instead of only its own uncached body would blow the budget).
-    let sanitizeCount = 0;
-
     function highlightElement(el, skipGrow) {
         const tag = Array.from(el.classList).find(function (c) { return c.startsWith('language-'); });
         const lang = tag ? tag.slice(9) : null;
@@ -296,7 +292,6 @@
             console[CONSOLE_METHOD[name]]('[st:' + scope + ']', readString(msgPtr, msgLen));
         },
         sanitize: function (ptr, len) {
-            sanitizeCount += 1;
             let out;
             try {
                 const clean = DOMPurify.sanitize(readString(ptr, len), MESSAGE_CONFIG);
@@ -319,26 +314,12 @@
         },
     };
 
-    // Seal glue (Zig stream_drive calls this at stream close via js.global.call): highlight the sealed
-    // message's code blocks (held hljs) and, in dev mode, fill #probe-metrics the verify gate reads.
-    window.__st_stream_sealed = function (devMetrics) {
+    // Seal glue (Zig stream_drive calls this at stream close): highlight the sealed message's code
+    // blocks. Held hljs, so JS owns the how; Zig owns the when and fills the dev #probe-metrics itself.
+    window.__st_stream_sealed = function () {
         const chat = document.getElementById('chat');
         const mes = chat ? chat.querySelectorAll('.mes') : null;
         if (mes && mes.length) highlightSealedBlocks(mes[mes.length - 1]);
-        if (!devMetrics) return;
-        const el = document.getElementById('probe-metrics');
-        if (!el) return;
-        const stats = {
-            chunks: wasm.__st_stream_chunks ? wasm.__st_stream_chunks() : 0,
-            tokens: wasm.__st_stream_tokens ? wasm.__st_stream_tokens() : 0,
-            flushes: wasm.__st_stream_flushes ? wasm.__st_stream_flushes() : 0,
-            sanitizes: sanitizeCount,
-        };
-        const json = JSON.stringify(stats);
-        el.textContent = json;
-        if (globalThis.__zx_debug) {
-            zxDomTrace('app.textContent', zxDomName(el), json);
-        }
     };
 
     /* w3-grp: start a group member rotation from a JSON definition (gate driver + roster UI). */
