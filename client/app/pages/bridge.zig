@@ -18,6 +18,7 @@ const zx = @import("zx");
 const regions = @import("./regions.zig");
 const reveal = @import("./reveal.zig");
 const instrument = @import("./instrument.zig");
+const telemetry = @import("./telemetry.zig"); // C5: uncaught-error + click diagnostics log here
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
@@ -278,6 +279,40 @@ fn groupStreamFailed() callconv(.c) void {
     group_send.onStreamFailed();
 }
 
+// C5: the raw document click listener forwards its resolved control here. Buffers are door-allocated
+// and freed JS-side after this synchronous call, so telemetry only reads them.
+fn onClickTelemetry(
+    tag_ptr: usize,
+    tag_len: usize,
+    id_ptr: usize,
+    id_len: usize,
+    class_ptr: usize,
+    class_len: usize,
+    label_ptr: usize,
+    label_len: usize,
+) callconv(.c) void {
+    telemetry.onClick(
+        doorBuf(tag_ptr, tag_len),
+        doorBuf(id_ptr, id_len),
+        doorBuf(class_ptr, class_len),
+        doorBuf(label_ptr, label_len),
+    );
+}
+
+// C5: window error/unhandledrejection forward their prefix + stack/detail here. Same door-buffer
+// contract as onClickTelemetry: JS frees after the call returns.
+fn onUncaught(
+    head_ptr: usize,
+    head_len: usize,
+    detail_ptr: usize,
+    detail_len: usize,
+) callconv(.c) void {
+    telemetry.onUncaught(
+        doorBuf(head_ptr, head_len),
+        doorBuf(detail_ptr, detail_len),
+    );
+}
+
 comptime {
     if (is_wasm) {
         // Zig owns the data layer (char_api.zig); the append/clear/select/meta exports
@@ -303,6 +338,9 @@ comptime {
         // w3-grp
         @export(&groupSend, .{ .name = "__st_group_send" });
         @export(&groupStreamFailed, .{ .name = "__st_group_stream_failed" });
+        // C5: diagnostics forwarded from the two irreducible JS listeners
+        @export(&onClickTelemetry, .{ .name = "__st_on_click_telemetry" });
+        @export(&onUncaught, .{ .name = "__st_on_uncaught" });
         if (instrument.enabled) {
             @export(&messageViewRenders, .{ .name = "__st_mv_renders" });
             @export(&shellRenders, .{ .name = "__st_shell_renders" });

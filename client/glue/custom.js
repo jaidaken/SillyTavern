@@ -129,17 +129,21 @@
     const log = {};
     LOG_CATEGORIES.forEach(function (c) { log[c] = buildLogNode(c); });
 
-    function logFor(category) {
-        return logNodes[category] || buildLogNode(category);
+    // Window-level listeners are irreducible; they only marshal the resolved prefix + stack to Zig,
+    // which logs at global:err via telemetry.zig. Errors before wasm instantiates are dropped.
+    function forwardUncaught(head, detail) {
+        if (!wasm || !wasm.__st_on_uncaught) return;
+        const h = writeBytes(head);
+        const d = writeBytes(detail || '');
+        try { wasm.__st_on_uncaught(h.ptr, h.len, d.ptr, d.len); } finally { freeRaw(h); freeRaw(d); }
     }
-
-    // Global capture: uncaught errors and unhandled rejections carry their stack via the Error object.
     window.addEventListener('error', function (e) {
-        if (e.error) log.global.error('uncaught error:', e.error);
-        else log.global.error('uncaught error:', e.message, 'at', (e.filename || '?') + ':' + e.lineno + ':' + e.colno);
+        if (e.error) forwardUncaught('uncaught error:', e.error.stack || String(e.error));
+        else forwardUncaught('uncaught error:', e.message + ' at ' + (e.filename || '?') + ':' + e.lineno + ':' + e.colno);
     });
     window.addEventListener('unhandledrejection', function (e) {
-        log.global.error('unhandled rejection:', e.reason);
+        const r = e.reason;
+        forwardUncaught('unhandled rejection:', r && r.stack ? r.stack : String(r));
     });
 
     // Every backend fetch logs start and status at net:debug; failures stay with the call sites.
@@ -537,16 +541,20 @@
         URL.revokeObjectURL(url);
     };
 
-    // Click telemetry, deliberate: it sees clicks on dead vnodes too, which is what a silently-dead
-    // handler looks like. Motion, autogrow, reading presets and click-outside are zx handlers now.
+    // Raw listener stays (framework delegation drops the dead-vnode clicks this is here to catch); it
+    // only marshals {tag, id, class, label} to Zig, which formats the selector and logs at ui:debug.
     document.addEventListener('click', function (e) {
+        if (!wasm || !wasm.__st_on_click_telemetry) return;
         const ctl = e.target.closest('button, [role=button], a, select, input, textarea, label');
         if (!ctl) return;
-        logFor('ui').debug('click',
-            ctl.tagName.toLowerCase()
-            + (ctl.id ? '#' + ctl.id : '')
-            + (ctl.className && typeof ctl.className === 'string' ? '.' + ctl.className.trim().split(/\s+/).join('.') : ''),
-            ctl.getAttribute('aria-label') || ctl.textContent.trim().slice(0, 30) || '');
+        const cls = (ctl.className && typeof ctl.className === 'string') ? ctl.className : '';
+        const label = ctl.getAttribute('aria-label') || ctl.textContent.trim().slice(0, 30) || '';
+        const t = writeBytes(ctl.tagName);
+        const i = writeBytes(ctl.id || '');
+        const c = writeBytes(cls);
+        const l = writeBytes(label);
+        try { wasm.__st_on_click_telemetry(t.ptr, t.len, i.ptr, i.len, c.ptr, c.len, l.ptr, l.len); }
+        finally { freeRaw(t); freeRaw(i); freeRaw(c); freeRaw(l); }
     }, false);
 
     // The reverse-lazy reader now lives entirely in Zig (reader.zig): the scroll watcher, the older-
