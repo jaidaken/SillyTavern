@@ -633,6 +633,78 @@ else:
         changed = True
         notes.append("patch-door: D6 pointermove delegation gated behind an active-drag flag")
 
+# ---------------------------------------------------------------------------
+# D7: a raw-bytes fetch door op (C4) for multipart uploads + binary responses
+# ---------------------------------------------------------------------------
+# zx.fetch reads the request body with readString (UTF-8) and returns the response via text(), so it
+# corrupts binary both ways. fetchRawAsync reads the body as raw bytes and returns the response as raw
+# bytes, reusing __zx_fetch_complete so the app's net layer keeps ONE completion path.
+
+raw_method_old = """  _notifyFetchComplete(fetchId, statusCode, body, isError) {
+    const handler = this.#fetchCompleteHandler;
+    const encoded = textEncoder.encode(body);
+    const ptr = this._alloc(encoded.length);
+    writeBytes(ptr, encoded);
+    invokeWasmExport(handler, fetchId, statusCode, ptr, encoded.length, isError ? 1 : 0);
+  }"""
+
+raw_method_new = raw_method_old + """
+  fetchRawAsync(urlPtr, urlLen, ctypePtr, ctypeLen, csrfPtr, csrfLen, bodyPtr, bodyLen, timeoutMs, fetchId) {
+    const url = readString(urlPtr, urlLen);
+    const ctype = ctypeLen > 0 ? readString(ctypePtr, ctypeLen) : "application/octet-stream";
+    const csrf = csrfLen > 0 ? readString(csrfPtr, csrfLen) : "";
+    // slice() copies the body out of the growable wasm buffer, so a memory.grow mid-fetch cannot
+    // move the bytes the in-flight request is still reading.
+    const body = getMemoryView().slice(bodyPtr, bodyPtr + bodyLen);
+    const headers = { "Content-Type": ctype };
+    if (csrf) headers["X-CSRF-Token"] = csrf;
+    const controller = new AbortController();
+    const timeout = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    fetch(url, { method: "POST", headers, body, signal: controller.signal }).then(async (response) => {
+      if (timeout) clearTimeout(timeout);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      this._notifyFetchRaw(fetchId, response.status, bytes, false);
+    }).catch(() => {
+      if (timeout) clearTimeout(timeout);
+      this._notifyFetchRaw(fetchId, 0, new Uint8Array(0), true);
+    });
+  }
+  _notifyFetchRaw(fetchId, statusCode, bytes, isError) {
+    const handler = this.#fetchCompleteHandler;
+    const ptr = this._alloc(bytes.length);
+    writeBytes(ptr, bytes);
+    invokeWasmExport(handler, fetchId, statusCode, ptr, bytes.length, isError ? 1 : 0);
+  }"""
+
+raw_import_old = """        _fetchAsync: (urlPtr, urlLen, methodPtr, methodLen, headersPtr, headersLen, bodyPtr, bodyLen, timeoutMs, fetchId) => {
+          bridgeRef.current?.fetchAsync(urlPtr, urlLen, methodPtr, methodLen, headersPtr, headersLen, bodyPtr, bodyLen, timeoutMs, fetchId);
+        },"""
+
+raw_import_new = raw_import_old + """
+        _fetchRawAsync: (urlPtr, urlLen, ctypePtr, ctypeLen, csrfPtr, csrfLen, bodyPtr, bodyLen, timeoutMs, fetchId) => {
+          bridgeRef.current?.fetchRawAsync(urlPtr, urlLen, ctypePtr, ctypeLen, csrfPtr, csrfLen, bodyPtr, bodyLen, timeoutMs, fetchId);
+        },"""
+
+D7_SENTINEL = "fetchRawAsync"
+
+if D7_SENTINEL in s:
+    notes.append("patch-door: D7 already patched, nothing to do")
+else:
+    missing = []
+    if s.count(raw_method_old) != 1:
+        missing.append("the _notifyFetchComplete method (found %d, want 1)" % s.count(raw_method_old))
+    if s.count(raw_import_old) != 2:
+        missing.append("the _fetchAsync import registration (found %d, want 2)" % s.count(raw_import_old))
+    if missing:
+        errors.append("patch-door: D7 could not find " + " and ".join(missing) +
+                      " verbatim; door version changed, update patch-door.sh")
+    else:
+        s = s.replace(raw_method_old, raw_method_new, 1)
+        s = s.replace(raw_import_old, raw_import_new)
+        changed = True
+        notes.append("patch-door: D7 raw-bytes fetch door op added "
+                     "(multipart uploads + binary responses ride __zx_fetch_complete)")
+
 # All-or-nothing: any stale expectation aborts before the write, so a door bump can never ship a
 # half-patched door.
 if errors:

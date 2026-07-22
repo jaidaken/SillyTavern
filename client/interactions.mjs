@@ -4,6 +4,7 @@
 // Usage: node interactions.mjs --base http://127.0.0.1:PORT [--timeout MS]
 
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, readdirSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -1819,34 +1820,35 @@ async function main() {
         const secondServed = !(await bgAll()).includes('odd null.jpg');
         row('must', bothGone && secondServed, 'C-BG2-3 a second mutation while one is in flight is not swallowed', `both=${bothGone} second=${secondServed}`);
 
-        // The upload control. The POST itself rides a FormData helper in custom.js that this member
-        // does not own, so what is pinned here is our half: the control, and the call into the seam.
+        // The upload control. The POST is Zig-owned now (net.zig raw multipart via the door op); what
+        // is pinned here is our half: the control, its file typing and its accessible name.
         const uploadCtl = await page.eval(
             "(function(){var i=document.getElementById('bg-upload-input');return !!i && i.type==='file' && !!i.getAttribute('aria-label') && !!i.getAttribute('name');})()");
         row('must', uploadCtl, 'C-BG2-4 the upload control is present, named and typed for files', `ctl=${uploadCtl}`);
 
         const seam = await (async () => {
-            await page.eval('window.__bg_upload_called = false; window.__st_bg_upload = function(){ window.__bg_upload_called = true; };');
+            await page.eval('window.__read_file_called = false; window.__st_read_file = function(){ window.__read_file_called = true; };');
             // bubbles: true is load-bearing. ziex delegates from a root, so a non-bubbling change
             // event never reaches the handler and the row reads as a dead seam.
             await page.eval("document.getElementById('bg-upload-input').dispatchEvent(new Event('change', { bubbles: true }))");
-            return await page.waitFor('window.__bg_upload_called === true', 4000);
+            return await page.waitFor('window.__read_file_called === true', 4000);
         })();
         const sending = await page.waitFor("/Uploading/.test(document.querySelector('.bg-upload-row').textContent)", 4000);
-        row('must', seam && sending, 'C-BG2-5 picking a file calls the upload glue and shows the wait', `seam=${seam} sending=${sending}`);
+        row('must', seam && sending, 'C-BG2-5 picking a file calls the File->bytes glue and shows the wait', `seam=${seam} sending=${sending}`);
 
-        // C-BG2-5 STUBS __st_bg_upload, so it pins the seam and nothing past it: that is how
-        // 338a06bb4 shipped the glue without its bridge export and stayed green. Navigate fresh (the
-        // reload destroys the stub) and drive the REAL helper, because the failure lived past the
-        // seam and uploadPick's catch is blind to it (__st_bg_upload exists; its callee throws).
+        // C-BG2-5 STUBS __st_read_file, so it pins the seam (uploadPick reached the File->bytes glue)
+        // and nothing past it. Navigate fresh (the reload destroys the stub) and drive the REAL path
+        // with a real picked file, so the Zig multipart build + raw POST run end to end.
         await page.navigate(`${args.base}/`);
         await page.waitFor(hydrated, 15000);
         await page.click('#d-backgrounds');
         await page.waitFor("document.getElementById('bg-upload-input')", 8000);
         const bgPngPath = join(mkdtempSync(join(tmpdir(), 'st-bg-')), 'picked bg.png');
-        writeFileSync(bgPngPath, Buffer.from(
+        const bgPngBytes = Buffer.from(
             'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
-            'base64'));
+            'base64');
+        const bgExpectSha = createHash('sha256').update(bgPngBytes).digest('hex');
+        writeFileSync(bgPngPath, bgPngBytes);
         const bgDoc = await page.cdp.send('DOM.getDocument', { depth: 1 }, page.sessionId);
         const bgNodeId = (await page.cdp.send('DOM.querySelector',
             { nodeId: bgDoc.root.nodeId, selector: '#bg-upload-input' }, page.sessionId)).nodeId;
@@ -1869,6 +1871,32 @@ async function main() {
         row('must', !!bgPost && bgPost.field_avatar === true && bgWaitLifted && bgLanded,
             'C-BG2-6 a real upload posts under the field multer reads, lifts the wait, and shows the file',
             `post=${bgPost ? JSON.stringify(bgPost) : 'NEVER-ARRIVED'} waitLifted=${bgWaitLifted} tile=${bgLanded}`);
+        // The dangerous-property check: the RAW file part the Zig multipart carried must be the PNG
+        // byte-for-byte (a UTF-8 round trip in the door would have corrupted it). The mock parses the
+        // file bytes out of the multipart body and hashes them.
+        row('must', !!bgPost && bgPost.file_sha256 === bgExpectSha && bgPost.file_len === bgPngBytes.length,
+            'C-BG2-7 the uploaded PNG round-trips byte-identical through the raw multipart POST',
+            `sha=${bgPost && bgPost.file_sha256} expect=${bgExpectSha} len=${bgPost && bgPost.file_len}/${bgPngBytes.length}`);
+        // C-BG2-8: a non-ASCII filename (emoji + accent) must reach the server's part header intact;
+        // appendQuoted passes those bytes raw and the raw door op does not decode the body.
+        const bgUniName = 'café🎨 bg.png';
+        const bgUniPath = join(mkdtempSync(join(tmpdir(), 'st-bg2-')), bgUniName);
+        writeFileSync(bgUniPath, bgPngBytes);
+        const bgUniNodeId = (await page.cdp.send('DOM.querySelector',
+            { nodeId: bgDoc.root.nodeId, selector: '#bg-upload-input' }, page.sessionId)).nodeId;
+        await page.cdp.send('DOM.setFileInputFiles', { files: [bgUniPath], nodeId: bgUniNodeId }, page.sessionId);
+        const bgUniPost = await (async () => {
+            const deadline = Date.now() + 8000;
+            while (Date.now() < deadline) {
+                const st = (await (await fetch(`${args.base}/dev/state`)).json()).bg_upload;
+                if (st && st.filename === bgUniName) return st;
+                await sleep(150);
+            }
+            return null;
+        })();
+        row('must', !!bgUniPost && bgUniPost.filename === bgUniName && bgUniPost.file_sha256 === bgExpectSha,
+            'C-BG2-8 a non-ASCII filename reaches the part header intact and the bytes still match',
+            `name=${bgUniPost && JSON.stringify(bgUniPost.filename)} expect=${JSON.stringify(bgUniName)} bytesMatch=${!!bgUniPost && bgUniPost.file_sha256 === bgExpectSha}`);
         /* C-CONN */
         // The connection panel's type selector and its write-only API-key field. The key never
         // round-trips: the field renders empty and only a masked tail reaches the DOM.

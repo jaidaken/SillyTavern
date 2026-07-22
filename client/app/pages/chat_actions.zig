@@ -19,6 +19,7 @@ const zx = @import("zx");
 const js = zx.client.js;
 
 const net = @import("./net.zig");
+const uploads = @import("./uploads.zig");
 const char_store = @import("./character_store.zig");
 const persona_store = @import("./persona_store.zig");
 const char_api = @import("./char_api.zig");
@@ -470,50 +471,91 @@ fn postCopyLike(url: []const u8, on_done: net.OnDone) !void {
     net.request(url, body, 0, on_done, .{});
 }
 
-/// Download the chat at `index` as jsonl. The blob download is browser-forced, so it hops through
-/// the JS adapter (__st_chat_export), same mechanism as the character PNG export.
+/// One in-flight chat export; the stem rides its address so onExportDone names the download and
+/// posts it. /api/chats/export answers JSON with the file text in `.result`, so unlike the PNG/JSON
+/// exports this reshapes the response rather than downloading it whole.
+const ExportCtx = struct { stem: []u8 };
+
+/// Download the chat at `index` as jsonl. The POST returns {result: <file text>}; onExportDone pulls
+/// that out and hands it to the browser download shim.
 pub fn exportRow(index: usize) void {
     if (zx.platform.role != .client) return;
     if (index >= rows.len) return;
     const stem = rows[index].file_name;
-    const ret = js.global.call(?js.Value, "__st_chat_export", .{ js.string(loaded_avatar), js.string(stem) }) catch {
-        log.warn("chat export helper missing", .{});
-        setStatus("export failed: helper missing", .{});
+    const jsonl = chat_names.withJsonl(alloc, stem) catch return;
+    defer alloc.free(jsonl);
+    const body = std.json.Stringify.valueAlloc(alloc, .{
+        .avatar_url = loaded_avatar,
+        .file = jsonl,
+        .exportfilename = jsonl,
+        .format = "jsonl",
+        .is_group = false,
+    }, .{}) catch return;
+    defer alloc.free(body);
+    const ctx = alloc.create(ExportCtx) catch return;
+    ctx.stem = alloc.dupe(u8, stem) catch {
+        alloc.destroy(ctx);
         return;
     };
-    if (ret) |r| r.deinit();
+    net.request("/api/chats/export", body, @intFromPtr(ctx), onExportDone, .{});
     setStatus("exporting \"{s}\"", .{stem});
 }
 
-/// The import file input changed: hand off to the JS multipart adapter (__st_chat_import), which
-/// posts the picked file and calls back through the bridge (importDone) so the list refreshes.
+fn onExportDone(tag: u64, http_status: u16, res: ?*zx.Fetch.Response) void {
+    const ctx: *ExportCtx = @ptrFromInt(@as(usize, @intCast(tag)));
+    defer {
+        alloc.free(ctx.stem);
+        alloc.destroy(ctx);
+    }
+    if (res == null or http_status < 200 or http_status >= 300) {
+        setStatus("export failed ({d})", .{http_status});
+        return;
+    }
+    const parsed = res.?.json(struct { result: []const u8 = "" }) catch {
+        setStatus("export failed: malformed response", .{});
+        return;
+    };
+    defer parsed.deinit();
+    const name = chat_names.withJsonl(alloc, ctx.stem) catch return;
+    defer alloc.free(name);
+    uploads.download(name, parsed.value.result, "application/jsonl");
+}
+
+/// The import file input changed: uploads.zig reads the picked file to bytes and builds the multipart
+/// in Zig (avatar file + file_type + avatar_url + character_name + user_name); importDone refreshes.
 pub fn importFile() void {
     if (zx.platform.role != .client) return;
     if (loaded_avatar.len == 0) return;
     const c = cardByAvatar(loaded_avatar) orelse return;
     const user_name = if (persona_store.selected()) |p| p.name else "You";
-    const ret = js.global.call(?js.Value, "__st_chat_import", .{
-        js.string(loaded_avatar),
-        js.string(c.name),
-        js.string(user_name),
-    }) catch {
-        log.warn("chat import helper missing", .{});
-        setStatus("import failed: helper missing", .{});
-        return;
+    const fields = [_]uploads.Field{
+        .{ .name = "avatar_url", .value = loaded_avatar },
+        .{ .name = "character_name", .value = c.name },
+        .{ .name = "user_name", .value = user_name },
     };
-    if (ret) |r| r.deinit();
+    uploads.start(.{
+        .input_id = "chat-import-input",
+        .url = "/api/chats/import",
+        .fields = &fields,
+        .add_file_type = true,
+        .on_done = onImportDone,
+    });
     setStatus("importing\u{2026}", .{});
 }
 
-/// Called by the JS import adapter through the bridge once the upload settles either way; 0 means
-/// the request never completed.
-pub fn importDone(http_status: i32) void {
+/// uploads.zig's settle callback; a cancelled picker (sent=false) leaves the "importing" note, which
+/// is acceptable (no file was chosen). 0 status = never completed.
+fn onImportDone(status: u16, sent: bool) void {
     if (zx.platform.role != .client) return;
-    if (http_status >= 200 and http_status < 300) {
+    if (!sent) {
+        setStatus("import cancelled", .{});
+        return;
+    }
+    if (status >= 200 and status < 300) {
         setStatus("import complete", .{});
         refreshAfterMutation(loaded_avatar);
     } else {
-        setStatus("import failed ({d})", .{http_status});
+        setStatus("import failed ({d})", .{status});
         bump();
     }
 }

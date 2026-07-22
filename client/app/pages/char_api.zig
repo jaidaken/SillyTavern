@@ -13,6 +13,7 @@ const zx = @import("zx");
 const js = zx.client.js;
 
 const net = @import("./net.zig");
+const uploads = @import("./uploads.zig");
 const data = @import("./char_data.zig");
 const generate = @import("./generate.zig");
 const tokenizer = @import("./tokenizer.zig");
@@ -971,37 +972,57 @@ fn crudRefresh(action: []const u8, status: u16) void {
 // a missing helper that is right there) and double-freed a jsz slot on the way out. The full
 // mechanism is in card_editor.uploadAvatar's header.
 
-/// Export stays a JS helper: a blob download needs objectURL + a.click. Zig hands it the
-/// avatar and the display name (the old helper looked both up in the deleted jsCharacters).
+/// Export the card PNG. The POST returns the image bytes, so it rides the binary-safe raw path; the
+/// blob download itself (objectURL + a.click) is the one browser primitive with no wasm route. The
+/// download name is the avatar filename, falling back to the display name (the old helper's rule).
 pub fn exportCharacter(index: usize) void {
     if (zx.platform.role != .client) return;
     const c = charAt(index) orelse return;
-    const ret = js.global.call(?js.Value, "__st_char_export", .{ js.string(c.avatar), js.string(c.name) }) catch {
-        chars_log.warn("export helper missing", .{});
-        return;
-    };
-    if (ret) |r| r.deinit();
+    const body = std.json.Stringify.valueAlloc(alloc, .{ .avatar_url = c.avatar, .format = "png" }, .{}) catch return;
+    defer alloc.free(body);
+    if (c.avatar.len > 0) {
+        uploads.requestDownload("/api/characters/export", "application/json", body, c.avatar, "image/png", true);
+    } else {
+        const name = std.fmt.allocPrint(alloc, "{s}.png", .{c.name}) catch return;
+        defer alloc.free(name);
+        uploads.requestDownload("/api/characters/export", "application/json", body, name, "image/png", true);
+    }
 }
 
-/// Import stays a JS helper: File/FormData cannot cross the wasm boundary.
+/// Import a card file. uploads.zig reads it to bytes, builds the multipart (avatar file + file_type
+/// from the extension) in Zig, and posts it; on success the store re-fetches.
 pub fn importCharacterFile() void {
     if (zx.platform.role != .client) return;
-    const ret = js.global.call(?js.Value, "__st_char_import", .{}) catch {
-        chars_log.warn("import helper missing", .{});
-        return;
-    };
-    if (ret) |r| r.deinit();
+    uploads.start(.{
+        .input_id = "char-import-input",
+        .url = "/api/characters/import",
+        .add_file_type = true,
+        .on_done = onImportDone,
+    });
 }
 
-/// Avatar replacement stays a JS helper for the same multipart reason.
+fn onImportDone(status: u16, sent: bool) void {
+    if (!sent) return;
+    if (status >= 200 and status < 300) fetchCharacters() else chars_log.warn("character import failed: {d}", .{status});
+}
+
+/// Replace a character's avatar image (multipart upload, avatar file + avatar_url). On success the
+/// store re-fetches so the same-URL image redraws.
 pub fn replaceAvatarFile(index: usize) void {
     if (zx.platform.role != .client) return;
     const c = charAt(index) orelse return;
-    const ret = js.global.call(?js.Value, "__st_char_avatar", .{js.string(c.avatar)}) catch {
-        chars_log.warn("avatar helper missing", .{});
-        return;
-    };
-    if (ret) |r| r.deinit();
+    const fields = [_]uploads.Field{.{ .name = "avatar_url", .value = c.avatar }};
+    uploads.start(.{
+        .input_id = "char-avatar-input",
+        .url = "/api/characters/edit-avatar",
+        .fields = &fields,
+        .on_done = onAvatarDone,
+    });
+}
+
+fn onAvatarDone(status: u16, sent: bool) void {
+    if (!sent) return;
+    if (status >= 200 and status < 300) fetchCharacters() else chars_log.warn("character avatar upload failed: {d}", .{status});
 }
 
 // ---- dialogs (Z-DIALOG, jsz reflection) ------------------------------------------------------

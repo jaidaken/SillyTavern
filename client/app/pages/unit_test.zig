@@ -30,6 +30,8 @@ comptime {
     _ = @import("log_spec.zig");
     _ = @import("dropdown_nav.zig");
     _ = @import("background_store.zig");
+    // C4: the pure multipart/form-data assembler behind the Zig-owned uploads.
+    _ = @import("multipart.zig");
     // w3-grp
     _ = @import("group_store.zig");
     _ = @import("textgen_types.zig");

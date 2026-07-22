@@ -41,7 +41,8 @@ fi
 # 19 adds test/boundary.zig, the H1 suite; client/build.zig wires it into `zig build test`.
 # 21 extends the EventType delegation enum with pointerdown/move/up/cancel (ordinals 19-22), in
 # lockstep with the door's Ne table (patch-door D5), so a Zig onpointerdown handler can bind.
-for p in "$PATCHES"/01-*.patch "$PATCHES"/02-*.patch "$PATCHES"/04-*.patch "$PATCHES"/05-*.patch "$PATCHES"/06-*.patch "$PATCHES"/10-*.patch "$PATCHES"/11-*.patch "$PATCHES"/12-*.patch "$PATCHES"/13-*.patch "$PATCHES"/14-*.patch "$PATCHES"/15-*.patch "$PATCHES"/16-*.patch "$PATCHES"/17-*.patch "$PATCHES"/18-*.patch "$PATCHES"/19-*.patch "$PATCHES"/21-*.patch; do
+# 22 exposes allocFetchId (C4): the completion seam net.zig's raw-bytes multipart POST reuses (door D7).
+for p in "$PATCHES"/01-*.patch "$PATCHES"/02-*.patch "$PATCHES"/04-*.patch "$PATCHES"/05-*.patch "$PATCHES"/06-*.patch "$PATCHES"/10-*.patch "$PATCHES"/11-*.patch "$PATCHES"/12-*.patch "$PATCHES"/13-*.patch "$PATCHES"/14-*.patch "$PATCHES"/15-*.patch "$PATCHES"/16-*.patch "$PATCHES"/17-*.patch "$PATCHES"/18-*.patch "$PATCHES"/19-*.patch "$PATCHES"/21-*.patch "$PATCHES"/22-*.patch; do
     git -C "$ZIEX_DIR" apply "../$p"
     echo "setup-ziex: applied $(basename "$p")"
 done

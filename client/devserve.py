@@ -388,6 +388,26 @@ def _multipart_filename(raw, field):
     return m.group(1) if m and m.group(1) else None
 
 
+# The file part's RAW bytes, verbatim (C4 byte-identical check). Works on the bytes body, not the
+# UTF-8-decoded str the other helpers use, so a binary upload (a PNG) survives for a sha compare.
+def _multipart_file_bytes(body, field):
+    if not body:
+        return None
+    delim = body.split(b"\r\n", 1)[0]  # the opening "--<boundary>" line
+    marker = ('name="' + field + '"; filename=').encode()
+    at = body.find(marker)
+    if at < 0:
+        return None
+    hdr_end = body.find(b"\r\n\r\n", at)
+    if hdr_end < 0:
+        return None
+    start = hdr_end + 4
+    end = body.find(b"\r\n" + delim, start)
+    if end < 0:
+        return None
+    return body[start:end]
+
+
 def _hostile_card(avatar):
     return {
         "name": None,
@@ -1296,7 +1316,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/backgrounds/upload":
             raw = body.decode("utf-8", "replace") if body else ""
             name = _multipart_filename(raw, "avatar")
-            Handler.bg_upload = {"field_avatar": 'name="avatar"' in raw, "filename": name, "bytes": len(raw)}
+            file_bytes = _multipart_file_bytes(body, "avatar")
+            Handler.bg_upload = {
+                "field_avatar": 'name="avatar"' in raw,
+                "filename": name,
+                "bytes": len(raw),
+                # C4 byte-identical proof: the RAW file part bytes the Zig multipart carried.
+                "file_sha256": hashlib.sha256(file_bytes).hexdigest() if file_bytes else None,
+                "file_len": len(file_bytes) if file_bytes is not None else 0,
+            }
             if not name:
                 return self.mock_status(400, "Error: no file uploaded")
             if name not in Handler.mock_backgrounds:

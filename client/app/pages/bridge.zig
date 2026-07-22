@@ -6,15 +6,12 @@ const stream_mod = @import("./stream.zig");
 const char_store = @import("./character_store.zig");
 const character_view = @import("./character_view.zig");
 const persona_store = @import("./persona_store.zig");
-const persona_actions = @import("./persona_actions.zig");
-const card_editor = @import("./card_editor.zig");
-const chat_actions = @import("./chat_actions.zig");
 const reading_prefs = @import("./reading_prefs.zig");
 const appearance = @import("./appearance.zig");
 const backgrounds = @import("./backgrounds.zig");
 const char_api = @import("./char_api.zig");
 const group_send = @import("./group_send.zig"); // w3-grp
-const wi_actions = @import("./world_info_actions.zig"); // w3-wi
+const uploads = @import("./uploads.zig"); // C4: the File->bytes callback lands here
 const ui = @import("./ui.zig");
 const zx = @import("zx");
 const regions = @import("./regions.zig");
@@ -205,44 +202,23 @@ fn bootInit() callconv(.c) void {
     char_api.boot();
 }
 
-/// Reload the character store from the backend. Called by the JS multipart helpers
-/// (import, avatar) after a successful upload; everything else refreshes inside char_api.
-fn refreshCharacters() callconv(.c) void {
-    char_api.fetchCharacters();
-}
-
-// w3-wi: called by the __st_wi_import JS helper after a successful lorebook import.
-fn refreshWorldInfo() callconv(.c) void {
-    wi_actions.reloadList();
-}
-
-/// Called by the __st_persona_avatar JS multipart helper after a successful persona-avatar upload,
-/// so the persona panel re-renders against the new image (C-PERS).
-fn personaAvatarUploaded() callconv(.c) void {
-    persona_actions.onAvatarUploaded();
-}
-
-/// Called by the __st_card_avatar JS multipart helper once the card-image upload settles, either
-/// way: the card editor states the outcome in its own footer, so it needs the failure too (C-CARD2).
-/// Carries the HTTP status, 0 meaning the request never completed.
-fn cardAvatarUploaded(status: i32) callconv(.c) void {
-    card_editor.onAvatarUploaded(status);
-}
-
-/// Called by the __st_bg_upload JS multipart helper once the background upload settles, on every
-/// path it takes, including a cancelled picker. Carries the HTTP status, 0 meaning the request never
-/// completed. uploadPick has already drawn its wait state by then and uploadDone is the only thing
-/// that clears it, so this export is not optional: without it the helper's call throws, the wait
-/// never lifts, and the panel spins over a file that already uploaded.
-fn backgroundUploaded(status: i32) callconv(.c) void {
-    backgrounds.uploadDone(status);
-}
-
-/// w3-chatmgr: called by the __st_chat_import JS multipart helper once the chat upload settles
-/// either way (importFile has drawn "importing" and this is what clears it). Status 0 = never
-/// completed.
-fn chatImported(status: i32) callconv(.c) void {
-    chat_actions.importDone(status);
+/// C4: JS (__st_read_file) hands back the picked file's bytes, name and mime. All three buffers were
+/// allocated by the door; uploads.zig owns and frees them, then builds the multipart and posts it.
+fn fileReady(
+    tag: usize,
+    bytes_ptr: usize,
+    bytes_len: usize,
+    name_ptr: usize,
+    name_len: usize,
+    mime_ptr: usize,
+    mime_len: usize,
+) callconv(.c) void {
+    uploads.fileReady(
+        tag,
+        doorBuf(bytes_ptr, bytes_len),
+        doorBuf(name_ptr, name_len),
+        doorBuf(mime_ptr, mime_len),
+    );
 }
 
 // Demo fixtures are opt-in (glue calls this on ?demo or when no backend answers), so a real
@@ -333,12 +309,7 @@ comptime {
         @export(&setCharacterMeta, .{ .name = "__st_set_character_meta" });
         @export(&bootInit, .{ .name = "__st_boot_init" });
         @export(&seedDemo, .{ .name = "__st_seed_demo" });
-        @export(&refreshCharacters, .{ .name = "__st_refresh_characters" });
-        @export(&refreshWorldInfo, .{ .name = "__st_refresh_wi" }); // w3-wi
-        @export(&personaAvatarUploaded, .{ .name = "__st_persona_avatar_done" });
-        @export(&cardAvatarUploaded, .{ .name = "__st_card_avatar_done" });
-        @export(&backgroundUploaded, .{ .name = "__st_bg_upload_done" });
-        @export(&chatImported, .{ .name = "__st_chat_import_done" });
+        @export(&fileReady, .{ .name = "__st_file_ready" }); // C4: File->bytes callback
         @export(&addPersona, .{ .name = "__st_add_persona" });
         @export(&clearPersonas, .{ .name = "__st_clear_personas" });
         @export(&selectPersona, .{ .name = "__st_select_persona" });

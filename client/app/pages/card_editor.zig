@@ -11,6 +11,7 @@
 const std = @import("std");
 const zx = @import("zx");
 const net = @import("./net.zig");
+const uploads = @import("./uploads.zig");
 const char_api = @import("./char_api.zig");
 const char_data = @import("./char_data.zig");
 const char_store = @import("./character_store.zig");
@@ -368,35 +369,24 @@ pub fn avatarAlt(arena: std.mem.Allocator) []const u8 {
     return std.fmt.allocPrint(arena, "{s}'s current card image", .{n}) catch "The card's current image";
 }
 
-/// The chosen file rides a FormData, which cannot cross the wasm boundary, so the POST hops to a JS
-/// helper (the same reason char_api and the persona panel do).
-///
-/// THE RETURN TYPE IS LOAD-BEARING. The helper is `async`, so it hands back a Promise, and jsz builds
-/// `void` only out of null/undefined: asking for void made a good pick return InvalidType, so this
-/// fn logged "helper missing" and drew "The server refused the image." while the POST was in flight.
-/// The error path then freed the return handle TWICE (Object.callAlloc's errdefer and convertValue's
-/// defer both fire), which pushes one jsz slot into the free list twice; the next two handles alias
-/// it, so the first render after a pick read a freed TreeWalker and threw a TypeError out through
-/// wasm. That throw skips every Zig defer on the way out, including the RenderGate's exit, which
-/// leaves the gate held and the whole page unable to render again. Name the type the helper actually
-/// returns and none of it happens.
+/// Replace the card image (multipart upload, avatar file + avatar_url). uploads.zig reads the file to
+/// bytes and builds the multipart in Zig; onAvatarUploaded reports the outcome in the footer.
 pub fn uploadAvatar() void {
     if (zx.platform.role != .client) return;
     if (owned_avatar.len == 0) return;
-    // Takes the Promise the async helper returns and drops it: jsz converts void only from
-    // null/undefined, so asking for void made every successful pick an InvalidType (see the header).
-    const ret = js.global.call(?js.Value, "__st_card_avatar", .{js.string(owned_avatar)}) catch {
-        log.warn("card avatar helper missing", .{});
-        notice = .avatar_failed;
-        regions.bumpShell();
-        return;
-    };
-    if (ret) |r| r.deinit();
+    const fields = [_]uploads.Field{.{ .name = "avatar_url", .value = owned_avatar }};
+    uploads.start(.{
+        .input_id = "card-avatar-input",
+        .url = "/api/characters/edit-avatar",
+        .fields = &fields,
+        .on_done = onAvatarUploaded,
+    });
 }
 
-/// Called from the bridge when the JS helper's upload settles. Takes the HTTP status rather than a
-/// verdict so the footer can tell a refusal from a request that never landed; 0 is never-completed.
-pub fn onAvatarUploaded(status: i32) void {
+/// uploads.zig's settle callback. `sent` is false for a cancelled picker (not an error); otherwise
+/// the status tells a refusal from a request that never landed (0), stated in the footer.
+fn onAvatarUploaded(status: u16, sent: bool) void {
+    if (!sent) return;
     if (status >= 200 and status < 300) {
         notice = .avatar_saved;
         avatar_version += 1;

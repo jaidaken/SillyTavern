@@ -15,6 +15,23 @@ const char_store = @import("./character_store.zig");
 const alloc = char_store.page_gpa;
 const log = std.log.scoped(.net);
 
+/// The C4 raw-bytes POST door op (patch-door D5). Unlike zx.fetch, which reads the request body with
+/// readString (UTF-8) and returns the response via text(), this carries BOTH bodies as raw bytes, so
+/// an uploaded image and a downloaded PNG survive the wasm boundary intact. Completion rides
+/// __zx_fetch_complete through allocFetchId, so a raw POST reuses this module's slot + 403-retry.
+extern "__zx" fn _fetchRawAsync(
+    url_ptr: [*]const u8,
+    url_len: usize,
+    ctype_ptr: [*]const u8,
+    ctype_len: usize,
+    csrf_ptr: [*]const u8,
+    csrf_len: usize,
+    body_ptr: [*]const u8,
+    body_len: usize,
+    timeout_ms: u32,
+    fetch_id: u64,
+) void;
+
 /// Completion callback. `res` is valid ONLY for the duration of the call; net.zig deinits
 /// and destroys it right after (S1 probe finding b), so copy anything you keep.
 pub const OnDone = *const fn (tag: u64, status: u16, res: ?*zx.Fetch.Response) void;
@@ -35,8 +52,13 @@ const Slot = struct {
     active: bool = false,
     /// Waiting for the csrf token before dispatch.
     queued: bool = false,
+    /// Raw-bytes POST (C4): dispatch via _fetchRawAsync, not zx.fetch, so binary bodies survive.
+    raw: bool = false,
     url: []u8 = &.{},
     body: []u8 = &.{},
+    /// The raw POST's request Content-Type (multipart with its boundary, or application/json); "" for
+    /// the JSON zx.fetch path, which sets its own header.
+    content_type: []u8 = &.{},
     opts: Opts = .{},
     retried: bool = false,
     tag: u64 = 0,
@@ -97,6 +119,49 @@ pub fn request(url: []const u8, body: []const u8, tag: u64, on_done: OnDone, opt
     dispatch(idx);
 }
 
+/// A raw-bytes POST (C4): the multipart uploads and the binary character export. Same slot machinery,
+/// csrf handling and 403-retry as request(); the difference is the door op, which carries the request
+/// body and the response as raw bytes rather than UTF-8. `content_type` names the body (multipart with
+/// its boundary, or application/json). `url`, `content_type` and `body` are copied until completion.
+pub fn requestRaw(url: []const u8, content_type: []const u8, body: []const u8, tag: u64, on_done: OnDone, opts: Opts) void {
+    const idx = freeSlot() orelse {
+        log.err("raw request dropped, all {d} slots busy: {s}", .{ max_requests, url });
+        on_done(tag, 0, null);
+        return;
+    };
+    const url_c = alloc.dupe(u8, url) catch {
+        on_done(tag, 0, null);
+        return;
+    };
+    const body_c = alloc.dupe(u8, body) catch {
+        alloc.free(url_c);
+        on_done(tag, 0, null);
+        return;
+    };
+    const ct_c = alloc.dupe(u8, content_type) catch {
+        alloc.free(url_c);
+        alloc.free(body_c);
+        on_done(tag, 0, null);
+        return;
+    };
+    slots[idx] = .{
+        .active = true,
+        .raw = true,
+        .url = url_c,
+        .body = body_c,
+        .content_type = ct_c,
+        .opts = opts,
+        .tag = tag,
+        .on_done = on_done,
+    };
+    if (opts.with_csrf and csrf_token == null) {
+        slots[idx].queued = true;
+        ensureCsrf();
+        return;
+    }
+    dispatch(idx);
+}
+
 fn freeSlot() ?usize {
     for (&slots, 0..) |*s, i| {
         if (!s.active) return i;
@@ -106,6 +171,10 @@ fn freeSlot() ?usize {
 
 fn dispatch(i: usize) void {
     const s = &slots[i];
+    if (s.raw) {
+        dispatchRaw(i);
+        return;
+    }
     log.debug("fetch {s}", .{s.url});
     // The door copies url/body/headers synchronously inside _fetchAsync (S1 probe finding e),
     // so the stack header array is safe.
@@ -129,6 +198,37 @@ fn dispatch(i: usize) void {
         log.err("fetch dispatch failed: {s} {s}", .{ @errorName(err), s.url });
         finish(i, 0, null);
     };
+}
+
+fn dispatchRaw(i: usize) void {
+    const s = &slots[i];
+    log.debug("raw fetch {s}", .{s.url});
+    const csrf: []const u8 = if (s.opts.with_csrf) (csrf_token orelse "") else "";
+    // The slot IS the callback context; rawComplete recovers its index by pointer arithmetic, so the
+    // door op's completion lands back on this same 403-retry path.
+    const fid = zx.client.allocFetchId(alloc, @ptrCast(s), rawComplete) orelse {
+        log.err("raw fetch dropped, no completion slot: {s}", .{s.url});
+        finish(i, 0, null);
+        return;
+    };
+    _fetchRawAsync(
+        s.url.ptr,
+        s.url.len,
+        s.content_type.ptr,
+        s.content_type.len,
+        csrf.ptr,
+        csrf.len,
+        s.body.ptr,
+        s.body.len,
+        30_000,
+        fid,
+    );
+}
+
+fn rawComplete(ctx: *anyopaque, res: ?*zx.Fetch.Response, err: ?zx.Fetch.FetchError) void {
+    const s: *Slot = @ptrCast(@alignCast(ctx));
+    const i = (@intFromPtr(s) - @intFromPtr(&slots[0])) / @sizeOf(Slot);
+    complete(i, res, err);
 }
 
 fn complete(i: usize, res: ?*zx.Fetch.Response, err: ?zx.Fetch.FetchError) void {
@@ -165,11 +265,13 @@ fn finish(i: usize, status: u16, res: ?*zx.Fetch.Response) void {
     const tag = s.tag;
     const url = s.url;
     const body = s.body;
+    const content_type = s.content_type;
     // Free the slot before the callback so on_done may issue a follow-up request into it.
     s.* = .{};
     on_done(tag, status, res);
     if (res) |r| destroyResponse(r);
     alloc.free(url);
+    if (content_type.len > 0) alloc.free(content_type);
     // The body carries plaintext secrets (the connection panel POSTs the API key), and a freed wasm
     // allocation keeps its bytes until something reuses them, readable the whole time from JS via
     // the memory buffer. secureZero, not @memset: the store is dead to the optimiser otherwise.

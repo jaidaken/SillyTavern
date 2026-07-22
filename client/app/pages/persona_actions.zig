@@ -17,6 +17,7 @@ const zx = @import("zx");
 const js = zx.client.js;
 
 const net = @import("./net.zig");
+const uploads = @import("./uploads.zig");
 const persona_store = @import("./persona_store.zig");
 const reading_prefs = @import("./reading_prefs.zig");
 const regions = @import("./regions.zig");
@@ -229,26 +230,30 @@ fn onAvatarDeleted(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     }
 }
 
-/// Replace the selected persona's avatar image. Multipart upload is browser-forced (FormData cannot
-/// cross the wasm boundary), so it hops through a JS helper that reads #persona-avatar-input and, on
-/// success, calls back into onAvatarUploaded.
-/// The helper is `async`, so `void` made a good upload return InvalidType: the catch fired on success
-/// and the error path double-freed a jsz slot (see card_editor.uploadAvatar for the whole mechanism).
+/// Replace the selected persona's avatar image (multipart upload, avatar file + overwrite_name).
+/// uploads.zig reads #persona-avatar-input to bytes and builds the multipart in Zig; onAvatarUploaded
+/// re-renders on success.
 pub fn replaceAvatar(avatar: []const u8) void {
     if (zx.platform.role != .client) return;
-    const ret = js.global.call(?js.Value, "__st_persona_avatar", .{js.string(avatar)}) catch {
-        log.warn("persona avatar helper missing", .{});
-        return;
-    };
-    if (ret) |r| r.deinit();
+    const fields = [_]uploads.Field{.{ .name = "overwrite_name", .value = avatar }};
+    uploads.start(.{
+        .input_id = "persona-avatar-input",
+        .url = "/api/avatars/upload",
+        .fields = &fields,
+        .on_done = onAvatarUploaded,
+    });
 }
 
-/// Called by the JS avatar helper on a successful upload (via the bridge export): re-render so the
-/// new thumbnail shows (the filename, hence the img src, is unchanged; the server busts its own
-/// thumbnail cache on overwrite).
-pub fn onAvatarUploaded() void {
+/// uploads.zig's settle callback. On success re-render so the new thumbnail shows (the filename, hence
+/// the img src, is unchanged; the server busts its own thumbnail cache on overwrite).
+fn onAvatarUploaded(status: u16, sent: bool) void {
     if (zx.platform.role != .client) return;
-    regions.bumpShell();
+    if (!sent) return;
+    if (status >= 200 and status < 300) {
+        regions.bumpShell();
+    } else {
+        log.warn("persona avatar upload failed: {d}", .{status});
+    }
 }
 
 // ---- store mutation (persona_store is the source of truth) ------------------------------------

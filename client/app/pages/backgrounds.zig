@@ -22,6 +22,7 @@ const js = zx.client.js;
 
 const bg = @import("./background_store.zig");
 const net = @import("./net.zig");
+const uploads = @import("./uploads.zig");
 const char_store = @import("./character_store.zig");
 const reading_prefs = @import("./reading_prefs.zig");
 
@@ -358,37 +359,23 @@ pub fn uploadErrorText() []const u8 {
     return upload_error;
 }
 
-/// Post the file the user just picked. A FormData cannot cross the wasm boundary, so the glue's
-/// `__st_bg_upload` reads the file input and posts it; this only starts it and draws the wait.
-/// Driven by the input's change event, so a file is always present by the time it runs.
-///
-/// THE RETURN TYPE IS LOAD-BEARING, for the reason card_editor.uploadAvatar spells out in full: the
-/// helper is `async`, so asking for `void` made a SUCCESSFUL pick return InvalidType. Measured on the
-/// unpatched build: a POST that reached the server with the file intact still logged "helper missing"
-/// twice and latched .failed, and the error path double-freed two jsz slots on the way out.
+/// Post the file the user just picked. uploads.zig reads the input to bytes, builds the multipart in
+/// Zig and posts it; this draws the wait and hands off. Driven by the input's change event, so a file
+/// is present by the time it runs (a cancelled picker settles back through onUploadDone).
 pub fn uploadPick() void {
     if (zx.platform.role != .client) return;
     if (upload_state == .sending) return;
     upload_state = .sending;
     clearErrorOn(&upload_error);
     bump();
-    // Takes the Promise the async helper returns and drops it; uploadDone reports the real outcome.
-    const ret = js.global.call(?js.Value, "__st_bg_upload", .{}) catch {
-        upload_state = .failed;
-        setErrorOn(&upload_error, "This build cannot upload: its upload helper is missing.", .{});
-        bump();
-        return;
-    };
-    if (ret) |r| r.deinit();
+    uploads.start(.{ .input_id = "bg-upload-input", .url = "/api/backgrounds/upload", .on_done = onUploadDone });
 }
 
-/// The glue's answer, exported to JS as `__st_bg_upload_done` by bridge.zig. A 2xx means the file
-/// landed and the gallery re-fetches to show it (the server names the file from its own upload, so
-/// only the server knows what it ended up called); anything else is the status the glue saw, with 0
-/// for a request that never completed at all. The glue MUST call this on every path it takes: the
-/// wait is showing by the time it runs, and only this clears it.
-pub fn uploadDone(status: i32) void {
-    if (zx.platform.role != .client) return;
+/// uploads.zig's answer. A 2xx means the file landed and the gallery re-fetches to show it (the
+/// server names the file from its own upload, so only the server knows what it ended up called);
+/// anything else is the status seen, with 0 for a request that never completed or a cancelled picker.
+fn onUploadDone(status: u16, sent: bool) void {
+    _ = sent;
     if (status >= 200 and status < 300) {
         upload_state = .idle;
         clearErrorOn(&upload_error);

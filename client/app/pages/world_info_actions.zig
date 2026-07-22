@@ -14,6 +14,7 @@ const js = zx.client.js;
 
 const wi = @import("./world_info.zig");
 const net = @import("./net.zig");
+const uploads = @import("./uploads.zig");
 const char_store = @import("./character_store.zig");
 const reading_prefs = @import("./reading_prefs.zig");
 const regions = @import("./regions.zig");
@@ -520,24 +521,27 @@ fn onRenameDeleted(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
 
 // ---- import / export (browser-forced JS helpers, the char_api pattern) --------------------------
 
-/// Import stays a JS helper: File/FormData cannot cross the wasm boundary.
+/// Import a lorebook (multipart upload, avatar file only). uploads.zig reads it to bytes and builds
+/// the multipart in Zig; on success the list re-fetches.
 pub fn importBookFile() void {
     if (zx.platform.role != .client) return;
-    const ret = js.global.call(?js.Value, "__st_wi_import", .{}) catch {
-        log.warn("wi import helper missing", .{});
-        return;
-    };
-    if (ret) |r| r.deinit();
+    uploads.start(.{ .input_id = "wi-import-input", .url = "/api/worldinfo/import", .on_done = onImportDone });
 }
 
-/// Export stays a JS helper: a blob download needs objectURL + a.click.
+fn onImportDone(status: u16, sent: bool) void {
+    if (!sent) return;
+    if (status >= 200 and status < 300) reloadList() else log.warn("lorebook import failed: {d}", .{status});
+}
+
+/// Export a lorebook. POST /api/worldinfo/get returns the book JSON, which is downloaded verbatim as
+/// name.json; the blob download (objectURL + a.click) is the one browser primitive with no wasm route.
 pub fn exportBook(file_id: []const u8) void {
     if (zx.platform.role != .client) return;
-    const ret = js.global.call(?js.Value, "__st_wi_export", .{js.string(file_id)}) catch {
-        log.warn("wi export helper missing", .{});
-        return;
-    };
-    if (ret) |r| r.deinit();
+    const body = std.json.Stringify.valueAlloc(alloc, .{ .name = file_id }, .{}) catch return;
+    defer alloc.free(body);
+    const name = std.fmt.allocPrint(alloc, "{s}.json", .{file_id}) catch return;
+    defer alloc.free(name);
+    uploads.requestDownload("/api/worldinfo/get", "application/json", body, name, "application/json", false);
 }
 
 // ---- scopes + budget -----------------------------------------------------------------------------

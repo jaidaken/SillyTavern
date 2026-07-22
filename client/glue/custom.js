@@ -480,8 +480,8 @@
         if (currentReader) currentReader.cancel().catch(function (err) { log.stream.debug('send stop cancel failed:', err); });
     };
 
-    // Browser-forced adapters: the data layer lives in Zig (net.zig + char_api.zig); only the
-    // multipart uploads + blob download stay here, and this csrf helper serves ONLY those three.
+    // Streaming and the reader still fetch through JS, so this csrf cache stays for them; uploads and
+    // exports moved to Zig (net.zig owns their csrf) and keep only the File->bytes + download shims.
     let csrfToken = null;
 
     async function ensureCsrfToken() {
@@ -504,186 +504,37 @@
         return headers;
     }
 
-    // Called from Zig (char_api.importCharacterFile); on success Zig reloads its store via
-    // the __st_refresh_characters export.
-    window.__st_char_import = async function () {
-        const input = document.getElementById('char-import-input');
-        if (!input || !input.files || !input.files[0]) return;
-        const file = input.files[0];
-        const ext = (file.name.split('.').pop() || '').toLowerCase();
-        const fd = new FormData();
-        fd.append('file', file);
-        fd.append('file_type', ext);
-        await ensureCsrfToken();
-        try {
-            const res = await loggedFetch('/api/characters/import', { method: 'POST', headers: withCsrf({}), body: fd });
-            if (!res.ok) { log.net.warn('import failed:', res.status); window.alert('Import failed'); } else wasm.__st_refresh_characters();
-        } catch (err) { log.chars.error('import failed:', err); }
-        input.value = '';
-    };
-
-    // Called from Zig (char_api.exportCharacter) with the avatar + display name it owns.
-    window.__st_char_export = async function (avatar, name) {
-        await ensureCsrfToken();
-        try {
-            const res = await loggedFetch('/api/characters/export', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: JSON.stringify({ avatar_url: avatar, format: 'png' }) });
-            if (!res.ok) { log.net.warn('export failed:', res.status); return; }
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url; a.download = avatar || (name + '.png');
-            document.body.appendChild(a); a.click(); a.remove();
-            URL.revokeObjectURL(url);
-        } catch (err) { log.chars.error('export failed:', err); }
-    };
-
-    // w3-wi: lorebook import stays a JS helper (File/FormData cannot cross the wasm boundary).
-    window.__st_wi_import = async function () {
-        const input = document.getElementById('wi-import-input');
-        if (!input || !input.files || !input.files[0]) return;
-        const fd = new FormData();
-        fd.append('avatar', input.files[0]);
-        await ensureCsrfToken();
-        try {
-            const res = await loggedFetch('/api/worldinfo/import', { method: 'POST', headers: withCsrf({}), body: fd });
-            if (!res.ok) { log.net.warn('wi import failed:', res.status); window.alert('Import failed'); } else wasm.__st_refresh_wi();
-        } catch (err) { log.net.error('wi import failed:', err); }
-        input.value = '';
-    };
-
-    // w3-wi: lorebook export stays a JS helper (a blob download needs objectURL + a.click).
-    window.__st_wi_export = async function (name) {
-        await ensureCsrfToken();
-        try {
-            const res = await loggedFetch('/api/worldinfo/get', { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: JSON.stringify({ name: name }) });
-            if (!res.ok) { log.net.warn('wi export failed:', res.status); return; }
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url; a.download = name + '.json';
-            document.body.appendChild(a); a.click(); a.remove();
-            URL.revokeObjectURL(url);
-        } catch (err) { log.net.error('wi export failed:', err); }
-    };
-
-    // Every upload rides the ONE global multer, `.single('avatar')` (server-main.js:292), so the file
-    // field is named 'avatar' whatever the endpoint and each 400s on `!request.file`.
-    // The `finally` is load-bearing: a caller that has drawn a wait state is released only by `done`,
-    // so a skipped call hangs it forever, and the language guarantees this where discipline would not.
-    // `sent` tells "no file picked" apart from "never completed", which a bare 0 status cannot.
-    async function postUpload(url, inputId, extra, done) {
+    // __st_read_file (C4): read a file input to bytes for Zig via __st_file_ready. Non-async so
+    // js.global.call(void) succeeds; an empty read (cancelled picker) still calls back to settle Zig.
+    window.__st_read_file = function (inputId, tag) {
+        function deliver(bytes, name, mime) {
+            const b = bytes && bytes.length ? writeRaw(bytes) : { ptr: 0, len: 0 };
+            const n = name ? writeBytes(name) : { ptr: 0, len: 0 };
+            const m = mime ? writeBytes(mime) : { ptr: 0, len: 0 };
+            wasm.__st_file_ready(tag, b.ptr, b.len, n.ptr, n.len, m.ptr, m.len);
+        }
         const input = document.getElementById(inputId);
-        if (!input || !input.files || !input.files[0]) { done(0, false); return; }
-        const fd = new FormData();
-        fd.append('avatar', input.files[0]);
-        Object.keys(extra).forEach(function (k) { fd.append(k, extra[k]); });
-        await ensureCsrfToken();
-        let status = 0;
-        try {
-            const res = await loggedFetch(url, { method: 'POST', headers: withCsrf({}), body: fd });
-            status = res.status;
-            if (!res.ok) log.net.warn('upload refused:', url, res.status);
-        } catch (err) {
-            log.net.error('upload never completed:', url, err);
-        } finally {
+        const file = input && input.files && input.files[0];
+        if (!file) { deliver(null, '', ''); return; }
+        file.arrayBuffer().then(function (buf) {
+            deliver(new Uint8Array(buf), file.name || 'file', file.type || '');
             input.value = '';
-            done(status, true);
-        }
-    }
-
-    // Called from Zig (char_api.replaceAvatarFile) with the avatar_url it owns.
-    window.__st_char_avatar = async function (avatar) {
-        await postUpload('/api/characters/edit-avatar', 'char-avatar-input', { avatar_url: avatar }, function (status, sent) {
-            if (!sent) return;
-            if (status >= 200 && status < 300) wasm.__st_refresh_characters();
-            else window.alert('Avatar update failed');
-        });
-    };
-
-    // Card editor's own image replace (C-CARD2). Reports the outcome back to the panel, which says
-    // what happened in its own footer instead of an alert. A cancelled picker is not an error.
-    window.__st_card_avatar = async function (avatar) {
-        await postUpload('/api/characters/edit-avatar', 'card-avatar-input', { avatar_url: avatar }, function (status, sent) {
-            if (sent) wasm.__st_card_avatar_done(status);
-        });
-    };
-
-    // Background upload (C-BG2): FormData cannot cross the wasm boundary, so uploadPick hops here.
-    // The server names the file from request.file.originalname and answers with the sanitized name
-    // (backgrounds.js:144-155), so only a re-fetch of /all knows what landed; the panel does that.
-    // Unlike the two above this reports a cancelled picker too, because uploadPick has already drawn
-    // its wait state and this callback is the only thing that clears it.
-    window.__st_bg_upload = async function () {
-        await postUpload('/api/backgrounds/upload', 'bg-upload-input', {}, function (status) {
-            wasm.__st_bg_upload_done(status);
-        });
-    };
-
-    /* w3-chatmgr */
-    // Chat jsonl import: FormData cannot cross the wasm boundary, so importFile hops here. Posts the
-    // stock /api/chats/import fields; reports the settle either way (0 = never completed), because
-    // the panel has drawn "importing" and the bridge callback is the only thing that clears it.
-    window.__st_chat_import = async function (avatar, characterName, userName) {
-        const input = document.getElementById('chat-import-input');
-        if (!input || !input.files || !input.files[0]) return;
-        const file = input.files[0];
-        const ext = (file.name.split('.').pop() || '').toLowerCase();
-        const fd = new FormData();
-        fd.append('avatar', file);
-        fd.append('file_type', ext);
-        fd.append('avatar_url', avatar);
-        fd.append('character_name', characterName);
-        fd.append('user_name', userName);
-        await ensureCsrfToken();
-        let status = 0;
-        try {
-            const res = await loggedFetch('/api/chats/import', { method: 'POST', headers: withCsrf({}), body: fd });
-            status = res.status;
-            if (!res.ok) log.net.warn('chat import refused:', res.status);
-        } catch (err) {
-            log.net.error('chat import never completed:', err);
-        } finally {
+        }).catch(function (err) {
+            log.net.error('file read failed:', err);
+            deliver(null, '', '');
             input.value = '';
-            wasm.__st_chat_import_done(status);
-        }
+        });
     };
 
-    /* w3-chatmgr */
-    // Chat jsonl export: /api/chats/export answers JSON with the raw file text in .result, and the
-    // blob download is browser-forced, so both stay here (the __st_char_export shape).
-    window.__st_chat_export = async function (avatar, stem) {
-        await ensureCsrfToken();
-        try {
-            const res = await loggedFetch('/api/chats/export', {
-                method: 'POST',
-                headers: withCsrf({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify({ avatar_url: avatar, file: stem + '.jsonl', exportfilename: stem + '.jsonl', format: 'jsonl', is_group: false }),
-            });
-            if (!res.ok) { log.net.warn('chat export failed:', res.status); return; }
-            const data = await res.json();
-            const blob = new Blob([data.result || ''], { type: 'application/jsonl' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url; a.download = stem + '.jsonl';
-            document.body.appendChild(a); a.click(); a.remove();
-            URL.revokeObjectURL(url);
-        } catch (err) { log.chars.error('chat export failed:', err); }
-    };
-
-    // Persona avatar replace (C-PERS): FormData cannot cross the wasm boundary, so replaceAvatar hops here.
-    // Posts to /api/avatars/upload with the stock frontend's fields ('avatar' file + 'overwrite_name').
-    window.__st_persona_avatar = async function (avatar) {
-        const input = document.getElementById('persona-avatar-input');
-        if (!input || !input.files || !input.files[0]) return;
-        const fd = new FormData();
-        fd.append('avatar', input.files[0]);
-        fd.append('overwrite_name', avatar);
-        await ensureCsrfToken();
-        try {
-            const res = await loggedFetch('/api/avatars/upload', { method: 'POST', headers: withCsrf({}), body: fd });
-            if (!res.ok) { log.net.warn('persona avatar upload failed:', res.status); window.alert('Avatar update failed'); } else wasm.__st_persona_avatar_done();
-        } catch (err) { log.chars.error('persona avatar upload failed:', err); }
-        input.value = '';
+    // __st_download (C4): write a fetched blob and click it. Zig passes the bytes by pointer into wasm
+    // memory; slice() copies them into the Blob synchronously, before Zig frees the response.
+    window.__st_download = function (name, ptr, len, mime) {
+        const bytes = new Uint8Array(wasm.memory.buffer, ptr, len).slice();
+        const blob = new Blob([bytes], { type: mime || 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
     };
 
     // Click telemetry, deliberate: it sees clicks on dead vnodes too, which is what a silently-dead
