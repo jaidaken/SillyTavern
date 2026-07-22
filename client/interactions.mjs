@@ -745,7 +745,9 @@ async function main() {
             await page.eval("(function(){var f=document.querySelector('.mes_edit_field'); if(!f) return; f.textContent='Edited **body**, reasoning kept.'; f.dispatchEvent(new Event('input',{bubbles:true}));})()");
             highlighted = await page.eval("!!document.querySelector('.mes_edit_field .md-bold')");
             roundTrip = await page.eval("(document.querySelector('.mes_edit_field')||{}).textContent === 'Edited **body**, reasoning kept.'");
-            try { await page.click('.mes_edit_save'); } catch (_) { /* row fails below */ }
+            // Bubbling el.click(), not a CDP coordinate click: the inline save button can sit
+            // off-viewport in a scrolled chat where a coordinate click misses (like the Edit/cancel above).
+            await page.eval("(function(){var e=document.querySelector('.mes_edit_save'); if(e) e.click();})()");
             r5ok = await page.waitFor("(function(){var w=document.querySelector('#chat .mes .mes_reasoning:not(.mes_reasoning-empty)'); if(!w) return false; var mes=w.closest('.mes'); return mes.textContent.includes('Edited body, reasoning kept.')})()", 8000);
         }
         row('must', editorUp, 'R5a clicking Edit opens the inline live-markdown editor', `menu=${menuOpen} editor=${editorUp}`);
@@ -1320,7 +1322,9 @@ async function main() {
             editorOpened = await page.waitFor("document.querySelector('.mes_edit_field')", 4000);
             if (editorOpened) {
                 await page.eval("(function(){var f=document.querySelector('.mes_edit_field'); f.textContent='EDITED-BY-GATE-T0'; f.dispatchEvent(new Event('input',{bubbles:true}));})()");
-                await page.click('.mes_edit_save');
+                // el.click() (not a coordinate click): the save button sits off-viewport in the windowed
+                // 300-msg reader, where a CDP coordinate click misses and the edit never lands.
+                await page.eval("(function(){var e=document.querySelector('.mes_edit_save'); if(e) e.click();})()");
             }
         }
         const editLanded = editorOpened && await (async () => {
