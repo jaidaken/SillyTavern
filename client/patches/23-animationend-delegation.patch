@@ -1,0 +1,30 @@
+diff --git i/src/core/fmt/html/Attribute.zig w/src/core/fmt/html/Attribute.zig
+index 26426aae..9655319d 100644
+--- i/src/core/fmt/html/Attribute.zig
++++ w/src/core/fmt/html/Attribute.zig
+@@ -1893,6 +1893,13 @@ pub const global: AttributeSet = .init(&.{
+             .desc = "",
+         },
+     },
++    .{
++        .name = "onanimationend",
++        .model = .{
++            .rule = .any,
++            .desc = "",
++        },
++    },
+     .{
+         .name = "onscrollend",
+         .model = .{
+diff --git i/src/runtime/client/Client.zig w/src/runtime/client/Client.zig
+index 96834e68..70fe9966 100644
+--- i/src/runtime/client/Client.zig
++++ w/src/runtime/client/Client.zig
+@@ -143,6 +143,7 @@ pub const EventType = enum(u8) {
+     pointermove,
+     pointerup,
+     pointercancel,
++    animationend,
+
+     /// Parse event type from attribute name (e.g., "onclick" -> .click)
+     pub fn fromAttributeName(name: []const u8) ?EventType {

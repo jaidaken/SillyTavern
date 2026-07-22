@@ -99,7 +99,7 @@ async function main() {
 
         // Boot shows the home landing; resume the most recent chat (the mock 300-message chat). resume-last
         // needs the character store, which races the recent-list load, so retry the click until it opens.
-        await waitFor('document.querySelector("#chat-root.hydrated") && document.querySelector("#home-resume") && window.__st_reader_scroll_bottom');
+        await waitFor('document.querySelector("#chat-root.hydrated") && document.querySelector("#home-resume")');
         {
             const dl = Date.now() + 15000;
             for (;;) {

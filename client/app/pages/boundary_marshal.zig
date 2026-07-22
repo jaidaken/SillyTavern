@@ -22,8 +22,6 @@ const Crossing = struct {
 /// deliberately excluded.
 const crossings = [_]Crossing{
     .{ .export_name = "__st_set_character_meta", .fn_name = "setCharacterMeta", .u64_params = 3, .ret_64 = false },
-    .{ .export_name = "__st_reader_next_body", .fn_name = "readerNextBody", .u64_params = 0, .ret_64 = true },
-    .{ .export_name = "__st_reader_page_url", .fn_name = "readerPageUrl", .u64_params = 0, .ret_64 = true },
 };
 
 const bridge_candidates = [_][]const u8{ "app/pages/bridge.zig", "client/app/pages/bridge.zig", "bridge.zig" };

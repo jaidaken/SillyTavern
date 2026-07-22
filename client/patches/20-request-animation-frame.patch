@@ -1,0 +1,50 @@
+diff --git i/src/runtime/client.zig w/src/runtime/client.zig
+index 96bd586a..40d9e04f 100644
+--- i/src/runtime/client.zig
++++ w/src/runtime/client.zig
+@@ -11,6 +11,7 @@ pub const js = window.js;
+ pub const clearInterval = window.clearInterval;
+ pub const setInterval = window.setInterval;
+ pub const setTimeout = window.setTimeout;
++pub const requestAnimationFrame = window.requestAnimationFrame;
+ pub const Console = window.Console;
+ pub const rerender = reactivity.rerender;
+ pub const eval = window.eval;
+diff --git i/src/runtime/client/window.zig w/src/runtime/client/window.zig
+index 7e724244..92302f9b 100644
+--- i/src/runtime/client/window.zig
++++ w/src/runtime/client/window.zig
+@@ -199,6 +199,21 @@ pub fn setTimeout(callback: TimeoutCallback, delay_ms: u32) ?u64 {
+     return id;
+ }
+ 
++/// Schedule a callback for the next animation frame. Fires once, like setTimeout, so the registry
++/// entry is a .timeout: the door delivers it as CallbackType.Timeout after requestAnimationFrame.
++pub fn requestAnimationFrame(callback: TimeoutCallback) ?u64 {
++    if (!is_wasm) return null;
++
++    const id = registerCallback(.{
++        .callback_type = .timeout,
++        .timeout_fn = callback,
++        .active = true,
++    }) orelse return null;
++
++    ext._requestAnimationFrame(id);
++    return id;
++}
++
+ /// Set an interval that calls the callback every interval_ms milliseconds
+ pub fn setInterval(callback: IntervalCallback, interval_ms: u32) ?u64 {
+     if (!is_wasm) return null;
+diff --git i/src/runtime/client/window/extern.zig w/src/runtime/client/window/extern.zig
+index 475b1001..d059fdc5 100644
+--- i/src/runtime/client/window/extern.zig
++++ w/src/runtime/client/window/extern.zig
+@@ -47,6 +47,7 @@ pub extern "__zx" fn _rpc(parent_id: u64, new_id: u64, old_id: u64) void;
+ pub extern "__zx" fn _setTimeout(callback_id: u64, delay_ms: u32) void;
+ pub extern "__zx" fn _setInterval(callback_id: u64, interval_ms: u32) void;
+ pub extern "__zx" fn _clearInterval(callback_id: u64) void;
++pub extern "__zx" fn _requestAnimationFrame(callback_id: u64) void;
+ 
+ // WebSocket
+ pub extern "__zx" fn _wsConnect(ws_id: u64, url_ptr: [*]const u8, url_len: usize, protocols_ptr: [*]const u8, protocols_len: usize) void;

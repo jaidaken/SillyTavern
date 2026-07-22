@@ -2,14 +2,10 @@ diff --git a/src/runtime/client.zig b/src/runtime/client.zig
 index 96bd586a..6e1fc93d 100644
 --- a/src/runtime/client.zig
 +++ b/src/runtime/client.zig
-@@ -12,6 +12,10 @@ pub const clearInterval = window.clearInterval;
- pub const setInterval = window.setInterval;
- pub const setTimeout = window.setTimeout;
+@@ -14,2 +14,6 @@ pub const setTimeout = window.setTimeout;
  pub const Console = window.Console;
 +/// Register a fetch completion slot without firing a request, returning the fetch_id to hand to a
 +/// custom door extern (the C4 raw-bytes multipart POST). The callback fires from __zx_fetch_complete
 +/// exactly as a zx.fetch callback does, so the app's net layer keeps one completion path.
 +pub const allocFetchId = @import("client/fetch.zig").allocFetchId;
  pub const rerender = reactivity.rerender;
- pub const eval = window.eval;
- // TODO: this should have it's own place, it's not related to client only

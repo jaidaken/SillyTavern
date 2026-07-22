@@ -799,7 +799,7 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     // The bumps above re-rendered synchronously (S1 probe finding d), so the whole window is in the
     // DOM. A re-sync restores the prior anchor (near-bottom tail-jumps); a normal open lands newest.
     if (was_resync) {
-        js.global.call(void, "__st_reader_after_resync", .{}) catch {};
+        reader.afterResync();
     } else {
         scrollChatToNewest();
     }
@@ -812,7 +812,7 @@ pub fn reloadCurrentChat() void {
     // w3-chatref: a group chat re-syncs through its own window loader, same anchor mechanics.
     if (open_group_index) |gidx| {
         chars_log.info("reader re-sync: reloading current group chat after a stale prepend", .{});
-        js.global.call(void, "__st_reader_capture_anchor", .{}) catch {};
+        reader.captureAnchor();
         openGroupChatWindow(gidx, store.global.slice().len + pager.BATCH, true);
         return;
     }
@@ -824,7 +824,7 @@ pub fn reloadCurrentChat() void {
     chars_log.info("reader re-sync: reloading current chat after a stale prepend", .{});
     // Snapshot the scrolled-up anchor from the still-current DOM before the reload seeds a new window,
     // so onChatDone can restore the reader's place; near-bottom captures nothing and tail-jumps.
-    js.global.call(void, "__st_reader_capture_anchor", .{}) catch {};
+    reader.captureAnchor();
     // Size the tail reload to keep the whole on-screen window plus the newest tail: a centered load
     // would drop the tail, and the reader has no forward-paging pump to get back down.
     const loaded = store.global.slice().len;
@@ -854,9 +854,9 @@ fn setChatBusy(busy: bool) void {
 
 fn scrollChatToNewest() void {
     if (zx.platform.role != .client) return;
-    // Scroll the container across a double rAF (glue-owned): content-visibility lays out late rows
-    // after the first frame, so a single-frame scrollIntoView on the last message lands short.
-    js.global.call(void, "__st_reader_scroll_bottom", .{}) catch return;
+    // Scroll the container across frames (reader.zig owns the settle): content-visibility lays out
+    // late rows after the first frame, so a single-frame scrollIntoView on the last message lands short.
+    reader.scrollBottom();
 }
 
 /// The user's own send: jump to the bottom and pin the reply to follow (reader.zig owns the pin),

@@ -27,6 +27,7 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
             onkeydown={message_actions.onLogKey}
             oninput={message_editor.onInput}
             onscroll={reader.onScroll}
+            onanimationend={reveal.onMesRise}
         >
             <div
                 class="chat-inner relative mx-auto max-w-[var(--reading-measure,var(--measure))] px-4 pt-6 pb-8 group-aria-busy/chat:opacity-55 max-[640px]:px-2 max-[640px]:pt-3 max-[640px]:pb-4"
@@ -73,6 +74,7 @@ const zx = @import("zx");
 const message_actions = @import("./message_actions.zig");
 const message_editor = @import("./message_editor.zig");
 const reader = @import("./reader.zig");
+const reveal = @import("./reveal.zig");
 const reading_prefs = @import("./reading_prefs.zig");
 const sanitized = @import("./sanitized.zig");
 const store = @import("./store.zig");

@@ -10,11 +10,13 @@ const reading_prefs = @import("./reading_prefs.zig");
 const appearance = @import("./appearance.zig");
 const backgrounds = @import("./backgrounds.zig");
 const char_api = @import("./char_api.zig");
+const reader = @import("./reader.zig");
 const group_send = @import("./group_send.zig"); // w3-grp
 const uploads = @import("./uploads.zig"); // C4: the File->bytes callback lands here
 const ui = @import("./ui.zig");
 const zx = @import("zx");
 const regions = @import("./regions.zig");
+const reveal = @import("./reveal.zig");
 const instrument = @import("./instrument.zig");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
@@ -48,32 +50,6 @@ fn clearMessages() callconv(.c) void {
     store.global.clear();
     pager.reset();
     regions.bumpMessageLog();
-}
-
-fn readerNextBody() callconv(.c) u64 {
-    return pager.nextBody();
-}
-
-fn readerApplyPage(ptr: usize, len: usize) callconv(.c) u32 {
-    return pager.applyPage(doorBuf(ptr, len));
-}
-
-fn readerCanPrepend() callconv(.c) u32 {
-    return @intFromBool(pager.canPrepend());
-}
-
-fn readerResync() callconv(.c) void {
-    pager.beginResync();
-    char_api.reloadCurrentChat();
-}
-
-fn readerAbort() callconv(.c) void {
-    pager.abort();
-}
-
-// w3-chatref: the route the reader pump posts pages to (solo vs group), ptr<<32|len; 0 = no chat.
-fn readerPageUrl() callconv(.c) u64 {
-    return pager.pageUrl();
 }
 
 fn addCharacter(
@@ -189,6 +165,9 @@ fn selectPersona(index: u32) callconv(.c) void {
 }
 
 fn bootInit() callconv(.c) void {
+    // The prefetch pump's 409 re-sync reaches char_api through a pointer (reader cannot import
+    // char_api without a cycle); wire it before any chat can open.
+    reader.resyncFn = char_api.reloadCurrentChat;
     regions.bumpMessageLog();
     ui.setMotion(ui.storedMotion());
     // Persisted reading prefs land on #chat-root before the first paint of the chat.
@@ -200,6 +179,8 @@ fn bootInit() callconv(.c) void {
     // Zig owns boot data orchestration (Z-BOOT): ?demo fixtures, characters + personas,
     // auto-open. The glue only calls __st_boot_init.
     char_api.boot();
+    // Past the first paint, stagger the messages in (double-rAF adds hydrated/revealing on #chat-root).
+    reveal.startReveal();
 }
 
 /// C4: JS (__st_read_file) hands back the picked file's bytes, name and mime. All three buffers were
@@ -319,12 +300,6 @@ comptime {
         @export(&streamTokens, .{ .name = "__st_stream_tokens" });
         @export(&streamDone, .{ .name = "__st_stream_done" });
         @export(&persistTurns, .{ .name = "__st_persist_turns" });
-        @export(&readerNextBody, .{ .name = "__st_reader_next_body" });
-        @export(&readerApplyPage, .{ .name = "__st_reader_apply_page" });
-        @export(&readerCanPrepend, .{ .name = "__st_reader_can_prepend" });
-        @export(&readerResync, .{ .name = "__st_reader_resync" });
-        @export(&readerAbort, .{ .name = "__st_reader_abort" });
-        @export(&readerPageUrl, .{ .name = "__st_reader_page_url" }); // w3-chatref
         // w3-grp
         @export(&groupSend, .{ .name = "__st_group_send" });
         @export(&groupStreamFailed, .{ .name = "__st_group_stream_failed" });

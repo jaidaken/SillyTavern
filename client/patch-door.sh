@@ -705,6 +705,96 @@ else:
         notes.append("patch-door: D7 raw-bytes fetch door op added "
                      "(multipart uploads + binary responses ride __zx_fetch_complete)")
 
+# ---------------------------------------------------------------------------
+# D8: requestAnimationFrame door binding (ziex binds only setTimeout/setInterval)
+# ---------------------------------------------------------------------------
+# Mirrors _setTimeout: a bridge method schedules via rAF and delivers through the same #invoke path
+# as the timers (CallbackType.Timeout, fire-once), and a browser import member forwards the Zig
+# _requestAnimationFrame extern to it. Zig registers the callback as a .timeout, so dispatchCallback
+# fires it once and deactivates, exactly as a rAF should.
+
+raf_method_old = """  setInterval(callbackId, intervalMs) {
+    const handle = setInterval(() => {
+      this.#invoke(CallbackType.Interval, callbackId, null);
+    }, intervalMs);
+    this.#intervals.set(callbackId, handle);
+  }
+  clearInterval(callbackId) {"""
+
+raf_method_new = """  setInterval(callbackId, intervalMs) {
+    const handle = setInterval(() => {
+      this.#invoke(CallbackType.Interval, callbackId, null);
+    }, intervalMs);
+    this.#intervals.set(callbackId, handle);
+  }
+  requestAnimationFrame(callbackId) {
+    requestAnimationFrame(() => {
+      this.#invoke(CallbackType.Timeout, callbackId, null);
+    });
+  }
+  clearInterval(callbackId) {"""
+
+raf_import_old = """        _clearInterval: (callbackId) => {
+          bridgeRef.current?.clearInterval(callbackId);
+        },
+        _wsConnect: (wsId, urlPtr, urlLen, protocolsPtr, protocolsLen) => {"""
+
+raf_import_new = """        _clearInterval: (callbackId) => {
+          bridgeRef.current?.clearInterval(callbackId);
+        },
+        _requestAnimationFrame: (callbackId) => {
+          bridgeRef.current?.requestAnimationFrame(callbackId);
+        },
+        _wsConnect: (wsId, urlPtr, urlLen, protocolsPtr, protocolsLen) => {"""
+
+D8_SENTINEL = "requestAnimationFrame(callbackId) {"
+
+if D8_SENTINEL in s:
+    notes.append("patch-door: D8 already patched, nothing to do")
+else:
+    missing = []
+    if s.count(raf_method_old) != 1:
+        missing.append("the setInterval/clearInterval bridge methods (found %d, want 1)" % s.count(raf_method_old))
+    if s.count(raf_import_old) != 1:
+        missing.append("the browser _clearInterval/_wsConnect import members (found %d, want 1)" % s.count(raf_import_old))
+    if missing:
+        errors.append("patch-door: D8 could not find " + " and ".join(missing) +
+                      " verbatim; door version changed, update patch-door.sh")
+    else:
+        s = s.replace(raf_method_old, raf_method_new, 1)
+        s = s.replace(raf_import_old, raf_import_new, 1)
+        changed = True
+        notes.append("patch-door: D8 requestAnimationFrame bound "
+                     "(bridge method + browser import member)")
+
+# ---------------------------------------------------------------------------
+# D9: animationend delegation (ziex delegates 19 events, not animationend)
+# ---------------------------------------------------------------------------
+# The reveal settle keys on the .mes mes-rise animationend. animationend bubbles, so body delegation
+# reaches it with no capture (unlike scroll). eventTypeId 23 follows the pointer ids (D5, 19-22) and
+# matches Client.zig's EventType (source patch 23). This block runs after D5 has appended the pointer
+# entries, so it anchors on the pointercancel=22 tail, not scroll=18.
+
+anim_old = """  { domType: "pointercancel", eventTypeId: 22 }
+];"""
+
+anim_new = """  { domType: "pointercancel", eventTypeId: 22 },
+  { domType: "animationend", eventTypeId: 23 }
+];"""
+
+D9_SENTINEL = 'domType: "animationend"'
+
+if D9_SENTINEL in s:
+    notes.append("patch-door: D9 already patched, nothing to do")
+elif s.count(anim_old) != 1:
+    errors.append("patch-door: D9 could not find the DELEGATED_EVENTS tail (pointercancel=22) verbatim "
+                  "(found %d, want 1); door version changed, update patch-door.sh" % s.count(anim_old))
+else:
+    s = s.replace(anim_old, anim_new, 1)
+    changed = True
+    notes.append("patch-door: D9 animationend delegated (eventTypeId 23), "
+                 "the reveal settle's mes-rise handler now reaches Zig")
+
 # All-or-nothing: any stale expectation aborts before the write, so a door bump can never ship a
 # half-patched door.
 if errors:

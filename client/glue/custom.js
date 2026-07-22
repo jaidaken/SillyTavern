@@ -549,174 +549,9 @@
             ctl.getAttribute('aria-label') || ctl.textContent.trim().slice(0, 30) || '');
     }, false);
 
-    // Reverse-lazy reader (ZX16 pump): scroll watcher + older-page fetch here, Zig owns window+parse+prepend.
-    // Prepend holds position by ELEMENT-ANCHORED correction (2px), not scrollHeight-delta (~8px under content-visibility).
-    // reader.zig owns the follow/chip/near-bottom policy; this file keeps only the IO it drives.
-    const READER_PREFETCH_MARGIN = 600;
-    let readerChat = null;
-    let readerPumping = false;
-    let readerScheduled = false;
-    // The scrolled-up anchor a 409 re-sync must restore: its absolute chat index and its pixel offset
-    // from the scroller top. -1 = no anchor (reader was near the bottom, so the re-sync tail-jumps).
-    let resyncAnchorIndex = -1;
-    let resyncAnchorPixel = 0;
-
-    // Scroll the container to its full height across two frames: content-visibility lays out late
-    // rows after the first frame, so a single-frame scroll lands short. Called from Zig on open.
-    let scrollSettleRaf = 0;
-    // A single snap lands short on a cold open (fonts/markdown/content-visibility settle late, so
-    // scrollHeight underestimates). Keep snapping until it stops growing; a stream call restarts it.
-    window.__st_reader_scroll_bottom = function () {
-        const chat = document.getElementById('chat');
-        if (!chat) return;
-        if (scrollSettleRaf) cancelAnimationFrame(scrollSettleRaf);
-        let last = -1;
-        let stable = 0;
-        let iters = 0;
-        function settle() {
-            chat.scrollTop = chat.scrollHeight;
-            const h = chat.scrollHeight;
-            if (h === last) { stable += 1; } else { stable = 0; last = h; }
-            iters += 1;
-            scrollSettleRaf = (stable < 3 && iters < 40) ? requestAnimationFrame(settle) : 0;
-        }
-        scrollSettleRaf = requestAnimationFrame(settle);
-    };
-
-    function readerSetState(state) {
-        const root = document.getElementById('chat-root');
-        if (!root) return;
-        if (state) root.setAttribute('data-reader-state', state);
-        else root.removeAttribute('data-reader-state');
-    }
-
-    // The first message whose bottom is below the scroller's top edge: the on-screen anchor whose
-    // viewport position a prepend must preserve.
-    function readerAnchorMes() {
-        if (!readerChat) return null;
-        const mes = readerChat.querySelectorAll('.mes');
-        const top = readerChat.getBoundingClientRect().top;
-        for (let i = 0; i < mes.length; i++) {
-            if (mes[i].getBoundingClientRect().bottom > top + 1) return mes[i];
-        }
-        return mes.length ? mes[mes.length - 1] : null;
-    }
-
-    // Snapshot the on-screen anchor before a 409 re-sync reload rebuilds the window (Zig calls this
-    // from reloadCurrentChat). A near-bottom reader captures nothing, so the re-sync tail-jumps.
-    window.__st_reader_capture_anchor = function () {
-        if (!readerChat || !wasm || wasm.__st_reader_near_bottom()) { resyncAnchorIndex = -1; return; }
-        const a = readerAnchorMes();
-        const idx = a ? parseInt(a.getAttribute('data-abs-index'), 10) : NaN;
-        if (a && Number.isFinite(idx)) {
-            resyncAnchorIndex = idx;
-            resyncAnchorPixel = a.getBoundingClientRect().top - readerChat.getBoundingClientRect().top;
-        } else {
-            resyncAnchorIndex = -1;
-        }
-    };
-
-    // Restore the reader after a 409 re-sync reload (Zig calls this from onChatDone). No anchor ->
-    // tail-jump; else force history rows to real height (content-visibility estimates them) + scroll back.
-    window.__st_reader_after_resync = function () {
-        if (resyncAnchorIndex < 0) { window.__st_reader_scroll_bottom(); return; }
-        requestAnimationFrame(function () {
-            requestAnimationFrame(function () {
-                const hist = readerChat.querySelectorAll('.chat-history .mes');
-                for (let i = 0; i < hist.length; i++) hist[i].style.contentVisibility = 'visible';
-                void readerChat.offsetHeight;
-                const el = readerChat.querySelector('[data-abs-index="' + resyncAnchorIndex + '"]');
-                if (el) {
-                    readerChat.scrollTop += (el.getBoundingClientRect().top - readerChat.getBoundingClientRect().top) - resyncAnchorPixel;
-                } else {
-                    window.__st_reader_scroll_bottom();
-                }
-                for (let i = 0; i < hist.length; i++) hist[i].style.contentVisibility = '';
-                resyncAnchorIndex = -1;
-            });
-        });
-    };
-
-    async function readerPrefetch() {
-        if (readerPumping || !wasm || !readerChat) return;
-        if (!wasm.__st_reader_can_prepend || !wasm.__st_reader_can_prepend()) return;
-        const packed = wasm.__st_reader_next_body();
-        if (packed === 0n) return;
-        readerPumping = true;
-        readerSetState('loading');
-        const body = readString(Number(packed >> 32n), Number(packed & 0xffffffffn));
-        try {
-            await ensureCsrfToken();
-            // w3-chatref: an open group pages over its own route; Zig owns the choice per open chat.
-            let pageUrl = '/api/chats/get';
-            if (wasm.__st_reader_page_url) {
-                const up = wasm.__st_reader_page_url();
-                if (up) pageUrl = readString(Number(up >> 32n), Number(up & 0xffffffffn));
-            }
-            const res = await loggedFetch(pageUrl, {
-                method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json' }), body: body,
-            });
-            if (res.status === 409) {
-                log.net.warn('history page stale (409) - re-syncing to the tail');
-                if (wasm.__st_reader_abort) wasm.__st_reader_abort();
-                readerSetState(null);
-                readerPumping = false;
-                if (wasm.__st_reader_resync) wasm.__st_reader_resync();
-                return;
-            }
-            if (!res.ok) {
-                log.net.warn('history page fetch failed:', res.status);
-                if (wasm.__st_reader_abort) wasm.__st_reader_abort();
-                readerSetState('error');
-                readerPumping = false;
-                return;
-            }
-            const text = await res.text();
-            const ref = readerAnchorMes();
-            const refBefore = ref ? ref.getBoundingClientRect().top : null;
-            const beforeCount = readerChat.querySelectorAll('.mes').length;
-            const buf = writeBytes(text);
-            try { wasm.__st_reader_apply_page(buf.ptr, buf.len); } finally { freeRaw(buf); }
-            readerSetState(null);
-            requestAnimationFrame(function () {
-                requestAnimationFrame(function () {
-                    // Force the prepended rows to real height WHILE correcting, then revert: content-
-                    // visibility sizes them at the 5rem estimate otherwise, so the anchor measures wrong.
-                    const hist = readerChat.querySelectorAll('.chat-history .mes');
-                    const added = readerChat.querySelectorAll('.mes').length - beforeCount;
-                    for (let i = 0; i < added && i < hist.length; i++) hist[i].style.contentVisibility = 'visible';
-                    void readerChat.offsetHeight;
-                    if (ref && refBefore !== null && readerChat.contains(ref)) {
-                        readerChat.scrollTop += (ref.getBoundingClientRect().top - refBefore);
-                    }
-                    for (let i = 0; i < added && i < hist.length; i++) hist[i].style.contentVisibility = '';
-                    readerPumping = false;
-                    if (readerChat.scrollTop < READER_PREFETCH_MARGIN) readerSchedulePrefetch();
-                });
-            });
-        } catch (err) {
-            log.net.error('history prefetch failed:', err);
-            if (wasm.__st_reader_abort) wasm.__st_reader_abort();
-            readerSetState('error');
-            readerPumping = false;
-        }
-    }
-
-    function readerSchedulePrefetch() {
-        if (readerScheduled) return;
-        readerScheduled = true;
-        requestAnimationFrame(function () {
-            readerScheduled = false;
-            if (readerChat && readerChat.scrollTop < READER_PREFETCH_MARGIN) readerPrefetch();
-        });
-    }
-
-    // reader.zig's onScroll (ziex-delegated via patch-door D4) owns every scroll decision; the
-    // prefetch trigger calls back here. This resolves the scroller and exposes the fetch scheduler.
-    function initReaderPaging() {
-        readerChat = document.getElementById('chat');
-        window.__st_reader_prefetch_schedule = readerSchedulePrefetch;
-    }
+    // The reverse-lazy reader now lives entirely in Zig (reader.zig): the scroll watcher, the older-
+    // page prefetch (fetch via net.zig, csrf + 403 handled there), the 409 re-sync, and the element-
+    // anchored prepend correction. Nothing reader-side is left in the glue.
 
     // Initialize: load deps, then init wasm
     async function init() {
@@ -740,22 +575,8 @@
 
             log.boot.debug('wasm loaded, exports:', Object.keys(wasm).slice(0, 20));
 
-            // .hydrated (past the next paint) settles complete messages, not the empty pre-hydrate
-            // frames. .revealing gates the stagger to the first settle, dropped on the mes-rise lull so
-            // a later arrival (a prepended history page) rises in at once instead of being delay-hidden.
-            requestAnimationFrame(function () {
-                requestAnimationFrame(function () {
-                    const root = document.getElementById('chat-root');
-                    if (!root) return;
-                    root.classList.add('hydrated', 'revealing');
-                    let settleTimer = 0;
-                    root.addEventListener('animationend', function (e) {
-                        if (e.animationName !== 'mes-rise') return;
-                        if (settleTimer) clearTimeout(settleTimer);
-                        settleTimer = setTimeout(function () { root.classList.remove('revealing'); }, 120);
-                    });
-                });
-            });
+            // The hydrate/reveal stagger now lives in Zig (reveal.zig, started from bootInit; the
+            // mes-rise settle is a delegated onanimationend on #chat via patches 21 + door D6).
 
             // Boot: Zig owns the data orchestration from here (char_api.boot via bootInit):
             // ?demo fixtures, characters + personas, auto-open, unreachable-backend fallback.
@@ -764,9 +585,6 @@
                 wasm.__st_boot_init();
                 log.boot.debug('boot_init done');
             }
-
-            // #chat exists after the first boot render; bind the reader scroll pump to it.
-            initReaderPaging();
 
             // Dev-mode streaming: the verify.sh gate drives hostile/markdown/streaming
             // bodies through the real pipeline via ?stream=URL&hold=MS query params.
