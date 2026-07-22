@@ -772,13 +772,12 @@ pub fn continuationPrefix(alloc: Allocator, tpl: Instruct, char_name: []const u8
     // solo: names appear only when names_behavior is ALWAYS (FORCE is group-only, instruct-mode.js:596).
     const include_names = tpl.names_behavior == .always and char_name.len > 0;
 
-    var seqbuf: std.ArrayList(u8) = .empty;
-    defer seqbuf.deinit(alloc);
-    try appendSeqName(alloc, &seqbuf, raw_seq, char_name); // {{name}} in the final sequence -> char
-    const seq = seqbuf.items;
-
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(alloc);
+    // Faithful port of formatInstructModePrompt (instruct-mode.js:594): the LEADING separator sets the cue
+    // off from the last turn's suffix; collapse_newlines (applied to the whole prompt) folds any doubling.
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(alloc);
+    try text.appendSlice(alloc, sep);
+    try appendSeqName(alloc, &text, raw_seq, char_name); // {{name}} in the final sequence -> char
     if (include_names) {
         // Mistral hack (instruct-mode.js:622): when the last_output_sequence dropped the trailing space
         // that output_sequence keeps, refill that one char so `Char:` is spaced as the format intends.
@@ -790,20 +789,17 @@ pub fn continuationPrefix(alloc: Allocator, tpl: Instruct, char_name: []const u8
         {
             filler = tpl.output_sequence[tpl.output_sequence.len - 1 ..];
         }
-        try out.appendSlice(alloc, seq);
-        try out.appendSlice(alloc, sep);
-        try out.appendSlice(alloc, filler);
-        try out.appendSlice(alloc, char_name);
-        try out.append(alloc, ':');
-    } else {
-        // stock trims the sequence's trailing whitespace when wrapping (formatInstructModePrompt tail).
-        const body = if (tpl.wrap) std.mem.trimEnd(u8, seq, &std.ascii.whitespace) else seq;
-        // An empty final sequence contributes NO cue (Adventure/Story emit nothing after the last turn),
-        // not a bare separator; the prior turn's suffix already supplies the newline.
-        if (body.len == 0) return alloc.dupe(u8, "");
-        try out.appendSlice(alloc, body);
-        try out.appendSlice(alloc, sep);
+        try text.appendSlice(alloc, sep);
+        try text.appendSlice(alloc, filler);
+        try text.appendSlice(alloc, char_name);
+        try text.append(alloc, ':');
     }
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(alloc);
+    const body = if (tpl.wrap) std.mem.trimEnd(u8, text.items, &std.ascii.whitespace) else text.items;
+    try out.appendSlice(alloc, body);
+    if (!include_names) try out.appendSlice(alloc, sep); // stock's `+ (includeNames ? '' : separator)`
     return out.toOwnedSlice(alloc);
 }
 
@@ -1194,7 +1190,7 @@ test "continuationPrefix primes with the output sequence or the classic char col
     const tpl = chatmlInstruct();
     const out = try continuationPrefix(testing.allocator, tpl, "Rita");
     defer testing.allocator.free(out);
-    try testing.expectEqualStrings("<|im_start|>assistant\n", out);
+    try testing.expectEqualStrings("\n<|im_start|>assistant\n", out);
 
     const off = try continuationPrefix(testing.allocator, .{ .enabled = false }, "Rita");
     defer testing.allocator.free(off);
@@ -1204,7 +1200,7 @@ test "continuationPrefix primes with the output sequence or the classic char col
     named.names_behavior = .always;
     const with_name = try continuationPrefix(testing.allocator, named, "Rita");
     defer testing.allocator.free(with_name);
-    try testing.expectEqualStrings("<|im_start|>assistant\nRita:", with_name);
+    try testing.expectEqualStrings("\n<|im_start|>assistant\nRita:", with_name);
 }
 
 test "continuationPrefix prefers last_output_sequence when the template sets one" {
@@ -1212,16 +1208,21 @@ test "continuationPrefix prefers last_output_sequence when the template sets one
     tpl.last_output_sequence = "<|im_start|>assistant_final";
     const out = try continuationPrefix(testing.allocator, tpl, "Rita");
     defer testing.allocator.free(out);
-    try testing.expectEqualStrings("<|im_start|>assistant_final\n", out);
+    try testing.expectEqualStrings("\n<|im_start|>assistant_final\n", out);
 }
 
-test "continuationPrefix on an empty output sequence contributes nothing" {
-    // Corrected 2026-07-22 by byte evidence (Adventure/Story): empty final sequence + names!=always adds NO
-    // cue (the prior turn's suffix supplies the newline); not a bare "\n", not the "Rita:" !enabled fallback.
-    const tpl = Instruct{ .enabled = true, .input_sequence = "U:", .output_sequence = "" };
-    const out = try continuationPrefix(testing.allocator, tpl, "Rita");
+test "continuationPrefix on an empty output sequence is a bare separator when wrapping, else nothing" {
+    // Adventure/Story: wrap=true + empty output_sequence -> stock's `separator + "" ... + separator` trims
+    // to a lone "\n" (formatInstructModePrompt); a wrap=false empty sequence contributes nothing.
+    const wrapped = Instruct{ .enabled = true, .wrap = true, .input_sequence = "U:", .output_sequence = "" };
+    const out = try continuationPrefix(testing.allocator, wrapped, "Rita");
     defer testing.allocator.free(out);
-    try testing.expectEqualStrings("", out);
+    try testing.expectEqualStrings("\n", out);
+
+    const flat = Instruct{ .enabled = true, .wrap = false, .input_sequence = "U:", .output_sequence = "" };
+    const out_flat = try continuationPrefix(testing.allocator, flat, "Rita");
+    defer testing.allocator.free(out_flat);
+    try testing.expectEqualStrings("", out_flat);
 }
 
 test "continuationPrefix with a set-but-resolved-empty last sequence emits no cue" {

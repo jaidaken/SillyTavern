@@ -587,7 +587,13 @@ pub fn fitAndAssemble(alloc: Allocator, pieces: Pieces, costs: CostTable, budget
     try appendAssembledInjectionsAt(alloc, &out, pieces.injections, window_len, window_len, first_inj);
     // Classic modifyLastPromptLine adds the cue only for a non-empty windowed history (script.js:4994):
     // a real history trimmed away entirely ships none; a no-history caller still primes the char.
-    if (window_len > 0 or pieces.history_len == 0) try out.appendSlice(alloc, pieces.prefix);
+    if (window_len > 0 or pieces.history_len == 0) {
+        // The cue owns a leading separator, but stock adds only ONE newline before it: drop the cue's when
+        // the body already ends in one (an Alpaca "\n\n" suffix keeps its run; a "</s>" suffix gains a break).
+        var cue = pieces.prefix;
+        if (cue.len > 0 and cue[0] == '\n' and out.items.len > 0 and out.items[out.items.len - 1] == '\n') cue = cue[1..];
+        try out.appendSlice(alloc, cue);
+    }
 
     // Stock strips every CR from the assembled prompt (script.js:5075, .replace(/\r/gm, '')); card
     // fields routinely carry CRLF and the wire prompt is LF-only. Position-independent, so stripping the
@@ -1829,6 +1835,7 @@ test "buildPrompt wraps every turn in the role's own ChatML sequence" {
         "<|im_start|>user\nHi.<|im_end|>\n" ++
         "<|im_start|>assistant\nHello.<|im_end|>\n" ++
         "<|im_start|>system\nThe lamp dies.<|im_end|>\n" ++
+        // the cue's leading separator is dropped against the turn's trailing newline: one newline here.
         "<|im_start|>assistant\n";
     try testing.expectEqualStrings(want, out);
 }
