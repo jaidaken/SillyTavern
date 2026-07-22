@@ -378,10 +378,11 @@ fn groupInjections(alloc: Allocator, out: *std.ArrayList(AssembledInjection), in
         defer alloc.free(subbed);
         const value = std.mem.trimStart(u8, subbed, &std.ascii.whitespace);
         if (value.len == 0) continue;
+        // A system injection's {{name}} resolves to name2, not "System": formatMessageHistoryItem
+        // (script.js:5806) falls a nameless non-user turn's name back to name2 before substitution.
         const name = switch (c.role) {
             .user => mctx.user,
-            .assistant => mctx.char,
-            .system => "",
+            .assistant, .system => mctx.char,
         };
         const wrapped = try templates.wrapMessage(alloc, instruct, c.role, name, value);
         errdefer alloc.free(wrapped);
@@ -848,6 +849,9 @@ fn resolveInstructMacros(alloc: Allocator, tpl: templates.Instruct, ctx: Ctx) Al
     r.system_suffix = sys_suf;
     r.first_output_sequence = first_out;
     r.last_output_sequence = last_out;
+    // Capture the raw set-ness BEFORE resolution: a {{noop}} last sequence resolves to "" but must
+    // still win the final-cue choice (stock picks last_output_sequence || output_sequence on the raw).
+    r.last_output_set = tpl.last_output_sequence.len > 0;
     r.stop_sequence = stop;
     r.story_string_prefix = ss_pre;
     r.story_string_suffix = ss_suf;
@@ -1975,7 +1979,7 @@ test "an in_chat note lands at its depth in the history" {
     };
     const out = try buildPrompt(testing.allocator, ctx, &history, shape);
     defer testing.allocator.free(out);
-    try testing.expectEqualStrings("Jamie: one\nRita: two\n: It is raining.\nJamie: three\nRita:", out);
+    try testing.expectEqualStrings("Jamie: one\nRita: two\nIt is raining.\nJamie: three\nRita:", out);
 }
 
 test "an in_chat note at depth zero lands after the newest turn" {
@@ -2185,7 +2189,7 @@ test "an atDepth entry injects at its depth and survives a tight budget" {
     const shape = Shape{ .tpl = .{ .context = .{ .story_string = "" } }, .wi_entries = &entries };
     const out = try buildPrompt(testing.allocator, ctx, &history, shape);
     defer testing.allocator.free(out);
-    try testing.expectEqualStrings("Jamie: an old line\nRita: a mid line\n: THE WARD HOLDS\nJamie: a new line\nRita:", out);
+    try testing.expectEqualStrings("Jamie: an old line\nRita: a mid line\nTHE WARD HOLDS\nJamie: a new line\nRita:", out);
 
     const tight = try buildPromptBudgeted(testing.allocator, ctx, &history, 40, shape, null);
     defer testing.allocator.free(tight);
@@ -2310,7 +2314,7 @@ test "an-position wi fires the in-chat note slot even when the note is silent" {
     };
     const out = try buildPrompt(testing.allocator, ctx, &history, shape);
     defer testing.allocator.free(out);
-    try testing.expectEqualStrings("Jamie: one\n: TOP\nRita:", out);
+    try testing.expectEqualStrings("Jamie: one\nTOP\nRita:", out);
 }
 
 test "em entries bracket the example blocks under the separator" {

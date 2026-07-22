@@ -119,6 +119,11 @@ pub const Instruct = struct {
     last_system_sequence: []const u8 = "",
     first_output_sequence: []const u8 = "",
     last_output_sequence: []const u8 = "",
+    /// Whether last_output_sequence was set in the RAW preset, captured before macro resolution can
+    /// collapse a `{{noop}}`-only value to "". null = derive from the current (unresolved) length.
+    /// The final-cue choice (last_output_sequence || output_sequence) is made on the raw value in
+    /// stock, so a `{{noop}}` last sequence still wins and then resolves to no cue. (instruct-mode.js:615)
+    last_output_set: ?bool = null,
     stop_sequence: []const u8 = "",
     story_string_prefix: []const u8 = "",
     story_string_suffix: []const u8 = "",
@@ -680,8 +685,11 @@ fn appendSeqName(alloc: Allocator, out: *std.ArrayList(u8), seq: []const u8, nam
 /// builder appends into one buffer and allocates nothing per turn.
 pub fn appendWrapped(alloc: Allocator, out: *std.ArrayList(u8), tpl: Instruct, role: Role, name: []const u8, mes: []const u8) Allocator.Error!void {
     if (!tpl.enabled) {
-        try out.appendSlice(alloc, name);
-        try out.appendSlice(alloc, ": ");
+        // A narrator/system turn carries no name colon (formatMessageHistoryItem shouldPrependName).
+        if (role != .system) {
+            try out.appendSlice(alloc, name);
+            try out.appendSlice(alloc, ": ");
+        }
         try out.appendSlice(alloc, mes);
         try out.append(alloc, '\n');
         return;
@@ -722,7 +730,7 @@ pub fn wrapMessage(alloc: Allocator, tpl: Instruct, role: Role, name: []const u8
 /// exact coupling invariant 2 exists to prevent. Keep this in step with wrapMessage; the test below
 /// asserts they agree for every role and both templates.
 pub fn wrapCost(tpl: Instruct, role: Role, name: []const u8, mes: []const u8) usize {
-    if (!tpl.enabled) return name.len + 2 + mes.len + 1;
+    if (!tpl.enabled) return (if (role == .system) 0 else name.len + 2) + mes.len + 1;
 
     const prefix = prefixFor(tpl, role);
     var suffix = suffixFor(tpl, role);
@@ -758,7 +766,8 @@ pub fn wrapStoryString(alloc: Allocator, tpl: Instruct, story: []const u8) Alloc
 pub fn continuationPrefix(alloc: Allocator, tpl: Instruct, char_name: []const u8) Allocator.Error![]u8 {
     if (!tpl.enabled) return std.fmt.allocPrint(alloc, "{s}:", .{char_name});
 
-    const raw_seq = if (tpl.last_output_sequence.len > 0) tpl.last_output_sequence else tpl.output_sequence;
+    const last_set = tpl.last_output_set orelse (tpl.last_output_sequence.len > 0);
+    const raw_seq = if (last_set) tpl.last_output_sequence else tpl.output_sequence;
     const sep: []const u8 = if (tpl.wrap) "\n" else "";
     // solo: names appear only when names_behavior is ALWAYS (FORCE is group-only, instruct-mode.js:596).
     const include_names = tpl.names_behavior == .always and char_name.len > 0;
@@ -1213,6 +1222,20 @@ test "continuationPrefix on an empty output sequence contributes nothing" {
     const out = try continuationPrefix(testing.allocator, tpl, "Rita");
     defer testing.allocator.free(out);
     try testing.expectEqualStrings("", out);
+}
+
+test "continuationPrefix with a set-but-resolved-empty last sequence emits no cue" {
+    // Harmony (Thinking): last_output_sequence {{noop}} resolves to "" but stays SET, so stock picks it
+    // over output_sequence and emits nothing; last_output_set carries that raw set-ness past resolution.
+    var tpl = Instruct{ .enabled = true, .wrap = false, .output_sequence = "<|start|>assistant<|message|>", .last_output_sequence = "", .last_output_set = true };
+    const set_out = try continuationPrefix(testing.allocator, tpl, "Rita");
+    defer testing.allocator.free(set_out);
+    try testing.expectEqualStrings("", set_out);
+
+    tpl.last_output_set = false;
+    const unset_out = try continuationPrefix(testing.allocator, tpl, "Rita");
+    defer testing.allocator.free(unset_out);
+    try testing.expectEqualStrings("<|start|>assistant<|message|>", unset_out);
 }
 
 test "parseTemplates migrates the anchors into a story string that predates them" {
