@@ -789,6 +789,9 @@ pub fn continuationPrefix(alloc: Allocator, tpl: Instruct, char_name: []const u8
     } else {
         // stock trims the sequence's trailing whitespace when wrapping (formatInstructModePrompt tail).
         const body = if (tpl.wrap) std.mem.trimEnd(u8, seq, &std.ascii.whitespace) else seq;
+        // An empty final sequence contributes NO cue (Adventure/Story emit nothing after the last turn),
+        // not a bare separator; the prior turn's suffix already supplies the newline.
+        if (body.len == 0) return alloc.dupe(u8, "");
         try out.appendSlice(alloc, body);
         try out.appendSlice(alloc, sep);
     }
@@ -1203,13 +1206,13 @@ test "continuationPrefix prefers last_output_sequence when the template sets one
     try testing.expectEqualStrings("<|im_start|>assistant_final\n", out);
 }
 
-test "continuationPrefix on an empty output sequence is a bare wrap newline, not a name colon" {
-    // Corrected 2026-07-21 (was "Rita:", contradicted formatInstructModePrompt): enabled + empty sequence
-    // + names!=always emits (sep+seq).trimEnd()+sep = "\n"; the name colon is only the !enabled fallback.
+test "continuationPrefix on an empty output sequence contributes nothing" {
+    // Corrected 2026-07-22 by byte evidence (Adventure/Story): empty final sequence + names!=always adds NO
+    // cue (the prior turn's suffix supplies the newline); not a bare "\n", not the "Rita:" !enabled fallback.
     const tpl = Instruct{ .enabled = true, .input_sequence = "U:", .output_sequence = "" };
     const out = try continuationPrefix(testing.allocator, tpl, "Rita");
     defer testing.allocator.free(out);
-    try testing.expectEqualStrings("\n", out);
+    try testing.expectEqualStrings("", out);
 }
 
 test "parseTemplates migrates the anchors into a story string that predates them" {
