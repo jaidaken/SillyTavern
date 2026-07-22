@@ -309,6 +309,10 @@ pub const AssembledInjection = struct {
     depth: usize,
     rank: u8,
     wrapped: []u8,
+    /// The injection's role is user. Used by the alignment-message predicate: stock suppresses the
+    /// user_alignment_message when the OLDEST chat-block element (a deep injection or the oldest history
+    /// turn) is a user turn (script.js:4901 stoppedAtUser over the injection-interleaved chat2).
+    is_user: bool = false,
 };
 
 /// A single depth-injection source before grouping: RAW (unsubstituted) text with its target
@@ -381,7 +385,7 @@ fn groupInjections(alloc: Allocator, out: *std.ArrayList(AssembledInjection), in
         };
         const wrapped = try templates.wrapMessage(alloc, instruct, c.role, name, value);
         errdefer alloc.free(wrapped);
-        try out.append(alloc, .{ .depth = c.depth, .rank = roleRank(c.role), .wrapped = wrapped });
+        try out.append(alloc, .{ .depth = c.depth, .rank = roleRank(c.role), .wrapped = wrapped, .is_user = c.role == .user });
     }
 }
 
@@ -395,6 +399,12 @@ pub const Pieces = struct {
     injections: []AssembledInjection,
     /// One pre-wrapped string per input history turn, in input order.
     wrapped_history: [][]u8,
+    /// is_user per history turn, parallel to wrapped_history: feeds the alignment predicate when no
+    /// deep injection precedes the oldest history turn.
+    history_is_user: []const bool,
+    /// power_user.instruct.user_alignment_message wrapped as a first user turn ("" when none). Emitted at
+    /// the front of the chat block unless the oldest chat-block element is a user turn; cost reserved in overhead.
+    alignment: []u8,
     prefix: []u8,
     history_len: usize,
     /// power_user.collapse_newlines: fitAndAssemble collapses the joined prompt's newline runs to one
@@ -410,6 +420,8 @@ pub fn freePieces(alloc: Allocator, p: *Pieces) void {
     alloc.free(p.injections);
     for (p.wrapped_history) |w| alloc.free(w);
     alloc.free(p.wrapped_history);
+    alloc.free(p.history_is_user);
+    alloc.free(p.alignment);
     alloc.free(p.prefix);
     if (p.timed_json) |j| alloc.free(j);
 }
@@ -437,7 +449,8 @@ pub fn byteCostTable(alloc: Allocator, pieces: Pieces) Allocator.Error!CostTable
     for (pieces.injections, 0..) |x, i| inj[i] = x.wrapped.len;
     const his = try alloc.alloc(usize, pieces.wrapped_history.len);
     for (pieces.wrapped_history, 0..) |w, i| his[i] = w.len;
-    return .{ .overhead = pieces.overhead.len, .injections = inj, .history = his };
+    // Alignment cost folds into overhead (always reserved), matching the classic seed (script.js:4822).
+    return .{ .overhead = pieces.overhead.len + pieces.alignment.len, .injections = inj, .history = his };
 }
 
 pub fn freeCostTable(alloc: Allocator, c: CostTable) void {
@@ -482,6 +495,20 @@ fn appendAssembledInjectionsAt(alloc: Allocator, out: *std.ArrayList(u8), inject
     for (order.items) |idx| try out.appendSlice(alloc, injections[idx].wrapped);
 }
 
+/// Whether the OLDEST element of the assembled chat block is a user turn: the first head injection (depth
+/// past the window, emitted before any history), else the oldest surviving history turn. Feeds the
+/// user_alignment_message predicate (stock stoppedAtUser over the injection-interleaved chat2, script.js:4901).
+fn oldestChatIsUser(pieces: Pieces, window_len: usize, start: usize) bool {
+    var best: ?usize = null;
+    for (pieces.injections, 0..) |inj, idx| {
+        if (window_len -| inj.depth != 0) continue;
+        if (best == null or injectionLess(pieces.injections, idx, best.?)) best = idx;
+    }
+    if (best) |b| return pieces.injections[b].is_user;
+    if (window_len > 0) return pieces.history_is_user[start];
+    return false;
+}
+
 /// Joins the assembled pieces under `costs` against `budget`: reserves the overhead and every injection
 /// out of the budget, trims history oldest-first over what remains, then emits overhead, the surviving
 /// history with each injection at its depth, and the continuation prefix. Every CR is stripped last
@@ -496,6 +523,10 @@ pub fn fitAndAssemble(alloc: Allocator, pieces: Pieces, costs: CostTable, budget
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(alloc);
     try out.appendSlice(alloc, pieces.overhead);
+    // user_alignment_message rides the front of the chat block unless the oldest chat-block element (a
+    // deep injection or the oldest history turn) is a user turn (script.js:4901); cost reserved in overhead.
+    if (pieces.alignment.len > 0 and (window_len > 0 or pieces.injections.len > 0) and !oldestChatIsUser(pieces, window_len, start))
+        try out.appendSlice(alloc, pieces.alignment);
     var i: usize = 0;
     while (i < window_len) : (i += 1) {
         try appendAssembledInjectionsAt(alloc, &out, pieces.injections, window_len, i);
@@ -703,7 +734,7 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
         defer alloc.free(subbed);
         const wrapped = try templates.wrapMessage(alloc, instruct, .user, "", subbed);
         errdefer alloc.free(wrapped);
-        try injections.append(alloc, .{ .depth = 0, .rank = jailbreak_rank, .wrapped = wrapped });
+        try injections.append(alloc, .{ .depth = 0, .rank = jailbreak_rank, .wrapped = wrapped, .is_user = true });
     }
 
     // Each history turn pre-wrapped in its role's sequence, the string the caller tokenizes.
@@ -717,6 +748,19 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
         errdefer alloc.free(wrapped);
         try wh.append(alloc, wrapped);
     }
+
+    const hist_is_user = try alloc.alloc(bool, history.len);
+    errdefer alloc.free(hist_is_user);
+    for (history, 0..) |m, i| hist_is_user[i] = m.role == .user;
+
+    // user_alignment_message (script.js:4789): a first user turn built now; fitAndAssemble emits it unless
+    // the oldest chat-block element is a user turn. force_output_sequence.FIRST resolves to input_sequence here.
+    const alignment: []u8 = if (instruct.enabled and shape.tpl.instruct.user_alignment_message.len > 0) blk: {
+        const am = try substituteMacros(alloc, shape.tpl.instruct.user_alignment_message, wctx);
+        defer alloc.free(am);
+        break :blk try templates.wrapMessage(alloc, instruct, .user, wctx.user, am);
+    } else try alloc.dupe(u8, "");
+    errdefer alloc.free(alignment);
 
     const prefix = try templates.continuationPrefix(alloc, instruct, ctx.char);
     errdefer alloc.free(prefix);
@@ -747,6 +791,8 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
         .overhead = overhead_slice,
         .injections = inj_slice,
         .wrapped_history = wh_slice,
+        .history_is_user = hist_is_user,
+        .alignment = alignment,
         .prefix = prefix,
         .history_len = history.len,
         .collapse_newlines = shape.tpl.collapse_newlines,

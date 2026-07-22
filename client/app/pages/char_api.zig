@@ -1551,10 +1551,13 @@ fn finishByteFallback() void {
 /// tokens against the token budget, then open the stream.
 fn finishTokenJob() void {
     const n = tok_job.n_inj;
+    const n_hist = tok_job.pieces.wrapped_history.len;
+    // The trailing alignment unit's count folds into overhead (always reserved); history stops before it.
+    const align_cost: usize = if (tok_job.pieces.alignment.len > 0) tok_job.counts[1 + n + n_hist] else 0;
     const costs = generate.CostTable{
-        .overhead = tok_job.counts[0],
+        .overhead = tok_job.counts[0] + align_cost,
         .injections = tok_job.counts[1 .. 1 + n],
-        .history = tok_job.counts[1 + n ..],
+        .history = tok_job.counts[1 + n .. 1 + n + n_hist],
     };
     const prompt = generate.fitAndAssemble(alloc, tok_job.pieces, costs, tok_job.token_budget) catch {
         chars_log.err("send: token prompt build failed", .{});
@@ -1631,7 +1634,8 @@ fn onTokenCountDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
 /// it degrades to the byte-cost path rather than dropping the send.
 fn startTokenJob(pieces: generate.Pieces, token_budget: usize, char_budget: usize, kind: tokenizer.Tokenizer, disc: u64, encode_path: []const u8, remote: bool, stop: [][]u8) void {
     const n = pieces.injections.len;
-    const total = 1 + n + pieces.wrapped_history.len;
+    // +1 trailing unit for the alignment message (its count folds into overhead in finishTokenJob).
+    const total = 1 + n + pieces.wrapped_history.len + @intFromBool(pieces.alignment.len > 0);
     tok_epoch_seq +%= 1;
     tok_job = .{
         .active = true,
@@ -1686,7 +1690,9 @@ fn startTokenJob(pieces: generate.Pieces, token_budget: usize, char_budget: usiz
 fn pieceText(pieces: generate.Pieces, n: usize, i: usize) []const u8 {
     if (i == 0) return pieces.overhead;
     if (i <= n) return pieces.injections[i - 1].wrapped;
-    return pieces.wrapped_history[i - 1 - n];
+    const hi = i - 1 - n;
+    if (hi < pieces.wrapped_history.len) return pieces.wrapped_history[hi];
+    return pieces.alignment; // trailing unit: reserves the alignment cost into overhead
 }
 
 /// A token-job setup allocation failed after `built` texts were stripped: free the partial job and
