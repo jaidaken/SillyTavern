@@ -129,12 +129,12 @@ fn open(kind: Kind, name: []const u8, avatar: []const u8) bool {
         return false;
     };
     // reader owns the follow decision (pin if this send forced it or you were near the bottom).
-    reader.__st_reader_stream_begin();
+    reader.streamBegin();
     live.begin(name_c, avatar_c) catch |err| {
         gpa.free(name_c);
         gpa.free(avatar_c);
         log.err("stream open: {s}, stream not started", .{@errorName(err)});
-        reader.__st_reader_stream_end();
+        reader.streamEnd();
         return false;
     };
     s = .{ .active = true, .kind = kind };
@@ -156,7 +156,7 @@ fn stashRequest(url: []const u8, body: []const u8) bool {
 /// not stranded in .streaming, and clear the session.
 fn abortOpen() void {
     live.end();
-    reader.__st_reader_stream_end();
+    reader.streamEnd();
     resetSession();
 }
 
@@ -184,7 +184,7 @@ pub export fn __st_stream_closed(status: u32) callconv(.c) void {
     // Whatever the rAF cadence left unfed must still reach the message before it seals.
     flushPending();
     live.end();
-    reader.__st_reader_stream_end();
+    reader.streamEnd();
     regions.bumpMessageLog();
 
     const dev_metrics = s.kind == .dev;
@@ -242,7 +242,7 @@ fn flushFrame() void {
     s.scheduled = false;
     if (!s.active) return;
     flushPending();
-    reader.__st_reader_stream_tick();
+    reader.streamTick();
     // A [DONE] sentinel sealed the stream mid-feed: stop the door reader now rather than wait for the
     // socket to close on its own.
     if (live.state == .done) cancel();

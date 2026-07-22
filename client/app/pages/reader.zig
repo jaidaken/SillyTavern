@@ -419,11 +419,11 @@ pub fn pinBottom() void {
     scrollBottom();
 }
 
-// ---- stream lifecycle (called from the JS pump) ------------------------------------------------
+// ---- stream lifecycle (called from stream_drive) -----------------------------------------------
 
 /// Stream opening: pin if the send forced it or you were already near the bottom, then clear the
 /// one-shot force flag.
-pub export fn __st_reader_stream_begin() callconv(.c) void {
+pub fn streamBegin() void {
     if (zx.platform.role != .client) return;
     stream_active = true;
     stream_pinned = send_forced_pin or nearBottomNow();
@@ -431,7 +431,7 @@ pub export fn __st_reader_stream_begin() callconv(.c) void {
 }
 
 /// One stream flush: follow the bottom if pinned, else raise the chip (never while near the bottom).
-pub export fn __st_reader_stream_tick() callconv(.c) void {
+pub fn streamTick() void {
     if (zx.platform.role != .client) return;
     if (stream_pinned) {
         scrollBottom();
@@ -446,7 +446,7 @@ pub export fn __st_reader_stream_tick() callconv(.c) void {
 }
 
 /// Stream sealed: stop tracking, and land at the bottom if it had been following.
-pub export fn __st_reader_stream_end() callconv(.c) void {
+pub fn streamEnd() void {
     if (zx.platform.role != .client) return;
     stream_active = false;
     if (stream_pinned) scrollBottom();

@@ -209,13 +209,6 @@ fn seedDemo() callconv(.c) void {
     regions.bumpMessageLog();
 }
 
-/// Called after a send's stream seals (stream_drive drives this now): persist the assistant reply
-/// (char_api owns the append). The user turn is persisted synchronously on send, so this handles the
-/// reply half only.
-fn persistTurns() callconv(.c) void {
-    char_api.persistNewTurns();
-}
-
 fn messageViewRenders() callconv(.c) usize {
     return instrument.messageViewRenders();
 }
@@ -238,10 +231,6 @@ fn groupSend(ptr: usize, len: usize) callconv(.c) u32 {
 }
 
 // w3-grp: the glue's stream-failure path, so a rotation cannot wedge on a dead backend.
-fn groupStreamFailed() callconv(.c) void {
-    group_send.onStreamFailed();
-}
-
 // C5: the raw document click listener forwards its resolved control here. Buffers are door-allocated
 // and freed JS-side after this synchronous call, so telemetry only reads them.
 fn onClickTelemetry(
@@ -292,11 +281,9 @@ comptime {
         @export(&addPersona, .{ .name = "__st_add_persona" });
         @export(&clearPersonas, .{ .name = "__st_clear_personas" });
         @export(&selectPersona, .{ .name = "__st_select_persona" });
-        @export(&persistTurns, .{ .name = "__st_persist_turns" });
         _ = stream_drive; // C2: force-link the streaming orchestrator's exports
         // w3-grp
         @export(&groupSend, .{ .name = "__st_group_send" });
-        @export(&groupStreamFailed, .{ .name = "__st_group_stream_failed" });
         // C5: diagnostics forwarded from the two irreducible JS listeners
         @export(&onClickTelemetry, .{ .name = "__st_on_click_telemetry" });
         @export(&onUncaught, .{ .name = "__st_on_uncaught" });

@@ -15,7 +15,7 @@ const char_store = @import("./character_store.zig");
 const alloc = char_store.page_gpa;
 const log = std.log.scoped(.net);
 
-/// The C4 raw-bytes POST door op (patch-door D5). Unlike zx.fetch, which reads the request body with
+/// The C4 raw-bytes POST door op (patch-door D7). Unlike zx.fetch, which reads the request body with
 /// readString (UTF-8) and returns the response via text(), this carries BOTH bodies as raw bytes, so
 /// an uploaded image and a downloaded PNG survive the wasm boundary intact. Completion rides
 /// __zx_fetch_complete through allocFetchId, so a raw POST reuses this module's slot + 403-retry.

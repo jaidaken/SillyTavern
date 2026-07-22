@@ -1890,9 +1890,9 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
     startTokenJob(pieces, generate.promptTokenBudget(conn), generate.promptCharBudget(conn), kind, disc, encode_path, remote, stop_owned);
 }
 
-/// Called by the JS pump on stream seal (via the __st_persist_turns export): persist the assistant
-/// reply. It is the last message, since a single stream runs between send and seal, and this only
-/// fires when the stream actually began (startStream rejects before .then otherwise).
+/// Called by stream_drive on stream seal: persist the assistant reply. It is the last message, since
+/// a single stream runs between send and seal, and this only fires when the stream actually began
+/// (stream_drive.open refuses a second stream and seals a begun-but-empty one, so no stray persist).
 pub fn persistNewTurns() void {
     if (zx.platform.role != .client) return;
     // w3-grp: a group rotation owns this seal (member append + advance); solo must not double-append.

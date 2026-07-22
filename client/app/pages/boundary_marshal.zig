@@ -116,8 +116,9 @@ test "every 64-bit signature in bridge.zig is named by the crossing register" {
             if (std.mem.eql(u8, cr.fn_name, f.name)) seen[idx] = true;
         }
     }
-    // The scan floor proves the parse walked the real export surface, not an empty match set.
-    try testing.expect(found_fns >= 20);
+    // Scan floor: proves the parse walked bridge.zig's real export surface (19 callconv(.c) fns
+    // today), not an empty match set. Lower only on a legitimate export removal, never to hide a scan.
+    try testing.expect(found_fns >= 18);
     for (crossings, seen) |c, s| {
         if (!s) {
             std.debug.print("registered crossing missing from bridge.zig: {s}\n", .{c.fn_name});

@@ -1,7 +1,7 @@
 //! The hydrate/reveal stagger, Zig-native. On boot, a double-rAF adds `hydrated` + `revealing` to
 //! #chat-root past the first paint (so the stagger settles complete messages, not the empty pre-
 //! hydrate frames). `revealing` gates the mes-rise stagger to that first settle: each `.mes` mes-rise
-//! animationend (delegated onto #chat via patches 21 + door D6) debounces removing `revealing`, so a
+//! animationend (delegated onto #chat via patch 23 + door D9) debounces removing `revealing`, so a
 //! later arrival (a prepended history page) rises in at once instead of being delay-hidden.
 //!
 //! animationend has no clearTimeout in ziex, so the 120ms debounce counts pending timers (the
