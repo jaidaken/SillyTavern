@@ -70,6 +70,43 @@ var slots: [max_requests]Slot = @splat(.{});
 var csrf_token: ?[]u8 = null;
 var csrf_in_flight: bool = false;
 
+/// Callbacks parked until the csrf token lands, for the streaming path (net.zig owns the token but
+/// the SSE fetch runs in the door, not through a slot). Bounded; a full list drops the request.
+var csrf_waiters: [max_requests]?*const fn () void = @splat(null);
+
+/// The current csrf token, or null before the first /csrf-token fetch resolves. The streaming door op
+/// reads it to set X-CSRF-Token; pair with ensureCsrfThen so a null token is fetched first.
+pub fn currentCsrf() ?[]const u8 {
+    return csrf_token;
+}
+
+/// Runs `cb` once a csrf token is available: immediately if one is cached, else after the shared
+/// /csrf-token fetch resolves. The streaming orchestrator gates its door open on this so the POST
+/// carries a token instead of eating a 403 on the first send after a server restart.
+pub fn ensureCsrfThen(cb: *const fn () void) void {
+    if (csrf_token != null) {
+        cb();
+        return;
+    }
+    for (&csrf_waiters) |*w| {
+        if (w.* == null) {
+            w.* = cb;
+            ensureCsrf();
+            return;
+        }
+    }
+    log.err("csrf waiter list full, streaming open dropped", .{});
+}
+
+fn drainCsrfWaiters() void {
+    for (&csrf_waiters) |*w| {
+        if (w.*) |cb| {
+            w.* = null;
+            cb();
+        }
+    }
+}
+
 /// The slot index cannot ride on zx.fetch's plain callback, so each slot gets its own
 /// comptime-stamped callback fn and the fn pointer IS the slot identity.
 fn slotCb(comptime i: usize) zx.Fetch.ResponseCallback {
@@ -326,6 +363,9 @@ fn onCsrfDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     // Queued requests go out either way; without a token a reachable server answers 403 and
     // the failure stays visible at the call site (matches the deleted glue).
     dispatchQueued();
+    // Streaming waiters open their door fetch now (with the token if it arrived, else "" and the
+    // reachable server answers 403 like any other request).
+    drainCsrfWaiters();
 }
 
 fn dispatchQueued() void {

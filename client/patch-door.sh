@@ -795,6 +795,69 @@ else:
     notes.append("patch-door: D9 animationend delegated (eventTypeId 23), "
                  "the reveal settle's mes-rise handler now reaches Zig")
 
+# ---------------------------------------------------------------------------
+# D10: SSE streaming door op (getReader pump). zx.fetch is whole-body only, so the reader loop is a
+# genuine browser IO that must live in the door. Zig (stream_drive.zig) drives __st_stream_open via
+# js.global.call, owns the flush batching (rAF), cancel, lifecycle and csrf; the door only pumps.
+# ---------------------------------------------------------------------------
+# The pump reads response.body.getReader() and hands each raw chunk to the wasm export __st_stream_chunk
+# (Zig batches on rAF); __st_stream_closed fires exactly once on natural end / error / cancel, the single
+# seal point. Cancel aborts the reader so the awaiting read() rejects and the loop ends.
+
+stream_anchor = "  const bridge = new ZxBridge(instance.exports);"
+stream_block = stream_anchor + """
+  (function () {
+    const exp = instance.exports;
+    const streams = new Map();
+    globalThis.__st_stream_open = function (streamId, url, body, csrf) {
+      const controller = new AbortController();
+      const rec = { controller: controller, cancelled: false, reader: null };
+      streams.set(streamId, rec);
+      const method = body ? "POST" : "GET";
+      const headers = { Accept: "text/event-stream" };
+      if (body) headers["Content-Type"] = "application/json";
+      if (csrf) headers["X-CSRF-Token"] = csrf;
+      fetch(url, { method: method, headers: headers, body: body || undefined, signal: controller.signal }).then(async (response) => {
+        if (!response.ok || !response.body) { streams.delete(streamId); exp.__st_stream_closed(response.status); return; }
+        const reader = response.body.getReader();
+        rec.reader = reader;
+        for (;;) {
+          let step;
+          try { step = await reader.read(); } catch (e) { break; }
+          if (step.done || rec.cancelled) break;
+          const bytes = step.value;
+          const ptr = exp.__zx_alloc(bytes.length);
+          writeBytes(ptr, bytes);
+          exp.__st_stream_chunk(ptr, bytes.length);
+        }
+        streams.delete(streamId);
+        exp.__st_stream_closed(response.status);
+      }).catch(() => { streams.delete(streamId); exp.__st_stream_closed(0); });
+    };
+    globalThis.__st_stream_cancel = function (streamId) {
+      const rec = streams.get(streamId);
+      if (!rec) return;
+      rec.cancelled = true;
+      // abort() ends the awaiting read(); reader.cancel() returns a promise that rejects with the same
+      // AbortError, so its rejection is swallowed rather than surfacing as an unhandled rejection.
+      try { rec.controller.abort(); } catch (e) {}
+      if (rec.reader) { try { rec.reader.cancel().catch(() => {}); } catch (e) {} }
+    };
+  })();"""
+
+D10_SENTINEL = "globalThis.__st_stream_open"
+
+if D10_SENTINEL in s:
+    notes.append("patch-door: D10 already patched, nothing to do")
+elif s.count(stream_anchor) != 1:
+    errors.append("patch-door: D10 could not find the ZxBridge construction anchor verbatim "
+                  "(found %d, want 1); door version changed, update patch-door.sh" % s.count(stream_anchor))
+else:
+    s = s.replace(stream_anchor, stream_block, 1)
+    changed = True
+    notes.append("patch-door: D10 SSE streaming getReader pump added "
+                 "(__st_stream_open/__st_stream_cancel, chunks -> __st_stream_chunk, seal -> __st_stream_closed)")
+
 # All-or-nothing: any stale expectation aborts before the write, so a door bump can never ship a
 # half-patched door.
 if errors:

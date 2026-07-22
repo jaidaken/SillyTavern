@@ -126,6 +126,20 @@ pub fn hasQueryFlag(search: []const u8, flag: []const u8) bool {
     return false;
 }
 
+/// The raw (still percent-encoded) value of `key` in location.search, or null if the key is absent
+/// or bare. Matches URLSearchParams.get for a first occurrence; the caller percent-decodes.
+pub fn queryValue(search: []const u8, key: []const u8) ?[]const u8 {
+    var s = search;
+    if (s.len > 0 and s[0] == '?') s = s[1..];
+    var it = std.mem.splitScalar(u8, s, '&');
+    while (it.next()) |tok| {
+        if (tok.len > key.len and std.mem.startsWith(u8, tok, key) and tok[key.len] == '=') {
+            return tok[key.len + 1 ..];
+        }
+    }
+    return null;
+}
+
 pub const PersonaJson = struct {
     avatar: []u8,
     name: []u8,

@@ -34,6 +34,7 @@ const wi_store = @import("./world_info.zig"); // w3-wi-engine
 const wi_timed = @import("./world_info_timed.zig"); // wi-timed: the chat's sticky/cooldown state
 const pager = @import("./pager.zig");
 const group_send = @import("./group_send.zig"); // w3-grp
+const stream_drive = @import("./stream_drive.zig"); // C2: Zig-owned SSE lifecycle
 const group_store = @import("./group_store.zig"); // w3-chatref
 const group_actions = @import("./group_actions.zig"); // w3-chatref: panel bump on deselect
 const regions = @import("./regions.zig");
@@ -1523,14 +1524,9 @@ fn finishSend(prompt: []const u8) void {
         return;
     };
     defer alloc.free(body);
-    js.global.call(void, "__st_send_stream", .{
-        js.string("/api/backends/text-completions/generate"),
-        js.string(pend_char_name),
-        js.string(pend_char_avatar),
-        js.string(body),
-    }) catch {
-        net_log.warn("send: __st_send_stream helper missing", .{});
-    };
+    // stream_drive owns the SSE lifecycle now (opens the door pump, batches, seals). It copies what it
+    // keeps, so freeing body/pending after this returns is safe. persistNewTurns runs on seal.
+    stream_drive.send("/api/backends/text-completions/generate", pend_char_name, pend_char_avatar, body);
 }
 
 /// Trim on byte lengths against the char budget: the classic pre-token behavior and the fallback when a
@@ -2017,9 +2013,7 @@ pub fn stopStream() void {
     if (zx.platform.role != .client) return;
     // w3-grp: clear the rotation queue FIRST so the current member's seal launches nobody else.
     group_send.cancel();
-    js.global.call(void, "__st_send_stop", .{}) catch {
-        net_log.warn("send: __st_send_stop helper missing", .{});
-    };
+    stream_drive.cancel();
 }
 
 // w3-grp ---- group member launch ----

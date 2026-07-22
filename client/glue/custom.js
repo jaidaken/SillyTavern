@@ -146,15 +146,6 @@
         forwardUncaught('unhandled rejection:', r && r.stack ? r.stack : String(r));
     });
 
-    // Every backend fetch logs start and status at net:debug; failures stay with the call sites.
-    function loggedFetch(url, opts) {
-        log.net.debug('fetch', url);
-        return fetch(url, opts).then(function (res) {
-            log.net.debug(url, '->', res.status);
-            return res;
-        });
-    }
-
     if (window.trustedTypes && window.trustedTypes.createPolicy) {
         try { window.trustedTypes.createPolicy('default', { createHTML: function (s) { return s; } }); } catch (err) { log.boot.debug('trustedTypes default policy not installed:', err); }
     }
@@ -229,7 +220,13 @@
         highlightCache.set(key, value);
     }
 
-    let streamRender = false;
+    // Zig (stream_drive) owns the streaming flag now: __st_stream_rendering() is true only while a flush
+    // feed is in progress, so the growing last code block is left un-highlighted until the stream seals.
+    function streamRendering() { return !!(wasm && wasm.__st_stream_rendering && wasm.__st_stream_rendering()); }
+
+    // env.sanitize invocation count, the render-cache gate's oracle (a streaming tail that re-sanitized
+    // every message per flush instead of only its own uncached body would blow the budget).
+    let sanitizeCount = 0;
 
     function highlightElement(el, skipGrow) {
         const tag = Array.from(el.classList).find(function (c) { return c.startsWith('language-'); });
@@ -270,7 +267,7 @@
         tpl.innerHTML = html;
         const blocks = tpl.content.querySelectorAll('pre > code');
 
-        const growing = streamRender ? blocks.length - 1 : -1;
+        const growing = streamRendering() ? blocks.length - 1 : -1;
 
         blocks.forEach(function (el, i) {
             highlightElement(el, i === growing);
@@ -299,6 +296,7 @@
             console[CONSOLE_METHOD[name]]('[st:' + scope + ']', readString(msgPtr, msgLen));
         },
         sanitize: function (ptr, len) {
+            sanitizeCount += 1;
             let out;
             try {
                 const clean = DOMPurify.sanitize(readString(ptr, len), MESSAGE_CONFIG);
@@ -321,151 +319,26 @@
         },
     };
 
-    const stats = { chunks: 0, tokens: 0, flushes: 0, sanitizes: 0, mdBytes: 0 };
-
-    let streamActive = false;
-    let devMode = false;
-    let currentReader = null;
-
-    function setSendStatus(text) {
-        const el = document.getElementById('send-status');
-        if (el) el.textContent = text;
+    // Seal glue (Zig stream_drive calls this at stream close via js.global.call): highlight the sealed
+    // message's code blocks (held hljs) and, in dev mode, fill #probe-metrics the verify gate reads.
+    window.__st_stream_sealed = function (devMetrics) {
+        const chat = document.getElementById('chat');
+        const mes = chat ? chat.querySelectorAll('.mes') : null;
+        if (mes && mes.length) highlightSealedBlocks(mes[mes.length - 1]);
+        if (!devMetrics) return;
+        const el = document.getElementById('probe-metrics');
+        if (!el) return;
+        const stats = {
+            chunks: wasm.__st_stream_chunks ? wasm.__st_stream_chunks() : 0,
+            tokens: wasm.__st_stream_tokens ? wasm.__st_stream_tokens() : 0,
+            flushes: wasm.__st_stream_flushes ? wasm.__st_stream_flushes() : 0,
+            sanitizes: sanitizeCount,
+        };
+        const json = JSON.stringify(stats);
+        el.textContent = json;
         if (globalThis.__zx_debug) {
-            zxDomTrace('app.textContent', el ? zxDomName(el) : 'span#send-status <absent>', JSON.stringify(text));
+            zxDomTrace('app.textContent', zxDomName(el), json);
         }
-    }
-
-    async function startStream(url, name, avatar, opts) {
-        if (streamActive) throw new Error('stream already running');
-        streamActive = true;
-        // Zig (reader.zig) owns the follow decision: pin if this was your own send (pinBottom set the
-        // force flag) or you were already near the bottom.
-        wasm.__st_reader_stream_begin();
-
-        let pending = [];
-        let pendingLen = 0;
-        let raf = 0;
-        let timer = 0;
-        let ended = false;
-        let begun = false;
-        let reader = null;
-
-        function cancelScheduled() {
-            if (raf) cancelAnimationFrame(raf);
-            if (timer) clearTimeout(timer);
-            raf = 0;
-            timer = 0;
-        }
-
-        function flush() {
-            cancelScheduled();
-            if (ended || pendingLen === 0) return;
-            const merged = new Uint8Array(pendingLen);
-            let at = 0;
-            for (const chunk of pending) {
-                merged.set(chunk, at);
-                at += chunk.length;
-            }
-
-            try {
-                const buf = writeRaw(merged);
-                pending = [];
-                pendingLen = 0;
-                stats.flushes += 1;
-
-                streamRender = true;
-                try {
-                    wasm.__st_stream_append(buf.ptr, buf.len);
-                } finally {
-                    streamRender = false;
-                }
-                wasm.__st_reader_stream_tick();
-
-                if (wasm.__st_stream_done && wasm.__st_stream_done()) {
-                    ended = true;
-                    if (reader) reader.cancel().catch(function (err) { log.stream.debug('reader cancel failed:', err); });
-                }
-            } catch (err) {
-                log.stream.error('stream flush failed:', err);
-                ended = true;
-                if (reader) reader.cancel().catch(function (err) { log.stream.debug('reader cancel failed:', err); });
-            }
-        }
-
-        function schedule() {
-            if (raf || timer) return;
-            raf = requestAnimationFrame(flush);
-            timer = setTimeout(flush, 16);
-        }
-
-        try {
-            const n = writeBytes(name);
-            const av = writeBytes(avatar || '');
-            if (wasm.__st_stream_begin(n.ptr, n.len, av.ptr, av.len) !== 0) {
-                freeRaw(av);
-                throw new Error('stream begin refused');
-            }
-            begun = true;
-
-            let init;
-            if (opts && opts.method === 'POST') {
-                await ensureCsrfToken();
-                init = { method: 'POST', headers: withCsrf({ 'Content-Type': 'application/json', Accept: 'text/event-stream' }), body: opts.body };
-            } else {
-                init = { headers: { Accept: 'text/event-stream' } };
-            }
-            const response = await loggedFetch(url, init);
-            // A spun-down .43 behind Pocket-ID answers 502/504 at the edge before ST is reached.
-            if (response.status === 502 || response.status === 504) setSendStatus('Backend asleep - unlock at silly');
-            if (!response.ok || !response.body) throw new Error('stream failed: ' + response.status);
-
-            reader = response.body.getReader();
-            currentReader = reader;
-            for (;;) {
-                const step = await reader.read();
-                if (step.done) break;
-                stats.chunks += 1;
-                pending.push(step.value);
-                pendingLen += step.value.length;
-                schedule();
-            }
-            flush();
-        } finally {
-            cancelScheduled();
-            ended = true;
-            streamActive = false;
-            currentReader = null;
-            if (begun) {
-                wasm.__st_stream_end();
-                wasm.__st_reader_stream_end();
-                const chat = document.getElementById('chat');
-                const mes = chat ? chat.querySelectorAll('.mes') : null;
-                if (mes && mes.length) highlightSealedBlocks(mes[mes.length - 1]);
-                if (devMode) {
-                    stats.tokens = wasm.__st_stream_tokens();
-                    window.__stStats = stats;
-                    const el = document.getElementById('probe-metrics');
-                    const json = JSON.stringify(stats);
-                    if (el) el.textContent = json;
-                    if (globalThis.__zx_debug) {
-                        zxDomTrace('app.textContent', el ? zxDomName(el) : 'pre#probe-metrics <absent>', json);
-                    }
-                }
-            }
-        }
-    }
-
-    // Zig (char_api.sendMessage) builds the request; the SSE pump stays in JS (ZX16). POST + csrf,
-    // driving the same __st_stream_* machinery the display half uses.
-    window.__st_send_stream = function (url, name, avatar, body) {
-        startStream(url, name, avatar, { method: 'POST', body: body }).then(function () {
-            // SL4 seam: persist the new turns on seal. Dormant until bridge exports __st_persist_turns.
-            if (wasm.__st_persist_turns) wasm.__st_persist_turns();
-        }).catch(function (err) {
-            log.stream.error('send stream failed:', err);
-            /* w3-grp: a failed stream never seals, so tell the rotation or it wedges. */
-            if (wasm.__st_group_stream_failed) wasm.__st_group_stream_failed();
-        });
     };
 
     /* w3-grp: start a group member rotation from a JSON definition (gate driver + roster UI). */
@@ -478,35 +351,6 @@
             freeRaw(buf);
         }
     };
-
-    // Stop: cancel the reader so the fetch loop ends and the finally seals what already arrived.
-    window.__st_send_stop = function () {
-        if (currentReader) currentReader.cancel().catch(function (err) { log.stream.debug('send stop cancel failed:', err); });
-    };
-
-    // Streaming and the reader still fetch through JS, so this csrf cache stays for them; uploads and
-    // exports moved to Zig (net.zig owns their csrf) and keep only the File->bytes + download shims.
-    let csrfToken = null;
-
-    async function ensureCsrfToken() {
-        if (csrfToken) return;
-        try {
-            const res = await loggedFetch('/csrf-token');
-            if (res.ok) {
-                const data = await res.json();
-                csrfToken = data.token;
-            } else {
-                log.net.warn('csrf token fetch returned', res.status);
-            }
-        } catch (err) {
-            log.net.error('csrf token fetch failed:', err);
-        }
-    }
-
-    function withCsrf(headers) {
-        if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
-        return headers;
-    }
 
     // __st_read_file (C4): read a file input to bytes for Zig via __st_file_ready. Non-async so
     // js.global.call(void) succeeds; an empty read (cancelled picker) still calls back to settle Zig.
@@ -594,46 +438,10 @@
                 log.boot.debug('boot_init done');
             }
 
-            // Dev-mode streaming: the verify.sh gate drives hostile/markdown/streaming
-            // bodies through the real pipeline via ?stream=URL&hold=MS query params.
-            var urlParams = new URLSearchParams(window.location.search);
-            var streamParam = urlParams.get('stream');
-            var holdParam = urlParams.get('hold');
-            if (streamParam) {
-                devMode = true;
-                var probe = document.getElementById('probe-metrics');
-                if (!probe) {
-                    probe = document.createElement('pre');
-                    probe.id = 'probe-metrics';
-                    document.body.appendChild(probe);
-                }
-                var holdMs = parseInt(holdParam, 10) || 0;
-
-                if (streamParam === '1') {
-                    // Default: stream 200 tokens from /dev/stream
-                    setTimeout(function () {
-                        startStream('/dev/stream?n=200', 'Seraphina').catch(function (err) {
-                            log.stream.error('dev stream failed:', err);
-                        });
-                    }, holdMs);
-                } else if (streamParam === '2') {
-                    // Two consecutive streams with distinct token prefixes
-                    setTimeout(function () {
-                        startStream('/dev/stream?n=20&prefix=aaa', 'First').then(function () {
-                            return startStream('/dev/stream?n=20&prefix=bbb', 'Second');
-                        }).catch(function (err) {
-                            log.stream.error('dev stream pair failed:', err);
-                        });
-                    }, holdMs);
-                } else {
-                    // Custom URL (URL-encoded path from verify.sh)
-                    setTimeout(function () {
-                        startStream(streamParam, 'Seraphina').catch(function (err) {
-                            log.stream.error('dev stream failed:', err);
-                        });
-                    }, holdMs);
-                }
-            }
+            // Dev-mode streaming (verify.sh ?stream=URL&hold=MS harness) is Zig-driven now:
+            // stream_drive.__st_dev_stream_init reads the params, creates #probe-metrics, and drives the
+            // streams through the same door pump a real send uses. No-op without ?stream.
+            if (wasm.__st_dev_stream_init) wasm.__st_dev_stream_init();
 
             log.boot.info('init complete');
         } catch (err) {

@@ -2,7 +2,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const store = @import("./store.zig");
 const pager = @import("./pager.zig");
-const stream_mod = @import("./stream.zig");
 const char_store = @import("./character_store.zig");
 const character_view = @import("./character_view.zig");
 const persona_store = @import("./persona_store.zig");
@@ -19,14 +18,13 @@ const regions = @import("./regions.zig");
 const reveal = @import("./reveal.zig");
 const instrument = @import("./instrument.zig");
 const telemetry = @import("./telemetry.zig"); // C5: uncaught-error + click diagnostics log here
+const stream_drive = @import("./stream_drive.zig"); // C2: Zig-owned SSE lifecycle + door pump driver
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
 const chars_log = std.log.scoped(.chars);
 const personas_log = std.log.scoped(.personas);
 const stream_log = std.log.scoped(.stream);
-
-var live: stream_mod.Stream = .{ .allocator = store.page_gpa, .store = &store.global };
 
 fn doorBuf(addr: usize, len: usize) []u8 {
     if (addr == 0 or len == 0) return &.{};
@@ -211,46 +209,11 @@ fn seedDemo() callconv(.c) void {
     regions.bumpMessageLog();
 }
 
-fn streamBegin(name_ptr: usize, name_len: usize, avatar_ptr: usize, avatar_len: usize) callconv(.c) u32 {
-    const name = doorBuf(name_ptr, name_len);
-    const avatar = doorBuf(avatar_ptr, avatar_len);
-    live.begin(name, avatar) catch |err| {
-        store.global.allocator.free(name);
-        store.global.allocator.free(avatar);
-        stream_log.err("stream_begin: {s}, stream not started", .{@errorName(err)});
-        return 1;
-    };
-    regions.bumpMessageLog();
-    return 0;
-}
-
-fn streamAppend(ptr: usize, len: usize) callconv(.c) void {
-    const buf = doorBuf(ptr, len);
-    defer store.global.allocator.free(buf);
-    live.feed(buf) catch |err| {
-        stream_log.err("stream_append: {s}, stream sealed early", .{@errorName(err)});
-        live.end();
-    };
-    regions.bumpMessageLog();
-}
-
-fn streamEnd() callconv(.c) void {
-    live.end();
-    regions.bumpMessageLog();
-}
-
-fn streamTokens() callconv(.c) usize {
-    return live.tokens;
-}
-
-/// Called by the JS pump after a send's stream seals: persist the assistant reply (char_api owns the
-/// append). The user turn is persisted synchronously on send, so this handles the reply half only.
+/// Called after a send's stream seals (stream_drive drives this now): persist the assistant reply
+/// (char_api owns the append). The user turn is persisted synchronously on send, so this handles the
+/// reply half only.
 fn persistTurns() callconv(.c) void {
     char_api.persistNewTurns();
-}
-
-fn streamDone() callconv(.c) u32 {
-    return @intFromBool(live.state == .done);
 }
 
 fn messageViewRenders() callconv(.c) usize {
@@ -329,12 +292,8 @@ comptime {
         @export(&addPersona, .{ .name = "__st_add_persona" });
         @export(&clearPersonas, .{ .name = "__st_clear_personas" });
         @export(&selectPersona, .{ .name = "__st_select_persona" });
-        @export(&streamBegin, .{ .name = "__st_stream_begin" });
-        @export(&streamAppend, .{ .name = "__st_stream_append" });
-        @export(&streamEnd, .{ .name = "__st_stream_end" });
-        @export(&streamTokens, .{ .name = "__st_stream_tokens" });
-        @export(&streamDone, .{ .name = "__st_stream_done" });
         @export(&persistTurns, .{ .name = "__st_persist_turns" });
+        _ = stream_drive; // C2: force-link the streaming orchestrator's exports
         // w3-grp
         @export(&groupSend, .{ .name = "__st_group_send" });
         @export(&groupStreamFailed, .{ .name = "__st_group_stream_failed" });
