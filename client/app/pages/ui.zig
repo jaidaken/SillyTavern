@@ -11,6 +11,7 @@ const ui_state = @import("./ui_state.zig");
 const regions = @import("./regions.zig");
 const dom_event = @import("./dom_event.zig");
 const dropdown_nav = @import("./dropdown_nav.zig");
+const notifications = @import("./notifications.zig");
 
 const log = std.log.scoped(.panels);
 
@@ -53,6 +54,9 @@ pub fn motionClass() []const u8 {
 // Mutations re-render only the Shell region so it reflects the new state.
 pub fn toggle(id: PanelId) void {
     ui.panels.toggle(id);
+    // Opening the notifications drawer IS the read receipt, so the badge clears as the list is shown.
+    // Closing it must not, or a toast arriving while the drawer is open would be marked read unseen.
+    if (id == .notifications and ui.panels.isActive(.notifications)) notifications.markAllRead();
     regions.bumpShell();
 }
 pub fn close() void {

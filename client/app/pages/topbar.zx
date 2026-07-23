@@ -44,13 +44,18 @@ pub fn TopBar(allocator: zx.Allocator) zx.Component {
                     <button
                         id={p.dom_id}
                         type="button"
-                        class="icon grid size-[2.1rem] cursor-pointer place-items-center rounded-md border-0 bg-transparent text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-text aria-expanded:bg-surface-2 aria-expanded:text-accent max-[768px]:size-[1.8rem] max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:shrink-0 max-[768px]:before:size-[0.95rem]"
+                        class="icon relative grid size-[2.1rem] cursor-pointer place-items-center rounded-md border-0 bg-transparent text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-text aria-expanded:bg-surface-2 aria-expanded:text-accent max-[768px]:size-[1.8rem] max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:shrink-0 max-[768px]:before:size-[0.95rem]"
                         data-icon={p.icon}
-                        aria-label={p.title}
+                        aria-label={labelFor(allocator, p)}
                         aria-expanded={if (ui.isActive(p.id)) "true" else "false"}
                         aria-controls="panel-view"
                         onclick={ui.onDrawer}
-                    ></button>
+                    >{if (badgeFor(p)) |count| (
+                        <span
+                            class="notif-badge pointer-events-none absolute top-[0.1rem] right-[0.05rem] grid min-w-[1rem] place-items-center rounded-full bg-accent px-[0.25rem] font-mono text-[0.6rem] leading-[0.95rem] text-on-accent"
+                            aria-hidden="true"
+                        >{count}</span>
+                    )}</button>
                 )}
             </nav>
             {if (ui.activeDrawer()) |p| (
@@ -60,8 +65,29 @@ pub fn TopBar(allocator: zx.Allocator) zx.Component {
     );
 }
 
+// The unread badge, on the bell only. Null everywhere else, so the markup renders no badge node at
+// all rather than an empty one. The count is capped in notifications.badgeText.
+fn badgeFor(p: ui.Panel) ?[]const u8 {
+    if (p.id != .notifications) return null;
+    var buf: [4]u8 = undefined;
+    const text = notifications.badgeText(&buf);
+    if (text.len == 0) return null;
+    return zx.allocator.dupe(u8, text) catch null;
+}
+
+/// The badge is aria-hidden decoration, so the COUNT has to reach assistive tech through the
+/// button's own name or it is announced as a bare "Notifications" whatever is waiting (WD38).
+fn labelFor(alloc: std.mem.Allocator, p: ui.Panel) []const u8 {
+    const badge = badgeFor(p) orelse return p.title;
+    var buf: [48]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, "{s}, {s} unread", .{ p.title, badge }) catch return p.title;
+    return alloc.dupe(u8, text) catch p.title;
+}
+
+const std = @import("std");
 const zx = @import("zx");
 const ui = @import("./ui.zig");
+const notifications = @import("./notifications.zig");
 const TopDrawer = @import("./panels/topdrawer.zx").TopDrawer;
 // The .zx transpiler appends `.len`, so the loop target must already be a slice.
 const panel_list: []const ui.Panel = &ui.panels;

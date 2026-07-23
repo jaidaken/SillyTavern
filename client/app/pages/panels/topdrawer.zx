@@ -39,6 +39,8 @@ pub fn TopDrawer(allocator: zx.Allocator, props: DrawerProps) zx.Component {
                 ) else if (p.id == .chat_manager) (
                     <ChatManagerBody />
                 // end w3-chatmgr
+                ) else if (p.id == .notifications) (
+                    <NotificationsBody />
                 ) else (
                     <></>
                 )}
@@ -59,3 +61,5 @@ const ExtensionsBody = @import("extensions_body.zx").ExtensionsBody;
 const CardEditorBody = @import("card_editor_body.zx").CardEditorBody;
 // w3-chatmgr
 const ChatManagerBody = @import("chat_manager_body.zx").ChatManagerBody;
+// P1-B
+const NotificationsBody = @import("notifications_body.zx").NotificationsBody;

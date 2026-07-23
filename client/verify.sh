@@ -409,9 +409,9 @@ if "__load_error" in mob:
 panels = mob.get("panels", [])
 tb = mob.get("topbar", {})
 check("mobile: no horizontal overflow", not mob.get("overflowX", True))
-# w3-chatmgr + w3-grp: 10 -> 12 (chat_manager and groups drawers joined the panel set).
-check("mobile: topbar 12 taps >=44px reachable", tb.get("count") == 12 and not has(mob, "topbar-count", "topbar-tap", "topbar-reachable", "topbar-scroll"))
-check("mobile: 12 panels open >=80% wide in view", len(panels) == 12 and all(p.get("open") for p in panels) and not has(mob, "panel-open", "panel-width", "panel-inviewport"), f"{len(panels)} panels")
+# w3-chatmgr + w3-grp: 10 -> 12; P1-B notifications drawer: 12 -> 13.
+check("mobile: topbar 13 taps >=44px reachable", tb.get("count") == 13 and not has(mob, "topbar-count", "topbar-tap", "topbar-reachable", "topbar-scroll"))
+check("mobile: 13 panels open >=80% wide in view", len(panels) == 13 and all(p.get("open") for p in panels) and not has(mob, "panel-open", "panel-width", "panel-inviewport"), f"{len(panels)} panels")
 check("mobile: panels scrollable on overflow", not has(mob, "panel-scroll"))
 check("mobile: reachability sweep 0 clipped", not has(mob, "panel-reachable"), f"{sum(p.get('clippedControls', 0) for p in panels)} clipped")
 check("mobile: 0 console errors", not has(mob, "console-errors"), f"{len(mob.get('consoleErrors', []))} err")

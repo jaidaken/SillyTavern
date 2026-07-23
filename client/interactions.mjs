@@ -4541,11 +4541,15 @@ async function main() {
 
             await page.eval('window.__notifObs.takeRecords()');
             const where = await page.eval('window.__notifMuts');
-            const strayed = where.composer + where.chat + where.shell + where.other;
+            // Shell is EXPECTED to move now: the bell's unread badge is computed from the same list,
+            // so a push that left the topbar alone would be the bug. What must not move is the state
+            // the user owns, which lives in the composer and the chat log. C-NOTIF-11 asserts the
+            // shell side positively, so the shell count dropping to zero cannot pass unnoticed here.
+            const strayed = where.composer + where.chat + where.other;
             // toast > 0 is the instrument's own liveness proof: an observer that never fired reads
             // exactly like perfect isolation (gate-rows-that-can-fail F17).
             row('must', where.toast > 0 && strayed === 0,
-                'C-NOTIF-5 the whole toast lifecycle mutated no DOM outside the overlay',
+                'C-NOTIF-5 the toast lifecycle left the composer and the chat log untouched',
                 JSON.stringify(where));
 
             const kept = await page.eval(`(function(){
@@ -4596,6 +4600,162 @@ async function main() {
                 `registered=${secondSweep.length} id=${secondSweep[0]} cleared=${secondCleared} totalSweeps=${t2.ids.length}`);
 
             await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: spy.identifier }, sessionId);
+
+            // Three pushes have happened above and none were read, so the badge is the count of them.
+            // Asserting the NUMBER, not merely that a badge exists: a badge stuck at 1 looks correct.
+            const bell = await page.eval(`(function(){
+                const b = document.getElementById('d-notifications');
+                if (!b) return null;
+                const badge = b.querySelector('.notif-badge');
+                return { icon: b.getAttribute('data-icon'), label: b.getAttribute('aria-label'),
+                         badge: badge ? badge.textContent : null,
+                         badgeHidden: badge ? badge.getAttribute('aria-hidden') : null };
+            })()`);
+            row('must', !!bell && bell.icon === 'bell' && bell.badge === '3'
+                && bell.label === 'Notifications, 3 unread' && bell.badgeHidden === 'true',
+                'C-NOTIF-10 the bell carries the unread count in its badge and in its name',
+                JSON.stringify(bell));
+
+            await page.click('#d-notifications');
+            const listed = await page.waitFor("document.querySelectorAll('#notif-list li').length === 3", 4000);
+            const drawer = await page.eval(`(function(){
+                const li = [...document.querySelectorAll('#notif-list li')];
+                return { rows: li.map(function (e) {
+                             return { text: e.querySelector('.notif-text').textContent,
+                                      age: e.querySelector('.notif-age').textContent,
+                                      level: e.getAttribute('data-level') };
+                         }),
+                         empty: !!document.querySelector('.panel-empty') };
+            })()`);
+            const r = drawer.rows;
+            row('must', listed && r.length === 3
+                && r[0].text === 'probe toast long' && r[2].text === 'probe toast alpha'
+                && r[0].level === 'warning' && r[2].level === 'err'
+                && r.every((e) => e.age.length > 0) && !drawer.empty,
+                'C-NOTIF-11 the drawer lists the history newest first, with each level and age',
+                JSON.stringify(r));
+
+            // Opening the drawer is the read receipt, so the badge must be gone WHILE the list is up.
+            const afterOpen = await page.eval(`(function(){
+                const b = document.getElementById('d-notifications');
+                return { badge: !!b.querySelector('.notif-badge'), label: b.getAttribute('aria-label') };
+            })()`);
+            row('must', afterOpen.badge === false && afterOpen.label === 'Notifications',
+                'C-NOTIF-12 opening the drawer marks the list read and clears the badge',
+                JSON.stringify(afterOpen));
+
+            await page.click('#notif-clear');
+            const cleared = await page.waitFor("document.querySelector('#panel-view .panel-empty') && !document.querySelector('#notif-list')", 4000);
+            const emptyText = await page.eval("(document.querySelector('#panel-view .panel-empty')||{}).textContent || ''");
+            row('must', cleared && emptyText.length > 40 && /reload/i.test(emptyText),
+                'C-NOTIF-13 Clear empties the list and leaves a real empty state, not a blank panel',
+                `cleared=${cleared} copy=${JSON.stringify(emptyText.slice(0, 60))}`);
+
+            // Four levels at once, to prove the ramp DISCRIMINATES. Four identical borders would pass
+            // any "is it coloured" row, so the assertion is on the count of DISTINCT colours, plus a
+            // measured contrast floor against the toast ground (WD4 non-text 3:1).
+            await page.eval(`window.__st_notify('info','ramp info',9000);window.__st_notify('success','ramp success',9000);`
+                + `window.__st_notify('warning','ramp warning',9000);window.__st_notify('err','ramp error',9000);`);
+            await page.waitFor("document.querySelectorAll('#notifications div[data-level]').length === 4", 4000);
+            const ramp = await page.eval(`(function(){
+                ${contrastFn}
+                const el = [...document.querySelectorAll('#notifications div[data-level]')];
+                const edges = el.map(function (e) { return getComputedStyle(e).borderLeftColor; });
+                const ground = getComputedStyle(el[0]).backgroundColor;
+                return { levels: el.map(function (e) { return e.getAttribute('data-level'); }),
+                         edges: edges, distinct: new Set(edges).size,
+                         width: getComputedStyle(el[0]).borderLeftWidth,
+                         minContrast: Math.round(Math.min.apply(null, edges.map(function (c) { return contrast(c, ground); })) * 100) / 100 };
+            })()`);
+            row('must', ramp.distinct === 4 && ramp.width === '4px' && ramp.minContrast >= 3,
+                'C-NOTIF-14 the four status levels paint four distinct edges, each clearing 3:1 on the toast ground',
+                `distinct=${ramp.distinct} width=${ramp.width} minContrast=${ramp.minContrast} ${JSON.stringify(ramp.edges)}`);
+
+            // A toast already on screen must not replay its entrance when the NEXT one arrives. The
+            // list renders unkeyed, so this asks whether the vdom patches position 0 in place or
+            // rebuilds it: a rebuilt node restarts its 180ms fade from opacity 0, which reads as the
+            // whole stack flickering every time a notification lands. Marked node, then one push.
+            await page.eval("document.querySelector('#notifications div[data-level]').__toastMark = 'FIRST';");
+            await sleep(400);
+            await page.eval("window.__st_notify('info','stack probe',9000)");
+            await page.waitFor("document.querySelectorAll('#notifications div[data-level]').length === 5", 4000);
+            const stack = await page.eval(`(function(){
+                const el = document.querySelector('#notifications div[data-level]');
+                return { sameNode: el.__toastMark === 'FIRST', opacity: Number(getComputedStyle(el).opacity),
+                         text: el.textContent };
+            })()`);
+            row('must', stack.sameNode && stack.opacity > 0.9 && stack.text === 'ramp info',
+                'C-NOTIF-18 an arriving toast does not rebuild or reflash the ones already up',
+                JSON.stringify(stack));
+
+            // THE MOBILE ROW. #chat-root sets overflow-x:clip below 768px and the overlay is a fixed
+            // child of it, so "is it in the DOM" proves nothing here: the question is whether the
+            // clip ate it. elementFromPoint answers that, because a clipped node is not hit-testable.
+            const wideW = await page.eval('window.innerWidth');
+            await page.cdp.send('Emulation.setDeviceMetricsOverride',
+                { width: 390, height: 844, deviceScaleFactor: 1, mobile: false }, page.sessionId);
+            await page.waitFor('window.innerWidth === 390', 3000);
+            // Sampled before AND after a settle window, because a single immediate read cannot tell
+            // "the clip ate it" from "caught it mid-entrance", and those want opposite fixes. The
+            // pre-sample is a diagnostic only: it read 0 while the row above still ran the 180ms
+            // fade, which is why the assertion is on the settled sample.
+            const phoneAtSwitch = await page.eval("Number(getComputedStyle(document.querySelector('#notifications div[data-level]')).opacity)");
+            await sleep(600);
+            const phone = await page.eval(`(function(){
+                const el = document.querySelector('#notifications div[data-level]');
+                if (!el) return { seen: false };
+                const r = el.getBoundingClientRect();
+                const cx = Math.round(r.left + r.width / 2), cy = Math.round(r.top + r.height / 2);
+                const hit = document.elementFromPoint(cx, cy);
+                const cs = getComputedStyle(el);
+                return { seen: true, w: Math.round(r.width), h: Math.round(r.height),
+                         left: Math.round(r.left), right: Math.round(r.right),
+                         top: Math.round(r.top), bottom: Math.round(r.bottom),
+                         inViewport: r.left >= 0 && r.top >= 0 && r.right <= 390 && r.bottom <= 844,
+                         hitsSelf: !!hit && (hit === el || el.contains(hit)),
+                         opacity: Number(cs.opacity), vis: cs.visibility, disp: cs.display };
+            })()`);
+            await page.cdp.send('Emulation.clearDeviceMetricsOverride', {}, page.sessionId);
+            const restored = await page.waitFor(`window.innerWidth === ${wideW}`, 5000);
+            row('must', phone.seen && phone.w > 0 && phone.h > 0 && phone.inViewport && phone.hitsSelf
+                && phone.opacity > 0.9 && phone.vis === 'visible' && phone.disp !== 'none',
+                'C-NOTIF-15 a toast is on screen and hit-testable at 390px, not eaten by the clip',
+                `${JSON.stringify(phone)} opacityAtSwitch=${phoneAtSwitch}`);
+            row('must', restored,
+                'C-NOTIF-16 the 390px override is fully restored before later rows run',
+                `wide=${wideW} now=${await page.eval('window.innerWidth')}`);
+
+            // Reduced motion must make the toast GENTLER, never absent: a fade that never runs leaves
+            // opacity at 0, and every DOM row still passes over an invisible toast (WD25).
+            //
+            // The in-app motion setting deliberately OVERRIDES the OS preference (the
+            // :root:has(#shell.motion-on) rule), and row A5a set it to On earlier in this run, so the
+            // OS path is only reachable with the stored pref cleared, which is what a first-time
+            // visitor with reduce set actually has. Clearing it needs a reload to be read.
+            await page.cdp.send('Emulation.setEmulatedMedia',
+                { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] }, page.sessionId);
+            await page.eval("localStorage.removeItem('st-motion')");
+            await page.navigate(`${args.base}/?demo=1`);
+            await page.waitFor(hydrated, 15000);
+            await page.eval("window.__st_notify('info','reduced motion toast',9000)");
+            const rmShown = await page.waitFor("document.querySelector('#notifications div[data-level]')", 4000);
+            await sleep(400);
+            const rm = await page.eval(`(function(){
+                const el = document.querySelector('#notifications div[data-level]');
+                if (!el) return { move: getComputedStyle(document.documentElement).getPropertyValue('--move').trim() };
+                const cs = getComputedStyle(el);
+                const r = el.getBoundingClientRect();
+                return { move: getComputedStyle(document.documentElement).getPropertyValue('--move').trim(),
+                         opacity: Number(cs.opacity), anim: cs.animationName,
+                         w: Math.round(r.width), h: Math.round(r.height) };
+            })()`);
+            await page.cdp.send('Emulation.setEmulatedMedia', { features: [] }, page.sessionId);
+            await page.eval("localStorage.setItem('st-motion','on')");
+            row('must', rmShown && rm.move === '0' && rm.opacity > 0.9 && rm.anim === 'toast-in'
+                && rm.w > 0 && rm.h > 0,
+                'C-NOTIF-17 under reduced motion the toast still lands and settles fully opaque',
+                JSON.stringify(rm));
+
         }
         /* C-NOTIF END */
 

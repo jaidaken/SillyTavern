@@ -44,6 +44,17 @@
     --color-st-quote: oklch(0.850 0.088 78);
     --color-st-em: oklch(0.800 0.014 74);
 
+    /* Status ramp (WD1-WD5). Four SEMANTIC hues, held apart from the amber accent on purpose: the
+       accent means "you can act on this", so a status that borrowed it would say the wrong thing.
+       Hue is the only carrier that changes; L sits in a narrow 0.72-0.82 band so no one level shouts
+       over the others, and chroma stays under the accent's 0.130 except for error, which is the one
+       allowed to. All four are read against --color-surface-2 (L 0.262), the toast and row ground.
+       Warning is pushed to hue 95 rather than the natural amber 72, which the accent already owns. */
+    --color-status-info: oklch(0.760 0.075 240);
+    --color-status-success: oklch(0.780 0.105 150);
+    --color-status-warning: oklch(0.830 0.115 95);
+    --color-status-error: oklch(0.735 0.140 25);
+
     /* Accent mixes for the CHROME, named once so one amber drives every state surface. Each sits on
        its own ground rather than as alpha over it, so it reads the same whatever is behind it. The
        reading surface deliberately does NOT use these: inside #chat a reading theme repoints the
@@ -111,6 +122,16 @@
     @keyframes drawer-in {
         from { opacity: 0; transform: translateY(calc(var(--move) * -10px)); }
         to { opacity: 1; transform: translateY(0); }
+    }
+    /* A toast slides in from its own edge and leaves the same way. Both scale MOVEMENT by --move, so
+       under reduced motion the fade still plays and the travel does not (WD25). */
+    @keyframes toast-in {
+        from { opacity: 0; transform: translateY(calc(var(--move) * 8px)) scale(calc(1 - var(--move) * 0.02)); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes toast-out {
+        from { opacity: 1; transform: translateY(0); }
+        to { opacity: 0; transform: translateY(calc(var(--move) * 6px)); }
     }
 }
 
@@ -185,6 +206,7 @@
 [data-icon="history"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>'); }
 /* w3-grp */
 [data-icon="users"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'); }
+[data-icon="bell"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>'); }
 
 /* ---- Fonts (self-hosted, latin subset). Newsreader is a variable face: one file carries weight
    400-600 plus optical sizing, so names read as display and body as text. */
@@ -860,6 +882,45 @@
     outline: 2px solid var(--color-on-accent);
     outline-offset: 2px;
 }
+
+/* Notifications. The toast in the overlay and the row in the drawer are one visual idea at two
+   sizes, so they share the ground, the radius and the level edge; only the layout differs. Written
+   as rules rather than utilities because notifications.zig computes these class names and the
+   tailwind scan reads *.zx only (see the @source note at the top). Depth is border against the
+   raised surface, never a shadow (WD16, dark UI). */
+.st-toast,
+.st-note {
+    border: 1px solid var(--color-border);
+    border-left-width: 4px;
+    border-radius: var(--radius-md);
+    background: var(--color-surface-2);
+    padding-block: 0.5rem;
+    padding-inline: 0.75rem;
+    font-size: var(--text-sm);
+    line-height: var(--leading-ui);
+    color: var(--color-text);
+}
+/* Declared literally rather than as an --animate-* theme key: those generate an animate-toast-in
+   utility class nobody uses, and the shorthand has one consumer. (A var() indirection was tried on a
+   theory that it restarted the animation; measured, it made no difference. C-NOTIF-18 holds the real
+   property, that an arriving toast does not rebuild the ones already up.) */
+.st-toast {
+    pointer-events: auto;
+    animation: toast-in 180ms var(--ease-settle);
+}
+.st-toast.is-leaving {
+    animation: toast-out 240ms var(--ease-settle) forwards;
+}
+.st-note {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: baseline;
+    column-gap: 0.75rem;
+}
+.st-toast-info, .st-note-info { border-left-color: var(--color-status-info); }
+.st-toast-success, .st-note-success { border-left-color: var(--color-status-success); }
+.st-toast-warning, .st-note-warning { border-left-color: var(--color-status-warning); }
+.st-toast-err, .st-note-err { border-left-color: var(--color-status-error); }
 
 /* ===================================================================================
    GENERATED-STATE RULES. Deliberately UNLAYERED, so they beat any utility: the element

@@ -21,7 +21,7 @@ pub fn Toasts(ctx: *zx.ComponentCtx(void)) zx.Component {
             aria-live="polite"
         >
             {for (notifications.toasts()) |n| (
-                <div class={notifications.toastClass(n.level)} data-level={notifications.levelName(n.level)}>{n.text}</div>
+                <div class={notifications.toastClass(n)} data-level={notifications.levelName(n.level)}>{n.text}</div>
             )}
         </div>
     );

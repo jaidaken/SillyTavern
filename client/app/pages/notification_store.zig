@@ -26,6 +26,10 @@ pub const Notification = struct {
     /// Milliseconds of toast life left. Zero means faded: history-only from here on.
     remaining_ms: u32,
     read: bool,
+    /// Epoch ms the caller stamped at push. OPAQUE here: the store never reads a clock and never
+    /// interprets this, which is what keeps expiry deterministic. The drawer pairs it with a clock
+    /// read of its own to phrase an age.
+    created_ms: f64,
 };
 
 pub const Store = struct {
@@ -77,10 +81,10 @@ pub const Store = struct {
     }
 
     /// Record a notification and show it as a toast for `ttl_ms`. Returns its id.
-    pub fn push(self: *Store, level: Level, text: []const u8, ttl_ms: u32) Allocator.Error!u32 {
+    pub fn push(self: *Store, level: Level, text: []const u8, ttl_ms: u32, created_ms: f64) Allocator.Error!u32 {
         const owned = try self.allocator.dupe(u8, text);
         errdefer self.allocator.free(owned);
-        return self.pushOwned(level, owned, ttl_ms);
+        return self.pushOwned(level, owned, ttl_ms, created_ms);
     }
 
     /// `push` over a formatted message, without the intermediate copy `push` would take.
@@ -88,15 +92,16 @@ pub const Store = struct {
         self: *Store,
         level: Level,
         ttl_ms: u32,
+        created_ms: f64,
         comptime fmt: []const u8,
         args: anytype,
     ) Allocator.Error!u32 {
         const owned = try std.fmt.allocPrint(self.allocator, fmt, args);
         errdefer self.allocator.free(owned);
-        return self.pushOwned(level, owned, ttl_ms);
+        return self.pushOwned(level, owned, ttl_ms, created_ms);
     }
 
-    fn pushOwned(self: *Store, level: Level, owned: []u8, ttl_ms: u32) Allocator.Error!u32 {
+    fn pushOwned(self: *Store, level: Level, owned: []u8, ttl_ms: u32, created_ms: f64) Allocator.Error!u32 {
         try self.items.ensureTotalCapacity(self.allocator, capacity);
         if (self.items.items.len >= capacity) {
             self.allocator.free(self.items.items[0].text);
@@ -110,6 +115,7 @@ pub const Store = struct {
             .text = owned,
             .remaining_ms = ttl_ms,
             .read = false,
+            .created_ms = created_ms,
         });
         self.rebuildToasts();
         return id;
@@ -148,8 +154,8 @@ test "push_records_the_text_and_hands_back_a_fresh_id" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const first = try store.push(.info, "saved", 3000);
-    const second = try store.push(.err, "backend offline", 6000);
+    const first = try store.push(.info, "saved", 3000, 0);
+    const second = try store.push(.err, "backend offline", 6000, 0);
 
     try std.testing.expect(first != second);
     try std.testing.expectEqual(@as(usize, 2), store.history().len);
@@ -159,12 +165,29 @@ test "push_records_the_text_and_hands_back_a_fresh_id" {
     try std.testing.expectEqual(@as(u32, 3000), store.history()[0].remaining_ms);
 }
 
+test "push_carries_the_caller_stamp_verbatim_and_the_sweep_never_ages_it" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    _ = try store.push(.info, "first", 1000, 1_700_000_000_000);
+    _ = try store.pushFmt(.warning, 1000, 1_700_000_060_500, "n{d}", .{7});
+
+    try std.testing.expectEqual(@as(f64, 1_700_000_000_000), store.history()[0].created_ms);
+    try std.testing.expectEqual(@as(f64, 1_700_000_060_500), store.history()[1].created_ms);
+
+    // The sweep ages remaining_ms and nothing else. If it touched the stamp, every entry's displayed
+    // age would drift by however long its toast happened to be up.
+    _ = store.tick(1000);
+    try std.testing.expectEqual(@as(f64, 1_700_000_000_000), store.history()[0].created_ms);
+    try std.testing.expectEqual(@as(u32, 0), store.history()[0].remaining_ms);
+}
+
 test "push_copies_the_caller_text_so_a_reused_buffer_cannot_rewrite_history" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
     var scratch: [8]u8 = "alpha   ".*;
-    _ = try store.push(.info, scratch[0..5], 1000);
+    _ = try store.push(.info, scratch[0..5], 1000, 0);
     @memcpy(scratch[0..5], "omega");
 
     try std.testing.expectEqualStrings("alpha", store.history()[0].text);
@@ -178,7 +201,7 @@ test "the_history_evicts_the_oldest_once_a_push_overflows_capacity" {
     var i: usize = 0;
     while (i < 60) : (i += 1) {
         const text = try std.fmt.bufPrint(&buf, "n{d}", .{i});
-        _ = try store.push(.info, text, 1000);
+        _ = try store.push(.info, text, 1000, 0);
     }
 
     try std.testing.expectEqual(@as(usize, 50), capacity);
@@ -190,7 +213,7 @@ test "the_history_evicts_the_oldest_once_a_push_overflows_capacity" {
 test "tick_decrements_each_live_toast_and_fades_it_at_zero" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
-    _ = try store.push(.info, "saved", 1000);
+    _ = try store.push(.info, "saved", 1000, 0);
 
     try std.testing.expectEqual(false, store.tick(250));
     try std.testing.expectEqual(@as(u32, 750), store.history()[0].remaining_ms);
@@ -209,7 +232,7 @@ test "tick_decrements_each_live_toast_and_fades_it_at_zero" {
 test "a_tick_wider_than_the_remaining_life_fades_the_toast_without_wrapping" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
-    _ = try store.push(.info, "saved", 100);
+    _ = try store.push(.info, "saved", 100, 0);
 
     try std.testing.expectEqual(true, store.tick(5000));
     try std.testing.expectEqual(@as(u32, 0), store.history()[0].remaining_ms);
@@ -221,8 +244,8 @@ test "a_tick_wider_than_the_remaining_life_fades_the_toast_without_wrapping" {
 test "a_long_lived_toast_outlives_a_shorter_one_pushed_after_it" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
-    _ = try store.push(.err, "backend offline", 4000);
-    _ = try store.push(.info, "saved", 500);
+    _ = try store.push(.err, "backend offline", 4000, 0);
+    _ = try store.push(.info, "saved", 500, 0);
 
     try std.testing.expectEqual(@as(usize, 2), store.toasts().len);
     try std.testing.expectEqual(true, store.tick(500));
@@ -235,14 +258,14 @@ test "a_long_lived_toast_outlives_a_shorter_one_pushed_after_it" {
 test "unread_count_rises_with_each_push_and_mark_all_read_clears_it" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
-    _ = try store.push(.info, "one", 1000);
-    _ = try store.push(.info, "two", 1000);
+    _ = try store.push(.info, "one", 1000, 0);
+    _ = try store.push(.info, "two", 1000, 0);
 
     try std.testing.expectEqual(@as(usize, 2), store.unreadCount());
     store.markAllRead();
     try std.testing.expectEqual(@as(usize, 0), store.unreadCount());
 
-    _ = try store.push(.warning, "three", 1000);
+    _ = try store.push(.warning, "three", 1000, 0);
     try std.testing.expectEqual(@as(usize, 1), store.unreadCount());
     try std.testing.expectEqual(true, store.history()[0].read);
     try std.testing.expectEqual(false, store.history()[2].read);
@@ -251,7 +274,7 @@ test "unread_count_rises_with_each_push_and_mark_all_read_clears_it" {
 test "fading_a_toast_leaves_it_unread_so_the_badge_survives_the_fade" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
-    _ = try store.push(.info, "saved", 250);
+    _ = try store.push(.info, "saved", 250, 0);
 
     try std.testing.expectEqual(true, store.tick(250));
     try std.testing.expectEqual(@as(usize, 1), store.unreadCount());
@@ -264,8 +287,8 @@ test "has_toasts_goes_false_once_the_last_toast_fades_and_true_again_on_the_next
     defer store.deinit();
     try std.testing.expectEqual(false, store.hasToasts());
 
-    _ = try store.push(.info, "one", 500);
-    _ = try store.push(.info, "two", 250);
+    _ = try store.push(.info, "one", 500, 0);
+    _ = try store.push(.info, "two", 250, 0);
     try std.testing.expectEqual(true, store.hasToasts());
 
     try std.testing.expectEqual(true, store.tick(250));
@@ -275,15 +298,15 @@ test "has_toasts_goes_false_once_the_last_toast_fades_and_true_again_on_the_next
     try std.testing.expectEqual(true, store.tick(250));
     try std.testing.expectEqual(false, store.hasToasts());
 
-    _ = try store.push(.info, "three", 500);
+    _ = try store.push(.info, "three", 500, 0);
     try std.testing.expectEqual(true, store.hasToasts());
 }
 
 test "clear_empties_both_the_history_and_the_toasts" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
-    _ = try store.push(.info, "one", 1000);
-    _ = try store.push(.info, "two", 1000);
+    _ = try store.push(.info, "one", 1000, 0);
+    _ = try store.push(.info, "two", 1000, 0);
 
     store.clear();
     try std.testing.expectEqual(@as(usize, 0), store.history().len);
@@ -296,7 +319,7 @@ test "push_fmt_formats_its_arguments_into_the_recorded_text" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    _ = try store.pushFmt(.err, 6000, "upload failed: {s} ({d})", .{ "card.png", 413 });
+    _ = try store.pushFmt(.err, 6000, 0, "upload failed: {s} ({d})", .{ "card.png", 413 });
     try std.testing.expectEqualStrings("upload failed: card.png (413)", store.history()[0].text);
     try std.testing.expectEqual(@as(u32, 6000), store.history()[0].remaining_ms);
 }
@@ -309,9 +332,9 @@ fn pushAndDrain(allocator: Allocator) !void {
     var i: usize = 0;
     while (i < capacity + 3) : (i += 1) {
         const text = try std.fmt.bufPrint(&buf, "n{d}", .{i});
-        _ = try store.push(.info, text, 500);
+        _ = try store.push(.info, text, 500, 0);
     }
-    _ = try store.pushFmt(.warning, 500, "n{d}", .{i});
+    _ = try store.pushFmt(.warning, 500, 0, "n{d}", .{i});
     _ = store.tick(500);
 }
 
