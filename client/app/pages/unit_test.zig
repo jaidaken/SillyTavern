@@ -24,6 +24,8 @@ comptime {
     _ = @import("md_highlight.zig");
     _ = @import("completion.zig");
     _ = @import("ui_state.zig");
+    // The edge-tab reveal geometry; pointer_track.zig is the zx-importing DOM half.
+    _ = @import("reveal_zone.zig");
     _ = @import("char_data.zig");
     _ = @import("generate.zig");
     _ = @import("tokenizer.zig");

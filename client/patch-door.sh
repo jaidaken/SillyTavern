@@ -860,6 +860,54 @@ else:
     notes.append("patch-door: D10 SSE streaming getReader pump added "
                  "(__st_stream_open/__st_stream_cancel, chunks -> __st_stream_chunk, seal -> __st_stream_closed)")
 
+# ---------------------------------------------------------------------------
+# D11: ambient pointer tracking (the edge-tab reveal needs a pointer position, not a drag)
+# ---------------------------------------------------------------------------
+# D6 gates the DELEGATED pointermove behind an active drag because the delegation walk stores one jsz
+# slot per dispatch and never reclaims it (measured: 600 ambient moves = +2400 live slots). That gate
+# stays exactly as it is. Ambient tracking rides its OWN window listener instead and crosses FOUR
+# NUMBERS per frame (x, y, innerWidth, innerHeight) straight into __st_pointer_move, so it allocates
+# no handle, touches no registry, and cannot leak a slot however long the pointer moves.
+# Coalesced on rAF: one wasm call per frame at most, whatever the pointer's report rate.
+# Policy stays in Zig (pointer_track.zig owns the flank geometry and the reveal state); the door only
+# reports where the pointer is. A build with no __st_pointer_move export skips the whole block.
+
+ptr_anchor = "  const bridge = new ZxBridge(instance.exports);"
+ptr_block = ptr_anchor + """
+  (function () {
+    const exp = instance.exports;
+    if (!exp.__st_pointer_move) return;
+    let px = -1, py = -1, queued = false;
+    function flush() {
+      queued = false;
+      exp.__st_pointer_move(px, py, window.innerWidth, window.innerHeight);
+    }
+    function mark(x, y) {
+      px = x; py = y;
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(flush);
+    }
+    window.addEventListener("pointermove", (e) => mark(e.clientX, e.clientY), { passive: true });
+    // Pointer left the window (no relatedTarget) or the window lost focus: report it nowhere, so a
+    // revealed tab fades instead of latching on at the last coordinate it saw.
+    window.addEventListener("pointerout", (e) => { if (!e.relatedTarget) mark(-1, -1); }, { passive: true });
+    window.addEventListener("blur", () => mark(-1, -1), { passive: true });
+  })();"""
+
+D11_SENTINEL = "__st_pointer_move"
+
+if D11_SENTINEL in s:
+    notes.append("patch-door: D11 already patched, nothing to do")
+elif s.count(ptr_anchor) != 1:
+    errors.append("patch-door: D11 could not find the ZxBridge construction anchor verbatim "
+                  "(found %d, want 1); door version changed, update patch-door.sh" % s.count(ptr_anchor))
+else:
+    s = s.replace(ptr_anchor, ptr_block, 1)
+    changed = True
+    notes.append("patch-door: D11 ambient pointer tracking added "
+                 "(rAF-coalesced window pointermove -> __st_pointer_move, no delegation, no handles)")
+
 # All-or-nothing: any stale expectation aborts before the write, so a door bump can never ship a
 # half-patched door.
 if errors:

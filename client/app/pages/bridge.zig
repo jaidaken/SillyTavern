@@ -13,6 +13,8 @@ const reader = @import("./reader.zig");
 const group_send = @import("./group_send.zig"); // w3-grp
 const uploads = @import("./uploads.zig"); // C4: the File->bytes callback lands here
 const ui = @import("./ui.zig");
+const proto_flags = @import("./proto_flags.zig");
+const pointer_track = @import("./pointer_track.zig");
 const zx = @import("zx");
 const regions = @import("./regions.zig");
 const reveal = @import("./reveal.zig");
@@ -174,6 +176,9 @@ fn bootInit() callconv(.c) void {
     // char_api without a cycle); wire it before any chat can open.
     reader.resyncFn = char_api.reloadCurrentChat;
     regions.bumpMessageLog();
+    // PROTOTYPE: the ?showtabs / ?sysopen / ?openleft / ?openright screenshot flags, read before the
+    // first paint so a still frame can show a state that a click would otherwise have to open.
+    proto_flags.boot();
     ui.setMotion(ui.storedMotion());
     // Persisted reading prefs land on #chat-root before the first paint of the chat.
     reading_prefs.applyAll();
@@ -402,6 +407,7 @@ comptime {
         @export(&clearPersonas, .{ .name = "__st_clear_personas" });
         @export(&selectPersona, .{ .name = "__st_select_persona" });
         _ = stream_drive; // C2: force-link the streaming orchestrator's exports
+        _ = pointer_track; // force-link __st_pointer_move (door D11 ambient pointer reporting)
         // w3-grp
         @export(&groupSend, .{ .name = "__st_group_send" });
         // C5: diagnostics forwarded from the two irreducible JS listeners

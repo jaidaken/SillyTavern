@@ -12,6 +12,7 @@ const regions = @import("./regions.zig");
 const dom_event = @import("./dom_event.zig");
 const dropdown_nav = @import("./dropdown_nav.zig");
 const notifications = @import("./notifications.zig");
+const dock_metrics = @import("./dock_metrics.zig");
 
 const log = std.log.scoped(.panels);
 
@@ -51,25 +52,56 @@ pub fn motionClass() []const u8 {
     return ui_state.motionClass(ui.motion);
 }
 
+/// Republish both dock widths to the CSS custom properties the panel and its tab position off. A
+/// closed side publishes zero, so its tab sits back on the screen edge.
+fn syncDocks() void {
+    for ([_]Side{ .left, .right }) |side| {
+        dock_metrics.publish(side, if (ui.panels.openId(side) == null) 0 else ui.panels.widthFor(side));
+    }
+}
+
 // Mutations re-render only the Shell region so it reflects the new state.
 pub fn toggle(id: PanelId) void {
     ui.panels.toggle(id);
     // Opening the notifications drawer IS the read receipt, so the badge clears as the list is shown.
     // Closing it must not, or a toast arriving while the drawer is open would be marked read unseen.
     if (id == .notifications and ui.panels.isActive(.notifications)) notifications.markAllRead();
+    syncDocks();
     regions.bumpShell();
 }
 pub fn close() void {
     ui.panels.close();
+    syncDocks();
     regions.bumpShell();
+}
+pub fn closeSide(side: Side) void {
+    ui.panels.closeSide(side);
+    syncDocks();
+    regions.bumpShell();
+}
+pub fn openIdOn(side: Side) ?PanelId {
+    return ui.panels.openId(side);
+}
+pub fn anyOpen() bool {
+    return ui.panels.anyOpen();
+}
+/// Boot-time open with no rerender: the prototype's ?openleft / ?openright flags run before the
+/// first paint, so the state has to be in place rather than bumped into place afterwards.
+pub fn openQuiet(id: PanelId) void {
+    ui.panels.toggle(id);
+    syncDocks();
 }
 pub fn setWidth(side: Side, w: f32) void {
     ui.panels.setWidth(side, w);
+    syncDocks();
     regions.bumpShell();
 }
 
-pub fn widthStyle(alloc: std.mem.Allocator, side: Side) []const u8 {
-    return ui_state.widthStyle(alloc, ui.panels.widthFor(side));
+pub fn dockWidthStyle(side: Side) []const u8 {
+    return ui_state.dockWidthStyle(side);
+}
+pub fn tabOffsetStyle(side: Side) []const u8 {
+    return ui_state.tabOffsetStyle(side);
 }
 pub fn sideStr(side: Side) []const u8 {
     return ui_state.sideStr(side);
@@ -88,8 +120,16 @@ pub fn onDrawer(ev: zx.client.Event) void {
     if (ui_state.panelIdFromDomId(id)) |panel_id| toggle(panel_id);
 }
 
-pub fn onClose(_: zx.client.Event) void {
-    close();
+/// The panel head's close button. Both sides can be open, so the click has to say WHICH side it
+/// closes; the button carries data-side and the read walks up from the click target.
+pub fn onClose(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.plainTarget(ev) orelse return close();
+    defer target.deinit();
+    const side_str = dom_event.datasetUp(target, "side") orelse return close();
+    defer zx.allocator.free(side_str);
+    if (side_str.len == 0) return close();
+    closeSide(if (std.mem.eql(u8, side_str, "left")) .left else .right);
 }
 
 /// A click anywhere dismisses the open panel, unless it landed inside the panel itself or on the
@@ -101,15 +141,9 @@ pub fn onClose(_: zx.client.Event) void {
 /// document listener used to hold.
 pub fn onPageClick(ev: zx.client.Event) void {
     if (zx.platform.role != .client) return;
-    if (ui.panels.active == null) return;
-    const target = dom_event.plainTarget(ev) orelse return;
-    // A control inside the panel (a dropdown option) rerenders itself away on this same click, and
-    // this handler runs after it, so the membership tests below would walk a detached node and read
-    // an inside click as an outside one. A click the panel already consumed never dismisses it.
-    if (!dom_event.isConnected(target)) return;
-    if (dom_event.hasAncestorId(target, "panel-view")) return;
-    if (dom_event.hasAncestorClass(target, "drawers")) return;
-    close();
+    // PROTOTYPE: click-outside dismiss is off (rework section 2). Both docks persist while you type,
+    // so only the edge tab and the panel head's close button dismiss one.
+    _ = ev;
 }
 
 /// Escape closes the open panel: the keyboard equivalent of clicking outside it, so the dismiss is
@@ -120,12 +154,14 @@ pub fn onPageClick(ev: zx.client.Event) void {
 /// must survive that too. dropdown_nav.zig holds the state because ui.zig cannot import dropdown.zx.
 pub fn onPageKey(ev: zx.client.Event) void {
     if (zx.platform.role != .client) return;
-    if (ui.panels.active == null) return;
+    if (!ui.panels.anyOpen()) return;
     const key = ev.key() orelse return;
     defer zx.allocator.free(key);
     if (!std.mem.eql(u8, key, "Escape")) return;
     if (dropdown_nav.isOpenAny()) return;
-    close();
+    // Escape takes the side that opened most recently, not both at once.
+    ui.panels.closeLast();
+    regions.bumpShell();
 }
 
 /// Keyboard resize on a focused panel separator (WCAG 2.1.1, the pointer gesture's twin): arrows
@@ -166,7 +202,7 @@ pub fn onResizeKey(ev: zx.client.Event) void {
 // setPointerCapture keeps the drag alive when the cursor leaves the separator (plain delegation
 // cannot), so the gesture is Zig, not glue. onResizeKey above is the keyboard twin.
 
-const PanelDrag = struct { start_x: f64, start_w: f64, left: bool, last: ?f64, panel: js.Object, handle: js.Object };
+const PanelDrag = struct { start_x: f64, start_w: f64, left: bool, last: ?f64, root_style: js.Object, handle: js.Object };
 var panel_drag: ?PanelDrag = null;
 
 /// A left dock widens as the separator moves right; a right dock does the opposite. Clamped to the
@@ -178,7 +214,8 @@ fn panelWidthAt(drag: PanelDrag, cx: f64) f64 {
 }
 
 /// Pointerdown on the .panel-resize separator inside #panel-view: capture start geometry + which
-/// side, take pointer capture, suppress selection.
+/// side, take pointer capture, suppress selection. The panel element is measured here and then
+/// released; the gesture itself writes the dock width property, not the panel.
 pub fn onResizeDown(ev: zx.client.Event) void {
     if (zx.platform.role != .client) return;
     const target = dom_event.plainTarget(ev) orelse return;
@@ -188,19 +225,23 @@ pub fn onResizeDown(ev: zx.client.Event) void {
         handle.deinit();
         return;
     };
+    defer panel.deinit();
     ev.preventDefault();
     const side_str = dom_event.datasetUp(handle, "side") orelse {
         handle.deinit();
-        panel.deinit();
         return;
     };
     defer zx.allocator.free(side_str);
+    const root_style = dock_metrics.rootStyle() orelse {
+        handle.deinit();
+        return;
+    };
     panel_drag = .{
         .start_x = dom_event.eventNum(ev, "clientX") orelse 0,
         .start_w = dom_event.rectWidth(panel) orelse 0,
         .left = std.mem.eql(u8, side_str, "left"),
         .last = null,
-        .panel = panel,
+        .root_style = root_style,
         .handle = handle,
     };
     dom_event.addClass(handle, "is-dragging");
@@ -209,18 +250,16 @@ pub fn onResizeDown(ev: zx.client.Event) void {
     dom_event.setPtrDrag(true);
 }
 
-/// Pointermove: paint the inline width for feedback (no rerender until release).
+/// Pointermove: write the new dock width to its custom property (no rerender until release). The
+/// panel sizes off that property and the edge tab offsets off it, so both track the pointer from one
+/// write; a render-time pixel value would leave the tab parked at its old edge until the drag ended.
 pub fn onResizeMove(ev: zx.client.Event) void {
     if (zx.platform.role != .client) return;
-    if (panel_drag == null) return;
+    const drag = panel_drag orelse return;
     const cx = dom_event.eventNum(ev, "clientX") orelse return;
-    const w = panelWidthAt(panel_drag.?, cx);
+    const w = panelWidthAt(drag, cx);
     panel_drag.?.last = w;
-    const style = panel_drag.?.panel.get(js.Object, "style") catch return;
-    defer style.deinit();
-    var buf: [24]u8 = undefined;
-    const val = std.fmt.bufPrint(&buf, "{d}px", .{@as(i64, @intFromFloat(w))}) catch return;
-    style.call(void, "setProperty", .{ js.string("width"), js.string(val) }) catch {};
+    dock_metrics.writeOn(drag.root_style, if (drag.left) .left else .right, @floatCast(w));
 }
 
 pub fn onResizeUp(ev: zx.client.Event) void {
@@ -231,13 +270,14 @@ pub fn onResizeCancel(ev: zx.client.Event) void {
     endPanelDrag(ev);
 }
 
-/// Pointerup/cancel: hand the final width to setWidth (clamps + rerenders, which replaces the inline
-/// width with the computed style), and clear the drag state.
+/// Pointerup/cancel: hand the final width to setWidth (clamps, republishes the property, rerenders),
+/// and clear the drag state. The property already holds the dragged value, so the commit changes
+/// nothing visible and the release cannot jump.
 fn endPanelDrag(_: zx.client.Event) void {
     if (zx.platform.role != .client) return;
     const drag = panel_drag orelse return;
     panel_drag = null;
-    defer drag.panel.deinit();
+    defer drag.root_style.deinit();
     defer drag.handle.deinit();
     dom_event.removeClass(drag.handle, "is-dragging");
     dom_event.setBodyUserSelect(false);

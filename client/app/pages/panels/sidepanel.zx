@@ -5,9 +5,10 @@
 // carries the border, and which way the panel slides in. panel-left / panel-right stay as the first
 // token because they are the app's side hook (the interaction gate selects #panel-view.panel-right).
 //
-// The width stays an inline style: it is a dragged pixel value, which is what an inline style is
-// for. Below 768px the dock goes full-screen, so its width utility is important-flagged; nothing
-// else can beat an inline style.
+// The width is an inline style reading the side's dock custom property (ui_state.dockVar), which the
+// resize drag writes at pointer rate. The panel and its edge tab both read that one value, so they
+// move together during a drag with no re-render. Below 768px the dock goes full-screen, so its width
+// utility is important-flagged; nothing else can beat an inline style.
 //
 // Every dock id has a body, so the trailing else only terminates the chain and renders nothing (the
 // drawer router says the same).
@@ -25,9 +26,9 @@ pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
             id="panel-view"
             aria-labelledby="panel-heading"
             class={if (p.side == .left) ("panel-left col-start-1 border-r animate-panel-in " ++ panel_base) else ("panel-right col-start-3 border-l animate-panel-in-right " ++ panel_base)}
-            style={ui.widthStyle(allocator, p.side)}
+            style={ui.dockWidthStyle(p.side)}
         >
-            <PanelHead title={p.title} />
+            <PanelHead title={p.title} side={ui.sideStr(p.side)} />
             <div class="flex-1 overflow-y-auto p-4 [scrollbar-width:thin] max-[768px]:px-3 max-[768px]:pt-3 max-[768px]:pb-[calc(0.75rem_+_env(safe-area-inset-bottom,0px))] max-[768px]:[-webkit-overflow-scrolling:touch]">
                 {if (p.id == .ai_config) (
                     <AiConfigBody />

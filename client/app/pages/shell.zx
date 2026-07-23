@@ -20,6 +20,8 @@ pub fn Shell(ctx: *zx.ComponentCtx(void)) zx.Component {
         // allow-div-onclick: region-level dismiss surface, keyboard parity via the Escape handler
         <div @allocator={ctx.allocator} id="shell" class={ui.motionClass()} onclick={ui.onPageClick} onkeydown={ui.onPageKey}>
             <TopBar key="topbar" />
+            <EdgeTabs key="edgetabs" />
+            <SysMenu key="sysmenu" />
             {if (ui.openOn(.left)) |p| (
                 <SidePanel panel={p} key="dock-left" />
             )}
@@ -36,3 +38,5 @@ const regions = @import("./regions.zig");
 const instrument = @import("./instrument.zig");
 const TopBar = @import("./topbar.zx").TopBar;
 const SidePanel = @import("./panels/sidepanel.zx").SidePanel;
+const EdgeTabs = @import("./edgetabs.zx").EdgeTabs;
+const SysMenu = @import("./sysmenu.zx").SysMenu;

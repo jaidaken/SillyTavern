@@ -29,8 +29,10 @@ function parseArgs(argv) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const MOBILE = { width: 390, height: 844 };
 const DESKTOP = { width: 1400, height: 900 };
-// The ten top-bar panels, in bar order. Ids match the button element ids the markup emits.
-const PANEL_IDS = ['d-ai_config', 'd-connections', 'd-formatting', 'd-world_info', 'd-settings', 'd-backgrounds', 'd-extensions', 'd-persona', 'd-characters', 'd-card_editor', /* w3-chatmgr */ 'd-chat_manager', /* w3-grp */ 'd-groups', /* P1-B */ 'd-notifications'];
+// The top-level launchers, which are now the two edge tabs: the 13-button top bar they replaced is
+// gone. Ids match the button element ids edgetabs.zx emits. The remaining panels have no launcher
+// until the information-architecture move homes them, and gain rows when they do.
+const PANEL_IDS = ['tab-setup', 'tab-cast'];
 const TAP_MIN = 44;   // iOS minimum touch target, px
 const WIDTH_MIN = 80; // an open mobile panel must fill at least this % of the viewport width
 // verify.sh serves the static dist through devserve.py, which has no SillyTavern Express backend, so a
@@ -134,16 +136,19 @@ async function main() {
         await cdp.send('Network.enable', {}, S);
         const netErrors = [];
         // A JS exception or a console.error is always a real code error (the BigInt-boundary class of
-        // crash lands here). A failed network request carries its URL via Network, so it can be split
-        // into a real missing dist asset vs a harness-only backend route (BACKEND_ROUTES). The Log 404
-        // text has no URL, so drop it and rely on Network for resource failures.
+        // crash lands here). A failed request carries its URL only on requestWillBeSent, so that url is
+        // held per requestId and looked up on loadingFailed: without it an aborted request has an error
+        // string where its url should be and cannot be told from a real missing dist asset. An abort of
+        // a backend route (a thumbnail cancelled when the audit re-navigates) is then exempt like a 404.
+        const reqUrl = new Map();
         ws.addEventListener('message', (ev) => {
             const m = JSON.parse(ev.data);
             if (m.method === 'Runtime.exceptionThrown') consoleErrors.push('exception: ' + (m.params?.exceptionDetails?.exception?.description || m.params?.exceptionDetails?.text || 'unknown'));
             else if (m.method === 'Runtime.consoleAPICalled' && m.params?.type === 'error') consoleErrors.push('console.error: ' + (m.params.args || []).map((a) => a.value ?? a.description ?? '').join(' '));
             else if (m.method === 'Log.entryAdded' && m.params?.entry?.level === 'error' && !/failed to load resource/i.test(m.params.entry.text || '')) consoleErrors.push('log: ' + m.params.entry.text);
+            else if (m.method === 'Network.requestWillBeSent') reqUrl.set(m.params.requestId, m.params.request?.url || '');
             else if (m.method === 'Network.responseReceived' && m.params?.response?.status >= 400) netErrors.push({ status: m.params.response.status, url: m.params.response.url });
-            else if (m.method === 'Network.loadingFailed' && m.params?.type !== 'Ping') netErrors.push({ status: 'failed', url: m.params?.errorText || m.params?.type || 'unknown' });
+            else if (m.method === 'Network.loadingFailed' && m.params?.type !== 'Ping') netErrors.push({ status: m.params?.errorText || 'failed', url: reqUrl.get(m.params.requestId) || '' });
         });
         await cdp.send('Emulation.setDeviceMetricsOverride', { width: vp.width, height: vp.height, deviceScaleFactor: args.mode === 'mobile' ? 2 : 1, mobile: args.mode === 'mobile' }, S);
         if (args.mode === 'mobile') await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 }, S);
@@ -171,16 +176,17 @@ async function main() {
         if (report.overflowX) fail('no-horizontal-overflow', `scrollWidth ${overflow.sw} > clientWidth ${overflow.cw}`);
 
         if (args.mode === 'mobile') {
-            // Top bar: every drawer button is a >=44px tap target and lives inside the nav's horizontal
-            // scroll content, so none is clipped past the point a swipe can reach.
-            const bar = await evalJS(`(()=>{const nav=document.querySelector('#topbar nav.drawers');if(!nav)return{__err:'no nav'};const cs=getComputedStyle(nav);const btns=[...nav.querySelectorAll('button')];const overflows=nav.scrollWidth>nav.clientWidth+1;return{count:btns.length,overflowX:cs.overflowX,overflows,scrollWidth:nav.scrollWidth,clientWidth:nav.clientWidth,scrollLeftMax:nav.scrollWidth-nav.clientWidth,buttons:btns.map(b=>{const r=b.getBoundingClientRect();const navBox=nav.getBoundingClientRect();return{id:b.id,w:Math.round(r.width),h:Math.round(r.height),leftInContent:Math.round(r.left-navBox.left+nav.scrollLeft),rightInContent:Math.round(r.right-navBox.left+nav.scrollLeft)};})};})()`);
+            // The launchers: on a coarse pointer the edge tabs never hide (there is no hover to reveal
+            // them with), so each must be present, visible, a >=44px tap target, and fully on screen.
+            const bar = await evalJS(`(()=>{const ids=${JSON.stringify(PANEL_IDS)};const btns=ids.map(id=>document.getElementById(id)).filter(Boolean);return{count:btns.length,buttons:btns.map(b=>{const r=b.getBoundingClientRect();const st=getComputedStyle(b);return{id:b.id,w:Math.round(r.width),h:Math.round(r.height),left:Math.round(r.left),right:Math.round(r.right),top:Math.round(r.top),opacity:Number(st.opacity),pointerEvents:st.pointerEvents};})};})()`);
             report.topbar = bar;
-            if (bar.count !== PANEL_IDS.length) fail('topbar-count', `${bar.count} buttons, want ${PANEL_IDS.length}`);
+            if (bar.count !== PANEL_IDS.length) fail('topbar-count', `${bar.count} launchers, want ${PANEL_IDS.length}`);
             for (const b of bar.buttons || []) {
                 if (b.w < TAP_MIN || b.h < TAP_MIN) fail('topbar-tap', `${b.id} is ${b.w}x${b.h}, want >=${TAP_MIN}`);
-                if (b.leftInContent < -1 || b.rightInContent > bar.scrollWidth + 1) fail('topbar-reachable', `${b.id} at [${b.leftInContent},${b.rightInContent}] outside scroll content 0..${bar.scrollWidth}`);
+                if (b.left < -1 || b.right > vp.width + 1 || b.top < -1) fail('topbar-reachable', `${b.id} at [${b.left},${b.top},${b.right}] outside the viewport`);
+                // Hidden behind a hover that a touch device cannot perform would leave no way in at all.
+                if (b.opacity < 1 || b.pointerEvents === 'none') fail('topbar-tap', `${b.id} is not reachable on touch (opacity ${b.opacity}, pointer-events ${b.pointerEvents})`);
             }
-            if (bar.overflows && bar.overflowX !== 'auto' && bar.overflowX !== 'scroll') fail('topbar-scroll', `nav overflows but overflow-x is ${bar.overflowX}`);
 
             // Each panel: open it, measure, close it (the drawer button toggles). Reload only if a panel
             // fails to appear, so the common path stays fast.
@@ -208,8 +214,11 @@ async function main() {
         report.consoleErrors = consoleErrors;
         if (consoleErrors.length > 0) fail('console-errors', `${consoleErrors.length}: ${consoleErrors.slice(0, 5).join(' | ')}`);
         const isBackend = (url) => { try { return BACKEND_ROUTES.some((r) => new URL(url).pathname.startsWith(r)); } catch (_) { return false; } };
-        report.harnessBackend404 = netErrors.filter((e) => isBackend(e.url));
-        report.missingAssets = netErrors.filter((e) => !isBackend(e.url));
+        // ERR_ABORTED is a request the audit cancelled by re-navigating, never a missing file (a missing
+        // dist asset returns a 404 response, caught above). It is harness noise regardless of the route.
+        const isAbort = (e) => e.status === 'net::ERR_ABORTED';
+        report.harnessBackend404 = netErrors.filter((e) => isBackend(e.url) || isAbort(e));
+        report.missingAssets = netErrors.filter((e) => !isBackend(e.url) && !isAbort(e));
         if (report.missingAssets.length > 0) fail('missing-asset', report.missingAssets.slice(0, 5).map((e) => `${e.status} ${e.url}`).join(' | '));
     } catch (err) {
         fail('audit-error', err.message);

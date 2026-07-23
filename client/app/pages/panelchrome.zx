@@ -2,6 +2,9 @@
 // the placeholder body live in one place instead of being hand-written in each.
 pub const HeadProps = struct {
     title: []const u8,
+    /// Which dock this head belongs to, read back by ui.onClose: with both sides openable at once a
+    /// close click has to name its own side. Empty on the top drawer, which has no side.
+    side: []const u8 = "",
 };
 
 pub fn PanelHead(allocator: zx.Allocator, props: HeadProps) zx.Component {
@@ -17,6 +20,7 @@ pub fn PanelHead(allocator: zx.Allocator, props: HeadProps) zx.Component {
             <button
                 class="icon grid size-[1.9rem] flex-none cursor-pointer place-items-center rounded-md border-0 bg-transparent text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-text max-[768px]:size-10 max-[768px]:min-h-11 max-[768px]:min-w-11"
                 data-icon="close"
+                data-side={props.side}
                 type="button"
                 aria-label="Close"
                 onclick={ui.onClose}

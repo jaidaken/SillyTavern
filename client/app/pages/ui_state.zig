@@ -74,56 +74,98 @@ pub const default_width: f32 = 340;
 /// it from the in-app setting.
 pub const MotionPref = enum { system, on, off };
 
-/// Which side panel or drawer is open (at most one), and the width of each dock. A plain value:
-/// ui.zig holds the single reactive instance; a mutation calls regions.bumpShell to re-render the
-/// Shell region only, not the whole page.
+/// The panel open on each side, and the width of each dock. A plain value: ui.zig holds the single
+/// reactive instance; a mutation calls regions.bumpShell to re-render the Shell region only, not the
+/// whole page.
+///
+/// The two sides are INDEPENDENT (hidden-launcher rework, section 2): opening one never closes the
+/// other, because the app grid already carries a left, a centre and a right column, so two open docks
+/// only narrow the reading column. `last` is which side opened most recently, which is the side
+/// Escape closes.
 pub const PanelState = struct {
-    active: ?PanelId = null,
+    left: ?PanelId = null,
+    right: ?PanelId = null,
+    last: ?Side = null,
     left_w: f32 = default_width,
     right_w: f32 = default_width,
 
-    pub fn isActive(self: PanelState, id: PanelId) bool {
-        return self.active != null and self.active.? == id;
+    pub fn openId(self: PanelState, side: Side) ?PanelId {
+        return if (side == .left) self.left else self.right;
     }
 
+    pub fn isActive(self: PanelState, id: PanelId) bool {
+        if (self.left) |l| {
+            if (l == id) return true;
+        }
+        if (self.right) |r| {
+            if (r == id) return true;
+        }
+        return false;
+    }
+
+    pub fn anyOpen(self: PanelState) bool {
+        return self.left != null or self.right != null;
+    }
+
+    /// The left panel when there is one, else the right. Kept for callers that only need "something
+    /// is open"; per-side reads should use openOn.
     pub fn activePanel(self: PanelState) ?Panel {
-        const a = self.active orelse return null;
-        for (panels) |p| {
-            if (p.id == a) return p;
+        if (self.openOn(.left)) |p| return p;
+        return self.openOn(.right);
+    }
+
+    /// The panel currently open on `side`, if any.
+    pub fn openOn(self: PanelState, side: Side) ?Panel {
+        const id = self.openId(side) orelse return null;
+        return panelFor(id);
+    }
+
+    /// The open panel that presents as a top-bar drawer rather than a dock. With the icon row gone
+    /// nothing opens a drawer any more, so this reads null in the reworked shell.
+    pub fn activeDrawer(self: PanelState) ?Panel {
+        inline for (.{ Side.left, Side.right }) |side| {
+            if (self.openOn(side)) |p| {
+                if (p.kind == .drawer) return p;
+            }
         }
         return null;
-    }
-
-    /// The dock currently open on `side`, if any. Drawer-kind panels never dock, so they are excluded
-    /// here and surface through activeDrawer instead.
-    pub fn openOn(self: PanelState, side: Side) ?Panel {
-        const p = self.activePanel() orelse return null;
-        return if (p.kind == .dock and p.side == side) p else null;
-    }
-
-    /// The active panel when it presents as a top-bar drawer rather than a dock.
-    pub fn activeDrawer(self: PanelState) ?Panel {
-        const p = self.activePanel() orelse return null;
-        return if (p.kind == .drawer) p else null;
     }
 
     pub fn widthFor(self: PanelState, side: Side) f32 {
         return if (side == .left) self.left_w else self.right_w;
     }
 
-    /// Open `id`, or close it if it is already the open panel. At most one panel is open at a time.
+    /// Open `id` on its own side, or close that side if `id` already holds it. The other side is
+    /// untouched.
     pub fn toggle(self: *PanelState, id: PanelId) void {
-        self.active = if (self.isActive(id)) null else id;
-        if (self.active) |a| {
-            log.debug("open: {s}", .{@tagName(a)});
-        } else {
+        const p = panelFor(id) orelse return;
+        const open_here = self.openId(p.side) != null and self.openId(p.side).? == id;
+        const next: ?PanelId = if (open_here) null else id;
+        if (p.side == .left) self.left = next else self.right = next;
+        if (next == null) {
             log.debug("close: {s}", .{@tagName(id)});
+        } else {
+            self.last = p.side;
+            log.debug("open: {s}", .{@tagName(id)});
         }
     }
 
+    pub fn closeSide(self: *PanelState, side: Side) void {
+        if (self.openId(side)) |prev| log.debug("close: {s}", .{@tagName(prev)});
+        if (side == .left) self.left = null else self.right = null;
+    }
+
+    /// Escape closes the side that opened most recently, not both.
+    pub fn closeLast(self: *PanelState) void {
+        const side = self.last orelse (if (self.left != null) Side.left else Side.right);
+        self.closeSide(side);
+        self.last = if (self.left != null) .left else if (self.right != null) .right else null;
+    }
+
     pub fn close(self: *PanelState) void {
-        if (self.active) |prev| log.debug("close: {s}", .{@tagName(prev)});
-        self.active = null;
+        self.closeSide(.left);
+        self.closeSide(.right);
+        self.last = null;
     }
 
     pub fn setWidth(self: *PanelState, side: Side, w: f32) void {
@@ -132,6 +174,14 @@ pub const PanelState = struct {
         log.debug("width {s}: {d}", .{ @tagName(side), c });
     }
 };
+
+/// The catalogue entry for an id.
+pub fn panelFor(id: PanelId) ?Panel {
+    for (panels) |p| {
+        if (p.id == id) return p;
+    }
+    return null;
+}
 
 /// Maps "d-<panel>" (a drawer button id) to its PanelId. Returns null for anything unrecognised.
 pub fn panelIdFromDomId(id: []const u8) ?PanelId {
@@ -165,52 +215,103 @@ pub fn sideStr(side: Side) []const u8 {
     return if (side == .left) "left" else "right";
 }
 
-/// Inline width for a dock, e.g. "width:340px". Falls back to the default width on OOM.
-pub fn widthStyle(alloc: std.mem.Allocator, w: f32) []const u8 {
-    return std.fmt.allocPrint(alloc, "width:{d}px", .{w}) catch
-        std.fmt.comptimePrint("width:{d}px", .{@as(u32, @intFromFloat(default_width))});
+// ---- the dock width custom properties ---------------------------------------------------------
+// A dock's width is published to the document root as one custom property per side, and BOTH the
+// panel and its edge tab read that property. One value, two readers: a resize drag writes the
+// property once per pointer move and the panel and the tab move together with no re-render, where a
+// render-time pixel value froze the tab until the drag ended.
+
+/// The property carrying a side's dock width. Named here so the writer and the two readers below
+/// cannot drift apart.
+pub fn dockVar(side: Side) []const u8 {
+    return if (side == .left) "--dock-w-left" else "--dock-w-right";
+}
+
+/// The panel's own inline width. The fallback covers the server render, which runs before any Zig
+/// has published a value.
+pub fn dockWidthStyle(side: Side) []const u8 {
+    return if (side == .left)
+        std.fmt.comptimePrint("width:var(--dock-w-left,{d}px)", .{@as(u32, @intFromFloat(default_width))})
+    else
+        std.fmt.comptimePrint("width:var(--dock-w-right,{d}px)", .{@as(u32, @intFromFloat(default_width))});
+}
+
+/// The edge tab's offset from its own screen edge: zero while the side is closed, the dock's live
+/// width while it is open, since the tab rides the panel's inner edge.
+pub fn tabOffsetStyle(side: Side) []const u8 {
+    return if (side == .left) "left:var(--dock-w-left,0px)" else "right:var(--dock-w-right,0px)";
+}
+
+/// The value written to the property, e.g. "340px". Rounded, because a subpixel dock edge leaves a
+/// seam between the panel border and the tab.
+pub fn dockWidthValue(buf: []u8, w: f32) []const u8 {
+    return std.fmt.bufPrint(buf, "{d}px", .{@as(i64, @intFromFloat(@round(w)))}) catch "0px";
 }
 
 const testing = std.testing;
 
-test "toggle opens then closes, and is exclusive across the two docks" {
+test "each side's dock property is read by both its panel width and its tab offset" {
+    // The drag writes dockVar; the panel and the tab read it. A rename that reached only one of the
+    // three would leave the tab frozen at its old edge, which is the defect this shape exists to kill.
+    try testing.expectEqualStrings("--dock-w-left", dockVar(.left));
+    try testing.expectEqualStrings("--dock-w-right", dockVar(.right));
+    try testing.expectEqualStrings("width:var(--dock-w-left,340px)", dockWidthStyle(.left));
+    try testing.expectEqualStrings("width:var(--dock-w-right,340px)", dockWidthStyle(.right));
+    try testing.expectEqualStrings("left:var(--dock-w-left,0px)", tabOffsetStyle(.left));
+    try testing.expectEqualStrings("right:var(--dock-w-right,0px)", tabOffsetStyle(.right));
+    inline for (.{ Side.left, Side.right }) |side| {
+        try testing.expect(std.mem.indexOf(u8, dockWidthStyle(side), dockVar(side)) != null);
+        try testing.expect(std.mem.indexOf(u8, tabOffsetStyle(side), dockVar(side)) != null);
+    }
+}
+
+test "a dock width becomes a rounded pixel property value" {
+    var buf: [24]u8 = undefined;
+    try testing.expectEqualStrings("340px", dockWidthValue(&buf, default_width));
+    try testing.expectEqualStrings("341px", dockWidthValue(&buf, 340.6));
+    try testing.expectEqualStrings("0px", dockWidthValue(&buf, 0));
+}
+
+test "toggle opens then closes, and the two sides are independent" {
     var s: PanelState = .{};
     try testing.expect(s.activePanel() == null);
     s.toggle(.ai_config);
     try testing.expect(s.isActive(.ai_config));
     try testing.expect(s.openOn(.left).?.id == .ai_config);
     try testing.expect(s.openOn(.right) == null);
-    // The other dock replaces it and sits on the right.
+    // The right dock opens alongside it; neither closes the other.
     s.toggle(.characters);
     try testing.expect(s.isActive(.characters));
-    try testing.expect(!s.isActive(.ai_config));
+    try testing.expect(s.isActive(.ai_config));
     try testing.expect(s.openOn(.right).?.id == .characters);
-    try testing.expect(s.openOn(.left) == null);
-    // Toggling the open panel closes it.
+    try testing.expect(s.openOn(.left).?.id == .ai_config);
+    // Toggling an open panel closes its own side only.
     s.toggle(.characters);
-    try testing.expect(s.activePanel() == null);
+    try testing.expect(s.openOn(.right) == null);
+    try testing.expect(s.openOn(.left).?.id == .ai_config);
+    s.close();
+    try testing.expect(!s.anyOpen());
 }
 
-test "the middle panels are drawers; ai_config docks left, persona and characters dock right" {
+test "each panel opens on its catalogue side, and Escape closes the last one opened" {
     var s: PanelState = .{};
-    const drawers = [_]PanelId{ .connections, .formatting, .world_info, .settings, .backgrounds, .extensions };
-    for (drawers) |id| {
-        s.toggle(id);
-        try testing.expect(s.activeDrawer().?.id == id);
-        try testing.expect(s.openOn(.left) == null);
-        try testing.expect(s.openOn(.right) == null);
-        s.close();
-    }
-    // ai_config docks on the left; persona and characters dock on the right, one at a time.
+    // A same-side panel replaces the one already there.
     s.toggle(.ai_config);
-    try testing.expect(s.activeDrawer() == null);
-    try testing.expect(s.openOn(.left).?.id == .ai_config);
+    s.toggle(.world_info);
+    try testing.expect(s.openOn(.left).?.id == .world_info);
+    try testing.expect(!s.isActive(.ai_config));
+    // persona and characters both live on the right.
     s.toggle(.persona);
-    try testing.expect(s.activeDrawer() == null);
     try testing.expect(s.openOn(.right).?.id == .persona);
     s.toggle(.characters);
     try testing.expect(s.openOn(.right).?.id == .characters);
     try testing.expect(!s.isActive(.persona));
+    // The right side opened last, so it is the one Escape takes.
+    s.closeLast();
+    try testing.expect(s.openOn(.right) == null);
+    try testing.expect(s.openOn(.left).?.id == .world_info);
+    s.closeLast();
+    try testing.expect(!s.anyOpen());
 }
 
 test "width clamps to the allowed range" {
