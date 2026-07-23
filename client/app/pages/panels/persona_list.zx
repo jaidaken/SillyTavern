@@ -144,10 +144,10 @@ fn onPersonaAction(e: *zx.client.Event.Stateful) void {
 
 const zx = @import("zx");
 const std = @import("std");
-const data = @import("../char_data.zig");
-const persona_store = @import("../persona_store.zig");
-const persona_actions = @import("../persona_actions.zig");
-const regions = @import("../regions.zig");
-const dom_event = @import("../dom_event.zig");
-const char_list = @import("character_list.zx");
+const data = @import("../cast/char_data.zig");
+const persona_store = @import("../cast/persona_store.zig");
+const persona_actions = @import("../cast/persona_actions.zig");
+const regions = @import("../shell/regions.zig");
+const dom_event = @import("../platform/dom_event.zig");
+const char_list = @import("./character_list.zx");
 const panelchrome = @import("../panelchrome.zx");

@@ -82,8 +82,8 @@ fn speakerVar(allocator: zx.Allocator, name: []const u8) []const u8 {
 
 const std = @import("std");
 const zx = @import("zx");
-const store = @import("./store.zig");
-const html = @import("./html.zig");
-const sanitized = @import("./sanitized.zig");
-const instrument = @import("./instrument.zig");
+const store = @import("./platform/store.zig");
+const html = @import("./platform/html.zig");
+const sanitized = @import("./platform/sanitized.zig");
+const instrument = @import("./platform/instrument.zig");
 const MessageMenuTrigger = @import("./message_menu.zx").MessageMenuTrigger;

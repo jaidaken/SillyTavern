@@ -13,62 +13,62 @@
 const std = @import("std");
 
 comptime {
-    _ = @import("quotes.zig");
+    _ = @import("./chat/quotes.zig");
     _ = @import("libc_shim");
-    _ = @import("markdown.zig");
-    _ = @import("store.zig");
-    _ = @import("utf8.zig");
-    _ = @import("stream.zig");
-    _ = @import("html.zig");
+    _ = @import("./platform/markdown.zig");
+    _ = @import("./platform/store.zig");
+    _ = @import("./platform/utf8.zig");
+    _ = @import("./platform/stream.zig");
+    _ = @import("./platform/html.zig");
     // The inline message editor's pure highlighter (message_editor.zig is the zx-importing DOM half).
-    _ = @import("md_highlight.zig");
-    _ = @import("completion.zig");
-    _ = @import("ui_state.zig");
+    _ = @import("./platform/md_highlight.zig");
+    _ = @import("./setup/completion.zig");
+    _ = @import("./nav/ui_state.zig");
     // The edge-tab reveal geometry; pointer_track.zig is the zx-importing DOM half.
-    _ = @import("reveal_zone.zig");
-    _ = @import("char_data.zig");
-    _ = @import("generate.zig");
-    _ = @import("tokenizer.zig");
-    _ = @import("log_spec.zig");
-    _ = @import("dropdown_nav.zig");
-    _ = @import("background_store.zig");
+    _ = @import("./nav/reveal_zone.zig");
+    _ = @import("./cast/char_data.zig");
+    _ = @import("./setup/generate.zig");
+    _ = @import("./setup/tokenizer.zig");
+    _ = @import("./platform/log_spec.zig");
+    _ = @import("./nav/dropdown_nav.zig");
+    _ = @import("./system/background_store.zig");
     // C4: the pure multipart/form-data assembler behind the Zig-owned uploads.
-    _ = @import("multipart.zig");
+    _ = @import("./platform/multipart.zig");
     // w3-grp
-    _ = @import("group_store.zig");
-    _ = @import("textgen_types.zig");
-    _ = @import("secret_mask.zig");
+    _ = @import("./cast/group_store.zig");
+    _ = @import("./setup/textgen_types.zig");
+    _ = @import("./platform/secret_mask.zig");
     // w3-grp
-    _ = @import("group_rotation.zig");
+    _ = @import("./cast/group_rotation.zig");
     // character_view's tests never reached the runner: the module was absent here.
-    _ = @import("tag_store.zig");
-    _ = @import("character_view.zig");
-    _ = @import("character_row.zig");
-    _ = @import("card_form.zig");
-    _ = @import("datetime.zig");
+    _ = @import("./cast/tag_store.zig");
+    _ = @import("./cast/character_view.zig");
+    _ = @import("./cast/character_row.zig");
+    _ = @import("./cast/card_form.zig");
+    _ = @import("./platform/datetime.zig");
     // C-CFG
-    _ = @import("macros.zig");
-    _ = @import("rng.zig");
-    _ = @import("templates.zig");
-    _ = @import("samplers.zig");
-    _ = @import("sampler_presets.zig");
-    _ = @import("authors_note.zig");
+    _ = @import("./setup/macros.zig");
+    _ = @import("./platform/rng.zig");
+    _ = @import("./setup/templates.zig");
+    _ = @import("./setup/samplers.zig");
+    _ = @import("./setup/sampler_presets.zig");
+    _ = @import("./setup/authors_note.zig");
     // C-PRE-TPL: the zx-free half of the preset pickers. template_presets.zig imports zx, so only
     // its rules can be proven here; its fetch and panel state are browser-verified.
-    _ = @import("preset_lib.zig");
+    _ = @import("./setup/preset_lib.zig");
     // w3-chatmgr: the zx-free half of the chat manager (suffix rules + name minting).
-    _ = @import("chat_names.zig");
+    _ = @import("./chat/chat_names.zig");
     // w3-wi
-    _ = @import("world_info.zig");
+    _ = @import("./setup/world_info.zig");
     // w3-wi-engine
-    _ = @import("world_info_engine.zig");
+    _ = @import("./setup/world_info_engine.zig");
     // P3-A: the zx-free server-event hub (transport; the router lands separately).
-    _ = @import("server_events.zig");
+    _ = @import("./platform/server_events.zig");
     // P1-A: the zx-free half of the notifications (notifications.zig is the timer + region glue).
-    _ = @import("notification_store.zig");
+    _ = @import("./notify/notification_store.zig");
     // H1: the 64-bit crossing register + the door packing convention.
-    _ = @import("boundary_marshal.zig");
-    _ = @import("doorpack.zig");
+    _ = @import("./platform/boundary_marshal.zig");
+    _ = @import("./platform/doorpack.zig");
 }
 
 const sink_call = "html.sink(";
@@ -77,8 +77,10 @@ const sink_call = "html.sink(";
 const raw_attr_tokens = [_][]const u8{ "@escaping", "=", "{", ".none", "}" };
 const attr_head = raw_attr_tokens[0];
 
-/// Proves the scan reached the real directory rather than an empty one; it reads whatever it finds.
-const known_zx_count = 8;
+/// The true count of `.zx` sources under app/pages across all 8 domain folders. The scan walks the
+/// tree recursively, so a walk that silently missed a folder would read fewer files and pass as
+/// clean; pinning the true total makes that a failure. Bump it the day a template lands.
+const total_zx_sources = 37;
 const zx_anchor = "message.zx";
 
 /// A test binary inherits the cwd `zig build` was invoked from, which is the client root on every
@@ -112,8 +114,11 @@ fn freeZxSources(gpa: std.mem.Allocator, sources: []ZxSource) void {
 /// its own scan strings, so the `.zig` forgery scan skips both.
 const witness_mint_files = [_][]const u8{ "html.zig", "unit_test.zig" };
 
-/// A floor proving the `.zig` scan reached the real page directory rather than an empty one.
-const known_zig_min = 8;
+/// The true counts of `.zig` sources under app/pages across all 8 domain folders: every `.zig` for
+/// the aggregator-import scan, and that minus the two witness-mint files for the forgery scan. A
+/// recursive walk that missed a folder scans fewer and reads clean; pinning the totals fails it.
+const total_zig_sources = 85;
+const total_forgeable_zig = total_zig_sources - witness_mint_files.len;
 
 fn isExcluded(name: []const u8, exclude: []const []const u8) bool {
     for (exclude) |ex| {
@@ -135,15 +140,17 @@ fn loadSources(gpa: std.mem.Allocator, io: std.Io, suffix: []const u8, exclude: 
         sources.deinit(gpa);
     }
 
-    var it = dir.iterate();
-    while (try it.next(io)) |entry| {
+    // Recursive: sources moved into per-domain subfolders a flat iterate would miss; basenames stay unique tree-wide, so name-keyed logic holds.
+    var walker = try dir.walk(gpa);
+    defer walker.deinit();
+    while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.name, suffix)) continue;
-        if (isExcluded(entry.name, exclude)) continue;
+        if (!std.mem.endsWith(u8, entry.basename, suffix)) continue;
+        if (isExcluded(entry.basename, exclude)) continue;
 
-        const name = try gpa.dupe(u8, entry.name);
+        const name = try gpa.dupe(u8, entry.basename);
         errdefer gpa.free(name);
-        const text = try dir.readFileAlloc(io, entry.name, gpa, .limited(1 << 20));
+        const text = try entry.dir.readFileAlloc(io, entry.basename, gpa, .limited(1 << 20));
         errdefer gpa.free(text);
         try sources.append(gpa, .{ .name = name, .text = text });
     }
@@ -390,7 +397,7 @@ test "every_raw_html_element_in_the_zx_sources_is_fed_by_the_sink" {
     const gpa = std.testing.allocator;
     const sources = try loadZxSources(gpa, std.testing.io);
     defer freeZxSources(gpa, sources);
-    try std.testing.expect(sources.len >= known_zx_count);
+    try std.testing.expect(sources.len >= total_zx_sources);
 
     var total: usize = 0;
     for (sources) |src| {
@@ -477,7 +484,7 @@ test "every_module_that_has_tests_is_imported_by_this_aggregator" {
     const gpa = std.testing.allocator;
     const sources = try loadSources(gpa, std.testing.io, ".zig", &[_][]const u8{});
     defer freeZxSources(gpa, sources);
-    try std.testing.expect(sources.len >= known_zig_min);
+    try std.testing.expect(sources.len >= total_zig_sources);
 
     // The aggregator reads its own source: the import list to check against is the text above.
     var self_text: ?[]const u8 = null;
@@ -492,8 +499,9 @@ test "every_module_that_has_tests_is_imported_by_this_aggregator" {
         // A test declaration at column 0. `test "` inside a string or a comment is not one.
         if (std.mem.indexOf(u8, src.text, "\ntest \"") == null) continue;
 
+        // Imports are subfolder-qualified (`@import("./chat/quotes.zig")`), so the basename is preceded by `/`; that leading slash also stops `store.zig` matching `background_store.zig`.
         var needle_buf: [128]u8 = undefined;
-        const needle = try std.fmt.bufPrint(&needle_buf, "@import(\"{s}\")", .{src.name});
+        const needle = try std.fmt.bufPrint(&needle_buf, "/{s}\")", .{src.name});
         if (std.mem.indexOf(u8, imports, needle) == null) {
             std.debug.print("\n{s} has tests but unit_test.zig never imports it: they never run.\n", .{src.name});
             missing += 1;
@@ -506,7 +514,7 @@ test "no_zx_source_unwraps_sanitized_html_outside_the_sink" {
     const gpa = std.testing.allocator;
     const sources = try loadZxSources(gpa, std.testing.io);
     defer freeZxSources(gpa, sources);
-    try std.testing.expect(sources.len >= known_zx_count);
+    try std.testing.expect(sources.len >= total_zx_sources);
 
     for (sources) |src| {
         try std.testing.expectEqual(@as(usize, 0), countOccurrences(src.text, ".unwrap()"));
@@ -518,7 +526,7 @@ test "no_zx_source_forges_the_sanitized_witness" {
     const gpa = std.testing.allocator;
     const sources = try loadZxSources(gpa, std.testing.io);
     defer freeZxSources(gpa, sources);
-    try std.testing.expect(sources.len >= known_zx_count);
+    try std.testing.expect(sources.len >= total_zx_sources);
 
     for (sources) |src| {
         try std.testing.expectEqual(@as(usize, 0), countOccurrences(src.text, "witness_token"));
@@ -533,7 +541,7 @@ test "no_zig_source_outside_the_mint_forges_the_sanitized_witness" {
     const gpa = std.testing.allocator;
     const sources = try loadForgeableZigSources(gpa, std.testing.io);
     defer freeZxSources(gpa, sources);
-    try std.testing.expect(sources.len >= known_zig_min);
+    try std.testing.expect(sources.len >= total_forgeable_zig);
 
     // html.zig admits `.witness_token = undefined` compiles with no field privacy, so any occurrence
     // of the field name in app-page Zig outside the mint is a forge reaching the raw-HTML sink.

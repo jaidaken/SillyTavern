@@ -2,7 +2,7 @@ pub fn Page(ctx: zx.PageContext) !zx.Component {
     // SSR-only skeleton: fixture prose fills the pre-hydration frames. The runtime store does NOT
     // mirror it (demo is opt-in via __st_seed_demo); hydration replaces these with real state.
     if (comptime zx.platform.role == .server) {
-        const fixtures = @import("./fixtures.zig");
+        const fixtures = @import("./platform/fixtures.zig");
         _ = fixtures.loadRoleplay(&store.global);
     }
 
@@ -31,7 +31,7 @@ pub fn Page(ctx: zx.PageContext) !zx.Component {
 }
 
 const zx = @import("zx");
-const store = @import("./store.zig");
+const store = @import("./platform/store.zig");
 pub const Shell = @import("./shell.zx").Shell;
 pub const MessageLog = @import("./messagelog.zx").MessageLog;
 pub const Home = @import("./home_body.zx").Home;
@@ -39,5 +39,5 @@ pub const Composer = @import("./composer.zx").Composer;
 pub const Toasts = @import("./toasts.zx").Toasts;
 
 comptime {
-    _ = @import("./character_store.zig");
+    _ = @import("./cast/character_store.zig");
 }

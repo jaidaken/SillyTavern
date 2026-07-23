@@ -74,8 +74,8 @@ fn onKey(e: *zx.client.Event.Stateful) void {
 
 const zx = @import("zx");
 const std = @import("std");
-const gs = @import("../group_store.zig");
-const group_actions = @import("../group_actions.zig");
-const dom_event = @import("../dom_event.zig");
-const char_list = @import("character_list.zx");
-const editor = @import("group_editor.zx");
+const gs = @import("../cast/group_store.zig");
+const group_actions = @import("../cast/group_actions.zig");
+const dom_event = @import("../platform/dom_event.zig");
+const char_list = @import("./character_list.zx");
+const editor = @import("./group_editor.zx");

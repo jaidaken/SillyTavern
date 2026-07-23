@@ -28,5 +28,5 @@ pub fn Toasts(ctx: *zx.ComponentCtx(void)) zx.Component {
 }
 
 const zx = @import("zx");
-const regions = @import("./regions.zig");
-const notifications = @import("./notifications.zig");
+const regions = @import("./shell/regions.zig");
+const notifications = @import("./notify/notifications.zig");

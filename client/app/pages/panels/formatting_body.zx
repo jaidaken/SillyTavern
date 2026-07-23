@@ -454,9 +454,9 @@ fn onRetryPresets(_: zx.client.Event) void {
 const zx = @import("zx");
 const std = @import("std");
 const js = zx.client.js;
-const config_state = @import("../config_state.zig");
-const presets = @import("../template_presets.zig");
-const an_state = @import("../authors_note_state.zig");
-const dom_event = @import("../dom_event.zig");
+const config_state = @import("../system/config_state.zig");
+const presets = @import("../setup/template_presets.zig");
+const an_state = @import("../setup/authors_note_state.zig");
+const dom_event = @import("../platform/dom_event.zig");
 const dropdown = @import("../dropdown.zx");
 const Dropdown = dropdown.Dropdown;

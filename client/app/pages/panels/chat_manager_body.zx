@@ -181,7 +181,7 @@ fn onImportPick(ev: zx.client.Event) void {
 const zx = @import("zx");
 const std = @import("std");
 const js = zx.client.js;
-const char_store = @import("../character_store.zig");
-const chat_actions = @import("../chat_actions.zig");
-const dom_event = @import("../dom_event.zig");
+const char_store = @import("../cast/character_store.zig");
+const chat_actions = @import("../chat/chat_actions.zig");
+const dom_event = @import("../platform/dom_event.zig");
 const panelchrome = @import("../panelchrome.zx");

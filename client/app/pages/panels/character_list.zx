@@ -271,11 +271,11 @@ fn onItemAction(e: *zx.client.Event.Stateful) void {
 
 const zx = @import("zx");
 const std = @import("std");
-const char_store = @import("../character_store.zig");
-const char_api = @import("../char_api.zig");
-const char_data = @import("../char_data.zig");
-const char_prefs = @import("../character_prefs.zig");
-const character_row = @import("../character_row.zig");
-const character_view = @import("../character_view.zig");
-const dom_event = @import("../dom_event.zig");
-const regions = @import("../regions.zig");
+const char_store = @import("../cast/character_store.zig");
+const char_api = @import("../cast/char_api.zig");
+const char_data = @import("../cast/char_data.zig");
+const char_prefs = @import("../cast/character_prefs.zig");
+const character_row = @import("../cast/character_row.zig");
+const character_view = @import("../cast/character_view.zig");
+const dom_event = @import("../platform/dom_event.zig");
+const regions = @import("../shell/regions.zig");

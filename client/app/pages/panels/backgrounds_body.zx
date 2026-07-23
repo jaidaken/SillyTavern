@@ -191,8 +191,8 @@ fn uploadDescribedBy() []const u8 {
 
 const zx = @import("zx");
 const std = @import("std");
-const dom_event = @import("../dom_event.zig");
-const backgrounds = @import("../backgrounds.zig");
+const dom_event = @import("../platform/dom_event.zig");
+const backgrounds = @import("../system/backgrounds.zig");
 const panelchrome = @import("../panelchrome.zx");
 
 const log = std.log.scoped(.panels);

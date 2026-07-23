@@ -71,20 +71,20 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
 }
 
 const zx = @import("zx");
-const message_actions = @import("./message_actions.zig");
-const message_editor = @import("./message_editor.zig");
-const reader = @import("./reader.zig");
-const reveal = @import("./reveal.zig");
-const reading_prefs = @import("./reading_prefs.zig");
-const sanitized = @import("./sanitized.zig");
-const store = @import("./store.zig");
-const regions = @import("./regions.zig");
-const instrument = @import("./instrument.zig");
+const message_actions = @import("./chat/message_actions.zig");
+const message_editor = @import("./chat/message_editor.zig");
+const reader = @import("./chat/reader.zig");
+const reveal = @import("./platform/reveal.zig");
+const reading_prefs = @import("./chat/reading_prefs.zig");
+const sanitized = @import("./platform/sanitized.zig");
+const store = @import("./platform/store.zig");
+const regions = @import("./shell/regions.zig");
+const instrument = @import("./platform/instrument.zig");
 pub const MessageView = @import("./message.zx").MessageView;
 const UndoVersions = @import("./panels/undo_body.zx").UndoVersions;
 const UndoSnapshots = @import("./panels/undo_body.zx").UndoSnapshots;
 const MessageMenu = @import("./message_menu.zx").MessageMenu;
 
 comptime {
-    _ = @import("./bridge.zig");
+    _ = @import("./platform/bridge.zig");
 }

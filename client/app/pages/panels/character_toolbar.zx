@@ -12,11 +12,11 @@
 
 const zx = @import("zx");
 const std = @import("std");
-const char_store = @import("../character_store.zig");
-const cv = @import("../character_view.zig");
-const char_prefs = @import("../character_prefs.zig");
-const regions = @import("../regions.zig");
-const dom_event = @import("../dom_event.zig");
+const char_store = @import("../cast/character_store.zig");
+const cv = @import("../cast/character_view.zig");
+const char_prefs = @import("../cast/character_prefs.zig");
+const regions = @import("../shell/regions.zig");
+const dom_event = @import("../platform/dom_event.zig");
 const dropdown = @import("../dropdown.zx");
 const Dropdown = dropdown.Dropdown;
 // w3-reason 3d tags

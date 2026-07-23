@@ -60,5 +60,5 @@ fn onClear(_: zx.client.Event) void {
 
 const std = @import("std");
 const zx = @import("zx");
-const notifications = @import("../notifications.zig");
+const notifications = @import("../notify/notifications.zig");
 const PanelEmpty = @import("../panelchrome.zx").PanelEmpty;

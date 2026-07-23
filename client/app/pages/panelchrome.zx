@@ -51,4 +51,4 @@ pub fn PanelEmpty(allocator: zx.Allocator, props: EmptyProps) zx.Component {
 pub const file_picker = "file-picker max-w-[13rem] font-mono text-xs text-muted";
 
 const zx = @import("zx");
-const ui = @import("./ui.zig");
+const ui = @import("./nav/ui.zig");

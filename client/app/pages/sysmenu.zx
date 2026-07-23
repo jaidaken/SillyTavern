@@ -110,5 +110,5 @@ const swatch_list: []const state.Swatch = state.swatches_slice;
 
 const std = @import("std");
 const zx = @import("zx");
-const ui = @import("./ui.zig");
-const state = @import("./sysmenu_state.zig");
+const ui = @import("./nav/ui.zig");
+const state = @import("./nav/sysmenu_state.zig");

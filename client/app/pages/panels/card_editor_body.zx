@@ -268,12 +268,12 @@ fn onRetry(ev: zx.client.Event) void {
 const zx = @import("zx");
 const std = @import("std");
 const js = zx.client.js;
-const dom_event = @import("../dom_event.zig");
-const card_editor = @import("../card_editor.zig");
-const card_form = @import("../card_form.zig");
-const char_store = @import("../character_store.zig");
+const dom_event = @import("../platform/dom_event.zig");
+const card_editor = @import("../cast/card_editor.zig");
+const card_form = @import("../cast/card_form.zig");
+const char_store = @import("../cast/character_store.zig");
 const panelchrome = @import("../panelchrome.zx");
-const nav = @import("../dropdown_nav.zig");
+const nav = @import("../nav/dropdown_nav.zig");
 const dropdown = @import("../dropdown.zx");
 const Dropdown = dropdown.Dropdown;
 

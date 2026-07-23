@@ -11,5 +11,5 @@ pub fn CharacterListRegion(ctx: *zx.ComponentCtx(void)) zx.Component {
 }
 
 const zx = @import("zx");
-const regions = @import("../regions.zig");
-const CharacterList = @import("character_list.zx").CharacterList;
+const regions = @import("../shell/regions.zig");
+const CharacterList = @import("./character_list.zx").CharacterList;

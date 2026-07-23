@@ -283,11 +283,11 @@ pub fn indexFrom(ev: zx.client.Event, comptime key: []const u8) ?usize {
 
 const zx = @import("zx");
 const std = @import("std");
-const data = @import("../char_data.zig");
-const gs = @import("../group_store.zig");
-const group_actions = @import("../group_actions.zig");
-const char_store = @import("../character_store.zig");
-const dom_event = @import("../dom_event.zig");
-const char_list = @import("character_list.zx");
+const data = @import("../cast/char_data.zig");
+const gs = @import("../cast/group_store.zig");
+const group_actions = @import("../cast/group_actions.zig");
+const char_store = @import("../cast/character_store.zig");
+const dom_event = @import("../platform/dom_event.zig");
+const char_list = @import("./character_list.zx");
 const Dropdown_mod = @import("../dropdown.zx");
 const Dropdown = Dropdown_mod.Dropdown;

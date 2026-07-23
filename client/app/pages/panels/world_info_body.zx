@@ -566,10 +566,10 @@ fn readValue(target: js.Object) ?[]u8 {
 const zx = @import("zx");
 const std = @import("std");
 const js = zx.client.js;
-const dom_event = @import("../dom_event.zig");
-const wi = @import("../world_info.zig");
-const actions = @import("../world_info_actions.zig");
-const nav = @import("../dropdown_nav.zig");
+const dom_event = @import("../platform/dom_event.zig");
+const wi = @import("../setup/world_info.zig");
+const actions = @import("../setup/world_info_actions.zig");
+const nav = @import("../nav/dropdown_nav.zig");
 const panelchrome = @import("../panelchrome.zx");
 const dropdown = @import("../dropdown.zx");
 const Dropdown = dropdown.Dropdown;

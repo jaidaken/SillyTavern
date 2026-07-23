@@ -121,5 +121,5 @@ pub fn UndoSnapshots(allocator: zx.Allocator) zx.Component {
 }
 
 const zx = @import("zx");
-const store = @import("../store.zig");
-const undo = @import("../undo.zig");
+const store = @import("../platform/store.zig");
+const undo = @import("../chat/undo.zig");

@@ -137,8 +137,8 @@ fn onClearKey(_: zx.client.Event) void {
 
 const std = @import("std");
 const zx = @import("zx");
-const connection = @import("../connection.zig");
-const textgen = @import("../textgen_types.zig");
-const dom_event = @import("../dom_event.zig");
+const connection = @import("../setup/connection.zig");
+const textgen = @import("../setup/textgen_types.zig");
+const dom_event = @import("../platform/dom_event.zig");
 const dropdown = @import("../dropdown.zx");
 const Dropdown = dropdown.Dropdown;

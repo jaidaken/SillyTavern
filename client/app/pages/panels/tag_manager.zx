@@ -10,11 +10,11 @@ const zx = @import("zx");
 const std = @import("std");
 const js = zx.client.js;
 
-const tag_store = @import("../tag_store.zig");
-const char_store = @import("../character_store.zig");
-const reading_prefs = @import("../reading_prefs.zig");
-const regions = @import("../regions.zig");
-const dom_event = @import("../dom_event.zig");
+const tag_store = @import("../cast/tag_store.zig");
+const char_store = @import("../cast/character_store.zig");
+const reading_prefs = @import("../chat/reading_prefs.zig");
+const regions = @import("../shell/regions.zig");
+const dom_event = @import("../platform/dom_event.zig");
 
 const alloc = char_store.page_gpa;
 const log = std.log.scoped(.tags);

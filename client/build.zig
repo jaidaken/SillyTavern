@@ -27,7 +27,7 @@ pub fn build(b: *std.Build) !void {
     });
     app_exe.root_module.addImport("build_options", build_opts.createModule());
 
-    const md4c = b.createModule(.{ .root_source_file = b.path("app/pages/markdown.zig") });
+    const md4c = b.createModule(.{ .root_source_file = b.path("app/pages/platform/markdown.zig") });
     addMd4c(b, md4c, optimize);
     app_exe.root_module.addImport("markdown", md4c);
     // The exe links libc; the md4c module deliberately does not, so ziex can stub its libc imports
@@ -71,7 +71,7 @@ pub fn build(b: *std.Build) !void {
     // zig test only discovers tests reachable by file path from the compilation root, so a module
     // root needs its own artifact. libc_shim cannot be file-imported: markdown owns it as a module.
     const shim_test_mod = b.createModule(.{
-        .root_source_file = b.path("app/pages/libc_shim.zig"),
+        .root_source_file = b.path("app/pages/platform/libc_shim.zig"),
         .target = target,
         .optimize = .Debug,
     });
@@ -144,6 +144,6 @@ fn addMd4c(b: *std.Build, mod: *std.Build.Module, optimize: std.builtin.Optimize
         .flags = md4c_flags,
     });
     mod.addImport("libc_shim", b.createModule(.{
-        .root_source_file = b.path("app/pages/libc_shim.zig"),
+        .root_source_file = b.path("app/pages/platform/libc_shim.zig"),
     }));
 }

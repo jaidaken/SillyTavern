@@ -33,9 +33,9 @@ pub fn Shell(ctx: *zx.ComponentCtx(void)) zx.Component {
 }
 
 const zx = @import("zx");
-const ui = @import("./ui.zig");
-const regions = @import("./regions.zig");
-const instrument = @import("./instrument.zig");
+const ui = @import("./nav/ui.zig");
+const regions = @import("./shell/regions.zig");
+const instrument = @import("./platform/instrument.zig");
 const TopBar = @import("./topbar.zx").TopBar;
 const SidePanel = @import("./panels/sidepanel.zx").SidePanel;
 const EdgeTabs = @import("./edgetabs.zx").EdgeTabs;

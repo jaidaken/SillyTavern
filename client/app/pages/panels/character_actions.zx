@@ -9,9 +9,9 @@
 
 const zx = @import("zx");
 const std = @import("std");
-const char_store = @import("../character_store.zig");
-const char_api = @import("../char_api.zig");
-const dom_event = @import("../dom_event.zig");
+const char_store = @import("../cast/character_store.zig");
+const char_api = @import("../cast/char_api.zig");
+const dom_event = @import("../platform/dom_event.zig");
 const panelchrome = @import("../panelchrome.zx");
 
 // Delete is the one destructive action, so it wears the danger hover instead of the ordinary one:

@@ -70,8 +70,8 @@ fn onDemoKey(ev: zx.client.Event) void {
 
 const zx = @import("zx");
 const js = zx.client.js;
-const data = @import("./char_data.zig");
-const nav = @import("./dropdown_nav.zig");
-const dom_event = @import("./dom_event.zig");
+const data = @import("./cast/char_data.zig");
+const nav = @import("./nav/dropdown_nav.zig");
+const dom_event = @import("./platform/dom_event.zig");
 const dropdown = @import("./dropdown.zx");
 const Dropdown = dropdown.Dropdown;

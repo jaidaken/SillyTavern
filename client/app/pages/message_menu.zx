@@ -53,5 +53,5 @@ pub fn MessageMenu(allocator: zx.Allocator) zx.Component {
 }
 
 const zx = @import("zx");
-const store = @import("./store.zig");
-const actions = @import("./message_actions.zig");
+const store = @import("./platform/store.zig");
+const actions = @import("./chat/message_actions.zig");

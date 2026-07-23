@@ -281,7 +281,9 @@ tally "markdown code-fence stage" $?
 echo
 echo "== dev endpoints are opt-in =="
 refuse_taken_port $((PORT + 1)) "the no-dev server"
-setsid timeout -k 5 20 python3 devserve.py --port $((PORT + 1)) --dist dist >/dev/null 2>&1 &
+# The timeout is an orphan backstop, not a perf assertion; match the primary server (line 168) so
+# heavy host load (eg many sibling chrome instances) cannot kill it mid-section and read a dead socket.
+setsid timeout -k 5 320 python3 devserve.py --port $((PORT + 1)) --dist dist >/dev/null 2>&1 &
 NODEV=$!
 nodev_ready=no
 for _ in $(seq 1 50); do

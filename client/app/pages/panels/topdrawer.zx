@@ -50,16 +50,16 @@ pub fn TopDrawer(allocator: zx.Allocator, props: DrawerProps) zx.Component {
 }
 
 const zx = @import("zx");
-const ui = @import("../ui.zig");
+const ui = @import("../nav/ui.zig");
 const PanelHead = @import("../panelchrome.zx").PanelHead;
-const ConnectionsBody = @import("connections_body.zx").ConnectionsBody;
-const FormattingBody = @import("formatting_body.zx").FormattingBody;
-const WorldInfoBody = @import("world_info_body.zx").WorldInfoBody;
-const SettingsBody = @import("settings_body.zx").SettingsBody;
-const BackgroundsBody = @import("backgrounds_body.zx").BackgroundsBody;
-const ExtensionsBody = @import("extensions_body.zx").ExtensionsBody;
-const CardEditorBody = @import("card_editor_body.zx").CardEditorBody;
+const ConnectionsBody = @import("./connections_body.zx").ConnectionsBody;
+const FormattingBody = @import("./formatting_body.zx").FormattingBody;
+const WorldInfoBody = @import("./world_info_body.zx").WorldInfoBody;
+const SettingsBody = @import("./settings_body.zx").SettingsBody;
+const BackgroundsBody = @import("./backgrounds_body.zx").BackgroundsBody;
+const ExtensionsBody = @import("./extensions_body.zx").ExtensionsBody;
+const CardEditorBody = @import("./card_editor_body.zx").CardEditorBody;
 // w3-chatmgr
-const ChatManagerBody = @import("chat_manager_body.zx").ChatManagerBody;
+const ChatManagerBody = @import("./chat_manager_body.zx").ChatManagerBody;
 // P1-B
-const NotificationsBody = @import("notifications_body.zx").NotificationsBody;
+const NotificationsBody = @import("./notifications_body.zx").NotificationsBody;

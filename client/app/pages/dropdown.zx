@@ -317,7 +317,7 @@ fn anchorStyle(allocator: std.mem.Allocator) []const u8 {
 const zx = @import("zx");
 const std = @import("std");
 const js = zx.client.js;
-const nav = @import("./dropdown_nav.zig");
-const dom_event = @import("./dom_event.zig");
+const nav = @import("./nav/dropdown_nav.zig");
+const dom_event = @import("./platform/dom_event.zig");
 
 const log = std.log.scoped(.ui);
