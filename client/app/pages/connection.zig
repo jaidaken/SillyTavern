@@ -18,6 +18,7 @@ const generate = @import("./generate.zig");
 const dom_event = @import("./dom_event.zig");
 const textgen = @import("./textgen_types.zig");
 const secret_mask = @import("./secret_mask.zig");
+const char_data = @import("./char_data.zig");
 const regions = @import("./regions.zig");
 const notifications = @import("./notifications.zig");
 
@@ -118,6 +119,76 @@ fn storeProbedModel(model: []const u8) void {
     pending_model_len = n;
 }
 
+// ---- the standalone status poll (P1-E) -------------------------------------------------------
+
+/// How often the standalone poll re-probes. This is the PRE-live-channel form and becomes the
+/// fallback once the server pushes state, so it is built to be stood down (`stopPoll`) rather than
+/// to own the status forever.
+const default_poll_ms: u32 = 20000;
+var poll_ms: u32 = default_poll_ms;
+
+/// Armed, not a timer handle: ziex exposes setTimeout with NO clearTimeout, so a poll is stopped by
+/// refusing to reschedule (the reveal.zig/reading_prefs.zig pattern). The pending tick still fires
+/// once and returns without arming another, which is why stopPoll cannot leave a loop running.
+var poll_armed: bool = false;
+
+/// Begin polling. Idempotent BY DESIGN: a second call while armed must not start a second timer, or
+/// every settings load would double the probe rate for the life of the page.
+pub fn startPoll() void {
+    if (zx.platform.role != .client) return;
+    if (poll_armed) return;
+    if (conn == null) return;
+    poll_armed = true;
+    schedulePoll();
+}
+
+/// Stand the poll down. The live channel calls this when it takes over; the pending tick observes
+/// the flag and stops.
+pub fn stopPoll() void {
+    poll_armed = false;
+}
+
+pub fn pollArmed() bool {
+    return poll_armed;
+}
+
+fn schedulePoll() void {
+    if (!poll_armed) return;
+    if (zx.client.setTimeout(pollTick, poll_ms) == null) {
+        // No timer slot. Disarm rather than report a poll that is not running.
+        poll_armed = false;
+        log.warn("no timer slot for the status poll: the dot will not refresh on its own", .{});
+    }
+}
+
+fn pollTick() void {
+    if (!poll_armed) return;
+    // A hidden tab probes NOTHING. Read at the tick rather than binding visibilitychange: the state
+    // is only interesting at the moment a probe would fire.
+    if (!documentHidden()) checkStatus();
+    schedulePoll();
+}
+
+fn documentHidden() bool {
+    if (zx.platform.role != .client) return false;
+    const doc = js.global.get(js.Object, "document") catch return false;
+    defer doc.deinit();
+    return doc.get(bool, "hidden") catch false;
+}
+
+/// `?pollms=` shortens the interval for the browser gate, which cannot spend 20s per probe. Absent
+/// on a real load, so the shipped cadence is the default.
+fn readPollInterval() void {
+    if (zx.platform.role != .client) return;
+    const loc = js.global.get(js.Object, "location") catch return;
+    defer loc.deinit();
+    const search = loc.getAlloc(js.String, alloc, "search") catch return;
+    defer alloc.free(search);
+    const raw = char_data.queryValue(search, "pollms") orelse return;
+    const parsed = std.fmt.parseInt(u32, raw, 10) catch return;
+    if (parsed >= 100) poll_ms = parsed;
+}
+
 /// A send stream came back 502/504, so the edge answered before SillyTavern was reached. Reported by
 /// stream_drive at the seal: the failure is the connection's to hold, not the streamer's to paint.
 pub fn onStreamUnreachable() void {
@@ -186,7 +257,9 @@ pub fn setFrom(settings_str: []const u8) void {
         if (c.api_type.len > 0) storeSelected(c.api_type);
     }
     updateConnState();
+    readPollInterval();
     checkStatus();
+    startPoll();
 }
 
 /// The pre-probe state: what the settings blob says, before the backend has been asked anything.

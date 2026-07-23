@@ -346,6 +346,14 @@
         }
     };
 
+    // P1-E: the status poll's arm/disarm. A fallback the live channel stands down, so both
+    // directions are product surface; the gate drives the same two calls.
+    window.__st_conn_poll = function (on) {
+        if (on) { if (wasm.__st_conn_start_poll) wasm.__st_conn_start_poll(); }
+        else if (wasm.__st_conn_stop_poll) { wasm.__st_conn_stop_poll(); }
+        return wasm.__st_conn_poll_armed ? wasm.__st_conn_poll_armed() : -1;
+    };
+
     // __st_read_file (C4): read a file input to bytes for Zig via __st_file_ready. Non-async so
     // js.global.call(void) succeeds; an empty read (cancelled picker) still calls back to settle Zig.
     window.__st_read_file = function (inputId, tag) {

@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 function parseArgs(argv) {
     // Watchdog must exceed the worst-case sum of row waits (~140s all-red), or a fully broken build
     // dies at the watchdog before the per-row diagnostics print.
-    const out = { base: null, timeout: 240000 };
+    const out = { base: null, timeout: 420000 };
     for (let i = 0; i < argv.length; i += 2) {
         const k = argv[i], v = argv[i + 1];
         if (k === '--base') out.base = v;
@@ -4495,6 +4495,346 @@ async function main() {
                 JSON.stringify(standing));
         }
         /* C-CONN-DOT END */
+
+        /* C-POLL: the standalone backend-status poll (P1-E). */
+        // Counted server-side, never inferred from the dot: a poll that stopped and a backend that
+        // stopped changing look identical from the DOM. ?pollms shortens the shipped 20s cadence.
+        console.log('== C-POLL the standalone status poll ==');
+        {
+            const probes = async () => (await (await fetch(`${args.base}/dev/state`)).json()).status_probe_count;
+            const armed = async () => page.eval('window.__st_conn_poll(true)');
+            await fetch(`${args.base}/dev/status-mode?m=ok`);
+            await page.navigate(`${args.base}/?demo=1&pollms=400`);
+            await page.waitFor(hydrated, 15000);
+            await page.waitFor("document.getElementById('d-connections').dataset.connState === 'connected'", 10000);
+
+            // The dot must follow the backend with NOBODY reloading. Nothing below navigates.
+            await fetch(`${args.base}/dev/status-mode?m=asleep`);
+            const flipped = await page.waitFor(
+                "document.getElementById('d-connections').dataset.connState === 'asleep'", 10000);
+            const flippedLabel = await page.eval("document.getElementById('d-connections').getAttribute('aria-label')");
+            row('must', flipped && flippedLabel === 'API Connections, Backend asleep - unlock at silly',
+                'C-POLL-1 the poll flips the dot when the backend changes, with no reload',
+                `flipped=${flipped} label=${JSON.stringify(flippedLabel)}`);
+
+            await fetch(`${args.base}/dev/status-mode?m=ok`);
+            const back = await page.waitFor(
+                "document.getElementById('d-connections').dataset.connState === 'connected'", 10000);
+            row('must', back, 'C-POLL-2 the poll recovers the dot when the backend comes back', `recovered=${back}`);
+
+            // A hidden tab probes NOTHING. document.hidden is overridden rather than stubbed out of
+            // the code path: the Zig still reads the real property, this only sets what it reads.
+            await page.eval("Object.defineProperty(document, 'hidden', { configurable: true, get: function(){ return true; } });");
+            const hiddenFrom = await probes();
+            await sleep(2500);
+            const hiddenAdded = (await probes()) - hiddenFrom;
+            // Then reveal it again: a zero that survives un-hiding would mean the poll had simply died.
+            await page.eval("Object.defineProperty(document, 'hidden', { configurable: true, get: function(){ return false; } });");
+            const shownFrom = await probes();
+            await sleep(2500);
+            const shownAdded = (await probes()) - shownFrom;
+            row('must', hiddenAdded === 0 && shownAdded >= 3,
+                'C-POLL-3 a hidden tab probes nothing, and probing resumes when it is shown',
+                `hidden=+${hiddenAdded} shown=+${shownAdded} over 2.5s at 400ms`);
+
+            // Arming twice must not double the rate. The sweep timer taught us that a loop which
+            // re-arms itself will happily run twice with nothing in the DOM to show for it.
+            const armAgain = await armed();
+            const armAgain2 = await armed();
+            const doubleFrom = await probes();
+            await sleep(2500);
+            const doubleAdded = (await probes()) - doubleFrom;
+            row('must', armAgain === 1 && armAgain2 === 1 && doubleAdded >= 3 && doubleAdded <= 9,
+                'C-POLL-4 arming an already-armed poll starts no second timer',
+                `armed=${armAgain},${armAgain2} probes=+${doubleAdded} over 2.5s at 400ms (one timer ~6)`);
+
+            // And it must actually STOP. A poll that cannot be stood down cannot become a fallback.
+            const stopped = await page.eval('window.__st_conn_poll(false)');
+            await sleep(700);
+            const stopFrom = await probes();
+            await sleep(2500);
+            const stopAdded = (await probes()) - stopFrom;
+            row('must', stopped === 0 && stopAdded === 0,
+                'C-POLL-5 stopping the poll leaves no timer still probing',
+                `armedAfterStop=${stopped} probes=+${stopAdded} over 2.5s`);
+
+            const rearmed = await armed();
+            const reFrom = await probes();
+            await sleep(2500);
+            const reAdded = (await probes()) - reFrom;
+            row('must', rearmed === 1 && reAdded >= 3,
+                'C-POLL-6 a stopped poll can be armed again, so the fallback is re-enterable',
+                `armed=${rearmed} probes=+${reAdded}`);
+            await page.eval('window.__st_conn_poll(false)');
+        }
+        /* C-POLL END */
+
+        /* C-PUSH: one row per notification push site (P1-D2). */
+        // A push site with no row is a branch nobody has run. Each row here drives the REAL path that
+        // reaches its push and asserts the level and the exact text, so a site cannot be proven by a
+        // neighbour's toast. Where two sites share wording (the three asleep pushes, the two offline
+        // ones) the driver is what tells them apart, which is why each starts from a known-silent
+        // load: a healthy boot pushes nothing, so any toast present after it came from the action.
+        console.log('== C-PUSH every notification push site ==');
+        {
+            const toastsNow = async () => page.eval(
+                `[...document.querySelectorAll('#notifications div[data-level]')].map(function(e){`
+                + `return { level: e.getAttribute('data-level'), text: e.textContent }; })`);
+            const only = (list, level, text) => list.length === 1 && list[0].level === level && list[0].text === text;
+            const settled = async (ms = 4000) => {
+                await page.waitFor("document.querySelectorAll('#notifications div[data-level]').length > 0", ms);
+                await sleep(250);
+                return toastsNow();
+            };
+            // A load whose probe answers `mode`. Returns once the readout has left its pre-probe state,
+            // so the boot push (if the mode has one) has already landed.
+            const bootWith = async (mode) => {
+                await fetch(`${args.base}/dev/status-mode?m=${mode}`);
+                await page.navigate(`${args.base}/?demo=1`);
+                await page.waitFor(hydrated, 15000);
+                await page.waitFor("document.getElementById('d-connections').dataset.connState !== 'configured'", 10000);
+                await sleep(200);
+                return toastsNow();
+            };
+            const openConnections = async () => {
+                if (!await page.eval("!!document.querySelector('.conn-connect')")) {
+                    await page.click('#d-connections');
+                    await page.waitFor("document.querySelector('.conn-connect')", 8000);
+                }
+                // The drawer opens on a transition and page.click dispatches at coordinates, so a
+                // click measured mid-animation lands on empty space.
+                let last = null;
+                for (let i = 0; i < 80; i++) {
+                    const at = await page.eval("(function(){const e=document.querySelector('.conn-connect');"
+                        + "if(!e)return '';const b=e.getBoundingClientRect();return b.top+','+b.left+','+b.width;})()");
+                    if (at && at === last) return;
+                    last = at;
+                    await sleep(50);
+                }
+                throw new Error('C-PUSH: the connect button never settled');
+            };
+            // Connect from a healthy boot, so the only toast that can be up is this attempt's.
+            const connectWith = async (mode, arm) => {
+                await bootWith('ok');
+                await fetch(`${args.base}/dev/status-mode?m=${mode}`);
+                if (arm) await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent(arm)}&code=500`);
+                await openConnections();
+                await page.click('.conn-connect');
+                return settled();
+            };
+
+            const bootOffline = await bootWith('offline');
+            row('must', only(bootOffline, 'warning', 'Backend offline - unlock at silly'),
+                'C-PUSH-1 boot probe offline raises exactly its own warning',
+                JSON.stringify(bootOffline));
+
+            const bootErr = await bootWith('error');
+            row('must', only(bootErr, 'err', 'Backend error 500'),
+                'C-PUSH-2 boot probe error carries its status code into the toast',
+                JSON.stringify(bootErr));
+
+            const bootOk = await bootWith('ok');
+            row('must', bootOk.length === 0,
+                'C-PUSH-3 a healthy boot pushes NOTHING, so every row below starts silent',
+                JSON.stringify(bootOk));
+
+            const probeAsleep = await connectWith('asleep', null);
+            row('must', only(probeAsleep, 'warning', 'Backend asleep - unlock at silly'),
+                'C-PUSH-4 interactive Connect against a 502 raises the asleep warning',
+                JSON.stringify(probeAsleep));
+
+            const probeFailed = await connectWith('error', null);
+            row('must', only(probeFailed, 'err', 'Connect failed: 500'),
+                'C-PUSH-5 interactive Connect against a 500 says connect failed, with the code',
+                JSON.stringify(probeFailed));
+
+            const probeOffline = await connectWith('offline', null);
+            row('must', only(probeOffline, 'warning', 'Backend offline - unlock at silly'),
+                'C-PUSH-6 interactive Connect against online:false raises the offline warning',
+                JSON.stringify(probeOffline));
+
+            const saveFailed = await connectWith('ok', '/api/settings/set-connection');
+            row('must', only(saveFailed, 'err', 'Connection save failed: 500'),
+                'C-PUSH-7 a probe that succeeds but a persist that fails says the SAVE failed',
+                JSON.stringify(saveFailed));
+
+            const connected = await connectWith('ok', null);
+            row('must', only(connected, 'success', 'Connected: mock-model'),
+                'C-PUSH-8 a Connect that lands names the model it connected to',
+                JSON.stringify(connected));
+
+            // The key lifecycle. Save then remove, each in both outcomes, from a silent boot.
+            const keyAction = async (arm, act) => {
+                await bootWith('ok');
+                await openConnections();
+                if (arm) await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent(arm)}&code=500`);
+                if (act === 'save') {
+                    await page.focus('#conn-api-key');
+                    await page.insertText('sk-push-probe');
+                    await page.click('.conn-key-save');
+                } else {
+                    await page.click('.conn-key-clear');
+                }
+                return settled();
+            };
+
+            const keySaved = await keyAction(null, 'save');
+            row('must', only(keySaved, 'success', 'API key saved'),
+                'C-PUSH-9 saving an API key confirms it', JSON.stringify(keySaved));
+
+            const keySaveFailed = await keyAction('/api/secrets/write', 'save');
+            row('must', only(keySaveFailed, 'err', 'API key save failed: 500'),
+                'C-PUSH-10 a rejected key write says so, with the code', JSON.stringify(keySaveFailed));
+
+            const keyRemoved = await keyAction(null, 'remove');
+            row('must', only(keyRemoved, 'success', 'API key removed'),
+                'C-PUSH-11 removing a stored key confirms it', JSON.stringify(keyRemoved));
+
+            const keyRemoveFailed = await keyAction('/api/secrets/delete', 'remove');
+            row('must', only(keyRemoveFailed, 'err', 'API key removal failed: 500'),
+                'C-PUSH-12 a rejected key delete says so, with the code', JSON.stringify(keyRemoveFailed));
+
+            // The character list. Its failure is the one a user experiences as an empty app, so the
+            // toast is the only thing that says why. Armed, then a load, then a clean load to recover.
+            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/characters/all')}&code=500`);
+            await page.navigate(`${args.base}/?demo=1`);
+            await page.waitFor(hydrated, 15000);
+            const charsFailed = await settled(8000);
+            row('must', charsFailed.some((t) => t.level === 'err' && t.text === 'Character list failed to load: 500'),
+                'C-PUSH-13 a failed character list says so rather than showing an empty app',
+                JSON.stringify(charsFailed));
+
+            // A file picked into a real input, so the Zig multipart + raw POST run end to end. Shared
+            // by the background and the two avatar sites below.
+            const pickFile = async (inputId, name) => {
+                const dir = mkdtempSync(join(tmpdir(), 'st-push-'));
+                const path = join(dir, name);
+                writeFileSync(path, Buffer.from(
+                    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+                    'base64'));
+                const doc = await page.cdp.send('DOM.getDocument', { depth: 1 }, page.sessionId);
+                const nodeId = (await page.cdp.send('DOM.querySelector',
+                    { nodeId: doc.root.nodeId, selector: '#' + inputId }, page.sessionId)).nodeId;
+                await page.cdp.send('DOM.setFileInputFiles', { files: [path], nodeId }, page.sessionId);
+            };
+            // Delete goes through window.confirm and rename through window.prompt (backgrounds.zig
+            // :272, :304). Each navigate here restores the NATIVE dialogs, and a native modal blocks
+            // the page: an unstubbed confirm hangs every later CDP eval, which is what a 420s
+            // watchdog timeout after the upload rows turned out to be.
+            const openBackgrounds = async () => {
+                await page.navigate(`${args.base}/?demo=1`);
+                await page.waitFor(hydrated, 15000);
+                await page.eval("window.confirm = function(){ return true; };"
+                    + "window.prompt = function(){ return 'push renamed.png'; };");
+                await page.click('#d-backgrounds');
+                await page.waitFor("document.getElementById('bg-upload-input')", 8000);
+                await sleep(300);
+            };
+
+            await openBackgrounds();
+            await pickFile('bg-upload-input', 'push probe.png');
+            const bgUploaded = await settled(8000);
+            row('must', bgUploaded.some((t) => t.level === 'success' && t.text === 'Background uploaded'),
+                'C-PUSH-14 a background upload that lands confirms it', JSON.stringify(bgUploaded));
+
+            await openBackgrounds();
+            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/backgrounds/upload')}&code=500`);
+            await pickFile('bg-upload-input', 'push fail.png');
+            const bgUpFailed = await settled(8000);
+            row('must', bgUpFailed.some((t) => t.level === 'err' && t.text === 'Background upload failed: 500'),
+                'C-PUSH-15 a rejected background upload says so, with the code', JSON.stringify(bgUpFailed));
+
+            await openBackgrounds();
+            const delTarget = await page.eval("(document.querySelector('#bg-gallery [data-bg-delete]')||{}).dataset ? document.querySelector('#bg-gallery [data-bg-delete]').getAttribute('data-bg-delete') : ''");
+            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/backgrounds/delete')}&code=500`);
+            await page.click(`#bg-gallery [data-bg-delete='${delTarget}']`);
+            const bgDelFailed = await settled(8000);
+            row('must', bgDelFailed.some((t) => t.level === 'err' && t.text === 'Background delete failed: 500'),
+                'C-PUSH-16 a rejected background delete says so, with the code',
+                `target=${JSON.stringify(delTarget)} ${JSON.stringify(bgDelFailed)}`);
+
+            await openBackgrounds();
+            const renTarget = await page.eval("document.querySelector('#bg-gallery [data-bg-rename]').getAttribute('data-bg-rename')");
+            await page.eval("window.prompt = function(){ return 'push renamed.png'; };");
+            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/backgrounds/rename')}&code=500`);
+            await page.click(`#bg-gallery [data-bg-rename='${renTarget}']`);
+            const bgRenFailed = await settled(8000);
+            row('must', bgRenFailed.some((t) => t.level === 'err' && t.text === 'Background rename failed: 500'),
+                'C-PUSH-17 a rejected background rename says so, with the code',
+                `target=${JSON.stringify(renTarget)} ${JSON.stringify(bgRenFailed)}`);
+
+            // The card editor. Opening it fetches the deep card, so the form's presence is the signal
+            // that the panel is ready to save from.
+            // The editor only has a card to show once one is selected, which resuming a chat does. A
+            // bare navigate leaves it empty, and the form never mounts.
+            const openCardEditor = async () => {
+                await page.navigate(`${args.base}/`);
+                await openRecentChat();
+                await page.click('#d-card_editor');
+                if (!await page.waitFor("!!document.querySelector('#card-description')", 10000)) {
+                    throw new Error('C-PUSH: the card editor form never mounted');
+                }
+                await sleep(200);
+            };
+
+            await openCardEditor();
+            await page.eval("(function(){var t=document.getElementById('card-description');"
+                + "t.value='push probe edit'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/characters/edit')}&code=500`);
+            await page.click('#card-save');
+            const cardSaveFailed = await settled(8000);
+            row('must', cardSaveFailed.some((t) => t.level === 'err' && t.text === 'Character save failed: 500'),
+                'C-PUSH-18 a rejected card save says so, with the code', JSON.stringify(cardSaveFailed));
+
+            await openCardEditor();
+            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/characters/edit-avatar')}&code=500`);
+            await pickFile('card-avatar-input', 'card push.png');
+            const cardAvatarFailed = await settled(8000);
+            row('must', cardAvatarFailed.some((t) => t.level === 'err' && t.text === 'Avatar upload failed: 500'),
+                'C-PUSH-19 a rejected card avatar upload says so, with the code', JSON.stringify(cardAvatarFailed));
+
+            const openPersona = async () => {
+                await page.navigate(`${args.base}/?demo=1`);
+                await page.waitFor(hydrated, 15000);
+                await page.click('#d-persona');
+                if (!await page.waitFor("document.getElementById('persona-avatar-input')", 10000)) {
+                    throw new Error('C-PUSH: the persona panel never mounted its avatar input');
+                }
+                await sleep(200);
+            };
+
+            await openPersona();
+            await pickFile('persona-avatar-input', 'persona push.png');
+            const personaOk = await settled(8000);
+            row('must', personaOk.some((t) => t.level === 'success' && t.text === 'Persona avatar updated'),
+                'C-PUSH-20 a persona avatar that uploads confirms it', JSON.stringify(personaOk));
+
+            await openPersona();
+            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/avatars/upload')}&code=500`);
+            await pickFile('persona-avatar-input', 'persona fail.png');
+            const personaFailed = await settled(8000);
+            row('must', personaFailed.some((t) => t.level === 'err' && t.text === 'Persona avatar upload failed: 500'),
+                'C-PUSH-21 a rejected persona avatar upload says so, with the code', JSON.stringify(personaFailed));
+
+            // The stream's own unreachable path, which is NOT the boot probe: stream_drive hands a
+            // 502 at the seal to connection.onStreamUnreachable, and only a real send reaches it.
+            // Not bootWith: that loads ?demo=1, which seeds a chat and has no #home-resume to click.
+            await fetch(`${args.base}/dev/status-mode?m=ok`);
+            await page.navigate(`${args.base}/`);
+            await openRecentChat();
+            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/backends/text-completions/generate')}&code=502`);
+            await page.focus('#send_textarea');
+            await page.insertText('push probe send');
+            await page.click('#composer button[aria-label="Send"]');
+            const streamAsleep = await settled(15000);
+            row('must', streamAsleep.some((t) => t.level === 'warning' && t.text === 'Backend asleep - unlock at silly'),
+                'C-PUSH-22 a send whose stream 502s at the edge raises the asleep warning',
+                JSON.stringify(streamAsleep));
+
+            await fetch(`${args.base}/dev/clear-fail-next`);
+            await fetch(`${args.base}/dev/status-mode?m=ok`);
+        }
+        /* C-PUSH END */
 
         /* C-NOTIF: the toast overlay (P1-PROBE + P1-A). Keep ABOVE C-DBG, which reads the whole run. */
         // Two claims, and the second is the one the region exists for. First: a toast fades on its own,

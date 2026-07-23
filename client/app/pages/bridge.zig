@@ -20,6 +20,7 @@ const instrument = @import("./instrument.zig");
 const telemetry = @import("./telemetry.zig"); // C5: uncaught-error + click diagnostics log here
 const stream_drive = @import("./stream_drive.zig"); // C2: Zig-owned SSE lifecycle + door pump driver
 const notifications = @import("./notifications.zig");
+const connection = @import("./connection.zig");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
@@ -279,6 +280,20 @@ fn notify(level: u32, text_ptr: usize, text_len: usize, ttl_ms: u32) callconv(.c
     notifications.push(lvl, text, ttl_ms);
 }
 
+/// P1-E: the status poll's arm/disarm, for the interactions gate. The poll is a FALLBACK that the
+/// live channel will stand down, so both directions are product surface, not test-only scaffolding.
+fn startPoll() callconv(.c) void {
+    connection.startPoll();
+}
+
+fn stopPoll() callconv(.c) void {
+    connection.stopPoll();
+}
+
+fn pollArmed() callconv(.c) u32 {
+    return @intFromBool(connection.pollArmed());
+}
+
 comptime {
     if (is_wasm) {
         // Zig owns the data layer (char_api.zig); the append/clear/select/meta exports
@@ -303,6 +318,10 @@ comptime {
         @export(&onUncaught, .{ .name = "__st_on_uncaught" });
         // P1-A: the notifications injection path for the interactions gate + console debugging.
         @export(&notify, .{ .name = "__st_notify" });
+        // P1-E
+        @export(&startPoll, .{ .name = "__st_conn_start_poll" });
+        @export(&stopPoll, .{ .name = "__st_conn_stop_poll" });
+        @export(&pollArmed, .{ .name = "__st_conn_poll_armed" });
         if (instrument.enabled) {
             @export(&messageViewRenders, .{ .name = "__st_mv_renders" });
             @export(&shellRenders, .{ .name = "__st_shell_renders" });

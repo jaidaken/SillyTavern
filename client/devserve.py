@@ -685,6 +685,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     get_count = 0
     # P1-C: what the text-completions status probe answers. "ok" is the healthy mock.
     status_mode = "ok"
+    # P1-D2: path -> status code, consumed by the next request to that exact path.
+    fail_next = {}
+    # P1-E: how many status probes have arrived, so a poll can be counted rather than eyeballed.
+    status_probe_count = 0
     # History-prefetch 409: armed once via /dev/arm-get-409, fires on the next prepend GET only, so the
     # scroll-preservation gate can drive the real resync path the mock append 409 cannot reach.
     arm_get_409 = False
@@ -915,6 +919,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.mock_json({
                     "recorded_connection": Handler.recorded_connection,
                     "set_connection_count": Handler.set_connection_count,
+                    "status_probe_count": Handler.status_probe_count,
                     "last_generate_server": Handler.last_generate_server,
                     "last_generate_prompt": Handler.last_generate_prompt,  # J1 invariant-2
                     "last_generate_body": Handler.last_generate_body,  # C-CFG
@@ -955,6 +960,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if self.path.startswith("/dev/arm-keys-exposed"):
                 Handler.keys_exposed = True
                 return self.mock_json({"ok": True, "keys_exposed": True})
+            # P1-D2: arm the next request to an exact path to fail with a code.
+            if self.path.startswith("/dev/fail-next"):
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                target = (q.get("path") or [""])[0]
+                code = int((q.get("code") or ["500"])[0])
+                if target:
+                    Handler.fail_next[target] = code
+                return self.mock_json({"armed": target, "code": code})
+            if self.path.startswith("/dev/clear-fail-next"):
+                Handler.fail_next.clear()
+                return self.mock_json({"armed": None})
             # P1-C: drive the connection probe's outcome (asleep / offline / error / ok).
             if self.path.startswith("/dev/status-mode"):
                 mode = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("m") or ["ok"])[0]
@@ -1138,6 +1154,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except ValueError:
             req = {}
         path = urllib.parse.urlparse(self.path).path
+
+        # P1-D2: one-shot failure injection, armed per EXACT path via /dev/fail-next. One generic arm
+        # instead of a bespoke flag per endpoint, because every notification push on a failure branch
+        # needs its own route to fail on its own, one at a time. Exact match and single-shot so an
+        # arm cannot leak into the next row's request.
+        if path in Handler.fail_next:
+            code = Handler.fail_next.pop(path)
+            return self.mock_status(code, {"error": "armed failure", "path": path})
 
         # ===== w3-grp: T0 sensor + groups routes (append-only zone) =====
         # The sensor sits BEFORE route matching so even a chat write the mock only generic-acks
@@ -1438,6 +1462,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             Handler.saved_card = saved
             return self.mock_json({"ok": True})
         if path == "/api/backends/text-completions/status":
+            Handler.status_probe_count += 1
             # P1-C: the probe answers whatever the gate armed, so the connection dot's asleep,
             # offline and error states can be driven instead of asserted only in the happy shape.
             mode = Handler.status_mode
