@@ -10,7 +10,7 @@ import { SETTINGS_FILE } from '../constants.js';
 import { getConfigValue, generateTimestamp, removeOldBackups } from '../util.js';
 import { getAllUserHandles, getUserDirectories } from '../users.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
-import { emitToUser } from '../client-events.js';
+import { emitForRequest } from '../client-events.js';
 import { log } from '../log.js';
 
 const ENABLE_EXTENSIONS = !!getConfigValue('extensions.enabled', true, 'boolean');
@@ -356,7 +356,7 @@ router.post('/save', async function (request, response) {
         const pathToSettings = path.join(request.user.directories.root, SETTINGS_FILE);
         await writeFileAtomic(pathToSettings, JSON.stringify(request.body, null, 4), 'utf8');
         triggerAutoSave(request.user.profile.handle);
-        emitToUser(request.user.profile.handle, 'settings-changed', { source: 'settings-save' });
+        emitForRequest(request, 'settings-changed', { source: 'settings-save' });
         response.send({ result: 'ok' });
     } catch (err) {
         log.settings.error(err);

@@ -27,6 +27,7 @@ import { ByafParser } from '../byaf.js';
 import { CharXParser, persistCharXAssets } from '../charx.js';
 import cacheBuster from '../middleware/cacheBuster.js';
 import { log } from '../log.js';
+import { emitForRequest } from '../client-events.js';
 
 // With 100 MB limit it would take roughly 3000 characters to reach this limit
 const memoryCacheCapacity = getConfigValue('performance.memoryCacheCapacity', '100mb');
@@ -1124,12 +1125,14 @@ router.post('/create', getFileNameValidationFunction('file_name'), async functio
 
         if (!request.file) {
             await writeCharacterData(DEFAULT_AVATAR_PATH, char, internalName, request);
+            emitForRequest(request, 'character-changed', { action: 'create', avatar: avatarName });
             return response.send(avatarName);
         } else {
             const crop = tryParse(request.query.crop);
             const uploadPath = path.join(request.file.destination, request.file.filename);
             await writeCharacterData(uploadPath, char, internalName, request, crop);
             await fs.promises.unlink(uploadPath);
+            emitForRequest(request, 'character-changed', { action: 'create', avatar: avatarName });
             return response.send(avatarName);
         }
     } catch (err) {
@@ -1222,6 +1225,7 @@ router.post('/edit', validateAvatarUrlMiddleware, async function (request, respo
         }
 
         bustCharacterListCacheEntry(request.user.profile.handle, request.body.avatar_url);
+        emitForRequest(request, 'character-changed', { action: 'edit', avatar: String(request.body.avatar_url) });
         return response.sendStatus(200);
     } catch (err) {
         log.chars.error('An error occurred, character edit invalidated.', err);
@@ -1263,6 +1267,7 @@ router.post('/edit-avatar', validateAvatarUrlMiddleware, async function (request
         cacheBuster.bust(request, response);
         await invalidateThumbnail(request.user.directories, 'avatar', request.body.avatar_url);
         bustCharacterListCacheEntry(request.user.profile.handle, request.body.avatar_url);
+        emitForRequest(request, 'character-changed', { action: 'edit-avatar', avatar: String(request.body.avatar_url) });
 
         return response.sendStatus(200);
     } catch (err) {
@@ -1547,6 +1552,7 @@ router.post('/delete', validateAvatarUrlMiddleware, async function (request, res
         }
     }
 
+    emitForRequest(request, 'character-changed', { action: 'delete', avatar: String(request.body.avatar_url) });
     return response.sendStatus(200);
 });
 

@@ -258,6 +258,24 @@ export function emitToUser(handle, event, payload, originClientId = '') {
 }
 
 /**
+ * Emits an event to the requesting user, skipping the client that caused it.
+ * Every persist site goes through here, so the handle always comes from the server-side session
+ * and never from anything the request could influence.
+ * @param {import('express').Request} request Express request carrying the session
+ * @param {string} event Event name
+ * @param {unknown} payload JSON-serializable payload
+ * @returns {void}
+ */
+export function emitForRequest(request, event, payload) {
+    const handle = request.user?.profile?.handle;
+    if (!handle) {
+        return;
+    }
+    const originClientId = request.headers['x-st-client-id'];
+    emitToUser(handle, event, payload, typeof originClientId === 'string' ? originClientId : '');
+}
+
+/**
  * Decides what a resuming client can be given.
  * A resume that cannot be fully satisfied from the ring reports incomplete, so the caller
  * tells the client to resynchronise rather than leaving it believing it is current.

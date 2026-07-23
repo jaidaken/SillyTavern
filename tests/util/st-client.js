@@ -62,12 +62,13 @@ export class SillyTavernClient {
     /**
      * @param {string} pathname Request path
      * @param {object} body JSON request body
+     * @param {Record<string, string>} [extraHeaders] Additional request headers
      * @returns {Promise<Response>} The response
      */
-    postJson(pathname, body) {
+    postJson(pathname, body, extraHeaders = {}) {
         return this.#send(pathname, {
             method: 'POST',
-            headers: this.#headers({ 'Content-Type': 'application/json' }),
+            headers: this.#headers({ 'Content-Type': 'application/json', ...extraHeaders }),
             body: JSON.stringify(body),
         });
     }

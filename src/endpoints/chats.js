@@ -23,6 +23,7 @@ import {
     isPathUnderParent,
 } from '../util.js';
 import { log } from '../log.js';
+import { emitForRequest } from '../client-events.js';
 import { bustCharacterListCacheForCharacter } from './characters.js';
 import {
     backupBaseName,
@@ -677,6 +678,7 @@ router.post('/save', validateAvatarUrlMiddleware, async function (request, respo
 
         if (Array.isArray(chatData)) {
             await trySaveChat(chatData, chatFilePath, request.body.force, handle, cardName, request.user.directories.backups);
+            emitForRequest(request, 'chat-changed', { action: 'save', card: cardName, file: String(request.body.file_name) });
             return response.send({ ok: true });
         } else {
             return response.status(400).send({ error: 'The request\'s body.chat is not an array.' });
@@ -1064,6 +1066,7 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
         chatInfoCache.delete(pathToOriginalFile);
         chatInfoCache.delete(pathToRenamedFile);
         log.chat.info('Successfully renamed chat file.');
+        emitForRequest(request, 'chat-changed', { action: 'rename', file: sanitizedFileName });
         return response.send({ ok: true, sanitizedFileName });
     } catch (error) {
         log.chat.error('Error renaming chat file:', error);
@@ -1086,6 +1089,7 @@ router.post('/delete', validateAvatarUrlMiddleware, async function (request, res
         //Return success if the file was deleted.
         if (await tryDeleteFile(chatFilePath)) {
             chatInfoCache.delete(chatFilePath);
+            emitForRequest(request, 'chat-changed', { action: 'delete', card: dirName, file: chatFileName });
             return response.send({ ok: true });
         } else {
             log.chat.error('The chat file was not deleted.');
@@ -1957,6 +1961,15 @@ router.post('/append', async function (request, response) {
             getBackupFunction(handle)(backupsDir, resolved.cardName, `${base}\n${appendedRaw}`);
             bustCharacterListCacheForCharacter(handle, resolved.cardName);
             const after = await readChatFile(resolved.ref.filePath);
+            // Hot path: the appended messages ride the event so another device appends them
+            // directly instead of refetching the whole chat file.
+            emitForRequest(request, 'chat-appended', {
+                card: resolved.cardName,
+                file: request.body.file_name ? String(request.body.file_name) : null,
+                group_id: request.body.group_id ? String(request.body.group_id) : null,
+                messages,
+                change_token: computeFullToken(after.headerRaw, after.messages),
+            });
             // change_token is the whole-file token (the append gate); tail_token refreshes the reader's
             // window path in the same response, mirroring runMutation's edit/delete contract.
             return response.send({
