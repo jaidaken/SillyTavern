@@ -43,6 +43,17 @@ var pending_model_len: usize = 0;
 var selected_buf: [64]u8 = undefined;
 var selected_len: usize = 0;
 
+/// Once the user edits the Server URL field it is theirs, not the renderer's. The field used to bind
+/// `value` straight to the mined URL, so any re-render (a boot settings load, a status probe, a live
+/// event) rewrote the box and discarded what was being typed. That was a real data-loss bug and the
+/// cause of the CONN-* interaction flake: whichever of the async settings load and the user's typing
+/// finished last won. `url_dirty` flips on the first keystroke and from then on `urlFieldValue`
+/// returns the typed text, so a re-render's diff is a no-op and never clobbers it. Same principle the
+/// composer draft relies on, made explicit for a field that must also prefill.
+var url_dirty: bool = false;
+var url_typed_buf: [1024]u8 = undefined;
+var url_typed_len: usize = 0;
+
 pub fn active() ?generate.Connection {
     return conn;
 }
@@ -221,6 +232,31 @@ pub fn withActive(f: *const fn (*generate.Connection) void) void {
 /// actually uses (mined from the settings blob), not a hardcoded default. Empty when none is set.
 pub fn activeServerUrl() []const u8 {
     return if (conn) |c| c.api_server else "";
+}
+
+/// The value the Server URL field renders. The mined URL while the field is pristine, so the box
+/// opens on what send actually uses; the typed text once the user has edited it, so a re-render can
+/// never overwrite an in-progress URL with the mined one. `url_typed_buf` is stable module memory, so
+/// the returned slice outlives the render without an allocation.
+pub fn urlFieldValue() []const u8 {
+    return if (url_dirty) url_typed_buf[0..url_typed_len] else activeServerUrl();
+}
+
+/// The field's oninput. Captures the typed value and marks the field dirty, so `urlFieldValue` stops
+/// tracking the mined URL. A value longer than the buffer is truncated for storage only; Connect
+/// still reads the live DOM value, so an over-long URL is never sent truncated.
+pub fn onUrlInput(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const raw = target.getAlloc(js.String, alloc, "value") catch return;
+    defer {
+        @memset(raw, 0);
+        alloc.free(raw);
+    }
+    const n = @min(raw.len, url_typed_buf.len);
+    @memcpy(url_typed_buf[0..n], raw[0..n]);
+    url_typed_len = n;
+    url_dirty = true;
 }
 
 /// The type the selector renders and Connect persists. Falls back to the table default only when

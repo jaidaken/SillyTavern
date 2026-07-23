@@ -1022,6 +1022,23 @@ async function main() {
         row('must', genPrompt.includes('keep the lamp burning'),
             'A1 character depth note reaches the prompt', `note=${genPrompt.includes('keep the lamp burning')}`);
 
+        // Deterministic form of the CONN-* flake: force a settings re-render while a URL is half-typed
+        // and assert it survives. Reverting connection.urlFieldValue to activeServerUrl reddens this.
+        console.log('== connection url sticky ==');
+        await page.navigate(`${args.base}/`);
+        await openRecentChat();
+        await page.click('#d-connections');
+        await page.waitFor("document.getElementById('llama-url')", 4000);
+        await page.eval("document.getElementById('llama-url').value=''");
+        await page.focus('#llama-url');
+        const stickyUrl = 'http://127.0.0.1:9077';
+        await page.insertText(stickyUrl);
+        await fetch(`${args.base}/dev/emit-event?type=settings-changed&data=${encodeURIComponent(JSON.stringify({ source: 'sticky' }))}`);
+        await sleep(1400);
+        const stickyAfter = await page.eval("document.getElementById('llama-url').value");
+        row('must', stickyAfter === stickyUrl,
+            'CONN-URL-STICKY a live settings event does not overwrite a URL being typed', `url=${stickyAfter}`);
+
         // --- append-409 ---
         // A "409:" message makes the mock append 409; asserted via observable state (mock counters +
         // store reset), not console lines, which are fragile after many prior sends.
