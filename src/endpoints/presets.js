@@ -7,6 +7,7 @@ import writeFileAtomic from 'write-file-atomic';
 
 import { getDefaultPresetFile, getDefaultPresets } from './content-manager.js';
 import { log } from '../log.js';
+import { emitForRequest } from '../client-events.js';
 import { bustSettingsCache } from './settings.js';
 
 /**
@@ -57,6 +58,7 @@ router.post('/save', async function (request, response) {
     const fullpath = path.join(settings.folder, filename);
     await writeFileAtomic(fullpath, JSON.stringify(request.body.preset, null, 4), 'utf-8');
     bustSettingsCache(request.user.profile.handle);
+    emitForRequest(request, 'preset-changed', { action: 'save', name });
     return response.send({ name });
 });
 
@@ -82,6 +84,7 @@ router.post('/delete', async function (request, response) {
     try {
         await fs.promises.unlink(fullpath);
         bustSettingsCache(request.user.profile.handle);
+        emitForRequest(request, 'preset-changed', { action: 'delete', name });
         return response.sendStatus(200);
     } catch (error) {
         if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {

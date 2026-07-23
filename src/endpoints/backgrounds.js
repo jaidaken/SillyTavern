@@ -9,6 +9,7 @@ import { thumbnailDimensions, readMetadataIndex, renameMetadata, removeMetadata,
 import { getImages } from '../util.js';
 import { getFileNameValidationFunction } from '../middleware/validateFileName.js';
 import { log } from '../log.js';
+import { emitForRequest } from '../client-events.js';
 
 export const router = express.Router();
 
@@ -94,6 +95,7 @@ router.post('/delete', getFileNameValidationFunction('bg'), async function (requ
             log.media.warn('[Backgrounds] Failed to remove metadata:', err.message);
         });
 
+        emitForRequest(request, 'background-changed', { action: 'delete', name: String(request.body.bg) });
         return response.send('ok');
     } catch (err) {
         log.media.error(err);
@@ -129,6 +131,7 @@ router.post('/rename', async function (request, response) {
             log.media.warn('[Backgrounds] Failed to rename metadata:', err.message);
         });
 
+        emitForRequest(request, 'background-changed', { action: 'rename', name: String(request.body.new_bg) });
         return response.send('ok');
     } catch (err) {
         log.media.error(err);
@@ -152,6 +155,7 @@ router.post('/upload', async function (request, response) {
             log.media.warn('[Backgrounds] Failed to generate metadata for upload:', err.message);
         });
 
+        emitForRequest(request, 'background-changed', { action: 'upload', name: filename });
         response.send(filename);
     } catch (err) {
         log.media.error(err);

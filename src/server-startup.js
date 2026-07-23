@@ -51,6 +51,7 @@ import { router as minimaxRouter } from './endpoints/minimax.js';
 import { router as dataMaidRouter } from './endpoints/data-maid.js';
 import { router as backupsRouter } from './endpoints/backups.js';
 import { router as imageMetadataRouter } from './endpoints/image-metadata.js';
+import { router as eventsRouter } from './endpoints/events.js';
 import { router as volcengineRouter } from './endpoints/volcengine.js';
 
 /**
@@ -186,6 +187,7 @@ export function setupPrivateEndpoints(app) {
     app.use('/api/data-maid', dataMaidRouter);
     app.use('/api/backups', backupsRouter);
     app.use('/api/image-metadata', imageMetadataRouter);
+    app.use('/api/events', eventsRouter);
 }
 
 /**

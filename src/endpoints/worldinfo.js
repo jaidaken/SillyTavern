@@ -7,6 +7,7 @@ import _ from 'lodash';
 import writeFileAtomic from 'write-file-atomic';
 import { tryParse } from '../util.js';
 import { log } from '../log.js';
+import { emitForRequest } from '../client-events.js';
 import { bustSettingsCache } from './settings.js';
 
 /**
@@ -138,6 +139,7 @@ router.post('/import', async (request, response) => {
 
     await writeFileAtomic(pathToNewFile, fileContents);
     bustSettingsCache(request.user.profile.handle);
+    emitForRequest(request, 'worldinfo-changed', { action: 'import', name: worldName });
     return response.send({ name: worldName });
 });
 
@@ -163,6 +165,7 @@ router.post('/edit', async (request, response) => {
 
     await writeFileAtomic(pathToFile, JSON.stringify(request.body.data, null, 4));
     bustSettingsCache(request.user.profile.handle);
+    emitForRequest(request, 'worldinfo-changed', { action: 'edit', name: String(request.body.name) });
 
     return response.send({ ok: true });
 });

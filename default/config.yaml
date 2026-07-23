@@ -388,6 +388,17 @@ gemini:
   image:
     # Leave empty to use the API-default value.
     personGeneration: 'allow_adult'
+# -- LIVE CLIENT EVENT STREAM CONFIGURATION --
+clientEvents:
+  # Seconds between keep-alive pings on an open /api/events stream. Each tick also re-checks
+  # that the streaming account is still enabled, so a long interval delays revoking a live stream.
+  # Keep this below the idle timeout of any reverse proxy in front of the server.
+  heartbeatSeconds: 15
+  # Seconds between backend reachability probes. Probing runs only while at least one tab
+  # reports itself visible, and all visible tabs of a user share a single probe.
+  probeSeconds: 20
+  # Seconds before an unanswered backend probe is treated as asleep.
+  probeTimeoutSeconds: 10
 # -- SERVER PLUGIN CONFIGURATION --
 enableServerPlugins: false
 # Attempt to automatically update server plugins on startup

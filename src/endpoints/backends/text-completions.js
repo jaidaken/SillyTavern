@@ -97,6 +97,41 @@ async function abortKoboldCppRequest(request, url) {
     }
 }
 
+/**
+ * Resolves the models-listing URL used to check whether a text completion backend is reachable.
+ * @param {string} apiType One of TEXTGEN_TYPES
+ * @param {string} baseUrl Backend base URL, already trimmed of a trailing /v1
+ * @returns {string} URL whose success means the backend is up
+ */
+export function getModelsStatusUrl(apiType, baseUrl) {
+    switch (apiType) {
+        case TEXTGEN_TYPES.GENERIC:
+        case TEXTGEN_TYPES.OOBA:
+        case TEXTGEN_TYPES.VLLM:
+        case TEXTGEN_TYPES.APHRODITE:
+        case TEXTGEN_TYPES.KOBOLDCPP:
+        case TEXTGEN_TYPES.LLAMACPP:
+        case TEXTGEN_TYPES.INFERMATICAI:
+        case TEXTGEN_TYPES.OPENROUTER:
+        case TEXTGEN_TYPES.FEATHERLESS:
+            return `${baseUrl}/v1/models`;
+        case TEXTGEN_TYPES.DREAMGEN:
+            return `${baseUrl}/api/openai/v1/models`;
+        case TEXTGEN_TYPES.MANCER:
+            return `${baseUrl}/oai/v1/models`;
+        case TEXTGEN_TYPES.TABBY:
+            return `${baseUrl}/v1/model/list`;
+        case TEXTGEN_TYPES.TOGETHERAI:
+            return `${baseUrl}/api/models?&info`;
+        case TEXTGEN_TYPES.OLLAMA:
+            return `${baseUrl}/api/tags`;
+        case TEXTGEN_TYPES.HUGGINGFACE:
+            return `${baseUrl}/info`;
+        default:
+            return baseUrl;
+    }
+}
+
 //************** Ooba/OpenAI text completions API
 router.post('/status', async function (request, response) {
     if (!request.body) return response.sendStatus(400);
@@ -116,40 +151,8 @@ router.post('/status', async function (request, response) {
         await setAdditionalHeaders(request, args, baseUrl);
 
         const apiType = request.body.api_type;
-        let url = baseUrl;
+        const url = getModelsStatusUrl(apiType, baseUrl);
         let result = '';
-
-        switch (apiType) {
-            case TEXTGEN_TYPES.GENERIC:
-            case TEXTGEN_TYPES.OOBA:
-            case TEXTGEN_TYPES.VLLM:
-            case TEXTGEN_TYPES.APHRODITE:
-            case TEXTGEN_TYPES.KOBOLDCPP:
-            case TEXTGEN_TYPES.LLAMACPP:
-            case TEXTGEN_TYPES.INFERMATICAI:
-            case TEXTGEN_TYPES.OPENROUTER:
-            case TEXTGEN_TYPES.FEATHERLESS:
-                url += '/v1/models';
-                break;
-            case TEXTGEN_TYPES.DREAMGEN:
-                url += '/api/openai/v1/models';
-                break;
-            case TEXTGEN_TYPES.MANCER:
-                url += '/oai/v1/models';
-                break;
-            case TEXTGEN_TYPES.TABBY:
-                url += '/v1/model/list';
-                break;
-            case TEXTGEN_TYPES.TOGETHERAI:
-                url += '/api/models?&info';
-                break;
-            case TEXTGEN_TYPES.OLLAMA:
-                url += '/api/tags';
-                break;
-            case TEXTGEN_TYPES.HUGGINGFACE:
-                url += '/info';
-                break;
-        }
 
         const modelsReply = await fetch(url, args);
         const isPossiblyLmStudio = modelsReply.headers.get('x-powered-by') === 'Express';

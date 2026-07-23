@@ -80,13 +80,14 @@ export class SillyTavernServer {
 
     /**
      * Starts the server and resolves once it answers HTTP requests.
+     * @param {object} [configOverrides] Config keys layered over the smoke defaults
      * @returns {Promise<void>}
      */
-    async start() {
+    async start(configOverrides = {}) {
         this.#tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-smoke-'));
         this.#logPath = path.join(this.#tempDir, 'server.log');
         const configPath = path.join(this.#tempDir, 'config.yaml');
-        fs.writeFileSync(configPath, yaml.stringify(SMOKE_CONFIG), 'utf8');
+        fs.writeFileSync(configPath, yaml.stringify({ ...SMOKE_CONFIG, ...configOverrides }), 'utf8');
 
         // Port 0 is unusable: getIPv4ListenUrl() renders an empty port as 80.
         this.#port = await allocatePort();
