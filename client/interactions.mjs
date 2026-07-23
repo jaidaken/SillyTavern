@@ -11,9 +11,9 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 function parseArgs(argv) {
-    // Watchdog must exceed the worst-case sum of row waits (~140s all-red), or a fully broken build
-    // dies at the watchdog before the per-row diagnostics print.
-    const out = { base: null, timeout: 240000 };
+    // Watchdog must exceed the worst-case sum of row waits, or a fully broken build dies at the
+    // watchdog before the per-row diagnostics print. Raised with the P3-B rows, which navigate.
+    const out = { base: null, timeout: 600000 };
     for (let i = 0; i < argv.length; i += 2) {
         const k = argv[i], v = argv[i + 1];
         if (k === '--base') out.base = v;
@@ -25,6 +25,37 @@ function parseArgs(argv) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Poll a condition rather than sleeping a guessed interval: a refresh crosses the network, and a
+// fixed wait is either a flake or dead time.
+const waitUntil = async (fn, timeoutMs) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if (await fn()) return true;
+        await sleep(100);
+    }
+    return false;
+};
+
+// A SECOND connection of the same user, held open from the driver. The origin skip is only half
+// proved by this tab staying quiet; the other half is that the change did reach somebody else.
+const openSecondStream = async (base, clientId) => {
+    const controller = new AbortController();
+    const res = await fetch(`${base}/api/events?clientId=${encodeURIComponent(clientId)}`, { signal: controller.signal });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    const state = { frames: [], close: () => controller.abort() };
+    (async () => {
+        try {
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) return;
+                state.frames.push(decoder.decode(value, { stream: true }));
+            }
+        } catch { /* aborted by close() */ }
+    })();
+    return state;
+};
 
 /* W6 */
 // WCAG contrast for the W6 rows, injected into a page eval. The colour is PAINTED to resolve it:
@@ -217,9 +248,32 @@ async function main() {
 
     let mustRows = 0;
     let mustFails = 0;
+
+    // A dead server is the failure that looks like a slow one: every later row waits on a socket
+    // nobody will answer, and the run reads as still-going until the watchdog finally fires. Name it
+    // instead, with the row it died after, so the next reader is not left guessing.
+    let lastRowSeen = '(before the first row)';
+    let serverMisses = 0;
+    const heartbeat = setInterval(async () => {
+        try {
+            const res = await fetch(`${args.base}/dev/state`, { signal: AbortSignal.timeout(4000) });
+            if (!res.ok) throw new Error(`status ${res.status}`);
+            serverMisses = 0;
+        } catch (err) {
+            serverMisses += 1;
+            if (serverMisses < 3) return;
+            process.stderr.write(`interactions.mjs: the mock server stopped answering (${err.message}); `
+                + `last row was ${lastRowSeen}. The suite outliving its server is the usual cause.\n`);
+            clearInterval(heartbeat);
+            cleanup();
+            process.exit(3);
+        }
+    }, 5000);
+    heartbeat.unref();
     let pendingRows = 0;
     let pendingPasses = 0;
     const row = (kind, ok, label, detail) => {
+        lastRowSeen = label;
         let tag;
         if (kind === 'must') {
             mustRows += 1;
@@ -267,6 +321,16 @@ async function main() {
         const ZX_PROBE = 'ST-SENSOR-PROBE';
         const consoleLines = [];
         cdp.onEvent = (msg) => {
+            // A native dialog BLOCKS the renderer, so every later CDP call waits forever and the run
+            // reads as slow rather than stuck. Dismiss it and name the row that opened it: a row that
+            // forgot to stub confirm/prompt should fail loudly, never hang the suite.
+            if (msg.method === 'Page.javascriptDialogOpening' && msg.sessionId === sessionId) {
+                process.stderr.write(`interactions.mjs: a native ${msg.params.type} dialog opened after `
+                    + `${lastRowSeen} (${JSON.stringify(msg.params.message)}); dismissing it. `
+                    + `Stub window.confirm/prompt before the click that opens it.\n`);
+                cdp.send('Page.handleJavaScriptDialog', { accept: true }, sessionId).catch(() => {});
+                return;
+            }
             if (msg.method === 'Runtime.consoleAPICalled' && msg.sessionId === sessionId) {
                 const line = (msg.params.args || [])
                     .map((a) => (a.value !== undefined ? String(a.value) : (a.description || '')))
@@ -628,7 +692,7 @@ async function main() {
         };
         await page.navigate(`${args.base}/`);
         await openRecentChat();
-        row('must', await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000),
+        row('must', await page.waitFor("document.getElementById('d-connections') && document.getElementById('d-connections').dataset.connState === 'connected'", 8000),
             'SL-status shows the configured backend connected');
 
         const beforeSend = await page.eval("document.querySelectorAll('#chat .mes').length");
@@ -958,6 +1022,23 @@ async function main() {
         row('must', genPrompt.includes('keep the lamp burning'),
             'A1 character depth note reaches the prompt', `note=${genPrompt.includes('keep the lamp burning')}`);
 
+        // Deterministic form of the CONN-* flake: force a settings re-render while a URL is half-typed
+        // and assert it survives. Reverting connection.urlFieldValue to activeServerUrl reddens this.
+        console.log('== connection url sticky ==');
+        await page.navigate(`${args.base}/`);
+        await openRecentChat();
+        await page.click('#d-connections');
+        await page.waitFor("document.getElementById('llama-url')", 4000);
+        await page.eval("document.getElementById('llama-url').value=''");
+        await page.focus('#llama-url');
+        const stickyUrl = 'http://127.0.0.1:9077';
+        await page.insertText(stickyUrl);
+        await fetch(`${args.base}/dev/emit-event?type=settings-changed&data=${encodeURIComponent(JSON.stringify({ source: 'sticky' }))}`);
+        await sleep(1400);
+        const stickyAfter = await page.eval("document.getElementById('llama-url').value");
+        row('must', stickyAfter === stickyUrl,
+            'CONN-URL-STICKY a live settings event does not overwrite a URL being typed', `url=${stickyAfter}`);
+
         // --- append-409 ---
         // A "409:" message makes the mock append 409; asserted via observable state (mock counters +
         // store reset), not console lines, which are fragile after many prior sends.
@@ -965,7 +1046,7 @@ async function main() {
         await page.navigate(`${args.base}/`);
         await openRecentChat();
         // Wait for the connection to load, else the send is a no-op (conn null) and never appends.
-        await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000);
+        await page.waitFor("document.getElementById('d-connections') && document.getElementById('d-connections').dataset.connState === 'connected'", 8000);
         const st0 = await (await fetch(`${args.base}/dev/state`)).json();
         await page.focus('#send_textarea');
         await page.insertText('409: force a resync');
@@ -989,7 +1070,7 @@ async function main() {
         console.log('== prefetch 409 preserves scroll ==');
         await page.navigate(`${args.base}/`);
         await openRecentChat();
-        await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000);
+        await page.waitFor("document.getElementById('d-connections') && document.getElementById('d-connections').dataset.connState === 'connected'", 8000);
         const pf0 = await (await fetch(`${args.base}/dev/state`)).json();
         await fetch(`${args.base}/dev/arm-get-409`);
         // Scroll to the top (fires the armed prepend GET) and capture the top-most on-screen anchor's
@@ -1044,7 +1125,7 @@ async function main() {
         console.log('== J1 invariant 2: prompt window exceeds the display window ==');
         await page.navigate(`${args.base}/`);
         await openRecentChat();
-        await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000);
+        await page.waitFor("document.getElementById('d-connections') && document.getElementById('d-connections').dataset.connState === 'connected'", 8000);
         const displayHas150 = await page.eval("document.body.textContent.includes('History message 150')");
         await page.focus('#send_textarea');
         await page.insertText('INV2 PROBE');
@@ -1544,7 +1625,7 @@ async function main() {
         await page.navigate(`${args.base}/`);
         await openRecentChat();
         await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
-        await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000);
+        await page.waitFor("document.getElementById('d-connections') && document.getElementById('d-connections').dataset.connState === 'connected'", 8000);
         await page.waitFor(`${idle}`, 5000);
         const disp = (sel) => page.eval(`getComputedStyle(document.querySelector(${JSON.stringify(sel)})).display`);
         const idleSend = await disp('#composer .composer-send');
@@ -3408,15 +3489,11 @@ async function main() {
                 'W6-6 the selected persona says so in ARIA, not just in a class',
                 `list=${pa.list} rowRoles=${JSON.stringify(pa.roles)} ariaMatchesClass=${pa.agree} selectedCount=${pa.selected}`);
 
-            // #send-status must STILL UPDATE after being moved into the composer's flow. It is
-            // childless in the markup on purpose: connection.zig reflects into it with a textContent
-            // write, whose setter REPLACES an element's children with a fresh text node. Give that
-            // span a vdom text child and ziex owns a node by vnode id, the first status write detaches
-            // it, and every later render patches an orphan while the reader sees a frozen line
-            // (858e2c9fd, the card editor's footer). A geometry-only row would stay green with the
-            // readout frozen at "Connected" while the backend is down, so drive a real transition:
-            // Connect persists, and onPersistDone calls updateSendStatus -> "Backend: <type>".
-            const statusBefore = await page.eval("document.getElementById('send-status').textContent.trim()");
+            // The readout moved to the topbar in P1-C, so this drives the same property against the
+            // new surface: a real Connect must leave the connections button reporting the backend it
+            // just probed, in its state attribute AND by name. A row that only checked the attribute
+            // was still there would stay green with the dot frozen while the backend was down.
+            const statusBefore = await page.eval("document.getElementById('d-connections').dataset.connState");
             // #d-connections TOGGLES and five rows click it, so a blind click CLOSES a drawer a prior
             // row left open. Ask, then open only if it is shut.
             if (!await page.eval("!!document.querySelector('.conn-connect')")) {
@@ -3452,53 +3529,56 @@ async function main() {
                 return false;
             })();
             const statusMoved = landed && await page.waitFor(
-                `document.getElementById('send-status').textContent.trim() !== ${JSON.stringify(statusBefore)}`, 6000);
-            const statusAfter = await page.eval("document.getElementById('send-status').textContent.trim()");
-            // Named for what it PROVES. It does NOT guard the detached-node trap: arming that two ways
-            // (a literal child, then a {expr} child) left this row green both times, because the trap
-            // needs the vdom to own text it can lose and the composer publishes no region handle.
-            row('must', statusMoved && statusAfter.length > 0,
+                "document.getElementById('d-connections').dataset.connState === 'connected'", 6000);
+            const after = await page.eval(`(function(){
+                const b = document.getElementById('d-connections');
+                const m = b.querySelector('.conn-model');
+                return { state: b.dataset.connState, label: b.getAttribute('aria-label'),
+                         model: m ? m.textContent.trim() : null };
+            })()`);
+            // The model name is the mock's own ("mock-model", devserve.py:1434), so this cannot pass
+            // off a hardcoded string or a stale boot value as a probe result.
+            row('must', statusMoved && after.state === 'connected' && after.model === 'mock-model'
+                && after.label === 'API Connections, Connected: mock-model',
                 'W6-7 the backend readout tracks the backend it is reporting on',
-                `landed=${landed} before=${JSON.stringify(statusBefore)} after=${JSON.stringify(statusAfter)} changed=${statusMoved}`);
+                `landed=${landed} before=${JSON.stringify(statusBefore)} ${JSON.stringify(after)}`);
 
-            // The readout is a fixture, not a toast: connection.zig writes a standing line at boot and
-            // leaves it. Absolutely positioned over the log it was a permanent label on the
-            // conversation, covering the last line of the chat at phone width. Measured against the
-            // CHAT REGION's box, not against whichever messages are loaded: #chat is the
-            // conversation's airspace whether it holds two messages or two hundred, and an
-            // overlapped-message count reads 0 on the unfixed build purely because this fixture's chat
-            // is too short to reach the composer at 390px. The wordmark rides the same override.
+            // The readout used to live in the composer as #send-status, in flow above the controls,
+            // and at 390px it sat on the conversation. P1-C deleted it, so the row that measured how
+            // much of the chat it covered has nothing left to measure and the honest replacement is
+            // the stronger claim: NO connection readout survives anywhere in the composer. The
+            // wordmark check rides the same 390px override.
             await page.click('#d-connections');
             const wideW = await page.eval('window.innerWidth');
             await page.cdp.send('Emulation.setDeviceMetricsOverride',
                 { width: 390, height: 844, deviceScaleFactor: 1, mobile: false }, page.sessionId);
             await page.waitFor('window.innerWidth === 390', 3000);
-            const phone = await page.eval("(function(){const s=document.getElementById('send-status');"
-                + "if(!s)return JSON.stringify({err:'no #send-status'});"
-                + "const sr=s.getBoundingClientRect();const cr=document.getElementById('chat').getBoundingClientRect();"
-                // A message's rect runs past #chat's bottom under scroll, so a raw rect test counts
-                // overlaps that overflow clips and nobody can see. Clip each to the chat box first, or
-                // the diagnostic reports covered messages on a build where none are covered.
-                + "const over=[...document.querySelectorAll('#chat .mes_text')].filter(function(m){"
-                + "const r=m.getBoundingClientRect();"
-                + "const vt=Math.max(r.top,cr.top),vb=Math.min(r.bottom,cr.bottom);"
-                + "const vl=Math.max(r.left,cr.left),vr=Math.min(r.right,cr.right);"
-                + "if(vb<=vt||vr<=vl)return false;"
-                + "return sr.bottom>vt+0.5 && sr.top<vb-0.5 && sr.right>vl+0.5 && sr.left<vr-0.5;});"
-                + "const h1=document.querySelector('#topbar h1');"
-                + "return JSON.stringify({text:s.textContent.trim(),h:Math.round(sr.height),covers:over.length,"
-                + "inChatBox: sr.bottom > cr.top + 0.5 && sr.top < cr.bottom - 0.5,"
-                + "statusTop:Math.round(sr.top),chatBottom:Math.round(cr.bottom),"
-                + "markClipped:h1.scrollWidth > h1.clientWidth + 1,"
-                + "markW:h1.clientWidth,markFull:h1.scrollWidth});})()");
+            // Scoped to the composer and named by the vocabulary the old readout used, so a readout
+            // reintroduced under any id or tag is caught, not just one called #send-status again.
+            const phone = await page.eval(`(function(){
+                const words = ['Connected', 'Backend', 'No backend', 'unlock at silly'];
+                const comp = document.getElementById('composer');
+                const bearers = [...comp.querySelectorAll('*')].filter(function (el) {
+                    if (el.children.length > 0) return false;
+                    const t = (el.textContent || '').trim();
+                    return t.length > 0 && words.some(function (w) { return t.includes(w); });
+                }).map(function (el) { return (el.id || el.tagName.toLowerCase()) + ':' + el.textContent.trim().slice(0, 40); });
+                const h1 = document.querySelector('#topbar h1');
+                const dot = document.querySelector('#d-connections .conn-dot');
+                return JSON.stringify({ legacy: !!document.getElementById('send-status'),
+                    bearers: bearers,
+                    dotVisible: !!dot && dot.getBoundingClientRect().width > 0,
+                    markClipped: h1.scrollWidth > h1.clientWidth + 1,
+                    markW: h1.clientWidth, markFull: h1.scrollWidth });
+            })()`);
             const ph = JSON.parse(phone);
             await page.cdp.send('Emulation.clearDeviceMetricsOverride', {}, page.sessionId);
             // Same restore discipline the C-MSG rows learned the hard way: the override returns before
             // the relayout, and a later row would inherit the half-restored page.
             const phoneRestored = await page.waitFor(`window.innerWidth === ${wideW}`, 5000);
-            row('must', ph.inChatBox === false && ph.h > 0 && (ph.text || '').length > 0,
-                'W6-8 the backend readout stays out of the conversation at 390px',
-                `insideChatBox=${ph.inChatBox} messagesCovered=${ph.covers} statusTop=${ph.statusTop} chatBottom=${ph.chatBottom} statusHeight=${ph.h} text=${JSON.stringify(ph.text)}`);
+            row('must', ph.legacy === false && ph.bearers.length === 0 && ph.dotVisible,
+                'W6-8 no connection readout survives in the composer, and the dot shows at 390px',
+                `legacy=${ph.legacy} bearers=${JSON.stringify(ph.bearers)} dotVisible=${ph.dotVisible}`);
             row('must', ph.markClipped === false,
                 'W6-9 the wordmark renders whole at 390px (the nav is what gives way, not the brand)',
                 `clipped=${ph.markClipped} rendered=${ph.markW}px full=${ph.markFull}px`);
@@ -4392,6 +4472,1074 @@ async function main() {
                 `shape=${wpLinkShape} stored=${(wpSt.group_meta || {}).world_info} alpha=${wpGrpPrompt.includes('WI-ENGINE-ALPHA')} soloHeld=${wpSoloHeld}`);
         }
         // wi-polish END
+
+        /* C-CONN-DOT: the connection readout after P1-C moved it out of the composer. */
+        // The dot is the fast channel and the words are the real one. Colour alone is unreadable to a
+        // screen reader and to a red-green reader, so every state row asserts the aria-label TEXT as
+        // well as the attribute, and the colours are only checked for being distinct from each other.
+        console.log('== C-CONN-DOT the connection readout ==');
+        {
+            const connState = async () => page.eval(`(function(){
+                const b = document.getElementById('d-connections');
+                if (!b) return null;
+                const dot = b.querySelector('.conn-dot');
+                const model = b.querySelector('.conn-model');
+                return { state: b.dataset.connState, label: b.getAttribute('aria-label'),
+                         dot: dot ? getComputedStyle(dot).backgroundColor : null,
+                         dotW: dot ? Math.round(dot.getBoundingClientRect().width) : 0,
+                         model: model ? model.textContent.trim() : null };
+            })()`);
+            const reloadWith = async (mode) => {
+                await fetch(`${args.base}/dev/status-mode?m=${mode}`);
+                await page.navigate(`${args.base}/?demo=1`);
+                await page.waitFor(hydrated, 15000);
+                await page.waitFor(`document.getElementById('d-connections').dataset.connState !== 'configured'`, 10000);
+                return connState();
+            };
+
+            const ok = await reloadWith('ok');
+            row('must', !!ok && ok.state === 'connected' && ok.label === 'API Connections, Connected: mock-model'
+                && ok.model === 'mock-model' && ok.dotW > 0,
+                'C-CONN-DOT-1 a reachable backend shows connected, names the model, and says so in words',
+                JSON.stringify(ok));
+
+            const asleep = await reloadWith('asleep');
+            row('must', asleep.state === 'asleep' && asleep.label === 'API Connections, Backend asleep - unlock at silly',
+                'C-CONN-DOT-2 a 502 at the edge reads as asleep, in the attribute and in the name',
+                JSON.stringify(asleep));
+
+            // P1-D end to end on a real outcome site: the boot probe's asleep branch must reach the
+            // notification system, not just the dot. Each reloadWith navigates, so the history is
+            // empty on arrival and this toast can only have come from THIS load's probe.
+            const asleepToast = await page.eval(`(function(){
+                const t = [...document.querySelectorAll('#notifications div[data-level]')]
+                    .map(function (e) { return { level: e.getAttribute('data-level'), text: e.textContent }; });
+                const badge = document.querySelector('#d-notifications .notif-badge');
+                return { toasts: t, badge: badge ? badge.textContent : null };
+            })()`);
+            row('must', asleepToast.toasts.length === 1 && asleepToast.toasts[0].level === 'warning'
+                && asleepToast.toasts[0].text === 'Backend asleep - unlock at silly' && asleepToast.badge === '1',
+                'C-CONN-DOT-8 an asleep backend also raises a notification, and the bell counts it',
+                JSON.stringify(asleepToast));
+
+            const offline = await reloadWith('offline');
+            row('must', offline.state === 'offline' && offline.label === 'API Connections, Backend offline - unlock at silly',
+                'C-CONN-DOT-3 an online:false probe reads as offline, not as connected',
+                JSON.stringify(offline));
+
+            const errored = await reloadWith('error');
+            row('must', errored.state === 'err' && errored.label === 'API Connections, Backend error 500',
+                'C-CONN-DOT-4 a 500 carries its status code into the readout',
+                JSON.stringify(errored));
+
+            // Distinctness, not specific colours: the words are what carry meaning, so this only has
+            // to prove the dot is not painting one colour for four different states.
+            const shades = [ok.dot, asleep.dot, errored.dot];
+            row('must', new Set(shades).size === 3 && shades.every((c) => c && c !== 'rgba(0, 0, 0, 0)'),
+                'C-CONN-DOT-5 connected, asleep and error paint three different dots',
+                JSON.stringify(shades));
+
+            await fetch(`${args.base}/dev/status-mode?m=ok`);
+            await page.navigate(`${args.base}/?demo=1`);
+            await page.waitFor(hydrated, 15000);
+            // The relocation itself. Scoped to #composer and keyed on the readout's own vocabulary, so
+            // a status line reintroduced under any id is caught, not only one called #send-status.
+            const composerClean = await page.eval(`(function(){
+                const words = ['Connected', 'Backend', 'No backend', 'unlock at silly'];
+                const comp = document.getElementById('composer');
+                const bearers = [...comp.querySelectorAll('*')].filter(function (el) {
+                    if (el.children.length > 0) return false;
+                    const t = (el.textContent || '').trim();
+                    return t.length > 0 && words.some(function (w) { return t.includes(w); });
+                }).map(function (el) { return (el.id || el.tagName.toLowerCase()) + ':' + el.textContent.trim().slice(0, 40); });
+                return { legacy: !!document.getElementById('send-status'), bearers: bearers,
+                         inShell: !!document.querySelector('#shell .conn-dot') };
+            })()`);
+            row('must', composerClean.legacy === false && composerClean.bearers.length === 0
+                && composerClean.inShell,
+                'C-CONN-DOT-6 the composer carries no connection readout, and the topbar does',
+                JSON.stringify(composerClean));
+
+            // The panel's standing line is the full readout the topbar only abbreviates.
+            await page.click('#d-connections');
+            await page.waitFor("document.querySelector('#conn-standing')", 6000);
+            const standing = await page.eval(`(function(){
+                const el = document.getElementById('conn-standing');
+                return { state: el.dataset.connState,
+                         text: document.getElementById('conn-standing-text').textContent.trim(),
+                         progressEmpty: (document.getElementById('conn-status').textContent || '').trim() === '' };
+            })()`);
+            await page.click('#d-connections');
+            row('must', standing.state === 'connected' && standing.text === 'Connected: mock-model'
+                && standing.progressEmpty,
+                'C-CONN-DOT-7 the panel shows the standing line, with Connect progress still its own',
+                JSON.stringify(standing));
+        }
+        /* C-CONN-DOT END */
+
+        /* C-SSE: the live server channel (P3-MOCK + P3-A). */
+        // Every server event is NAMED, and onmessage receives only unnamed ones, so a glue that bound
+        // onmessage alone would connect, hold the socket, and deliver nothing: a dead server with a
+        // healthy-looking connection. C-SSE-3 is the row for exactly that, and it is the reason the
+        // counts below are per-TYPE rather than a single total.
+        console.log('== C-SSE the live server channel ==');
+        {
+            const sse = async () => page.eval(`(function(){
+                const s = window.__st_events_stat;
+                return { total: s(0), lastId: s(1), connId: s(2), hellos: s(3), replayed: s(4), unknown: s(5),
+                         readyState: window.__st_events_state ? window.__st_events_state() : -2 };
+            })()`);
+            const emit = async (type, note) =>
+                (await (await fetch(`${args.base}/dev/emit-event?type=${type}&note=${encodeURIComponent(note)}`)).json()).id;
+            const devState = async () => (await (await fetch(`${args.base}/dev/state`)).json());
+
+            await page.navigate(`${args.base}/?demo=1`);
+            await page.waitFor(hydrated, 15000);
+            await page.waitFor("window.__st_events_state && window.__st_events_state() === 1", 8000);
+
+            const opened = await page.eval("window.__st_events_state()");
+            const st0 = await devState();
+            row('must', opened === 1 && st0.events_open >= 1,
+                'C-SSE-1 the client holds a live stream open against the server',
+                `readyState=${opened} serverSideOpen=${st0.events_open}`);
+
+            // Six named events, one at a time, all of which must CROSS into Zig.
+            const before = await page.eval('window.__st_events_stat(0)');
+            const kinds = ['settings-changed', 'background-changed', 'preset-changed',
+                'worldinfo-changed', 'chat-changed', 'backend-status'];
+            const ids = [];
+            for (const k of kinds) ids.push(await emit(k, 'c-sse'));
+            await sleep(1200);
+            const afterEmit = await sse();
+            row('must', afterEmit.total - before === kinds.length && afterEmit.lastId === ids[ids.length - 1],
+                'C-SSE-2 every named event crosses into Zig, not just the first',
+                `crossed=${afterEmit.total - before} of ${kinds.length} lastId=${afterEmit.lastId} wanted=${ids[ids.length - 1]}`);
+
+            // THE NAMED-EVENT TRAP. onmessage sees only UNNAMED events, so if the glue bound nothing
+            // else this count would be zero while the connection looked perfectly healthy.
+            row('must', afterEmit.unknown === 0 && afterEmit.hellos >= 1 && afterEmit.total >= kinds.length + 1,
+                'C-SSE-3 named events arrive through their own listeners, not through onmessage',
+                `unknown=${afterEmit.unknown} hellos=${afterEmit.hellos} total=${afterEmit.total}`);
+
+            // The id has to survive the crossing or a router can never dedupe a replay.
+            row('must', afterEmit.lastId === ids[ids.length - 1] && afterEmit.lastId > 0,
+                'C-SSE-4 the event id crosses with the payload, so a replay is identifiable',
+                `lastId=${afterEmit.lastId} serverLastId=${ids[ids.length - 1]}`);
+
+            // Drop the stream server-side, then let the BROWSER retry on its own.
+            const connBefore = afterEmit.connId;
+            await fetch(`${args.base}/dev/drop-events`);
+            const reconnected = await page.waitFor(
+                `window.__st_events_stat(2) > ${connBefore}`, 10000);
+            const afterDrop = await sse();
+            row('must', reconnected && afterDrop.connId > connBefore && afterDrop.hellos >= 2,
+                'C-SSE-5 the browser reconnects by itself after the stream is dropped',
+                `connBefore=${connBefore} connAfter=${afterDrop.connId} hellos=${afterDrop.hellos}`);
+
+            // RESUME. Events emitted while the client was away must arrive on the reconnect, which
+            // can only happen if Last-Event-ID went out with the retry.
+            const beforeResume = afterDrop.total;
+            await fetch(`${args.base}/dev/drop-events?ms=2000`);
+            // Emitting with zero streams open is the whole row: emit while the client is back and the
+            // events arrive live, which proves nothing about a resume.
+            let awayOpen = -1;
+            for (let i = 0; i < 40 && awayOpen !== 0; i += 1) {
+                awayOpen = (await devState()).events_open;
+                if (awayOpen !== 0) await sleep(50);
+            }
+            const missedA = await emit('settings-changed', 'missed-1');
+            const missedB = await emit('background-changed', 'missed-2');
+            const resumed = await page.waitFor(
+                `window.__st_events_stat(1) >= ${missedB}`, 15000);
+            const afterResume = await sse();
+            row('must', awayOpen === 0 && resumed && afterResume.lastId >= missedB && afterResume.total > beforeResume,
+                'C-SSE-6 events missed while disconnected are replayed on the reconnect',
+                `openWhenEmitted=${awayOpen} missed=[${missedA},${missedB}] lastId=${afterResume.lastId} total=${beforeResume}->${afterResume.total}`);
+
+            // The beacon, posted by Zig through net.zig so it carries the csrf token.
+            const beaconRet = await page.eval('window.__st_events_visibility(false)');
+            await sleep(800);
+            const stAfter = await devState();
+            const recorded = (stAfter.events_visibility || []).slice(-1)[0];
+            row('must', beaconRet === 1 && !!recorded && recorded.visible === false
+                && recorded.id === afterResume.connId,
+                'C-SSE-7 the visibility beacon posts and the server records the right connection',
+                `ret=${beaconRet} recorded=${JSON.stringify(recorded)} connId=${afterResume.connId}`);
+        }
+        /* C-SSE END */
+
+        /* C-LIVE: routing, idempotency, origin skip and the hot path (P3-B). */
+        // The routes are measured SERVER-SIDE, by which endpoint got refetched. A refresh that fired
+        // and a refresh that did not look identical in the DOM when the data has not changed, so the
+        // only honest instrument is the request the client did or did not make.
+        console.log('== C-LIVE the event router ==');
+        {
+            const sse = async () => page.eval(`(function(){
+                const s = window.__st_events_stat;
+                return { total: s(0), lastId: s(1), connId: s(2), hellos: s(3), replayed: s(4),
+                         unknown: s(5), applied: s(6), readyState: window.__st_events_state() };
+            })()`);
+            const devState = async () => (await (await fetch(`${args.base}/dev/state`)).json());
+            const hits = async (p) => ((await devState()).api_hits || {})[p] || 0;
+            const emit = async (type, payload) => (await (await fetch(
+                `${args.base}/dev/emit-event?type=${type}&data=${encodeURIComponent(JSON.stringify(payload))}`)).json()).id;
+
+            await fetch(`${args.base}/dev/status-mode?m=ok`);
+            await fetch(`${args.base}/dev/add-background?name=${encodeURIComponent('live origin.jpg')}`);
+            await page.navigate(`${args.base}/?demo=1`);
+            await page.waitFor(hydrated, 15000);
+            await page.waitFor("window.__st_events_state && window.__st_events_state() === 1", 8000);
+            await page.waitFor('window.__st_events_stat(3) >= 1', 8000);
+
+            // ROUTING. One event type at a time, each asserted against ITS OWN endpoint.
+            const routes = [
+                ['background-changed', '/api/backgrounds/all', { action: 'delete', name: 'x.jpg' }],
+                ['settings-changed', '/api/settings/get', { source: 'settings-save' }],
+                ['character-changed', '/api/characters/all', { action: 'edit', avatar: 'x.png' }],
+                ['worldinfo-changed', '/api/worldinfo/list', { action: 'edit', name: 'lore' }],
+            ];
+            const routed = [];
+            for (const [type, endpoint, payload] of routes) {
+                const before = await hits(endpoint);
+                await emit(type, payload);
+                const landed = await waitUntil(async () => (await hits(endpoint)) > before, 6000);
+                routed.push(`${type}->${endpoint}:${landed ? 'refetched' : 'NOTHING'}`);
+            }
+            row('must', routed.every((r) => r.endsWith('refetched')),
+                'C-LIVE-1 each event type refetches its own subsystem and nothing stands in for it',
+                routed.join(' '));
+
+            // IDEMPOTENCY. A resume replays what this client already applied, so the SAME ids arrive
+            // twice; the second sighting must change nothing.
+            const beforeReplay = await hits('/api/backgrounds/all');
+            const statBefore = await sse();
+            await fetch(`${args.base}/dev/replay-from?id=0`);
+            await sleep(1200);
+            const afterReplay = await hits('/api/backgrounds/all');
+            const statAfter = await sse();
+            row('must', afterReplay === beforeReplay && statAfter.replayed > statBefore.replayed,
+                'C-LIVE-2 a replayed batch is recognised and refreshes nothing a second time',
+                `bgAll=${beforeReplay}->${afterReplay} replayed=${statBefore.replayed}->${statAfter.replayed} total=${statBefore.total}->${statAfter.total}`);
+
+            // ORIGIN SKIP, end to end. The tab's own write must not come back to it, or every write
+            // costs a refetch of the thing just written.
+            // The delete goes through the CLIENT's own request path, so the header under test is the
+            // one net.zig attaches. A hand-written fetch here would prove only that the mock skips.
+            const other = await openSecondStream(args.base, 'c-other-tab');
+            await page.click('#d-backgrounds');
+            const galleryUp = await page.waitFor("!!document.querySelector('#bg-gallery')", 8000);
+            const tilePresent = galleryUp && await page.waitFor(
+                `!!document.querySelector("#bg-gallery [data-bg-delete='live origin.jpg']")`, 8000);
+            const tiles = await page.eval(
+                "Array.from(document.querySelectorAll('#bg-gallery [data-bg-file]')).map(function(e){return e.getAttribute('data-bg-file');}).join('|')");
+            const ownedBefore = await sse();
+            const tabClientId = await page.eval('window.__st_client_id()');
+            // Delete confirms through a NATIVE dialog, which blocks the renderer and hangs every
+            // later CDP call until it is dismissed. Stub it before the click, as the C-BG rows do.
+            // Delete confirms through a NATIVE dialog, which blocks the renderer and hangs every
+            // later CDP call until it is dismissed. Stub it before the click, as the C-BG rows do.
+            await page.eval('window.confirm = function(){ return true; };');
+            if (tilePresent) await page.click("#bg-gallery [data-bg-delete='live origin.jpg']");
+            const deleted = tilePresent && await page.waitFor(
+                `!document.querySelector("#bg-gallery [data-bg-file='live origin.jpg']")`, 8000);
+            await sleep(1200);
+            const ownedAfter = await sse();
+            const otherSaw = other.frames.join('').split('event: background-changed').length - 1;
+            row('must', tilePresent && deleted && ownedAfter.total === ownedBefore.total && otherSaw >= 1,
+                'C-LIVE-3 a write made here is not echoed back here, and another tab still gets it',
+                `thisTab=${ownedBefore.total}->${ownedAfter.total} otherTabSaw=${otherSaw} clientId=${tabClientId.slice(0, 8)} gallery=${galleryUp} tiles=[${tiles}]`);
+            other.close();
+            await page.click('#d-backgrounds');
+
+            // HOT PATH. The turns ride the event, so the open chat gains EXACTLY the ones sent.
+            await page.navigate(`${args.base}/`);
+            await openRecentChat();
+            await page.waitFor("window.__st_events_state && window.__st_events_state() === 1", 8000);
+            await page.waitFor('window.__st_events_stat(3) >= 1', 8000);
+            const mesCount = async () => page.eval("document.querySelectorAll('#chat .mes').length");
+            const beforeAppend = await mesCount();
+            await emit('chat-appended', { card: null, file: null, group_id: null, change_token: 't',
+                messages: [{ name: 'Seraphina', mes: 'a turn from another device', is_user: false }] });
+            const appendedOne = await waitUntil(async () => (await mesCount()) !== beforeAppend, 6000);
+            await sleep(600);
+            const afterAppend = await mesCount();
+            row('must', appendedOne && afterAppend === beforeAppend + 1,
+                'C-LIVE-4 a turn added elsewhere appends exactly one message, not zero and not two',
+                `mes=${beforeAppend}->${afterAppend}`);
+
+            // The same event for a DIFFERENT chat must not land in this one.
+            const beforeForeign = await mesCount();
+            const chatHitsBefore = await hits('/api/chats/get');
+            await emit('chat-appended', { card: 'SomeoneElse', file: 'another chat', group_id: null,
+                messages: [{ name: 'SomeoneElse', mes: 'not for this chat', is_user: false }] });
+            await sleep(1200);
+            row('must', (await mesCount()) === beforeForeign && (await hits('/api/chats/get')) === chatHitsBefore,
+                'C-LIVE-5 a turn belonging to another chat neither lands here nor triggers a reload',
+                `mes=${beforeForeign}->${await mesCount()}`);
+
+            // SCOPING. The draft is the property the region work exists for.
+            await page.focus('#send_textarea');
+            await page.insertText('a draft nobody should take');
+            await emit('settings-changed', { source: 'settings-save' });
+            await sleep(1500);
+            const draft = await page.eval("document.getElementById('send_textarea').value");
+            const caret = await page.eval("document.getElementById('send_textarea').selectionStart");
+            row('must', draft === 'a draft nobody should take' && caret === draft.length,
+                'C-LIVE-6 an incoming event leaves the composer draft and caret alone',
+                `draft=${JSON.stringify(draft)} caret=${caret}`);
+            await page.eval("document.getElementById('send_textarea').value = ''");
+        }
+        /* C-LIVE END */
+
+        /* C-RETIRE: the poll stands down under a live stream and takes over when it drops (P3-B). */
+        console.log('== C-RETIRE the poll handover ==');
+        {
+            const probes = async () => (await (await fetch(`${args.base}/dev/state`)).json()).status_probe_count;
+            await fetch(`${args.base}/dev/status-mode?m=ok`);
+            await page.navigate(`${args.base}/?demo=1&pollms=400`);
+            await page.waitFor(hydrated, 15000);
+            await page.waitFor("window.__st_events_state && window.__st_events_state() === 1", 8000);
+            await page.waitFor('window.__st_events_stat(3) >= 1', 8000);
+
+            // Up: the poll must be standing down, so a 400ms cadence still probes nothing.
+            const upBefore = await probes();
+            await sleep(2500);
+            const upAfter = await probes();
+            const armedUnderStream = await page.eval('window.__st_conn_poll_armed()');
+            row('must', upAfter === upBefore && armedUnderStream === 0,
+                'C-RETIRE-1 a live stream leaves the poll standing down, probing nothing',
+                `probes=+${upAfter - upBefore} over 2.5s at 400ms armed=${armedUnderStream}`);
+
+            // Down: the browser reports the drop, and the poll has to take the status back.
+            await fetch(`${args.base}/dev/drop-events?ms=6000`);
+            const armedAfterDrop = await waitUntil(async () => (await page.eval('window.__st_conn_poll_armed()')) === 1, 8000);
+            const downBefore = await probes();
+            await sleep(2500);
+            const downAfter = await probes();
+            row('must', armedAfterDrop && downAfter > downBefore,
+                'C-RETIRE-2 a dropped stream hands the status back to the poll',
+                `armed=${armedAfterDrop} probes=+${downAfter - downBefore} over 2.5s at 400ms`);
+
+            // And back: the reconnect's hello stands it down again, so both cannot run at once.
+            const backUp = await waitUntil(async () => (await page.eval('window.__st_events_state()')) === 1, 12000);
+            const settledArmed = await waitUntil(async () => (await page.eval('window.__st_conn_poll_armed()')) === 0, 8000);
+            const reBefore = await probes();
+            await sleep(2000);
+            row('must', backUp && settledArmed && (await probes()) === reBefore,
+                'C-RETIRE-3 the reconnect stands the poll down again, so the two never both run',
+                `readyState=${await page.eval('window.__st_events_state()')} armed=${await page.eval('window.__st_conn_poll_armed()')} probes=+${(await probes()) - reBefore}`);
+        }
+        /* C-RETIRE END */
+
+        /* C-POLL: the standalone backend-status poll (P1-E). */
+        // Counted server-side, never inferred from the dot: a poll that stopped and a backend that
+        // stopped changing look identical from the DOM. ?pollms shortens the shipped 20s cadence.
+        console.log('== C-POLL the standalone status poll ==');
+        {
+            const probes = async () => (await (await fetch(`${args.base}/dev/state`)).json()).status_probe_count;
+            const armed = async () => page.eval('window.__st_conn_poll(true)');
+            await fetch(`${args.base}/dev/status-mode?m=ok`);
+            await page.navigate(`${args.base}/?demo=1&pollms=400`);
+            await page.waitFor(hydrated, 15000);
+            await page.waitFor("document.getElementById('d-connections').dataset.connState === 'connected'", 10000);
+            // The poll is the FALLBACK for a stream that is down (P3-B), so these rows close the live
+            // channel first. Left open, its hello stands the poll down and every row below measures
+            // the retirement instead of the fallback it is here to test.
+            await page.eval('window.__st_events_close()');
+
+            // The dot must follow the backend with NOBODY reloading. Nothing below navigates.
+            await fetch(`${args.base}/dev/status-mode?m=asleep`);
+            const flipped = await page.waitFor(
+                "document.getElementById('d-connections').dataset.connState === 'asleep'", 10000);
+            const flippedLabel = await page.eval("document.getElementById('d-connections').getAttribute('aria-label')");
+            row('must', flipped && flippedLabel === 'API Connections, Backend asleep - unlock at silly',
+                'C-POLL-1 the poll flips the dot when the backend changes, with no reload',
+                `flipped=${flipped} label=${JSON.stringify(flippedLabel)}`);
+
+            await fetch(`${args.base}/dev/status-mode?m=ok`);
+            const back = await page.waitFor(
+                "document.getElementById('d-connections').dataset.connState === 'connected'", 10000);
+            row('must', back, 'C-POLL-2 the poll recovers the dot when the backend comes back', `recovered=${back}`);
+
+            // A hidden tab probes NOTHING. document.hidden is overridden rather than stubbed out of
+            // the code path: the Zig still reads the real property, this only sets what it reads.
+            await page.eval("Object.defineProperty(document, 'hidden', { configurable: true, get: function(){ return true; } });");
+            const hiddenFrom = await probes();
+            await sleep(2500);
+            const hiddenAdded = (await probes()) - hiddenFrom;
+            // Then reveal it again: a zero that survives un-hiding would mean the poll had simply died.
+            await page.eval("Object.defineProperty(document, 'hidden', { configurable: true, get: function(){ return false; } });");
+            const shownFrom = await probes();
+            await sleep(2500);
+            const shownAdded = (await probes()) - shownFrom;
+            row('must', hiddenAdded === 0 && shownAdded >= 3,
+                'C-POLL-3 a hidden tab probes nothing, and probing resumes when it is shown',
+                `hidden=+${hiddenAdded} shown=+${shownAdded} over 2.5s at 400ms`);
+
+            // Arming twice must not double the rate. The sweep timer taught us that a loop which
+            // re-arms itself will happily run twice with nothing in the DOM to show for it.
+            const armAgain = await armed();
+            const armAgain2 = await armed();
+            const doubleFrom = await probes();
+            await sleep(2500);
+            const doubleAdded = (await probes()) - doubleFrom;
+            row('must', armAgain === 1 && armAgain2 === 1 && doubleAdded >= 3 && doubleAdded <= 9,
+                'C-POLL-4 arming an already-armed poll starts no second timer',
+                `armed=${armAgain},${armAgain2} probes=+${doubleAdded} over 2.5s at 400ms (one timer ~6)`);
+
+            // And it must actually STOP. A poll that cannot be stood down cannot become a fallback.
+            const stopped = await page.eval('window.__st_conn_poll(false)');
+            await sleep(700);
+            const stopFrom = await probes();
+            await sleep(2500);
+            const stopAdded = (await probes()) - stopFrom;
+            row('must', stopped === 0 && stopAdded === 0,
+                'C-POLL-5 stopping the poll leaves no timer still probing',
+                `armedAfterStop=${stopped} probes=+${stopAdded} over 2.5s`);
+
+            const rearmed = await armed();
+            const reFrom = await probes();
+            await sleep(2500);
+            const reAdded = (await probes()) - reFrom;
+            row('must', rearmed === 1 && reAdded >= 3,
+                'C-POLL-6 a stopped poll can be armed again, so the fallback is re-enterable',
+                `armed=${rearmed} probes=+${reAdded}`);
+            await page.eval('window.__st_conn_poll(false)');
+        }
+        /* C-POLL END */
+
+        /* C-PUSH: one row per notification push site (P1-D2). */
+        // A push site with no row is a branch nobody has run. Each row here drives the REAL path that
+        // reaches its push and asserts the level and the exact text, so a site cannot be proven by a
+        // neighbour's toast. Where two sites share wording (the three asleep pushes, the two offline
+        // ones) the driver is what tells them apart, which is why each starts from a known-silent
+        // load: a healthy boot pushes nothing, so any toast present after it came from the action.
+        console.log('== C-PUSH every notification push site ==');
+        {
+            const toastsNow = async () => page.eval(
+                `[...document.querySelectorAll('#notifications div[data-level]')].map(function(e){`
+                + `return { level: e.getAttribute('data-level'), text: e.textContent }; })`);
+            const only = (list, level, text) => list.length === 1 && list[0].level === level && list[0].text === text;
+            const settled = async (ms = 4000) => {
+                await page.waitFor("document.querySelectorAll('#notifications div[data-level]').length > 0", ms);
+                await sleep(250);
+                return toastsNow();
+            };
+            // A load whose probe answers `mode`. Returns once the readout has left its pre-probe state,
+            // so the boot push (if the mode has one) has already landed.
+            const bootWith = async (mode) => {
+                await fetch(`${args.base}/dev/status-mode?m=${mode}`);
+                await page.navigate(`${args.base}/?demo=1`);
+                await page.waitFor(hydrated, 15000);
+                await page.waitFor("document.getElementById('d-connections').dataset.connState !== 'configured'", 10000);
+                await sleep(200);
+                return toastsNow();
+            };
+            const openConnections = async () => {
+                if (!await page.eval("!!document.querySelector('.conn-connect')")) {
+                    await page.click('#d-connections');
+                    await page.waitFor("document.querySelector('.conn-connect')", 8000);
+                }
+                // The drawer opens on a transition and page.click dispatches at coordinates, so a
+                // click measured mid-animation lands on empty space.
+                let last = null;
+                for (let i = 0; i < 80; i++) {
+                    const at = await page.eval("(function(){const e=document.querySelector('.conn-connect');"
+                        + "if(!e)return '';const b=e.getBoundingClientRect();return b.top+','+b.left+','+b.width;})()");
+                    if (at && at === last) return;
+                    last = at;
+                    await sleep(50);
+                }
+                throw new Error('C-PUSH: the connect button never settled');
+            };
+            // Connect from a healthy boot, so the only toast that can be up is this attempt's.
+            const connectWith = async (mode, arm) => {
+                await bootWith('ok');
+                await fetch(`${args.base}/dev/status-mode?m=${mode}`);
+                if (arm) await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent(arm)}&code=500`);
+                await openConnections();
+                await page.click('.conn-connect');
+                return settled();
+            };
+
+            const bootOffline = await bootWith('offline');
+            row('must', only(bootOffline, 'warning', 'Backend offline - unlock at silly'),
+                'C-PUSH-1 boot probe offline raises exactly its own warning',
+                JSON.stringify(bootOffline));
+
+            const bootErr = await bootWith('error');
+            row('must', only(bootErr, 'err', 'Backend error 500'),
+                'C-PUSH-2 boot probe error carries its status code into the toast',
+                JSON.stringify(bootErr));
+
+            const bootOk = await bootWith('ok');
+            row('must', bootOk.length === 0,
+                'C-PUSH-3 a healthy boot pushes NOTHING, so every row below starts silent',
+                JSON.stringify(bootOk));
+
+            const probeAsleep = await connectWith('asleep', null);
+            row('must', only(probeAsleep, 'warning', 'Backend asleep - unlock at silly'),
+                'C-PUSH-4 interactive Connect against a 502 raises the asleep warning',
+                JSON.stringify(probeAsleep));
+
+            const probeFailed = await connectWith('error', null);
+            row('must', only(probeFailed, 'err', 'Connect failed: 500'),
+                'C-PUSH-5 interactive Connect against a 500 says connect failed, with the code',
+                JSON.stringify(probeFailed));
+
+            const probeOffline = await connectWith('offline', null);
+            row('must', only(probeOffline, 'warning', 'Backend offline - unlock at silly'),
+                'C-PUSH-6 interactive Connect against online:false raises the offline warning',
+                JSON.stringify(probeOffline));
+
+            const saveFailed = await connectWith('ok', '/api/settings/set-connection');
+            row('must', only(saveFailed, 'err', 'Connection save failed: 500'),
+                'C-PUSH-7 a probe that succeeds but a persist that fails says the SAVE failed',
+                JSON.stringify(saveFailed));
+
+            const connected = await connectWith('ok', null);
+            row('must', only(connected, 'success', 'Connected: mock-model'),
+                'C-PUSH-8 a Connect that lands names the model it connected to',
+                JSON.stringify(connected));
+
+            // The key lifecycle. Save then remove, each in both outcomes, from a silent boot.
+            const keyAction = async (arm, act) => {
+                await bootWith('ok');
+                await openConnections();
+                if (arm) await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent(arm)}&code=500`);
+                if (act === 'save') {
+                    await page.focus('#conn-api-key');
+                    await page.insertText('sk-push-probe');
+                    await page.click('.conn-key-save');
+                } else {
+                    await page.click('.conn-key-clear');
+                }
+                return settled();
+            };
+
+            const keySaved = await keyAction(null, 'save');
+            row('must', only(keySaved, 'success', 'API key saved'),
+                'C-PUSH-9 saving an API key confirms it', JSON.stringify(keySaved));
+
+            const keySaveFailed = await keyAction('/api/secrets/write', 'save');
+            row('must', only(keySaveFailed, 'err', 'API key save failed: 500'),
+                'C-PUSH-10 a rejected key write says so, with the code', JSON.stringify(keySaveFailed));
+
+            const keyRemoved = await keyAction(null, 'remove');
+            row('must', only(keyRemoved, 'success', 'API key removed'),
+                'C-PUSH-11 removing a stored key confirms it', JSON.stringify(keyRemoved));
+
+            const keyRemoveFailed = await keyAction('/api/secrets/delete', 'remove');
+            row('must', only(keyRemoveFailed, 'err', 'API key removal failed: 500'),
+                'C-PUSH-12 a rejected key delete says so, with the code', JSON.stringify(keyRemoveFailed));
+
+            // The character list. Its failure is the one a user experiences as an empty app, so the
+            // toast is the only thing that says why. Armed, then a load, then a clean load to recover.
+            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/characters/all')}&code=500`);
+            await page.navigate(`${args.base}/?demo=1`);
+            await page.waitFor(hydrated, 15000);
+            const charsFailed = await settled(8000);
+            row('must', charsFailed.some((t) => t.level === 'err' && t.text === 'Character list failed to load: 500'),
+                'C-PUSH-13 a failed character list says so rather than showing an empty app',
+                JSON.stringify(charsFailed));
+
+            // A file picked into a real input, so the Zig multipart + raw POST run end to end. Shared
+            // by the background and the two avatar sites below.
+            const pickFile = async (inputId, name) => {
+                const dir = mkdtempSync(join(tmpdir(), 'st-push-'));
+                const path = join(dir, name);
+                writeFileSync(path, Buffer.from(
+                    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+                    'base64'));
+                const doc = await page.cdp.send('DOM.getDocument', { depth: 1 }, page.sessionId);
+                const nodeId = (await page.cdp.send('DOM.querySelector',
+                    { nodeId: doc.root.nodeId, selector: '#' + inputId }, page.sessionId)).nodeId;
+                await page.cdp.send('DOM.setFileInputFiles', { files: [path], nodeId }, page.sessionId);
+            };
+            // Delete goes through window.confirm and rename through window.prompt (backgrounds.zig
+            // :272, :304). Each navigate here restores the NATIVE dialogs, and a native modal blocks
+            // the page: an unstubbed confirm hangs every later CDP eval, which is what a 420s
+            // watchdog timeout after the upload rows turned out to be.
+            const openBackgrounds = async () => {
+                await page.navigate(`${args.base}/?demo=1`);
+                await page.waitFor(hydrated, 15000);
+                await page.eval("window.confirm = function(){ return true; };"
+                    + "window.prompt = function(){ return 'push renamed.png'; };");
+                await page.click('#d-backgrounds');
+                await page.waitFor("document.getElementById('bg-upload-input')", 8000);
+                await sleep(300);
+            };
+
+            await openBackgrounds();
+            await pickFile('bg-upload-input', 'push probe.png');
+            const bgUploaded = await settled(8000);
+            row('must', bgUploaded.some((t) => t.level === 'success' && t.text === 'Background uploaded'),
+                'C-PUSH-14 a background upload that lands confirms it', JSON.stringify(bgUploaded));
+
+            await openBackgrounds();
+            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/backgrounds/upload')}&code=500`);
+            await pickFile('bg-upload-input', 'push fail.png');
+            const bgUpFailed = await settled(8000);
+            row('must', bgUpFailed.some((t) => t.level === 'err' && t.text === 'Background upload failed: 500'),
+                'C-PUSH-15 a rejected background upload says so, with the code', JSON.stringify(bgUpFailed));
+
+            await openBackgrounds();
+            const delTarget = await page.eval("(document.querySelector('#bg-gallery [data-bg-delete]')||{}).dataset ? document.querySelector('#bg-gallery [data-bg-delete]').getAttribute('data-bg-delete') : ''");
+            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/backgrounds/delete')}&code=500`);
+            await page.click(`#bg-gallery [data-bg-delete='${delTarget}']`);
+            const bgDelFailed = await settled(8000);
+            row('must', bgDelFailed.some((t) => t.level === 'err' && t.text === 'Background delete failed: 500'),
+                'C-PUSH-16 a rejected background delete says so, with the code',
+                `target=${JSON.stringify(delTarget)} ${JSON.stringify(bgDelFailed)}`);
+
+            await openBackgrounds();
+            const renTarget = await page.eval("document.querySelector('#bg-gallery [data-bg-rename]').getAttribute('data-bg-rename')");
+            await page.eval("window.prompt = function(){ return 'push renamed.png'; };");
+            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/backgrounds/rename')}&code=500`);
+            await page.click(`#bg-gallery [data-bg-rename='${renTarget}']`);
+            const bgRenFailed = await settled(8000);
+            row('must', bgRenFailed.some((t) => t.level === 'err' && t.text === 'Background rename failed: 500'),
+                'C-PUSH-17 a rejected background rename says so, with the code',
+                `target=${JSON.stringify(renTarget)} ${JSON.stringify(bgRenFailed)}`);
+
+            // The card editor. Opening it fetches the deep card, so the form's presence is the signal
+            // that the panel is ready to save from.
+            // The editor only has a card to show once one is selected, which resuming a chat does. A
+            // bare navigate leaves it empty, and the form never mounts.
+            const openCardEditor = async () => {
+                await page.navigate(`${args.base}/`);
+                await openRecentChat();
+                await page.click('#d-card_editor');
+                if (!await page.waitFor("!!document.querySelector('#card-description')", 10000)) {
+                    throw new Error('C-PUSH: the card editor form never mounted');
+                }
+                await sleep(200);
+            };
+
+            await openCardEditor();
+            await page.eval("(function(){var t=document.getElementById('card-description');"
+                + "t.value='push probe edit'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
+            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/characters/edit')}&code=500`);
+            await page.click('#card-save');
+            const cardSaveFailed = await settled(8000);
+            row('must', cardSaveFailed.some((t) => t.level === 'err' && t.text === 'Character save failed: 500'),
+                'C-PUSH-18 a rejected card save says so, with the code', JSON.stringify(cardSaveFailed));
+
+            await openCardEditor();
+            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/characters/edit-avatar')}&code=500`);
+            await pickFile('card-avatar-input', 'card push.png');
+            const cardAvatarFailed = await settled(8000);
+            row('must', cardAvatarFailed.some((t) => t.level === 'err' && t.text === 'Avatar upload failed: 500'),
+                'C-PUSH-19 a rejected card avatar upload says so, with the code', JSON.stringify(cardAvatarFailed));
+
+            const openPersona = async () => {
+                await page.navigate(`${args.base}/?demo=1`);
+                await page.waitFor(hydrated, 15000);
+                await page.click('#d-persona');
+                if (!await page.waitFor("document.getElementById('persona-avatar-input')", 10000)) {
+                    throw new Error('C-PUSH: the persona panel never mounted its avatar input');
+                }
+                await sleep(200);
+            };
+
+            await openPersona();
+            await pickFile('persona-avatar-input', 'persona push.png');
+            const personaOk = await settled(8000);
+            row('must', personaOk.some((t) => t.level === 'success' && t.text === 'Persona avatar updated'),
+                'C-PUSH-20 a persona avatar that uploads confirms it', JSON.stringify(personaOk));
+
+            await openPersona();
+            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/avatars/upload')}&code=500`);
+            await pickFile('persona-avatar-input', 'persona fail.png');
+            const personaFailed = await settled(8000);
+            row('must', personaFailed.some((t) => t.level === 'err' && t.text === 'Persona avatar upload failed: 500'),
+                'C-PUSH-21 a rejected persona avatar upload says so, with the code', JSON.stringify(personaFailed));
+
+            // The stream's own unreachable path, which is NOT the boot probe: stream_drive hands a
+            // 502 at the seal to connection.onStreamUnreachable, and only a real send reaches it.
+            // Not bootWith: that loads ?demo=1, which seeds a chat and has no #home-resume to click.
+            await fetch(`${args.base}/dev/status-mode?m=ok`);
+            await page.navigate(`${args.base}/`);
+            await openRecentChat();
+            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/backends/text-completions/generate')}&code=502`);
+            await page.focus('#send_textarea');
+            await page.insertText('push probe send');
+            await page.click('#composer button[aria-label="Send"]');
+            const streamAsleep = await settled(15000);
+            row('must', streamAsleep.some((t) => t.level === 'warning' && t.text === 'Backend asleep - unlock at silly'),
+                'C-PUSH-22 a send whose stream 502s at the edge raises the asleep warning',
+                JSON.stringify(streamAsleep));
+
+            await fetch(`${args.base}/dev/clear-fail-next`);
+            await fetch(`${args.base}/dev/status-mode?m=ok`);
+        }
+        /* C-PUSH END */
+
+        /* C-NOTIF: the toast overlay (P1-PROBE + P1-A). Keep ABOVE C-DBG, which reads the whole run. */
+        // Two claims, and the second is the one the region exists for. First: a toast fades on its own,
+        // driven by one Zig setInterval and nothing else, so these rows never touch the page between
+        // the push and the fade. Second: that whole lifecycle leaves the composer alone. The composer
+        // holds unsaved typing, so a toast that re-rendered it would take the draft, the caret, and the
+        // auto-grown height with it, and nothing in the product would report the loss.
+        //
+        // Isolation is measured with a MutationObserver, not a render counter: the -Dinstrument
+        // counters in instrument.zig have no reader left (render-harness.sh drives a ?rendercount=
+        // probe that lived in the deleted glue/main.js).
+        console.log('== C-NOTIF the toast overlay ==');
+        {
+            // The timer spy, installed before the document exists so it wraps the globals ahead of the
+            // wasm door. No app code used zx.client.setInterval before this chunk, so neither the
+            // repeat nor the CLEAR path has ever run in this product: a sweep that never stops is a
+            // 250ms wakeup for the life of the page, and nothing else here would notice it.
+            const spy = await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+                source: `(function(){
+                    window.__timerLog = { set: [], clear: [] };
+                    const rawSet = window.setInterval.bind(window);
+                    const rawClear = window.clearInterval.bind(window);
+                    window.setInterval = function (fn, ms) {
+                        const id = rawSet(fn, ms);
+                        window.__timerLog.set.push({ id: id, ms: ms });
+                        return id;
+                    };
+                    window.clearInterval = function (id) {
+                        window.__timerLog.clear.push(id);
+                        return rawClear(id);
+                    };
+                })();`,
+            }, sessionId);
+
+            await page.navigate(`${args.base}/?demo=1`);
+            await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=12`, 15000);
+
+            // Deltas, not totals: an unrelated 250ms interval registered at boot would otherwise be
+            // counted as the sweep and make the leak row pass while the sweep leaked.
+            const sweepTimers = async () => page.eval(`(function(){
+                const l = window.__timerLog || { set: [], clear: [] };
+                const s = l.set.filter(function (e) { return e.ms === 250; });
+                return { ids: s.map(function (e) { return e.id; }), cleared: l.clear.slice() };
+            })()`);
+            const timersAtBoot = await sweepTimers();
+
+            const overlay = await page.eval(`(function(){
+                const el = document.getElementById('notifications');
+                if (!el) return null;
+                const cs = getComputedStyle(el);
+                return { kids: el.children.length, pos: cs.position, pe: cs.pointerEvents, live: el.getAttribute('aria-live') };
+            })()`);
+            row('must', !!overlay && overlay.kids === 0 && overlay.pos === 'fixed'
+                && overlay.pe === 'none' && overlay.live === 'polite',
+                'C-NOTIF-1 the overlay mounts empty, fixed, and never eats a click',
+                JSON.stringify(overlay));
+
+            // Typed BEFORE the toast, and asserted afterwards against this exact string. A row that
+            // only compared before to after would pass on two empty reads, which is what a composer
+            // rebuilt on the first push would give it (gate-rows-that-can-fail F3).
+            const draft = 'draft that must survive a toast';
+            await page.focus('#send_textarea');
+            await page.insertText(draft);
+            const before = await page.eval(`(function(){
+                const t = document.getElementById('send_textarea');
+                t.setSelectionRange(6, 6);
+                t.__notifMark = 'COMPOSER-NODE';
+                const chat = document.getElementById('chat');
+                if (chat) chat.__notifMark = 'CHAT-NODE';
+                return { value: t.value, caret: t.selectionStart, height: t.style.height };
+            })()`);
+
+            // The isolation instrument. A MutationObserver rather than the door's [zx:dom] traces:
+            // those need __st_debug(true), and C-DBG-3 reads the whole run so far as a flag-off window,
+            // so turning it on above that row would break it. It also attributes better. A childList
+            // record names the PARENT, so a node the renderer REMOVED is still scored to the region it
+            // was removed from, which is exactly the composer damage a trace-id lookup could not see.
+            // #chat-root itself is bucketed apart and not scored as a stray: it is the grid the regions
+            // sit in, not a region, and reveal.zig plus reading_prefs.zig write classes and custom
+            // properties on it to their own schedule. A real full-page re-render would light up the
+            // composer, chat and shell counts, so excusing the root alone cannot hide one. Every
+            // non-toast record is described, so a red names what moved instead of asking for a rerun.
+            await page.eval(`(function(){
+                window.__notifMuts = { toast: 0, composer: 0, chat: 0, shell: 0, root: 0, other: 0, what: [] };
+                const bucket = function (node) {
+                    const el = node && node.nodeType === 3 ? node.parentElement : node;
+                    if (!el || !el.closest) return 'other';
+                    if (el.closest('#notifications')) return 'toast';
+                    if (el.closest('#composer')) return 'composer';
+                    if (el.closest('#chat')) return 'chat';
+                    if (el.closest('#shell')) return 'shell';
+                    if (el.id === 'chat-root') return 'root';
+                    return 'other';
+                };
+                window.__notifObs = new MutationObserver(function (recs) {
+                    for (const r of recs) {
+                        const b = bucket(r.target);
+                        window.__notifMuts[b] += 1;
+                        if (b !== 'toast' && window.__notifMuts.what.length < 6) {
+                            const t = r.target;
+                            const name = t.nodeType === 3 ? '#text' : ((t.id ? '#' + t.id : '') || t.nodeName.toLowerCase());
+                            window.__notifMuts.what.push(b + ':' + r.type + ':' + name + (r.attributeName ? '[' + r.attributeName + ']' : ''));
+                        }
+                    }
+                });
+                window.__notifObs.observe(document.getElementById('chat-root'),
+                    { subtree: true, childList: true, attributes: true, characterData: true });
+            })()`);
+
+            const ttl = 1200;
+            await page.eval(`window.__st_notify('err', 'probe toast alpha', ${ttl})`);
+            const shown = await page.waitFor("document.querySelector('#notifications div[data-level]')", 4000);
+            const toastAt = Date.now();
+            const toast = await page.eval(`(function(){
+                const el = document.querySelector('#notifications div[data-level]');
+                if (!el) return null;
+                const r = el.getBoundingClientRect();
+                return { text: el.textContent, level: el.getAttribute('data-level'),
+                         onScreen: r.width > 0 && r.height > 0 && r.top < window.innerHeight };
+            })()`);
+            row('must', shown && !!toast && toast.text === 'probe toast alpha'
+                && toast.level === 'err' && toast.onScreen,
+                'C-NOTIF-2 a pushed notification paints as a toast carrying its own text and level',
+                JSON.stringify(toast));
+
+            // Nothing below touches the page: the only thing that can clear this toast is the sweep
+            // interval inside the wasm. No app code called zx.client.setInterval before this chunk, so
+            // this row is also the first proof that the ziex interval reaches Zig at all.
+            const faded = await page.waitFor("document.querySelectorAll('#notifications div[data-level]').length === 0", 6000);
+            const fadeMs = Date.now() - toastAt;
+            row('must', faded && fadeMs >= 900 && fadeMs <= 5000,
+                'C-NOTIF-3 the toast fades on the sweep timer alone, near its own ttl',
+                `faded=${faded} after=${fadeMs}ms ttl=${ttl}ms`);
+
+            const after = await page.eval(`(function(){
+                const t = document.getElementById('send_textarea');
+                const chat = document.getElementById('chat');
+                return { value: t.value, caret: t.selectionStart, height: t.style.height,
+                         sameNode: t.__notifMark === 'COMPOSER-NODE',
+                         chatSame: !!chat && chat.__notifMark === 'CHAT-NODE',
+                         focused: document.activeElement === t };
+            })()`);
+            row('must', after.value === draft && after.caret === before.caret
+                && after.sameNode && after.chatSame && after.height === before.height,
+                'C-NOTIF-4 the composer keeps its draft, caret, height and node across the toast',
+                `value=${JSON.stringify(after.value)} caret=${after.caret} node=${after.sameNode} chat=${after.chatSame} h=${after.height}`);
+
+            await page.eval('window.__notifObs.takeRecords()');
+            const where = await page.eval('window.__notifMuts');
+            // Shell is EXPECTED to move now: the bell's unread badge is computed from the same list,
+            // so a push that left the topbar alone would be the bug. What must not move is the state
+            // the user owns, which lives in the composer and the chat log. C-NOTIF-11 asserts the
+            // shell side positively, so the shell count dropping to zero cannot pass unnoticed here.
+            const strayed = where.composer + where.chat + where.other;
+            // toast > 0 is the instrument's own liveness proof: an observer that never fired reads
+            // exactly like perfect isolation (gate-rows-that-can-fail F17).
+            row('must', where.toast > 0 && strayed === 0,
+                'C-NOTIF-5 the toast lifecycle left the composer and the chat log untouched',
+                JSON.stringify(where));
+
+            const kept = await page.eval(`(function(){
+                const el = document.getElementById('notifications');
+                return { kids: el ? el.children.length : -1 };
+            })()`);
+            row('must', kept.kids === 0,
+                'C-NOTIF-6 the faded toast leaves no empty node behind in the overlay',
+                JSON.stringify(kept));
+
+            await page.eval('window.__notifObs.disconnect()');
+
+            // One interval for the whole toast, and it must be GONE afterwards. A sweep that never
+            // clears is a 250ms wakeup for the life of the page that no other row here would see.
+            const t1 = await sweepTimers();
+            const firstSweep = t1.ids.filter((id) => !timersAtBoot.ids.includes(id));
+            const firstCleared = firstSweep.length === 1 && t1.cleared.includes(firstSweep[0]);
+            row('must', firstSweep.length === 1 && firstCleared,
+                'C-NOTIF-7 one 250ms sweep serves the toast and is cleared when the last one fades',
+                `registered=${firstSweep.length} id=${firstSweep[0]} cleared=${firstCleared} clears=${JSON.stringify(t1.cleared)}`);
+
+            // Two ttls at once. The long toast needs ttl/250 = 8 sweeps, so a timer that fired once,
+            // or a fixed few times, cannot retire it. The short one going FIRST also proves the
+            // per-toast decrement is per-toast: a store that aged them together would drop both at once.
+            const shortTtl = 600;
+            const longTtl = 2000;
+            await page.eval(`window.__st_notify('info', 'probe toast short', ${shortTtl});`
+                + `window.__st_notify('warning', 'probe toast long', ${longTtl});`);
+            const pairAt = Date.now();
+            const bothUp = await page.waitFor("document.querySelectorAll('#notifications div[data-level]').length === 2", 3000);
+            const shortGone = await page.waitFor("document.querySelectorAll('#notifications div[data-level]').length === 1", 5000);
+            const shortAt = Date.now() - pairAt;
+            const survivor = await page.eval("(document.querySelector('#notifications div[data-level]')||{}).textContent");
+            const longGone = await page.waitFor("document.querySelectorAll('#notifications div[data-level]').length === 0", 6000);
+            const longAt = Date.now() - pairAt;
+            row('must', bothUp && shortGone && longGone && survivor === 'probe toast long'
+                && shortAt >= 450 && longAt >= 1800 && longAt > shortAt + 600,
+                'C-NOTIF-8 the sweep keeps firing: the 600ms toast goes, the 2000ms one stays, then goes',
+                `short=${shortAt}ms long=${longAt}ms survivor=${JSON.stringify(survivor)} sweeps>=${Math.floor(longAt / 250)}`);
+
+            // The restart. C-NOTIF-7 proved the timer stops; a stop with no restart would mean the
+            // FIRST toast of the page fades and every later one hangs on screen forever.
+            const t2 = await sweepTimers();
+            const secondSweep = t2.ids.filter((id) => !t1.ids.includes(id));
+            const secondCleared = secondSweep.length === 1 && t2.cleared.includes(secondSweep[0]);
+            row('must', secondSweep.length === 1 && secondCleared,
+                'C-NOTIF-9 a push after the sweep stopped starts a fresh interval, also cleared',
+                `registered=${secondSweep.length} id=${secondSweep[0]} cleared=${secondCleared} totalSweeps=${t2.ids.length}`);
+
+            await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: spy.identifier }, sessionId);
+
+            // Three pushes have happened above and none were read, so the badge is the count of them.
+            // Asserting the NUMBER, not merely that a badge exists: a badge stuck at 1 looks correct.
+            const bell = await page.eval(`(function(){
+                const b = document.getElementById('d-notifications');
+                if (!b) return null;
+                const badge = b.querySelector('.notif-badge');
+                return { icon: b.getAttribute('data-icon'), label: b.getAttribute('aria-label'),
+                         badge: badge ? badge.textContent : null,
+                         badgeHidden: badge ? badge.getAttribute('aria-hidden') : null };
+            })()`);
+            row('must', !!bell && bell.icon === 'bell' && bell.badge === '3'
+                && bell.label === 'Notifications, 3 unread' && bell.badgeHidden === 'true',
+                'C-NOTIF-10 the bell carries the unread count in its badge and in its name',
+                JSON.stringify(bell));
+
+            await page.click('#d-notifications');
+            const listed = await page.waitFor("document.querySelectorAll('#notif-list li').length === 3", 4000);
+            const drawer = await page.eval(`(function(){
+                const li = [...document.querySelectorAll('#notif-list li')];
+                return { rows: li.map(function (e) {
+                             return { text: e.querySelector('.notif-text').textContent,
+                                      age: e.querySelector('.notif-age').textContent,
+                                      level: e.getAttribute('data-level') };
+                         }),
+                         empty: !!document.querySelector('.panel-empty') };
+            })()`);
+            const r = drawer.rows;
+            row('must', listed && r.length === 3
+                && r[0].text === 'probe toast long' && r[2].text === 'probe toast alpha'
+                && r[0].level === 'warning' && r[2].level === 'err'
+                && r.every((e) => e.age.length > 0) && !drawer.empty,
+                'C-NOTIF-11 the drawer lists the history newest first, with each level and age',
+                JSON.stringify(r));
+
+            // Opening the drawer is the read receipt, so the badge must be gone WHILE the list is up.
+            const afterOpen = await page.eval(`(function(){
+                const b = document.getElementById('d-notifications');
+                return { badge: !!b.querySelector('.notif-badge'), label: b.getAttribute('aria-label') };
+            })()`);
+            row('must', afterOpen.badge === false && afterOpen.label === 'Notifications',
+                'C-NOTIF-12 opening the drawer marks the list read and clears the badge',
+                JSON.stringify(afterOpen));
+
+            await page.click('#notif-clear');
+            const cleared = await page.waitFor("document.querySelector('#panel-view .panel-empty') && !document.querySelector('#notif-list')", 4000);
+            const emptyText = await page.eval("(document.querySelector('#panel-view .panel-empty')||{}).textContent || ''");
+            row('must', cleared && emptyText.length > 40 && /reload/i.test(emptyText),
+                'C-NOTIF-13 Clear empties the list and leaves a real empty state, not a blank panel',
+                `cleared=${cleared} copy=${JSON.stringify(emptyText.slice(0, 60))}`);
+
+            // Four levels at once, to prove the ramp DISCRIMINATES. Four identical borders would pass
+            // any "is it coloured" row, so the assertion is on the count of DISTINCT colours, plus a
+            // measured contrast floor against the toast ground (WD4 non-text 3:1).
+            await page.eval(`window.__st_notify('info','ramp info',9000);window.__st_notify('success','ramp success',9000);`
+                + `window.__st_notify('warning','ramp warning',9000);window.__st_notify('err','ramp error',9000);`);
+            await page.waitFor("document.querySelectorAll('#notifications div[data-level]').length === 4", 4000);
+            const ramp = await page.eval(`(function(){
+                ${contrastFn}
+                const el = [...document.querySelectorAll('#notifications div[data-level]')];
+                const edges = el.map(function (e) { return getComputedStyle(e).borderLeftColor; });
+                const ground = getComputedStyle(el[0]).backgroundColor;
+                return { levels: el.map(function (e) { return e.getAttribute('data-level'); }),
+                         edges: edges, distinct: new Set(edges).size,
+                         width: getComputedStyle(el[0]).borderLeftWidth,
+                         minContrast: Math.round(Math.min.apply(null, edges.map(function (c) { return contrast(c, ground); })) * 100) / 100 };
+            })()`);
+            row('must', ramp.distinct === 4 && ramp.width === '4px' && ramp.minContrast >= 3,
+                'C-NOTIF-14 the four status levels paint four distinct edges, each clearing 3:1 on the toast ground',
+                `distinct=${ramp.distinct} width=${ramp.width} minContrast=${ramp.minContrast} ${JSON.stringify(ramp.edges)}`);
+
+            // A toast already on screen must not replay its entrance when the NEXT one arrives. The
+            // list renders unkeyed, so this asks whether the vdom patches position 0 in place or
+            // rebuilds it: a rebuilt node restarts its 180ms fade from opacity 0, which reads as the
+            // whole stack flickering every time a notification lands. Marked node, then one push.
+            await page.eval("document.querySelector('#notifications div[data-level]').__toastMark = 'FIRST';");
+            await sleep(400);
+            await page.eval("window.__st_notify('info','stack probe',9000)");
+            await page.waitFor("document.querySelectorAll('#notifications div[data-level]').length === 5", 4000);
+            const stack = await page.eval(`(function(){
+                const el = document.querySelector('#notifications div[data-level]');
+                return { sameNode: el.__toastMark === 'FIRST', opacity: Number(getComputedStyle(el).opacity),
+                         text: el.textContent };
+            })()`);
+            row('must', stack.sameNode && stack.opacity > 0.9 && stack.text === 'ramp info',
+                'C-NOTIF-18 an arriving toast does not rebuild or reflash the ones already up',
+                JSON.stringify(stack));
+
+            // THE MOBILE ROW. #chat-root sets overflow-x:clip below 768px and the overlay is a fixed
+            // child of it, so "is it in the DOM" proves nothing here: the question is whether the
+            // clip ate it. elementFromPoint answers that, because a clipped node is not hit-testable.
+            const wideW = await page.eval('window.innerWidth');
+            await page.cdp.send('Emulation.setDeviceMetricsOverride',
+                { width: 390, height: 844, deviceScaleFactor: 1, mobile: false }, page.sessionId);
+            await page.waitFor('window.innerWidth === 390', 3000);
+            // Sampled before AND after a settle window, because a single immediate read cannot tell
+            // "the clip ate it" from "caught it mid-entrance", and those want opposite fixes. The
+            // pre-sample is a diagnostic only: it read 0 while the row above still ran the 180ms
+            // fade, which is why the assertion is on the settled sample.
+            const phoneAtSwitch = await page.eval("Number(getComputedStyle(document.querySelector('#notifications div[data-level]')).opacity)");
+            await sleep(600);
+            const phone = await page.eval(`(function(){
+                const el = document.querySelector('#notifications div[data-level]');
+                if (!el) return { seen: false };
+                const r = el.getBoundingClientRect();
+                const cx = Math.round(r.left + r.width / 2), cy = Math.round(r.top + r.height / 2);
+                const hit = document.elementFromPoint(cx, cy);
+                const cs = getComputedStyle(el);
+                return { seen: true, w: Math.round(r.width), h: Math.round(r.height),
+                         left: Math.round(r.left), right: Math.round(r.right),
+                         top: Math.round(r.top), bottom: Math.round(r.bottom),
+                         inViewport: r.left >= 0 && r.top >= 0 && r.right <= 390 && r.bottom <= 844,
+                         hitsSelf: !!hit && (hit === el || el.contains(hit)),
+                         opacity: Number(cs.opacity), vis: cs.visibility, disp: cs.display };
+            })()`);
+            await page.cdp.send('Emulation.clearDeviceMetricsOverride', {}, page.sessionId);
+            const restored = await page.waitFor(`window.innerWidth === ${wideW}`, 5000);
+            row('must', phone.seen && phone.w > 0 && phone.h > 0 && phone.inViewport && phone.hitsSelf
+                && phone.opacity > 0.9 && phone.vis === 'visible' && phone.disp !== 'none',
+                'C-NOTIF-15 a toast is on screen and hit-testable at 390px, not eaten by the clip',
+                `${JSON.stringify(phone)} opacityAtSwitch=${phoneAtSwitch}`);
+            row('must', restored,
+                'C-NOTIF-16 the 390px override is fully restored before later rows run',
+                `wide=${wideW} now=${await page.eval('window.innerWidth')}`);
+
+            // Reduced motion must make the toast GENTLER, never absent: a fade that never runs leaves
+            // opacity at 0, and every DOM row still passes over an invisible toast (WD25).
+            //
+            // The in-app motion setting deliberately OVERRIDES the OS preference (the
+            // :root:has(#shell.motion-on) rule), and row A5a set it to On earlier in this run, so the
+            // OS path is only reachable with the stored pref cleared, which is what a first-time
+            // visitor with reduce set actually has. Clearing it needs a reload to be read.
+            await page.cdp.send('Emulation.setEmulatedMedia',
+                { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] }, page.sessionId);
+            await page.eval("localStorage.removeItem('st-motion')");
+            await page.navigate(`${args.base}/?demo=1`);
+            await page.waitFor(hydrated, 15000);
+            await page.eval("window.__st_notify('info','reduced motion toast',9000)");
+            const rmShown = await page.waitFor("document.querySelector('#notifications div[data-level]')", 4000);
+            await sleep(400);
+            const rm = await page.eval(`(function(){
+                const el = document.querySelector('#notifications div[data-level]');
+                if (!el) return { move: getComputedStyle(document.documentElement).getPropertyValue('--move').trim() };
+                const cs = getComputedStyle(el);
+                const r = el.getBoundingClientRect();
+                return { move: getComputedStyle(document.documentElement).getPropertyValue('--move').trim(),
+                         opacity: Number(cs.opacity), anim: cs.animationName,
+                         w: Math.round(r.width), h: Math.round(r.height) };
+            })()`);
+            await page.cdp.send('Emulation.setEmulatedMedia', { features: [] }, page.sessionId);
+            await page.eval("localStorage.setItem('st-motion','on')");
+            row('must', rmShown && rm.move === '0' && rm.opacity > 0.9 && rm.anim === 'toast-in'
+                && rm.w > 0 && rm.h > 0,
+                'C-NOTIF-17 under reduced motion the toast still lands and settles fully opaque',
+                JSON.stringify(rm));
+
+        }
+        /* C-NOTIF END */
 
         /* C-DBG */
         // The [zx:dom] channel. A live crash (removeChild NotFoundError) came out of the door with the

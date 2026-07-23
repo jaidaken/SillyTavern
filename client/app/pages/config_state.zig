@@ -207,6 +207,13 @@ pub fn presetsLoadFailed() bool {
     return presets_load_failed;
 }
 
+/// A preset changed on the server. Only refetches a list this page has already asked for: an
+/// untouched picker has nothing to go stale, and ensurePresetsLoaded still fetches it on first open.
+pub fn reloadPresets() void {
+    if (zx.platform.role != .client or !presets_requested) return;
+    net.request("/api/settings/get", "{}", 0, onPresetsFetched, .{});
+}
+
 /// Re-arm and refetch once, from the panel's Retry control.
 pub fn retryPresets() void {
     if (!presets_load_failed) return;

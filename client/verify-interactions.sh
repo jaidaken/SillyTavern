@@ -51,10 +51,16 @@ if curl -sS --max-time 2 -o /dev/null "http://127.0.0.1:$PORT/" 2>/dev/null; the
     exit 1
 fi
 
+# ONE knob for both lifetimes. These drifted apart once and the suite grew past the server's cap, so
+# the server was killed mid-run and every later row waited on a dead socket for minutes, reading as
+# slow tests rather than a dead dependency. The server must always outlive the watchdog.
+WATCHDOG_MS="${WATCHDOG_MS:-600000}"
+SRV_SECONDS=$(( WATCHDOG_MS / 1000 + 60 ))
+
 # -k 5 is load-bearing, not decoration: the three launches in verify.sh have it and this one did not,
 # so every orphan found so far has been THIS server. Without the SIGKILL escalation a timeout that
 # fires on a parked process leaves it holding this port forever, serving a STALE dist to later runs.
-setsid timeout -k 5 300 python3 devserve.py --port "$PORT" --dist dist --dev --mock-api >"$PROFILE/srv.log" 2>&1 &
+setsid timeout -k 5 "$SRV_SECONDS" python3 devserve.py --port "$PORT" --dist dist --dev --mock-api >"$PROFILE/srv.log" 2>&1 &
 SRV=$!
 ready=no
 for _ in $(seq 1 100); do
@@ -72,4 +78,4 @@ if [ "$ready" != yes ]; then
     exit 1
 fi
 
-node interactions.mjs --base "http://127.0.0.1:$PORT"
+node interactions.mjs --base "http://127.0.0.1:$PORT" --timeout "$WATCHDOG_MS"

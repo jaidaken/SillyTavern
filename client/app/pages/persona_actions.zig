@@ -21,6 +21,7 @@ const uploads = @import("./uploads.zig");
 const persona_store = @import("./persona_store.zig");
 const reading_prefs = @import("./reading_prefs.zig");
 const regions = @import("./regions.zig");
+const notifications = @import("./notifications.zig");
 
 const alloc = persona_store.page_gpa;
 const log = std.log.scoped(.personas);
@@ -250,9 +251,11 @@ fn onAvatarUploaded(status: u16, sent: bool) void {
     if (zx.platform.role != .client) return;
     if (!sent) return;
     if (status >= 200 and status < 300) {
+        notifications.push(.success, "Persona avatar updated", notifications.default_ttl_ms);
         regions.bumpShell();
     } else {
         log.warn("persona avatar upload failed: {d}", .{status});
+        notifications.pushFmt(.err, notifications.error_ttl_ms, "Persona avatar upload failed: {d}", .{status});
     }
 }
 

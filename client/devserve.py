@@ -683,6 +683,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # C-CARD2, for C-BG2: the same, for the last /backgrounds/upload body.
     bg_upload = None
     get_count = 0
+    # P1-C: what the text-completions status probe answers. "ok" is the healthy mock.
+    status_mode = "ok"
+    # P1-D2: path -> status code, consumed by the next request to that exact path.
+    fail_next = {}
+    # P1-E: how many status probes have arrived, so a poll can be counted rather than eyeballed.
+    status_probe_count = 0
+    # P3-MOCK: the SSE channel. `events_ring` is every event ever emitted (id, type, data), which is
+    # what a Last-Event-ID resume replays from; `events_open` is the live streams' queues, so an
+    # emit reaches each of them. A lock because ThreadingTCPServer runs one thread per connection.
+    events_lock = threading.Lock()
+    events_ring = []
+    events_next_id = 0
+    events_open = {}
+    events_conn_seq = 0
+    events_drop = False
+    # A refetch is only observable server-side: the gallery looks the same either way.
+    bg_all_count = 0
+    api_hits = {}
+    events_visibility = []
     # History-prefetch 409: armed once via /dev/arm-get-409, fires on the next prepend GET only, so the
     # scroll-preservation gate can drive the real resync path the mock append 409 cannot reach.
     arm_get_409 = False
@@ -891,6 +910,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return self.path.startswith(PROXY_PREFIXES)
 
     def do_GET(self):
+        # P3-MOCK: the live channel. NOT under /dev/: it is the real route the client opens, and
+        # nesting it there is why the first attempt answered a generic {} and the browser gave up.
+        if self.path.startswith("/api/events") and Handler.mock_api:
+            return self.api_events()
         # Test endpoints. Off unless --dev: they must never exist in a served build.
         if self.path.startswith("/dev/"):
             if not Handler.dev:
@@ -898,6 +921,41 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return
             if self.path.startswith("/dev/stream"):
                 return self.dev_stream()
+            if self.path.startswith("/dev/emit-event"):
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                kind = (q.get("type") or ["settings-changed"])[0]
+                note = (q.get("note") or [""])[0]
+                raw = (q.get("data") or [""])[0]
+                origin = (q.get("origin") or [""])[0]
+                try:
+                    payload = json.loads(raw) if raw else {"note": note}
+                except ValueError:
+                    return self.mock_status(400, {"error": "data is not JSON"})
+                eid = Handler.emit_event(kind, payload, origin)
+                return self.mock_json({"id": eid, "type": kind})
+            if self.path.startswith("/dev/add-background"):
+                # Its own fixture, so the origin-skip row does not depend on what the C-BG rows left
+                # behind and does not move their tile count.
+                name = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("name") or ["live origin.jpg"])[0]
+                if name not in Handler.mock_backgrounds:
+                    Handler.mock_backgrounds.append(name)
+                return self.mock_json({"added": name, "count": len(Handler.mock_backgrounds)})
+            if self.path.startswith("/dev/replay-from"):
+                # Re-delivers ring entries a client has ALREADY applied, which is what a resume does
+                # and the only way to see whether the client dedupes them.
+                since = int((urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("id") or ["0"])[0])
+                with Handler.events_lock:
+                    ids = [e["id"] for e in Handler.events_ring if e["id"] > since]
+                    for conn in Handler.events_open.values():
+                        conn["q"].extend(ids)
+                return self.mock_json({"replayed": ids})
+            if self.path.startswith("/dev/drop-events"):
+                # Answers at once and clears the refusal on a timer, so a caller can emit with the
+                # client provably away instead of racing its 500ms retry.
+                held = float((urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("ms") or ["400"])[0]) / 1000.0
+                Handler.events_drop = True
+                threading.Timer(held, lambda: setattr(Handler, "events_drop", False)).start()
+                return self.mock_json({"dropped": True, "heldMs": int(held * 1000)})
             if self.path.startswith("/dev/hold"):
                 return self.dev_hold()
             # C-CONN: seed the configured textgen type so the gate can tell a reflected mined type
@@ -913,6 +971,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.mock_json({
                     "recorded_connection": Handler.recorded_connection,
                     "set_connection_count": Handler.set_connection_count,
+                    "status_probe_count": Handler.status_probe_count,
+                    "events_emitted": Handler.events_next_id,
+                    "events_open": len(Handler.events_open),
+                    "events_clients": [c["client"] for c in Handler.events_open.values()],
+                    "bg_all_count": Handler.bg_all_count,
+                    "api_hits": dict(Handler.api_hits),
+                    "events_visibility": Handler.events_visibility,
                     "last_generate_server": Handler.last_generate_server,
                     "last_generate_prompt": Handler.last_generate_prompt,  # J1 invariant-2
                     "last_generate_body": Handler.last_generate_body,  # C-CFG
@@ -953,6 +1018,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if self.path.startswith("/dev/arm-keys-exposed"):
                 Handler.keys_exposed = True
                 return self.mock_json({"ok": True, "keys_exposed": True})
+            # P1-D2: arm the next request to an exact path to fail with a code.
+            if self.path.startswith("/dev/fail-next"):
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                target = (q.get("path") or [""])[0]
+                code = int((q.get("code") or ["500"])[0])
+                if target:
+                    Handler.fail_next[target] = code
+                return self.mock_json({"armed": target, "code": code})
+            if self.path.startswith("/dev/clear-fail-next"):
+                Handler.fail_next.clear()
+                return self.mock_json({"armed": None})
+            # P1-C: drive the connection probe's outcome (asleep / offline / error / ok).
+            if self.path.startswith("/dev/status-mode"):
+                mode = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("m") or ["ok"])[0]
+                Handler.status_mode = mode
+                return self.mock_json({"status_mode": mode})
             if self.path.startswith("/dev/arm-get-409"):
                 Handler.arm_get_409 = True
                 return self.mock_json({"armed": True})
@@ -1035,6 +1116,93 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(pixel)
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+
+    # ===== P3-MOCK: the SSE channel =====
+
+    @staticmethod
+    def emit_event(kind, data, origin=""):
+        """Append to the ring and fan out to every open stream except the one that caused it.
+
+        The ring keeps the event either way, mirroring the real server: a resume replays by id and
+        does not re-check who wrote it."""
+        with Handler.events_lock:
+            Handler.events_next_id += 1
+            eid = Handler.events_next_id
+            Handler.events_ring.append({"id": eid, "type": kind, "data": data})
+            for conn in Handler.events_open.values():
+                if origin and conn["client"] == origin:
+                    continue
+                conn["q"].append(eid)
+        return eid
+
+    def sse_frame(self, ev):
+        return f"id: {ev['id']}\nevent: {ev['type']}\ndata: {json.dumps(ev['data'])}\n\n".encode()
+
+    def api_events(self):
+        # Resume position: the header the browser sends by itself on a retry, query fallback for a
+        # driver that wants to force one.
+        raw = self.headers.get("Last-Event-ID")
+        if raw is None:
+            raw = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("lastEventId") or [None])[0]
+        try:
+            last_seen = int(raw) if raw not in (None, "") else 0
+        except ValueError:
+            last_seen = 0
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        # No `Connection: keep-alive`: send_header() reads it and sets close_connection=False, so
+        # the socket would outlive this stream and the peer would never see the close.
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        client_id = (params.get("clientId") or [""])[0]
+        with Handler.events_lock:
+            Handler.events_conn_seq += 1
+            conn_id = Handler.events_conn_seq
+            queue = []
+            Handler.events_open[conn_id] = {"q": queue, "client": client_id}
+            # Everything the client missed, oldest first. This is what makes a resume observable.
+            backlog = [e for e in Handler.events_ring if e["id"] > last_seen]
+
+        try:
+            self.wfile.write(b"retry: 500\n\n")
+            self.wfile.write(f"event: hello\ndata: {json.dumps({'connectionId': conn_id, 'resumedFrom': last_seen})}\n\n".encode())
+            self.wfile.flush()
+            for ev in backlog:
+                self.wfile.write(self.sse_frame(ev))
+            self.wfile.flush()
+
+            last_ping = time.monotonic()
+            while True:
+                if Handler.events_drop:
+                    break
+                pending = []
+                with Handler.events_lock:
+                    if queue:
+                        ids = set(queue)
+                        queue.clear()
+                        pending = [e for e in Handler.events_ring if e["id"] in ids]
+                for ev in pending:
+                    self.wfile.write(self.sse_frame(ev))
+                if pending:
+                    self.wfile.flush()
+                now = time.monotonic()
+                # An idle stream never writes, and a socket never written to never reports its peer
+                # is gone, so the thread would outlive the page it was opened for.
+                if now - last_ping >= 1.0:
+                    last_ping = now
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+                time.sleep(0.05)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            with Handler.events_lock:
+                Handler.events_open.pop(conn_id, None)
 
     def dev_stream(self):
         query = urllib.parse.urlparse(self.path).query
@@ -1131,6 +1299,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except ValueError:
             req = {}
         path = urllib.parse.urlparse(self.path).path
+        Handler.api_hits[path] = Handler.api_hits.get(path, 0) + 1
+
+        # P3-MOCK: the visibility beacon. Recorded rather than acted on: the client half is what
+        # this mock exists to prove, and a row needs to see WHAT was posted.
+        if path == "/api/events/visibility":
+            body = req if isinstance(req, dict) else None
+            if not body or not isinstance(body.get("id"), int) or not isinstance(body.get("visible"), bool):
+                return self.mock_status(400, {"error": "id must be an integer and visible a boolean"})
+            Handler.events_visibility.append({"id": body["id"], "visible": body["visible"]})
+            return self.mock_json({"visible": 0 if not body["visible"] else 1, "connections": len(Handler.events_open)})
+
+        # P1-D2: one-shot failure injection, armed per EXACT path via /dev/fail-next. One generic arm
+        # instead of a bespoke flag per endpoint, because every notification push on a failure branch
+        # needs its own route to fail on its own, one at a time. Exact match and single-shot so an
+        # arm cannot leak into the next row's request.
+        if path in Handler.fail_next:
+            code = Handler.fail_next.pop(path)
+            return self.mock_status(code, {"error": "armed failure", "path": path})
 
         # ===== w3-grp: T0 sensor + groups routes (append-only zone) =====
         # The sensor sits BEFORE route matching so even a chat write the mock only generic-acks
@@ -1431,6 +1617,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             Handler.saved_card = saved
             return self.mock_json({"ok": True})
         if path == "/api/backends/text-completions/status":
+            Handler.status_probe_count += 1
+            # P1-C: the probe answers whatever the gate armed, so the connection dot's asleep,
+            # offline and error states can be driven instead of asserted only in the happy shape.
+            mode = Handler.status_mode
+            if mode == "asleep":
+                return self.mock_status(502, {"error": "bad gateway"})
+            if mode == "error":
+                return self.mock_status(500, {"error": "boom"})
+            if mode == "offline":
+                return self.mock_json({"result": "", "online": False})
             return self.mock_json({"result": "mock-model", "data": [{"id": "mock-model"}]})
         if path == "/api/settings/set-connection":
             Handler.recorded_connection = {"api_type": req.get("api_type"), "api_server": req.get("api_server")}
@@ -1625,6 +1821,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # rows are non-vacuous. The real delete/rename answer the text "ok"; the client reads only
         # the status, so a json body stands in for it here.
         if path == "/api/backgrounds/all":
+            Handler.bg_all_count += 1
             return self.mock_json({
                 "images": [Handler.mock_bg_entry(f) for f in Handler.mock_backgrounds],
                 "config": {"width": 160, "height": 90},
@@ -1637,6 +1834,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if name == Handler.mock_bg_slow_delete:
                 time.sleep(1.5)
             Handler.mock_backgrounds.remove(name)
+            # Mirrors the real endpoint: the write announces itself to every OTHER stream of this
+            # user, and skips the tab that made it (the X-ST-Client-Id it opened its stream with).
+            Handler.emit_event("background-changed", {"action": "delete", "name": name},
+                               self.headers.get("X-ST-Client-Id") or "")
             return self.mock_json({"ok": True})
         if path == "/api/backgrounds/rename":
             old, new = req.get("old_bg"), req.get("new_bg")
@@ -1645,6 +1846,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if new in Handler.mock_backgrounds:
                 return self.mock_status(400, {"error": "exists"})
             Handler.mock_backgrounds[Handler.mock_backgrounds.index(old)] = new
+            Handler.emit_event("background-changed", {"action": "rename", "name": new},
+                               self.headers.get("X-ST-Client-Id") or "")
             return self.mock_json({"ok": True})
         # Every other API POST (create/rename/settings-save/...) acknowledges without state.
         return self.mock_json({})

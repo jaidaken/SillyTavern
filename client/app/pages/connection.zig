@@ -18,6 +18,10 @@ const generate = @import("./generate.zig");
 const dom_event = @import("./dom_event.zig");
 const textgen = @import("./textgen_types.zig");
 const secret_mask = @import("./secret_mask.zig");
+const char_data = @import("./char_data.zig");
+const regions = @import("./regions.zig");
+const notifications = @import("./notifications.zig");
+const server_events = @import("./server_events.zig");
 
 const alloc = @import("./character_store.zig").page_gpa;
 const log = std.log.scoped(.net);
@@ -39,6 +43,17 @@ var pending_model_len: usize = 0;
 var selected_buf: [64]u8 = undefined;
 var selected_len: usize = 0;
 
+/// Once the user edits the Server URL field it is theirs, not the renderer's. The field used to bind
+/// `value` straight to the mined URL, so any re-render (a boot settings load, a status probe, a live
+/// event) rewrote the box and discarded what was being typed. That was a real data-loss bug and the
+/// cause of the CONN-* interaction flake: whichever of the async settings load and the user's typing
+/// finished last won. `url_dirty` flips on the first keystroke and from then on `urlFieldValue`
+/// returns the typed text, so a re-render's diff is a no-op and never clobbers it. Same principle the
+/// composer draft relies on, made explicit for a field that must also prefill.
+var url_dirty: bool = false;
+var url_typed_buf: [1024]u8 = undefined;
+var url_typed_len: usize = 0;
+
 pub fn active() ?generate.Connection {
     return conn;
 }
@@ -48,6 +63,162 @@ pub fn active() ?generate.Connection {
 /// until a probe has run this session.
 pub fn probedModel() []const u8 {
     return pending_model_buf[0..pending_model_len];
+}
+
+// ---- the connection state (the topbar readout) ----------------------------------------------
+
+/// What the backend is doing, as one value with one owner. Every site that learns something about
+/// the backend sets this and re-renders the Shell; none of them writes DOM text any more. The old
+/// design had six call sites poking `#send-status` directly, which is why the readout could only
+/// live in one place and why nothing else could ask what the state was.
+pub const ConnState = enum { none, configured, connected, asleep, offline, err };
+
+var state: ConnState = .none;
+var state_code: u16 = 0;
+
+pub fn connState() ConnState {
+    return state;
+}
+
+/// The state as a DATA value for the markup to key off (`data-conn-state`). Never a class name: the
+/// tailwind scan reads `.zx` only, so appearance keyed on a Zig-built class would never be generated.
+pub fn stateName() []const u8 {
+    return @tagName(state);
+}
+
+/// The state IN WORDS, for the dot's accessible name and the panel's standing line. A dot that
+/// carries its meaning only in colour tells a screen reader, and a red-green reader, nothing (WD38).
+pub fn statusWords(buf: *[96]u8) []const u8 {
+    return switch (state) {
+        .none => "No backend configured",
+        .configured => blk: {
+            const c = conn orelse break :blk "No backend configured";
+            if (c.api_server.len == 0) break :blk "Backend not connected";
+            break :blk std.fmt.bufPrint(buf, "Backend: {s}", .{c.api_type}) catch "Backend configured";
+        },
+        .connected => std.fmt.bufPrint(buf, "Connected: {s}", .{statusModel()}) catch "Connected",
+        .asleep => "Backend asleep - unlock at silly",
+        .offline => "Backend offline - unlock at silly",
+        .err => std.fmt.bufPrint(buf, "Backend error {d}", .{state_code}) catch "Backend error",
+    };
+}
+
+/// What the topbar prints beside the dot: the model the backend reported, falling back to the type
+/// so the button still names the backend before any probe has answered.
+pub fn statusModel() []const u8 {
+    if (pending_model_len > 0) return pending_model_buf[0..pending_model_len];
+    const c = conn orelse return "";
+    return c.api_type;
+}
+
+fn setState(s: ConnState) void {
+    state = s;
+    state_code = 0;
+    regions.bumpShell();
+}
+
+fn setStateErr(code: u16) void {
+    state = .err;
+    state_code = code;
+    regions.bumpShell();
+}
+
+/// Remember the model a status probe reported, so the topbar can name it. Shared by the boot
+/// pre-flight and the interactive connect, which both read `result` off the same endpoint.
+fn storeProbedModel(model: []const u8) void {
+    const n = @min(model.len, pending_model_buf.len);
+    @memcpy(pending_model_buf[0..n], model[0..n]);
+    pending_model_len = n;
+}
+
+// ---- the standalone status poll (P1-E) -------------------------------------------------------
+
+/// How often the standalone poll re-probes. This is the PRE-live-channel form and becomes the
+/// fallback once the server pushes state, so it is built to be stood down (`stopPoll`) rather than
+/// to own the status forever.
+const default_poll_ms: u32 = 20000;
+var poll_ms: u32 = default_poll_ms;
+
+/// Armed, not a timer handle: ziex exposes setTimeout with NO clearTimeout, so a poll is stopped by
+/// refusing to reschedule (the reveal.zig/reading_prefs.zig pattern). The pending tick still fires
+/// once and returns without arming another, which is why stopPoll cannot leave a loop running.
+var poll_armed: bool = false;
+
+/// Begin polling. Idempotent BY DESIGN: a second call while armed must not start a second timer, or
+/// every settings load would double the probe rate for the life of the page.
+pub fn startPoll() void {
+    if (zx.platform.role != .client) return;
+    // The live channel owns the status while it is up. The settings load arms the poll every time it
+    // runs, so without this the two would both probe and every settings change would re-arm it.
+    if (server_events.streamLive()) return;
+    if (poll_armed) return;
+    if (conn == null) return;
+    poll_armed = true;
+    schedulePoll();
+}
+
+/// Stand the poll down. The live channel calls this when it takes over; the pending tick observes
+/// the flag and stops.
+pub fn stopPoll() void {
+    poll_armed = false;
+}
+
+pub fn pollArmed() bool {
+    return poll_armed;
+}
+
+/// The server pushed the backend's state, so nothing here probed for it. `{"status":"online"|
+/// "asleep"}`; an unrecognised status is left alone rather than guessed at.
+pub fn applyServerStatus(payload: []const u8) void {
+    if (std.mem.indexOf(u8, payload, "\"online\"") != null) {
+        setState(.connected);
+    } else if (std.mem.indexOf(u8, payload, "\"asleep\"") != null) {
+        setState(.asleep);
+    }
+}
+
+fn schedulePoll() void {
+    if (!poll_armed) return;
+    if (zx.client.setTimeout(pollTick, poll_ms) == null) {
+        // No timer slot. Disarm rather than report a poll that is not running.
+        poll_armed = false;
+        log.warn("no timer slot for the status poll: the dot will not refresh on its own", .{});
+    }
+}
+
+fn pollTick() void {
+    if (!poll_armed) return;
+    // A hidden tab probes NOTHING. Read at the tick rather than binding visibilitychange: the state
+    // is only interesting at the moment a probe would fire.
+    if (!documentHidden()) checkStatus();
+    schedulePoll();
+}
+
+fn documentHidden() bool {
+    if (zx.platform.role != .client) return false;
+    const doc = js.global.get(js.Object, "document") catch return false;
+    defer doc.deinit();
+    return doc.get(bool, "hidden") catch false;
+}
+
+/// `?pollms=` shortens the interval for the browser gate, which cannot spend 20s per probe. Absent
+/// on a real load, so the shipped cadence is the default.
+fn readPollInterval() void {
+    if (zx.platform.role != .client) return;
+    const loc = js.global.get(js.Object, "location") catch return;
+    defer loc.deinit();
+    const search = loc.getAlloc(js.String, alloc, "search") catch return;
+    defer alloc.free(search);
+    const raw = char_data.queryValue(search, "pollms") orelse return;
+    const parsed = std.fmt.parseInt(u32, raw, 10) catch return;
+    if (parsed >= 100) poll_ms = parsed;
+}
+
+/// A send stream came back 502/504, so the edge answered before SillyTavern was reached. Reported by
+/// stream_drive at the seal: the failure is the connection's to hold, not the streamer's to paint.
+pub fn onStreamUnreachable() void {
+    setState(.asleep);
+    notifications.push(.warning, "Backend asleep - unlock at silly", notifications.error_ttl_ms);
 }
 
 /// Mutate the live connection in place, for the config panel's samplers. Handed a pointer rather
@@ -61,6 +232,31 @@ pub fn withActive(f: *const fn (*generate.Connection) void) void {
 /// actually uses (mined from the settings blob), not a hardcoded default. Empty when none is set.
 pub fn activeServerUrl() []const u8 {
     return if (conn) |c| c.api_server else "";
+}
+
+/// The value the Server URL field renders. The mined URL while the field is pristine, so the box
+/// opens on what send actually uses; the typed text once the user has edited it, so a re-render can
+/// never overwrite an in-progress URL with the mined one. `url_typed_buf` is stable module memory, so
+/// the returned slice outlives the render without an allocation.
+pub fn urlFieldValue() []const u8 {
+    return if (url_dirty) url_typed_buf[0..url_typed_len] else activeServerUrl();
+}
+
+/// The field's oninput. Captures the typed value and marks the field dirty, so `urlFieldValue` stops
+/// tracking the mined URL. A value longer than the buffer is truncated for storage only; Connect
+/// still reads the live DOM value, so an over-long URL is never sent truncated.
+pub fn onUrlInput(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const raw = target.getAlloc(js.String, alloc, "value") catch return;
+    defer {
+        @memset(raw, 0);
+        alloc.free(raw);
+    }
+    const n = @min(raw.len, url_typed_buf.len);
+    @memcpy(url_typed_buf[0..n], raw[0..n]);
+    url_typed_len = n;
+    url_dirty = true;
 }
 
 /// The type the selector renders and Connect persists. Falls back to the table default only when
@@ -102,7 +298,7 @@ pub fn setFrom(settings_str: []const u8) void {
             error.MissingConnection => log.info("send: no textgen backend configured", .{}),
             else => log.warn("send: connection parse failed: {s}", .{@errorName(err)}),
         }
-        setSendStatus("No backend configured");
+        setState(.none);
         return;
     };
     // The mined type wins over the table default even when the table does not offer it: the selector
@@ -110,14 +306,15 @@ pub fn setFrom(settings_str: []const u8) void {
     if (conn) |c| {
         if (c.api_type.len > 0) storeSelected(c.api_type);
     }
-    updateSendStatus();
+    updateConnState();
+    readPollInterval();
     checkStatus();
+    startPoll();
 }
 
-fn updateSendStatus() void {
-    const c = conn orelse return setSendStatus("No backend configured");
-    if (c.api_server.len == 0) return setSendStatus("Backend not connected");
-    setSendStatusFmt("Backend: {s}", .{c.api_type});
+/// The pre-probe state: what the settings blob says, before the backend has been asked anything.
+fn updateConnState() void {
+    setState(if (conn == null) .none else .configured);
 }
 
 fn checkStatus() void {
@@ -128,22 +325,41 @@ fn checkStatus() void {
     net.request("/api/backends/text-completions/status", body, 0, onBootStatusDone, .{});
 }
 
+// The boot pre-flight's answer. Notifications fire only on the states the user can DO something
+// about; a healthy boot says nothing, because a toast on every load is noise nobody reads.
 fn onBootStatusDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     _ = tag;
-    const c = conn orelse return;
+    if (conn == null) return;
+    // Only a CHANGE is worth saying: this is the repeating poll's callback too, so an unchanged
+    // answer that still toasted would warn about the same dead backend every cadence, forever.
+    const was = state;
+    const was_code = state_code;
     if (status == 0 or status == 502 or status == 504) {
-        setSendStatus("Backend asleep - unlock at silly");
+        setState(.asleep);
+        if (was != .asleep) notifications.push(.warning, "Backend asleep - unlock at silly", notifications.error_ttl_ms);
         return;
     }
     if (status >= 200 and status < 300) {
-        if (statusOffline(res)) {
-            setSendStatus("Backend offline - unlock at silly");
+        // ONE parse for both fields. Reading the body twice returns nothing the second time, which
+        // showed up as the topbar naming the configured type instead of the model the probe reported.
+        var offline = false;
+        if (res) |r| {
+            if (r.json(struct { result: []const u8 = "", online: ?bool = null })) |parsed| {
+                defer parsed.deinit();
+                if (parsed.value.online) |up| offline = !up;
+                if (parsed.value.result.len > 0) storeProbedModel(parsed.value.result);
+            } else |_| {}
+        }
+        if (offline) {
+            setState(.offline);
+            if (was != .offline) notifications.push(.warning, "Backend offline - unlock at silly", notifications.error_ttl_ms);
             return;
         }
-        setSendStatusFmt("Connected: {s}", .{c.api_type});
+        setState(.connected);
         return;
     }
-    setSendStatusFmt("Backend error {d}", .{status});
+    setStateErr(status);
+    if (was != .err or was_code != status) notifications.pushFmt(.err, notifications.error_ttl_ms, "Backend error {d}", .{status});
 }
 
 // ---- interactive connect (the connections panel) --------------------------------------------
@@ -174,10 +390,14 @@ fn onProbeDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     connecting = false;
     if (status == 0 or status == 502 or status == 504) {
         setConnStatus("Backend asleep - unlock at silly");
+        setState(.asleep);
+        notifications.push(.warning, "Backend asleep - unlock at silly", notifications.error_ttl_ms);
         return;
     }
     if (status < 200 or status >= 300) {
         setConnStatusFmt("Connect failed: {d}", .{status});
+        setStateErr(status);
+        notifications.pushFmt(.err, notifications.error_ttl_ms, "Connect failed: {d}", .{status});
         return;
     }
     var model_buf: [96]u8 = undefined;
@@ -194,12 +414,13 @@ fn onProbeDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     }
     if (offline) {
         setConnStatus("Backend offline - unlock at silly");
+        setState(.offline);
+        notifications.push(.warning, "Backend offline - unlock at silly", notifications.error_ttl_ms);
         return;
     }
     // Stash the model, then persist. "Connected" shows only once the save lands (onPersistDone), so a
     // caller waiting on it knows the connection was adopted, not merely probed.
-    pending_model_len = model.len;
-    if (model.len > 0) @memcpy(pending_model_buf[0..model.len], model);
+    storeProbedModel(model);
     setConnStatus("Saving...");
     persistConnection(selectedType(), pending_url);
 }
@@ -217,6 +438,8 @@ fn onPersistDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     _ = tag;
     if (status < 200 or status >= 300) {
         setConnStatusFmt("Save failed: {d}", .{status});
+        setStateErr(status);
+        notifications.pushFmt(.err, notifications.error_ttl_ms, "Connection save failed: {d}", .{status});
         return;
     }
     // Adopt the persisted connection so send works immediately; the full samplers reload on next boot.
@@ -234,9 +457,11 @@ fn onPersistDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         } else |_| {}
     }
     if (!adopted) applyConnection(selectedType(), pending_url);
-    updateSendStatus();
+    // A successful Connect has PROBED the backend, so the state is connected, not merely configured.
+    setState(.connected);
     // "Connected" is the post-save signal: the connection is now adopted and send will use it.
     if (pending_model_len > 0) setConnStatusFmt("Connected: {s}", .{pending_model_buf[0..pending_model_len]}) else setConnStatus("Connected");
+    notifications.pushFmt(.success, notifications.default_ttl_ms, "Connected: {s}", .{statusModel()});
 }
 
 /// Build an active connection from a type and URL with backend-neutral sampler defaults. The full
@@ -410,10 +635,12 @@ fn onKeyWriteDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     _ = res;
     if (status < 200 or status >= 300) {
         setKeyStatusFmt("Key save failed: {d}", .{status});
+        notifications.pushFmt(.err, notifications.error_ttl_ms, "API key save failed: {d}", .{status});
         return;
     }
     clearKeyInput();
     setKeyStatus("Key saved");
+    notifications.push(.success, "API key saved", notifications.default_ttl_ms);
     key_state.requested = false;
     loadSecretState();
 }
@@ -441,9 +668,11 @@ fn onKeyDeleteDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     _ = res;
     if (status < 200 or status >= 300) {
         setKeyStatusFmt("Key removal failed: {d}", .{status});
+        notifications.pushFmt(.err, notifications.error_ttl_ms, "API key removal failed: {d}", .{status});
         return;
     }
     setKeyStatus("Key removed");
+    notifications.push(.success, "API key removed", notifications.default_ttl_ms);
     key_state.requested = false;
     loadSecretState();
 }
@@ -455,13 +684,6 @@ fn statusBody(api_server: []const u8, api_type: []const u8) ?[]u8 {
         .api_server = api_server,
         .api_type = api_type,
     }, .{}) catch null;
-}
-
-fn statusOffline(res: ?*zx.Fetch.Response) bool {
-    const r = res orelse return false;
-    const parsed = r.json(struct { online: ?bool = null }) catch return false;
-    defer parsed.deinit();
-    return if (parsed.value.online) |up| !up else false;
 }
 
 fn readUrlInput() ?[]u8 {
@@ -493,10 +715,6 @@ fn clearKeyInput() void {
     el.ref.set("value", js.string("")) catch {};
 }
 
-fn setSendStatus(text: []const u8) void {
-    reflectText("send-status", text);
-}
-
 fn setConnStatus(text: []const u8) void {
     reflectText("conn-status", text);
 }
@@ -510,10 +728,6 @@ fn reflectText(id: []const u8, text: []const u8) void {
     const el = dom_event.elementById(alloc, id) orelse return;
     defer el.deinit();
     el.ref.set("textContent", js.string(text)) catch {};
-}
-
-fn setSendStatusFmt(comptime fmt: []const u8, args: anytype) void {
-    fmtInto("send-status", fmt, args);
 }
 
 fn setConnStatusFmt(comptime fmt: []const u8, args: anytype) void {

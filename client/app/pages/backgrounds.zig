@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const zx = @import("zx");
+const notifications = @import("./notifications.zig");
 const js = zx.client.js;
 
 const bg = @import("./background_store.zig");
@@ -286,6 +287,7 @@ fn onDeleted(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     defer endMutation(m);
     if (status < 200 or status >= 300) {
         setError("\"{s}\" could not be deleted ({d}). It is still on the server.", .{ m.old, status });
+        notifications.pushFmt(.err, notifications.error_ttl_ms, "Background delete failed: {d}", .{status});
         bump();
         return;
     }
@@ -321,6 +323,7 @@ fn onRenamed(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     const new = m.new;
     if (status < 200 or status >= 300) {
         setError("\"{s}\" could not be renamed ({d}). A background of that name may already exist.", .{ old, status });
+        notifications.pushFmt(.err, notifications.error_ttl_ms, "Background rename failed: {d}", .{status});
         bump();
         return;
     }
@@ -379,9 +382,11 @@ fn onUploadDone(status: u16, sent: bool) void {
     if (status >= 200 and status < 300) {
         upload_state = .idle;
         clearErrorOn(&upload_error);
+        notifications.push(.success, "Background uploaded", notifications.default_ttl_ms);
         reload();
         return;
     }
+    notifications.pushFmt(.err, notifications.error_ttl_ms, "Background upload failed: {d}", .{status});
     upload_state = .failed;
     if (status == 0) {
         setErrorOn(&upload_error, "The upload did not reach the server. The file was not added.", .{});

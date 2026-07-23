@@ -22,6 +22,8 @@ pub const PanelId = enum {
     chat_manager,
     // w3-grp
     groups,
+    // P1-B
+    notifications,
 };
 
 pub const Side = enum { left, right };
@@ -60,6 +62,8 @@ pub const panels = [_]Panel{
     .{ .id = .chat_manager, .dom_id = "d-chat_manager", .icon = "chats", .title = "Chat Management", .side = .right },
     // w3-grp
     .{ .id = .groups, .dom_id = "d-groups", .icon = "users", .title = "Group Chats", .side = .right, .kind = .dock },
+    // P1-B
+    .{ .id = .notifications, .dom_id = "d-notifications", .icon = "bell", .title = "Notifications", .side = .right },
 };
 
 pub const min_width: f32 = 240;

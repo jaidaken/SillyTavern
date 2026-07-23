@@ -2,17 +2,21 @@
 // Its own sibling client region, so a Shell panel toggle or a MessageLog token never re-renders it:
 // the textarea's typed value, caret, and auto-grow height survive both. It has no state mutation of
 // its own yet, so it publishes no region handle; it never re-renders after its first mount.
+//
+// THE DRAFT IS BROWSER-OWNED AND MUST STAY THAT WAY. #send_textarea carries no value binding, so the
+// renderer never writes its content and no re-render can take a half-typed message. That, not the
+// region split above, is what actually survives a full rerender: measured 2026-07-23, a live event
+// re-rendering the whole page left the draft and caret intact. Bind this field to state and the
+// draft becomes the renderer's to lose, with nothing in the gate guaranteed to notice.
 // You write prose here, so the input reads in the prose face. Each button carries only the hover it
 // owns: send brightens its amber, stop keeps the active-control look, and only the plain options
 // button takes the ordinary surface hover, so no two rules chase the same property.
 //
-// #send-status has its OWN ROW, in flow above the controls. It reads as a toast but it is not one:
-// connection.zig writes a standing readout into it at boot ("Connected: llamacpp", "Backend offline
-// - unlock at silly") and leaves it there, and it used to sit `absolute bottom-full`, which parks a
-// permanent label on top of the conversation. At 390px it covered the last line of the chat, the one
-// you are most likely to be reading. The row's height is reserved rather than collapsed on empty:
-// the readout is filled from boot onward, so `empty:hidden` bought nothing and would only have
-// shifted the whole chat once as it landed (WD43).
+// NO CONNECTION READOUT LIVES HERE. It used to: a #send-status row sat above the controls carrying
+// "Connected: llamacpp" and "Backend offline - unlock at silly" from boot onward, which put a
+// permanent label about the backend inside the space you write in. The status is the topbar's now
+// (a dot and the model on the connections button, the full line in that panel), so the composer is
+// only the composer. C-CONN-DOT-6 fails if a connection readout reappears in here.
 const btn_base = "icon grid size-[2.7rem] flex-none cursor-pointer place-items-center rounded-md border border-control-border transition-[background,color,filter,transform] duration-120 ease-[ease] active:[transform:translateY(calc(var(--move)*1px))_scale(calc(1_-_var(--move)*0.03))] max-[640px]:size-11 max-[640px]:before:size-4";
 
 pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
@@ -30,12 +34,6 @@ pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
                 <DropdownDemo />
             )}
             <div class="mx-auto grid w-full max-w-[var(--reading-measure,var(--measure))] grid-cols-1 gap-1">
-                <span
-                    id="send-status"
-                    role="status"
-                    aria-live="polite"
-                    class="min-h-[1.1rem] truncate font-mono text-xs leading-[1.1rem] text-muted"
-                ></span>
                 <div class="flex items-end gap-2">
                     <button
                         type="button"
