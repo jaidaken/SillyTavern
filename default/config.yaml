@@ -388,6 +388,12 @@ gemini:
   image:
     # Leave empty to use the API-default value.
     personGeneration: 'allow_adult'
+# -- LIVE CLIENT EVENT STREAM CONFIGURATION --
+clientEvents:
+  # Seconds between keep-alive pings on an open /api/events stream. Each tick also re-checks
+  # that the streaming account is still enabled, so a long interval delays revoking a live stream.
+  # Keep this below the idle timeout of any reverse proxy in front of the server.
+  heartbeatSeconds: 15
 # -- SERVER PLUGIN CONFIGURATION --
 enableServerPlugins: false
 # Attempt to automatically update server plugins on startup

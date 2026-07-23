@@ -936,6 +936,22 @@ async function basicUserLogin(request) {
 }
 
 /**
+ * Looks up a user account by handle, honouring the accounts-disabled default user.
+ * @param {string} handle User handle
+ * @returns {Promise<User|null>} The account, or null when no such account exists
+ */
+export async function getUserByHandle(handle) {
+    if (!ENABLE_ACCOUNTS) {
+        return handle === DEFAULT_USER.handle ? /** @type {User} */ (DEFAULT_USER) : null;
+    }
+    if (!handle) {
+        return null;
+    }
+    const user = await storage.getItem(toKey(handle));
+    return user ?? null;
+}
+
+/**
  * Gets the account version tag for the provided user.
  * @param {User} user User account object
  * @returns {string} Account version tag

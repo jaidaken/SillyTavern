@@ -25,6 +25,11 @@ export class SillyTavernClient {
         return [...this.#cookies.keys()];
     }
 
+    /** @returns {string} The Cookie header for this session, for requests made outside this client. */
+    get cookieHeader() {
+        return [...this.#cookies].map(([name, value]) => `${name}=${value}`).join('; ');
+    }
+
     /**
      * Requests a CSRF token, which also establishes the session cookie.
      * @returns {Promise<string>} The issued token
