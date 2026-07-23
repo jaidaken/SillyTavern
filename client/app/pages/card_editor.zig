@@ -17,6 +17,7 @@ const char_data = @import("./char_data.zig");
 const char_store = @import("./character_store.zig");
 const dom_event = @import("./dom_event.zig");
 const regions = @import("./regions.zig");
+const notifications = @import("./notifications.zig");
 const form_mod = @import("./card_form.zig");
 const js = zx.client.js;
 
@@ -395,6 +396,7 @@ fn onAvatarUploaded(status: u16, sent: bool) void {
     } else {
         notice = if (status == 0) .avatar_no_reply else .avatar_failed;
         log.warn("card avatar upload failed: {d}", .{status});
+        notifications.pushFmt(.err, notifications.error_ttl_ms, "Avatar upload failed: {d}", .{status});
     }
     regions.bumpShell();
 }
@@ -434,6 +436,7 @@ fn onSaveDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     state = .ready;
     if (status < 200 or status >= 300) {
         log.warn("card save failed: {d}", .{status});
+        notifications.pushFmt(.err, notifications.error_ttl_ms, "Character save failed: {d}", .{status});
         notice = .save_failed;
         regions.bumpShell();
         return;

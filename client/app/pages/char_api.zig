@@ -38,6 +38,7 @@ const stream_drive = @import("./stream_drive.zig"); // C2: Zig-owned SSE lifecyc
 const group_store = @import("./group_store.zig"); // w3-chatref
 const group_actions = @import("./group_actions.zig"); // w3-chatref: panel bump on deselect
 const regions = @import("./regions.zig");
+const notifications = @import("./notifications.zig");
 const dom_event = @import("./dom_event.zig");
 const fixtures = @import("./fixtures.zig");
 
@@ -308,6 +309,7 @@ fn loadCharacters(status: u16, res: ?*zx.Fetch.Response) BootOutcome {
     }
     if (status < 200 or status >= 300) {
         net_log.warn("char fetch failed: {d}", .{status});
+        notifications.pushFmt(.err, notifications.error_ttl_ms, "Character list failed to load: {d}", .{status});
         return .err;
     }
     // A reachable 200 with a malformed body is an ERROR, never the demo fallback: the

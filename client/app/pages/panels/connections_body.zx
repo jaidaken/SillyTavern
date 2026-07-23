@@ -33,6 +33,14 @@ pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
             onkeydown={onBodyKey}
         >
             <div class="flex flex-col gap-3">
+                <div
+                    id="conn-standing"
+                    class="setting-row flex items-center gap-2 rounded-md border border-border bg-surface-2 px-3 py-2"
+                    data-conn-state={connection.stateName()}
+                >
+                    <span class="conn-dot flex-none" aria-hidden="true"></span>
+                    <span id="conn-standing-text" class="text-sm text-text">{standingText(ctx.allocator)}</span>
+                </div>
                 <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
                     <span class={label_cls}>Backend</span>
                     <Dropdown
@@ -100,6 +108,13 @@ fn onBodyKey(ev: zx.client.Event) void {
     if (dropdown.onKey(ev)) ev.stopPropagation();
 }
 
+/// The standing readout: what the backend is, in words, whether or not you just pressed Connect.
+/// #conn-status below is the opposite thing, the transient progress of an interactive attempt.
+fn standingText(alloc: std.mem.Allocator) []const u8 {
+    var buf: [96]u8 = undefined;
+    return alloc.dupe(u8, connection.statusWords(&buf)) catch "";
+}
+
 fn onConnect(_: zx.client.Event) void {
     connection.connect();
 }
@@ -112,6 +127,7 @@ fn onClearKey(_: zx.client.Event) void {
     connection.clearKey();
 }
 
+const std = @import("std");
 const zx = @import("zx");
 const connection = @import("../connection.zig");
 const textgen = @import("../textgen_types.zig");

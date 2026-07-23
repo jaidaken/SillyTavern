@@ -917,6 +917,22 @@
     align-items: baseline;
     column-gap: 0.75rem;
 }
+/* The connection dot. Keyed off the data-conn-state attribute connection.zig publishes, per the
+   state-hook convention above: Zig emits the STATE, the stylesheet says what it looks like. Colour
+   is the fast channel, never the only one: the button's aria-label carries the same status in words
+   (WD38), so the dot is redundant rather than load-bearing. */
+.conn-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: var(--radius-full);
+    background: var(--color-faint);
+}
+[data-conn-state="connected"] .conn-dot { background: var(--color-status-success); }
+[data-conn-state="asleep"] .conn-dot { background: var(--color-status-warning); }
+[data-conn-state="offline"] .conn-dot { background: var(--color-status-warning); }
+[data-conn-state="err"] .conn-dot { background: var(--color-status-error); }
+[data-conn-state="configured"] .conn-dot { background: var(--color-status-info); }
+
 .st-toast-info, .st-note-info { border-left-color: var(--color-status-info); }
 .st-toast-success, .st-note-success { border-left-color: var(--color-status-success); }
 .st-toast-warning, .st-note-warning { border-left-color: var(--color-status-warning); }

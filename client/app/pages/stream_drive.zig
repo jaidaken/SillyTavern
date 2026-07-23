@@ -16,6 +16,7 @@ const stream_mod = @import("./stream.zig");
 const reader = @import("./reader.zig");
 const net = @import("./net.zig");
 const regions = @import("./regions.zig");
+const connection = @import("./connection.zig");
 const char_api = @import("./char_api.zig");
 const group_send = @import("./group_send.zig");
 const char_data = @import("./char_data.zig");
@@ -189,8 +190,9 @@ pub export fn __st_stream_closed(status: u32) callconv(.c) void {
 
     const dev_metrics = s.kind == .dev;
     const kind = s.kind;
-    // A spun-down .43 behind Pocket-ID answers 502/504 at the edge before ST is reached.
-    if (status == 502 or status == 504) setSendStatus("Backend asleep - unlock at silly");
+    // A spun-down .43 behind Pocket-ID answers 502/504 at the edge before ST is reached. The
+    // readout is connection.zig's to own now, so this reports the fact and lets it hold the state.
+    if (status == 502 or status == 504) connection.onStreamUnreachable();
     // Seal the highlight (held hljs, so JS owns the how, Zig the when); the dev metrics block is now
     // filled Zig-side below, so JS is left with nothing but the hljs call.
     js.global.call(void, "__st_stream_sealed", .{}) catch {};
@@ -266,14 +268,6 @@ fn resetSession() void {
     if (s.body.len > 0) gpa.free(s.body);
     s.pending.clearAndFree(gpa);
     s = .{};
-}
-
-fn setSendStatus(text: []const u8) void {
-    const doc = js.global.get(js.Object, "document") catch return;
-    defer doc.deinit();
-    const el = (doc.call(?js.Object, "getElementById", .{js.string("send-status")}) catch return) orelse return;
-    defer el.deinit();
-    el.set("textContent", js.string(text)) catch {};
 }
 
 // ---- dev stream driver (verify.sh ?stream= harness) --------------------------------------------

@@ -628,7 +628,7 @@ async function main() {
         };
         await page.navigate(`${args.base}/`);
         await openRecentChat();
-        row('must', await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000),
+        row('must', await page.waitFor("document.getElementById('d-connections') && document.getElementById('d-connections').dataset.connState === 'connected'", 8000),
             'SL-status shows the configured backend connected');
 
         const beforeSend = await page.eval("document.querySelectorAll('#chat .mes').length");
@@ -965,7 +965,7 @@ async function main() {
         await page.navigate(`${args.base}/`);
         await openRecentChat();
         // Wait for the connection to load, else the send is a no-op (conn null) and never appends.
-        await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000);
+        await page.waitFor("document.getElementById('d-connections') && document.getElementById('d-connections').dataset.connState === 'connected'", 8000);
         const st0 = await (await fetch(`${args.base}/dev/state`)).json();
         await page.focus('#send_textarea');
         await page.insertText('409: force a resync');
@@ -989,7 +989,7 @@ async function main() {
         console.log('== prefetch 409 preserves scroll ==');
         await page.navigate(`${args.base}/`);
         await openRecentChat();
-        await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000);
+        await page.waitFor("document.getElementById('d-connections') && document.getElementById('d-connections').dataset.connState === 'connected'", 8000);
         const pf0 = await (await fetch(`${args.base}/dev/state`)).json();
         await fetch(`${args.base}/dev/arm-get-409`);
         // Scroll to the top (fires the armed prepend GET) and capture the top-most on-screen anchor's
@@ -1044,7 +1044,7 @@ async function main() {
         console.log('== J1 invariant 2: prompt window exceeds the display window ==');
         await page.navigate(`${args.base}/`);
         await openRecentChat();
-        await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000);
+        await page.waitFor("document.getElementById('d-connections') && document.getElementById('d-connections').dataset.connState === 'connected'", 8000);
         const displayHas150 = await page.eval("document.body.textContent.includes('History message 150')");
         await page.focus('#send_textarea');
         await page.insertText('INV2 PROBE');
@@ -1544,7 +1544,7 @@ async function main() {
         await page.navigate(`${args.base}/`);
         await openRecentChat();
         await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
-        await page.waitFor("document.getElementById('send-status') && document.getElementById('send-status').textContent.includes('Connected')", 8000);
+        await page.waitFor("document.getElementById('d-connections') && document.getElementById('d-connections').dataset.connState === 'connected'", 8000);
         await page.waitFor(`${idle}`, 5000);
         const disp = (sel) => page.eval(`getComputedStyle(document.querySelector(${JSON.stringify(sel)})).display`);
         const idleSend = await disp('#composer .composer-send');
@@ -3408,15 +3408,11 @@ async function main() {
                 'W6-6 the selected persona says so in ARIA, not just in a class',
                 `list=${pa.list} rowRoles=${JSON.stringify(pa.roles)} ariaMatchesClass=${pa.agree} selectedCount=${pa.selected}`);
 
-            // #send-status must STILL UPDATE after being moved into the composer's flow. It is
-            // childless in the markup on purpose: connection.zig reflects into it with a textContent
-            // write, whose setter REPLACES an element's children with a fresh text node. Give that
-            // span a vdom text child and ziex owns a node by vnode id, the first status write detaches
-            // it, and every later render patches an orphan while the reader sees a frozen line
-            // (858e2c9fd, the card editor's footer). A geometry-only row would stay green with the
-            // readout frozen at "Connected" while the backend is down, so drive a real transition:
-            // Connect persists, and onPersistDone calls updateSendStatus -> "Backend: <type>".
-            const statusBefore = await page.eval("document.getElementById('send-status').textContent.trim()");
+            // The readout moved to the topbar in P1-C, so this drives the same property against the
+            // new surface: a real Connect must leave the connections button reporting the backend it
+            // just probed, in its state attribute AND by name. A row that only checked the attribute
+            // was still there would stay green with the dot frozen while the backend was down.
+            const statusBefore = await page.eval("document.getElementById('d-connections').dataset.connState");
             // #d-connections TOGGLES and five rows click it, so a blind click CLOSES a drawer a prior
             // row left open. Ask, then open only if it is shut.
             if (!await page.eval("!!document.querySelector('.conn-connect')")) {
@@ -3452,53 +3448,56 @@ async function main() {
                 return false;
             })();
             const statusMoved = landed && await page.waitFor(
-                `document.getElementById('send-status').textContent.trim() !== ${JSON.stringify(statusBefore)}`, 6000);
-            const statusAfter = await page.eval("document.getElementById('send-status').textContent.trim()");
-            // Named for what it PROVES. It does NOT guard the detached-node trap: arming that two ways
-            // (a literal child, then a {expr} child) left this row green both times, because the trap
-            // needs the vdom to own text it can lose and the composer publishes no region handle.
-            row('must', statusMoved && statusAfter.length > 0,
+                "document.getElementById('d-connections').dataset.connState === 'connected'", 6000);
+            const after = await page.eval(`(function(){
+                const b = document.getElementById('d-connections');
+                const m = b.querySelector('.conn-model');
+                return { state: b.dataset.connState, label: b.getAttribute('aria-label'),
+                         model: m ? m.textContent.trim() : null };
+            })()`);
+            // The model name is the mock's own ("mock-model", devserve.py:1434), so this cannot pass
+            // off a hardcoded string or a stale boot value as a probe result.
+            row('must', statusMoved && after.state === 'connected' && after.model === 'mock-model'
+                && after.label === 'API Connections, Connected: mock-model',
                 'W6-7 the backend readout tracks the backend it is reporting on',
-                `landed=${landed} before=${JSON.stringify(statusBefore)} after=${JSON.stringify(statusAfter)} changed=${statusMoved}`);
+                `landed=${landed} before=${JSON.stringify(statusBefore)} ${JSON.stringify(after)}`);
 
-            // The readout is a fixture, not a toast: connection.zig writes a standing line at boot and
-            // leaves it. Absolutely positioned over the log it was a permanent label on the
-            // conversation, covering the last line of the chat at phone width. Measured against the
-            // CHAT REGION's box, not against whichever messages are loaded: #chat is the
-            // conversation's airspace whether it holds two messages or two hundred, and an
-            // overlapped-message count reads 0 on the unfixed build purely because this fixture's chat
-            // is too short to reach the composer at 390px. The wordmark rides the same override.
+            // The readout used to live in the composer as #send-status, in flow above the controls,
+            // and at 390px it sat on the conversation. P1-C deleted it, so the row that measured how
+            // much of the chat it covered has nothing left to measure and the honest replacement is
+            // the stronger claim: NO connection readout survives anywhere in the composer. The
+            // wordmark check rides the same 390px override.
             await page.click('#d-connections');
             const wideW = await page.eval('window.innerWidth');
             await page.cdp.send('Emulation.setDeviceMetricsOverride',
                 { width: 390, height: 844, deviceScaleFactor: 1, mobile: false }, page.sessionId);
             await page.waitFor('window.innerWidth === 390', 3000);
-            const phone = await page.eval("(function(){const s=document.getElementById('send-status');"
-                + "if(!s)return JSON.stringify({err:'no #send-status'});"
-                + "const sr=s.getBoundingClientRect();const cr=document.getElementById('chat').getBoundingClientRect();"
-                // A message's rect runs past #chat's bottom under scroll, so a raw rect test counts
-                // overlaps that overflow clips and nobody can see. Clip each to the chat box first, or
-                // the diagnostic reports covered messages on a build where none are covered.
-                + "const over=[...document.querySelectorAll('#chat .mes_text')].filter(function(m){"
-                + "const r=m.getBoundingClientRect();"
-                + "const vt=Math.max(r.top,cr.top),vb=Math.min(r.bottom,cr.bottom);"
-                + "const vl=Math.max(r.left,cr.left),vr=Math.min(r.right,cr.right);"
-                + "if(vb<=vt||vr<=vl)return false;"
-                + "return sr.bottom>vt+0.5 && sr.top<vb-0.5 && sr.right>vl+0.5 && sr.left<vr-0.5;});"
-                + "const h1=document.querySelector('#topbar h1');"
-                + "return JSON.stringify({text:s.textContent.trim(),h:Math.round(sr.height),covers:over.length,"
-                + "inChatBox: sr.bottom > cr.top + 0.5 && sr.top < cr.bottom - 0.5,"
-                + "statusTop:Math.round(sr.top),chatBottom:Math.round(cr.bottom),"
-                + "markClipped:h1.scrollWidth > h1.clientWidth + 1,"
-                + "markW:h1.clientWidth,markFull:h1.scrollWidth});})()");
+            // Scoped to the composer and named by the vocabulary the old readout used, so a readout
+            // reintroduced under any id or tag is caught, not just one called #send-status again.
+            const phone = await page.eval(`(function(){
+                const words = ['Connected', 'Backend', 'No backend', 'unlock at silly'];
+                const comp = document.getElementById('composer');
+                const bearers = [...comp.querySelectorAll('*')].filter(function (el) {
+                    if (el.children.length > 0) return false;
+                    const t = (el.textContent || '').trim();
+                    return t.length > 0 && words.some(function (w) { return t.includes(w); });
+                }).map(function (el) { return (el.id || el.tagName.toLowerCase()) + ':' + el.textContent.trim().slice(0, 40); });
+                const h1 = document.querySelector('#topbar h1');
+                const dot = document.querySelector('#d-connections .conn-dot');
+                return JSON.stringify({ legacy: !!document.getElementById('send-status'),
+                    bearers: bearers,
+                    dotVisible: !!dot && dot.getBoundingClientRect().width > 0,
+                    markClipped: h1.scrollWidth > h1.clientWidth + 1,
+                    markW: h1.clientWidth, markFull: h1.scrollWidth });
+            })()`);
             const ph = JSON.parse(phone);
             await page.cdp.send('Emulation.clearDeviceMetricsOverride', {}, page.sessionId);
             // Same restore discipline the C-MSG rows learned the hard way: the override returns before
             // the relayout, and a later row would inherit the half-restored page.
             const phoneRestored = await page.waitFor(`window.innerWidth === ${wideW}`, 5000);
-            row('must', ph.inChatBox === false && ph.h > 0 && (ph.text || '').length > 0,
-                'W6-8 the backend readout stays out of the conversation at 390px',
-                `insideChatBox=${ph.inChatBox} messagesCovered=${ph.covers} statusTop=${ph.statusTop} chatBottom=${ph.chatBottom} statusHeight=${ph.h} text=${JSON.stringify(ph.text)}`);
+            row('must', ph.legacy === false && ph.bearers.length === 0 && ph.dotVisible,
+                'W6-8 no connection readout survives in the composer, and the dot shows at 390px',
+                `legacy=${ph.legacy} bearers=${JSON.stringify(ph.bearers)} dotVisible=${ph.dotVisible}`);
             row('must', ph.markClipped === false,
                 'W6-9 the wordmark renders whole at 390px (the nav is what gives way, not the brand)',
                 `clipped=${ph.markClipped} rendered=${ph.markW}px full=${ph.markFull}px`);
@@ -4392,6 +4391,110 @@ async function main() {
                 `shape=${wpLinkShape} stored=${(wpSt.group_meta || {}).world_info} alpha=${wpGrpPrompt.includes('WI-ENGINE-ALPHA')} soloHeld=${wpSoloHeld}`);
         }
         // wi-polish END
+
+        /* C-CONN-DOT: the connection readout after P1-C moved it out of the composer. */
+        // The dot is the fast channel and the words are the real one. Colour alone is unreadable to a
+        // screen reader and to a red-green reader, so every state row asserts the aria-label TEXT as
+        // well as the attribute, and the colours are only checked for being distinct from each other.
+        console.log('== C-CONN-DOT the connection readout ==');
+        {
+            const connState = async () => page.eval(`(function(){
+                const b = document.getElementById('d-connections');
+                if (!b) return null;
+                const dot = b.querySelector('.conn-dot');
+                const model = b.querySelector('.conn-model');
+                return { state: b.dataset.connState, label: b.getAttribute('aria-label'),
+                         dot: dot ? getComputedStyle(dot).backgroundColor : null,
+                         dotW: dot ? Math.round(dot.getBoundingClientRect().width) : 0,
+                         model: model ? model.textContent.trim() : null };
+            })()`);
+            const reloadWith = async (mode) => {
+                await fetch(`${args.base}/dev/status-mode?m=${mode}`);
+                await page.navigate(`${args.base}/?demo=1`);
+                await page.waitFor(hydrated, 15000);
+                await page.waitFor(`document.getElementById('d-connections').dataset.connState !== 'configured'`, 10000);
+                return connState();
+            };
+
+            const ok = await reloadWith('ok');
+            row('must', !!ok && ok.state === 'connected' && ok.label === 'API Connections, Connected: mock-model'
+                && ok.model === 'mock-model' && ok.dotW > 0,
+                'C-CONN-DOT-1 a reachable backend shows connected, names the model, and says so in words',
+                JSON.stringify(ok));
+
+            const asleep = await reloadWith('asleep');
+            row('must', asleep.state === 'asleep' && asleep.label === 'API Connections, Backend asleep - unlock at silly',
+                'C-CONN-DOT-2 a 502 at the edge reads as asleep, in the attribute and in the name',
+                JSON.stringify(asleep));
+
+            // P1-D end to end on a real outcome site: the boot probe's asleep branch must reach the
+            // notification system, not just the dot. Each reloadWith navigates, so the history is
+            // empty on arrival and this toast can only have come from THIS load's probe.
+            const asleepToast = await page.eval(`(function(){
+                const t = [...document.querySelectorAll('#notifications div[data-level]')]
+                    .map(function (e) { return { level: e.getAttribute('data-level'), text: e.textContent }; });
+                const badge = document.querySelector('#d-notifications .notif-badge');
+                return { toasts: t, badge: badge ? badge.textContent : null };
+            })()`);
+            row('must', asleepToast.toasts.length === 1 && asleepToast.toasts[0].level === 'warning'
+                && asleepToast.toasts[0].text === 'Backend asleep - unlock at silly' && asleepToast.badge === '1',
+                'C-CONN-DOT-8 an asleep backend also raises a notification, and the bell counts it',
+                JSON.stringify(asleepToast));
+
+            const offline = await reloadWith('offline');
+            row('must', offline.state === 'offline' && offline.label === 'API Connections, Backend offline - unlock at silly',
+                'C-CONN-DOT-3 an online:false probe reads as offline, not as connected',
+                JSON.stringify(offline));
+
+            const errored = await reloadWith('error');
+            row('must', errored.state === 'err' && errored.label === 'API Connections, Backend error 500',
+                'C-CONN-DOT-4 a 500 carries its status code into the readout',
+                JSON.stringify(errored));
+
+            // Distinctness, not specific colours: the words are what carry meaning, so this only has
+            // to prove the dot is not painting one colour for four different states.
+            const shades = [ok.dot, asleep.dot, errored.dot];
+            row('must', new Set(shades).size === 3 && shades.every((c) => c && c !== 'rgba(0, 0, 0, 0)'),
+                'C-CONN-DOT-5 connected, asleep and error paint three different dots',
+                JSON.stringify(shades));
+
+            await fetch(`${args.base}/dev/status-mode?m=ok`);
+            await page.navigate(`${args.base}/?demo=1`);
+            await page.waitFor(hydrated, 15000);
+            // The relocation itself. Scoped to #composer and keyed on the readout's own vocabulary, so
+            // a status line reintroduced under any id is caught, not only one called #send-status.
+            const composerClean = await page.eval(`(function(){
+                const words = ['Connected', 'Backend', 'No backend', 'unlock at silly'];
+                const comp = document.getElementById('composer');
+                const bearers = [...comp.querySelectorAll('*')].filter(function (el) {
+                    if (el.children.length > 0) return false;
+                    const t = (el.textContent || '').trim();
+                    return t.length > 0 && words.some(function (w) { return t.includes(w); });
+                }).map(function (el) { return (el.id || el.tagName.toLowerCase()) + ':' + el.textContent.trim().slice(0, 40); });
+                return { legacy: !!document.getElementById('send-status'), bearers: bearers,
+                         inShell: !!document.querySelector('#shell .conn-dot') };
+            })()`);
+            row('must', composerClean.legacy === false && composerClean.bearers.length === 0
+                && composerClean.inShell,
+                'C-CONN-DOT-6 the composer carries no connection readout, and the topbar does',
+                JSON.stringify(composerClean));
+
+            // The panel's standing line is the full readout the topbar only abbreviates.
+            await page.click('#d-connections');
+            await page.waitFor("document.querySelector('#conn-standing')", 6000);
+            const standing = await page.eval(`(function(){
+                const el = document.getElementById('conn-standing');
+                return { state: el.dataset.connState,
+                         text: document.getElementById('conn-standing-text').textContent.trim(),
+                         progressEmpty: (document.getElementById('conn-status').textContent || '').trim() === '' };
+            })()`);
+            await page.click('#d-connections');
+            row('must', standing.state === 'connected' && standing.text === 'Connected: mock-model'
+                && standing.progressEmpty,
+                'C-CONN-DOT-7 the panel shows the standing line, with Connect progress still its own',
+                JSON.stringify(standing));
+        }
+        /* C-CONN-DOT END */
 
         /* C-NOTIF: the toast overlay (P1-PROBE + P1-A). Keep ABOVE C-DBG, which reads the whole run. */
         // Two claims, and the second is the one the region exists for. First: a toast fades on its own,

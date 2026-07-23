@@ -683,6 +683,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # C-CARD2, for C-BG2: the same, for the last /backgrounds/upload body.
     bg_upload = None
     get_count = 0
+    # P1-C: what the text-completions status probe answers. "ok" is the healthy mock.
+    status_mode = "ok"
     # History-prefetch 409: armed once via /dev/arm-get-409, fires on the next prepend GET only, so the
     # scroll-preservation gate can drive the real resync path the mock append 409 cannot reach.
     arm_get_409 = False
@@ -953,6 +955,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if self.path.startswith("/dev/arm-keys-exposed"):
                 Handler.keys_exposed = True
                 return self.mock_json({"ok": True, "keys_exposed": True})
+            # P1-C: drive the connection probe's outcome (asleep / offline / error / ok).
+            if self.path.startswith("/dev/status-mode"):
+                mode = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("m") or ["ok"])[0]
+                Handler.status_mode = mode
+                return self.mock_json({"status_mode": mode})
             if self.path.startswith("/dev/arm-get-409"):
                 Handler.arm_get_409 = True
                 return self.mock_json({"armed": True})
@@ -1431,6 +1438,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             Handler.saved_card = saved
             return self.mock_json({"ok": True})
         if path == "/api/backends/text-completions/status":
+            # P1-C: the probe answers whatever the gate armed, so the connection dot's asleep,
+            # offline and error states can be driven instead of asserted only in the happy shape.
+            mode = Handler.status_mode
+            if mode == "asleep":
+                return self.mock_status(502, {"error": "bad gateway"})
+            if mode == "error":
+                return self.mock_status(500, {"error": "boom"})
+            if mode == "offline":
+                return self.mock_json({"result": "", "online": False})
             return self.mock_json({"result": "mock-model", "data": [{"id": "mock-model"}]})
         if path == "/api/settings/set-connection":
             Handler.recorded_connection = {"api_type": req.get("api_type"), "api_server": req.get("api_server")}
