@@ -81,7 +81,7 @@ const attr_head = raw_attr_tokens[0];
 /// tree recursively, so a walk that silently missed a folder would read fewer files and pass as
 /// clean; pinning the true total makes that a failure. Bump it the day a template lands.
 const total_zx_sources = 37;
-const zx_anchor = "message.zx";
+const zx_anchor = "chat/message.zx";
 
 /// A test binary inherits the cwd `zig build` was invoked from, which is the client root on every
 /// documented path. The other two candidates cost nothing and cover a repo-root invocation.

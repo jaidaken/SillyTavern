@@ -1,0 +1,57 @@
+// The message action chrome (C-MSG). Two parts, split by the `.mes` paint containment: the trigger is
+// small chrome inside the bubble's frame (never inside the sanitized body, invariant 6), revealed on
+// message hover/focus by the CSS zone (WD25, hover-capable pointers only; always shown on touch); the
+// popped action list renders ONCE at the MessageLog region root so content-visibility never clips it.
+// Items dispatch through the region delegate (message_actions.onLogClick) by their data attributes.
+
+pub const MenuTriggerProps = struct {
+    /// The message's absolute index in the chat file, echoed to the dispatched action.
+    abs: usize = 0,
+};
+
+/// The action-menu trigger button, placed top-right of the message frame and opening the popped list.
+pub fn MessageMenuTrigger(allocator: zx.Allocator, props: MenuTriggerProps) zx.Component {
+    return (
+        <button
+            @allocator={allocator}
+            type="button"
+            class="msg-menu-trigger icon absolute top-1 right-1 z-10 grid size-7 place-items-center rounded-md border-0 bg-transparent text-muted opacity-0 transition-[opacity,color,background] duration-120 ease-[ease] hover:bg-surface-2 hover:text-text focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent max-[640px]:size-9 max-[640px]:min-h-11 max-[640px]:min-w-11 max-[640px]:opacity-60"
+            data-icon="dots"
+            data-msg-menu={props.abs}
+            aria-label="Message actions"
+            aria-haspopup="menu"
+            aria-expanded={if (store.menuOpenFor(props.abs)) "true" else "false"}
+        ></button>
+    );
+}
+
+/// The popped action list: fixed under the trigger via the captured anchor, at the region root.
+pub fn MessageMenu(allocator: zx.Allocator) zx.Component {
+    const abs = store.menu.open_index orelse 0;
+    const wo = store.windowOffset();
+    const in_window = abs >= wo and (abs - wo) < store.slice().len;
+    const hidden = in_window and store.slice()[abs - wo].is_system;
+    const item = "cursor-pointer rounded-md border-0 bg-transparent px-3 py-1.5 text-left font-mono text-xs text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-text focus-visible:bg-surface-2 focus-visible:text-text focus-visible:outline-none max-[640px]:min-h-11";
+    return (
+        <div
+            @allocator={allocator}
+            id="msg-menu"
+            role="menu"
+            aria-label="Message actions"
+            style={actions.anchorStyle(allocator, store.menu.anchor_top, store.menu.anchor_right, store.menu.anchor_up)}
+            class="z-40 flex min-w-[10rem] animate-drawer-in flex-col gap-0.5 rounded-lg border border-border bg-surface p-1 outline-none"
+        >
+            <button type="button" role="menuitem" class={item} data-msg-action="edit" data-msg-index={abs}>Edit</button>
+            <button type="button" role="menuitem" class={item} data-msg-action="copy" data-msg-index={abs}>Copy text</button>
+            <button type="button" role="menuitem" class={item} data-msg-action="hide" data-msg-index={abs}>{if (hidden) "Unhide" else "Hide"}</button>
+            <button type="button" role="menuitem" class={item} data-msg-action="moveup" data-msg-index={abs}>Move up</button>
+            <button type="button" role="menuitem" class={item} data-msg-action="movedown" data-msg-index={abs}>Move down</button>
+            <button type="button" role="menuitem" class={item} data-undo-history={abs} aria-haspopup="dialog">Earlier versions</button>
+            <button type="button" role="menuitem" class={item} data-msg-action="delete" data-msg-index={abs}>Delete</button>
+        </div>
+    );
+}
+
+const zx = @import("zx");
+const store = @import("../platform/store.zig");
+const actions = @import("./message_actions.zig");

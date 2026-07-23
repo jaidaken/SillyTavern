@@ -1,0 +1,77 @@
+// Dev-only harness that proves dropdown.zx in isolation (no real consumer wired yet; Wave 2 wires the
+// config panels). Gated behind ?dropdemo=1 and mounted as a fixed island by composer.zx, so it never
+// appears in a normal boot or in the other verify gates. It IS the reference consumer: a
+// @rendering={.client} region whose root delegates onclick/onkeydown to dropdown.onClick/onKey, with a
+// static options list, a controlled value, and an onchange that stores the pick. The readout span is
+// the gate's observable that the value callback fired.
+
+const demo_options = [_]dropdown.Option{
+    .{ .value = "chatml", .label = "ChatML" },
+    .{ .value = "llama3", .label = "Llama 3" },
+    .{ .value = "mistral", .label = "Mistral" },
+    .{ .value = "alpaca", .label = "Alpaca" },
+};
+
+var demo_idx: usize = 0;
+var flag_read = false;
+var flag_on = false;
+
+/// True when the ?dropdemo flag is set; read once off location.search (client only).
+pub fn enabled() bool {
+    if (zx.platform.role != .client) return false;
+    if (flag_read) return flag_on;
+    flag_read = true;
+    const loc = js.global.get(js.Object, "location") catch return false;
+    const search = loc.getAlloc(js.String, zx.allocator, "search") catch return false;
+    defer zx.allocator.free(search);
+    flag_on = data.hasQueryFlag(search, "dropdemo");
+    return flag_on;
+}
+
+fn onPick(v: []const u8) void {
+    if (nav.indexOfValue(&demo_options, v)) |i| demo_idx = i;
+}
+
+pub fn DropdownDemo(ctx: *zx.ComponentCtx(void)) zx.Component {
+    const selected = demo_options[demo_idx];
+    // allow-div-onclick: delegation root for the dropdown's data-* controls; keyboard parity via onkeydown
+    return (
+        <div
+            @allocator={ctx.allocator}
+            @rendering={.client}
+            id="dropdown-demo"
+            class="fixed top-[calc(var(--topbar-h)_+_0.5rem)] left-3 z-50 flex flex-col gap-2 rounded-lg border border-border bg-surface p-3"
+            onclick={onDemoClick}
+            onkeydown={onDemoKey}
+        >
+            <h2 class="m-0 font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">Dropdown demo</h2>
+            <Dropdown
+                options={&demo_options}
+                value={selected.value}
+                name="demo"
+                label="Instruct template"
+                onchange={&onPick}
+            />
+            <p class="m-0 font-mono text-xs text-faint">selected: <span id="dd-demo-value" class="text-accent">{selected.value}</span></p>
+        </div>
+    );
+}
+
+fn onDemoClick(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    _ = dropdown.onClick(target);
+}
+
+fn onDemoKey(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    _ = dropdown.onKey(ev);
+}
+
+const zx = @import("zx");
+const js = zx.client.js;
+const data = @import("../cast/char_data.zig");
+const nav = @import("./dropdown_nav.zig");
+const dom_event = @import("../platform/dom_event.zig");
+const dropdown = @import("./dropdown.zx");
+const Dropdown = dropdown.Dropdown;

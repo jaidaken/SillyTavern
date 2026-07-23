@@ -1,0 +1,280 @@
+// The Character Card drawer body: the editable card for whichever character is selected.
+//
+// The field rows are generated from card_form.specs (WD31: the repetition is data, not markup), so
+// adding a field is one row in that table and nothing here. Which control a row wears is the spec's
+// kind: a line input, a textarea, or the shared dropdown for the one enumerated field.
+//
+// Four states, because the card arrives over the network (WD54): no selection, loading, error with
+// a retry, and the form. The form only mounts once the card has landed, which is deliberate: a
+// textarea's text child is its DEFAULT value, so rendering the fields empty and patching them after
+// the fetch would leave the browser showing the empty ones. Mount them with their text already in.
+//
+// The root delegates click and keydown to the dropdown (ZX11: ziex dispatches at <body>, so a
+// handler resolves its own element by walking up from the target); an edit writes straight to the
+// buffer with no re-render, so the caret stays where the user put it.
+const field_label = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
+const field_hint = "setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]";
+const field_col = "setting-col flex flex-col gap-2";
+const control_base = "w-full rounded-md border border-control-border bg-bg px-3 py-2 font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] placeholder:text-faint focus:border-accent focus:not-focus-visible:outline-none";
+const text_area = "min-h-[7rem] resize-y " ++ control_base;
+const action_btn = "cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text";
+// Save is what this whole panel is for, so it is the one filled amber in it: the theme spends the
+// accent once, on the single active signal (app-input.css:12-13). It was an outline sitting beside
+// an outline Revert, which left the panel's actual primary indistinguishable from its escape hatch.
+const save_btn = "cursor-pointer rounded-md border border-accent bg-accent px-3 py-1 font-mono text-sm text-on-accent transition-[background,filter] duration-120 ease-[ease] hover:brightness-[1.06] aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
+const greeting_btn = "self-start " ++ action_btn;
+
+const spec_list: []const card_form.Spec = &card_form.specs;
+const role_list: []const nav.Option = &card_form.role_options;
+
+pub fn CardEditorBody(ctx: *zx.ComponentCtx(void)) zx.Component {
+    card_editor.ensureLoaded();
+    const st = card_editor.editorState();
+    const selected = char_store.selected();
+    // allow-div-onclick: delegation root for the dropdown's data-* controls (ZX11); the controls
+    // inside are real buttons and inputs, and onkeydown gives the menu keyboard parity.
+    return (
+        <div
+            @allocator={ctx.allocator}
+            @rendering={.client}
+            id="card-editor"
+            class="card-editor flex flex-col gap-3"
+            onclick={onRootClick}
+            onkeydown={onRootKey}
+        >
+            {if (selected == null) (
+                <p class="m-0 text-sm text-muted">Pick a character in Character Management and their card opens here.</p>
+            ) else if (st == .loading or st == .idle) (
+                <p class="m-0 text-sm text-muted" aria-busy="true">Reading the card...</p>
+            ) else if (st == .err) (
+                <div class="flex flex-col items-start gap-2" role="alert">
+                    <p class="m-0 text-sm text-text">That card would not load. It may have been renamed or removed on the server.</p>
+                    <button class={action_btn} type="button" onclick={onRetry}>Try again</button>
+                </div>
+            ) else (
+                <div class="flex flex-col gap-3">
+                    {for (spec_list) |s| (
+                        <div class={field_col}>
+                            {if (s.kind == .choice) (
+                                <span class={field_label}>{s.label}</span>
+                            ) else (
+                                <label class={field_label} for={card_editor.domId(ctx.allocator, s.field)}>{s.label}</label>
+                            )}
+                            {if (s.kind == .area) (
+                                <textarea
+                                    id={card_editor.domId(ctx.allocator, s.field)}
+                                    name={card_editor.fieldKey(s.field)}
+                                    data-card-field={card_editor.fieldKey(s.field)}
+                                    aria-describedby={card_editor.hintId(ctx.allocator, s.field)}
+                                    class={text_area}
+                                    rows="5"
+                                    spellcheck="false"
+                                    autocomplete="off"
+                                    oninput={ctx.bind(onFieldInput)}
+                                >{card_editor.value(s.field)}</textarea>
+                            ) else if (s.kind == .choice) (
+                                <Dropdown
+                                    options={role_list}
+                                    value={card_editor.value(s.field)}
+                                    name={card_editor.fieldKey(s.field)}
+                                    label={s.label}
+                                    describedby={card_editor.hintId(ctx.allocator, s.field)}
+                                    onchange={&card_editor.setRole}
+                                />
+                            ) else (
+                                <input
+                                    id={card_editor.domId(ctx.allocator, s.field)}
+                                    name={card_editor.fieldKey(s.field)}
+                                    data-card-field={card_editor.fieldKey(s.field)}
+                                    aria-describedby={card_editor.hintId(ctx.allocator, s.field)}
+                                    class={control_base}
+                                    type="text"
+                                    spellcheck="false"
+                                    autocomplete="off"
+                                    value={card_editor.value(s.field)}
+                                    oninput={ctx.bind(onFieldInput)}
+                                />
+                            )}
+                            <p class={field_hint} id={card_editor.hintId(ctx.allocator, s.field)}>{s.hint}</p>
+                        </div>
+                    )}
+
+                    <div class={field_col}>
+                        <span class={field_label}>Alternate greetings</span>
+                        <p class={field_hint} id="card-greetings-hint">Other openings the user can swipe to instead of the first message.</p>
+                        {for (0..card_editor.greetingCount()) |i| (
+                            <div class="flex flex-col gap-2">
+                                <label class="text-sm text-muted" for={card_editor.greetingDomId(ctx.allocator, i)}>Greeting {card_editor.greetingKey(ctx.allocator, i)}</label>
+                                <textarea
+                                    id={card_editor.greetingDomId(ctx.allocator, i)}
+                                    name={card_editor.greetingDomId(ctx.allocator, i)}
+                                    data-card-greeting={card_editor.greetingKey(ctx.allocator, i)}
+                                    aria-describedby="card-greetings-hint"
+                                    class={text_area}
+                                    rows="3"
+                                    spellcheck="false"
+                                    autocomplete="off"
+                                    oninput={ctx.bind(onGreetingInput)}
+                                >{card_editor.greetingText(i)}</textarea>
+                                <button
+                                    class={greeting_btn}
+                                    type="button"
+                                    data-card-greeting-remove={card_editor.greetingKey(ctx.allocator, i)}
+                                    aria-label={card_editor.greetingRemoveLabel(ctx.allocator, i)}
+                                    onclick={ctx.bind(onGreetingRemove)}
+                                >Remove</button>
+                            </div>
+                        )}
+                        {if (card_editor.greetingCount() == 0) (
+                            <p class="m-0 text-sm text-muted">This card has none: the first message is its only opening. Add one and the user can swipe between them.</p>
+                        ) else (
+                            <></>
+                        )}
+                        <button class={greeting_btn} type="button" id="card-greeting-add" onclick={onGreetingAdd}>Add greeting</button>
+                    </div>
+
+                    <div class={field_col}>
+                        <span class={field_label}>Card image</span>
+                        <img
+                            class="h-24 w-24 rounded-md border border-control-border object-cover"
+                            id="card-avatar-img"
+                            src={card_editor.avatarUrl(ctx.allocator)}
+                            alt={card_editor.avatarAlt(ctx.allocator)}
+                            width="96"
+                            height="96"
+                        />
+                        <input
+                            id="card-avatar-input"
+                            name="card-avatar"
+                            type="file"
+                            accept="image/*"
+                            class={panelchrome.file_picker}
+                            aria-label="Replace the card image"
+                            aria-describedby="card-avatar-hint"
+                            onchange={ctx.bind(onAvatarPick)}
+                        />
+                        <p class={field_hint} id="card-avatar-hint">Writes straight to the card's file when you pick it. It does not wait for Save.</p>
+                    </div>
+
+                    <div class="sticky bottom-0 flex items-center justify-between gap-3 border-t border-border bg-surface pt-3">
+                        <p class="m-0 font-mono text-sm text-muted" id="card-editor-notice" role="status" aria-live="polite">{card_editor.noticeText()}</p>
+                        <div class="flex gap-2">
+                            <button class={action_btn} type="button" id="card-revert" onclick={onRevert}>Revert</button>
+                            <button class={save_btn} type="button" id="card-save" aria-disabled={boolAttr(st == .saving)} onclick={onSave}>{if (st == .saving) ("Saving...") else ("Save card")}</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+/// ziex renders an attribute whatever its value, and a PRESENT `disabled` disables the control
+/// however it is valued, so a plain `disabled={...}` is dead-on-arrival (it shipped a panel of dead
+/// buttons once already). aria-disabled takes a real "true"/"false", which the tailwind
+/// aria-disabled variant matches on "true" only; the handler owns the actual guard.
+fn boolAttr(on: bool) []const u8 {
+    return if (on) "true" else "false";
+}
+
+fn onFieldInput(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const key = dom_event.datasetUp(target, "cardField") orelse {
+        log.warn("card input: control has no data-card-field", .{});
+        return;
+    };
+    defer zx.allocator.free(key);
+    const field = card_form.fieldFromName(key) orelse {
+        log.warn("card input: unknown field {s}", .{key});
+        return;
+    };
+    const text = target.getAlloc(js.String, zx.allocator, "value") catch return;
+    defer zx.allocator.free(text);
+    card_editor.setField(field, text);
+}
+
+fn onGreetingInput(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const i = greetingIndexOf(target, "cardGreeting") orelse return;
+    const text = target.getAlloc(js.String, zx.allocator, "value") catch return;
+    defer zx.allocator.free(text);
+    card_editor.setGreeting(i, text);
+}
+
+fn onGreetingRemove(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const i = greetingIndexOf(target, "cardGreetingRemove") orelse return;
+    card_editor.removeGreeting(i);
+}
+
+/// The row a control belongs to, read off its own data attribute. datasetUp walks up from the
+/// target, so the Remove button answers for its row even when the click lands on inner text.
+fn greetingIndexOf(target: js.Object, comptime key: []const u8) ?usize {
+    const raw = dom_event.datasetUp(target, key) orelse {
+        log.warn("card greeting: control has no data-{s}", .{key});
+        return null;
+    };
+    defer zx.allocator.free(raw);
+    return card_editor.greetingIndex(raw);
+}
+
+fn onGreetingAdd(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    _ = ev;
+    card_editor.addGreeting();
+}
+
+fn onAvatarPick(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    _ = e;
+    card_editor.uploadAvatar();
+}
+
+fn onRootClick(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    _ = dropdown.onClick(target);
+}
+
+/// A key the dropdown handled MUST be consumed. ziex delivers one delegated keydown to every handler
+/// on the path, and ui.onPageKey closes the active panel on any Escape without reading the target, so
+/// discarding this result means an Escape aimed at the open menu takes the whole drawer with it.
+fn onRootKey(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    if (dropdown.onKey(ev)) ev.stopPropagation();
+}
+
+fn onSave(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    _ = ev;
+    card_editor.save();
+}
+
+fn onRevert(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    _ = ev;
+    card_editor.reload();
+}
+
+fn onRetry(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    _ = ev;
+    card_editor.reload();
+}
+
+const zx = @import("zx");
+const std = @import("std");
+const js = zx.client.js;
+const dom_event = @import("../platform/dom_event.zig");
+const card_editor = @import("./card_editor.zig");
+const card_form = @import("./card_form.zig");
+const char_store = @import("./character_store.zig");
+const panelchrome = @import("../shell/panelchrome.zx");
+const nav = @import("../nav/dropdown_nav.zig");
+const dropdown = @import("../nav/dropdown.zx");
+const Dropdown = dropdown.Dropdown;
+
+const log = std.log.scoped(.card);

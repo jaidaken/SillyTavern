@@ -1,0 +1,198 @@
+// The Backgrounds drawer body: the gallery of images the server holds, the one that is showing, and
+// the two file actions the backend offers (rename, delete). backgrounds.zig owns the fetch, the
+// persistence and the CSS layer; this file reads the clicked control and hands it over.
+//
+// The gallery loads on this panel's first render rather than at boot: most sessions never open the
+// drawer, so the request is worth deferring until it is asked for. All four async states are drawn
+// (WD54): a skeleton matching the tile grid, a failure with a retry, an empty state that says where
+// the files go, and the gallery itself.
+//
+// A tile is a button and its two file actions are its SIBLINGS, not its children: a button inside a
+// button is invalid, and the actions must stay reachable by keyboard on their own.
+const tile_action = "bg-tile-action grid size-7 cursor-pointer place-items-center rounded-md border border-control-border bg-surface-2/90 text-muted transition-colors duration-120 ease-[ease] hover:text-text";
+const retry_btn = "cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text";
+const tile_btn = "bg-tile block w-full cursor-pointer overflow-hidden rounded-md border border-control-border bg-bg p-0 text-left transition-colors duration-120 ease-[ease] aria-pressed:border-accent";
+const file_input = "bg-upload-file " ++ panelchrome.file_picker;
+const none_btn = "bg-tile grid aspect-[16/9] cursor-pointer place-items-center rounded-md border border-control-border bg-bg font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text aria-pressed:border-accent aria-pressed:text-accent";
+
+pub fn BackgroundsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
+    backgrounds.region = ctx.state(u32, 0);
+    backgrounds.ensureLoaded();
+
+    const sel = backgrounds.selected(ctx.allocator);
+    return (
+        <div @allocator={ctx.allocator} class="backgrounds-body flex flex-col gap-3" @rendering={.client}>
+            {if (backgrounds.state() == .failed) (
+                <div class="flex flex-col items-start gap-2 rounded-md border border-control-border bg-bg p-3" role="alert">
+                    <p class="m-0 text-sm text-text">{backgrounds.errorText()}</p>
+                    <button class={retry_btn} type="button" data-bg-retry="1" onclick={onRetry}>Try again</button>
+                </div>
+            ) else if (backgrounds.state() == .loading) (
+                <div class="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-3" aria-busy="true" aria-label="Loading backgrounds">
+                    {for (skeleton_slots) |_| (
+                        <div class="aspect-[16/9] animate-pulse rounded-md border border-control-border bg-surface-2"></div>
+                    )}
+                </div>
+            ) else if (backgrounds.list().len == 0) (
+                <div class="flex flex-col gap-1 rounded-md border border-control-border bg-bg p-4">
+                    <p class="m-0 text-base text-text">No backgrounds yet.</p>
+                    <p class="m-0 text-sm text-muted">Drop image files into the server's backgrounds folder, then reload this panel.</p>
+                    <button class={retry_btn} type="button" data-bg-retry="1" onclick={onRetry}>Reload</button>
+                </div>
+            ) else (
+                <div id="bg-gallery" class="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-3" role="group" aria-label="Backgrounds">
+                    <button
+                        class={none_btn}
+                        type="button"
+                        data-bg-none="1"
+                        aria-pressed={pressed(sel, "")}
+                        onclick={onClear}
+                    >None</button>
+
+                    {for (backgrounds.list()) |b| (
+                        <div class="bg-tile-wrap relative">
+                            <button
+                                class={tile_btn}
+                                type="button"
+                                data-bg-file={b.filename}
+                                aria-pressed={pressed(sel, b.filename)}
+                                onclick={onSelect}
+                            >
+                                <img
+                                    class="block aspect-[16/9] w-full object-cover"
+                                    src={backgrounds.thumbFor(ctx.allocator, b.filename)}
+                                    alt=""
+                                    loading="lazy"
+                                    decoding="async"
+                                />
+                                <span class="block truncate px-2 py-1 font-mono text-xs text-muted">{b.filename}</span>
+                            </button>
+                            {if (b.is_animated) (
+                                <span class="pointer-events-none absolute top-1 left-1 rounded-sm bg-bg/80 px-1 font-mono text-[0.65rem] text-muted">GIF</span>
+                            )}
+                            <div class="bg-tile-actions absolute top-1 right-1 flex gap-1">
+                                <button
+                                    class={tile_action}
+                                    type="button"
+                                    data-icon="pencil"
+                                    data-bg-rename={b.filename}
+                                    aria-label={label(ctx.allocator, "Rename ", b.filename)}
+                                    onclick={onRename}
+                                ><span class="icon"></span></button>
+                                <button
+                                    class={tile_action}
+                                    type="button"
+                                    data-icon="trash"
+                                    data-bg-delete={b.filename}
+                                    aria-label={label(ctx.allocator, "Delete ", b.filename)}
+                                    onclick={onDelete}
+                                ><span class="icon"></span></button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+            <div class="bg-upload-row flex flex-wrap items-center gap-2">
+                <input
+                    id="bg-upload-input"
+                    name="bg-upload-input"
+                    type="file"
+                    accept="image/*,video/*"
+                    class={file_input}
+                    aria-label="Upload a background image"
+                    aria-describedby={uploadDescribedBy()}
+                    onchange={onUploadPick}
+                />
+                {if (backgrounds.uploadState() == .sending) (
+                    <span class="font-mono text-xs text-muted" role="status">Uploading...</span>
+                )}
+            </div>
+            {if (backgrounds.uploadState() == .failed) (
+                <div class="flex flex-col items-start gap-2 rounded-md border border-control-border bg-bg p-3" role="alert">
+                    <p id="bg-upload-error" class="m-0 text-sm text-text">{backgrounds.uploadErrorText()}</p>
+                    <p class="m-0 text-sm text-muted">Choose the file again to retry.</p>
+                </div>
+            )}
+            <p class="setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]">The background sits behind the chat, dimmed so the text stays readable.</p>
+        </div>
+    );
+}
+
+/// Six tiles is roughly what the drawer shows before scrolling, so the skeleton reserves that much
+/// and the grid does not jump when the real gallery lands (WD43).
+const skeleton_slots: []const u8 = &[_]u8{ 0, 0, 0, 0, 0, 0 };
+
+fn pressed(sel: []const u8, filename: []const u8) []const u8 {
+    return if (std.mem.eql(u8, sel, filename)) "true" else "false";
+}
+
+/// An accessible name for a per-tile action. Falls back to the bare verb on OOM, which still names
+/// the control (WD38) even though it stops naming its target.
+fn label(a: std.mem.Allocator, verb: []const u8, filename: []const u8) []const u8 {
+    return std.fmt.allocPrint(a, "{s}{s}", .{ verb, filename }) catch verb;
+}
+
+// A click lands on the button or on anything inside it, and ziex reports the delegation root as
+// currentTarget (ZX11), so the control is found by walking target upward for its data attribute.
+fn onSelect(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    const file = dom_event.datasetUp(target, "bgFile") orelse {
+        log.warn("background click: target has no data-bg-file ancestor", .{});
+        return;
+    };
+    defer zx.allocator.free(file);
+    backgrounds.select(file);
+}
+
+// "None" clears rather than selecting, and it carries its own attribute to say so: dom_event.datasetUp
+// frees an empty dataset value and keeps walking, so an empty data-bg-file would never dispatch.
+fn onClear(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    _ = ev;
+    backgrounds.select("");
+}
+
+fn onRename(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    const file = dom_event.datasetUp(target, "bgRename") orelse return;
+    defer zx.allocator.free(file);
+    backgrounds.renameBg(file);
+}
+
+fn onDelete(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    const file = dom_event.datasetUp(target, "bgDelete") orelse return;
+    defer zx.allocator.free(file);
+    backgrounds.deleteBg(file);
+}
+
+fn onRetry(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    _ = ev;
+    backgrounds.reload();
+}
+
+// The change event, not a click: it fires once a file is actually chosen, so a cancelled picker
+// never leaves the row saying it is uploading nothing.
+fn onUploadPick(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    _ = ev;
+    backgrounds.uploadPick();
+}
+
+/// Binds the failure text to the input that caused it (WD40). Empty when there is nothing to point
+/// at: the paragraph only exists in the failed state, and a dangling id names nothing.
+fn uploadDescribedBy() []const u8 {
+    return if (backgrounds.uploadState() == .failed) "bg-upload-error" else "";
+}
+
+const zx = @import("zx");
+const std = @import("std");
+const dom_event = @import("../platform/dom_event.zig");
+const backgrounds = @import("./backgrounds.zig");
+const panelchrome = @import("../shell/panelchrome.zx");
+
+const log = std.log.scoped(.panels);

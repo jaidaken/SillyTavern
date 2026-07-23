@@ -1,0 +1,127 @@
+// The composer: options menu, the message input, and send/stop.
+// Its own sibling client region, so a Shell panel toggle or a MessageLog token never re-renders it:
+// the textarea's typed value, caret, and auto-grow height survive both. It has no state mutation of
+// its own yet, so it publishes no region handle; it never re-renders after its first mount.
+//
+// THE DRAFT IS BROWSER-OWNED AND MUST STAY THAT WAY. #send_textarea carries no value binding, so the
+// renderer never writes its content and no re-render can take a half-typed message. That, not the
+// region split above, is what actually survives a full rerender: measured 2026-07-23, a live event
+// re-rendering the whole page left the draft and caret intact. Bind this field to state and the
+// draft becomes the renderer's to lose, with nothing in the gate guaranteed to notice.
+// You write prose here, so the input reads in the prose face. Each button carries only the hover it
+// owns: send brightens its amber, stop keeps the active-control look, and only the plain options
+// button takes the ordinary surface hover, so no two rules chase the same property.
+//
+// NO CONNECTION READOUT LIVES HERE. It used to: a #send-status row sat above the controls carrying
+// "Connected: llamacpp" and "Backend offline - unlock at silly" from boot onward, which put a
+// permanent label about the backend inside the space you write in. The status is the topbar's now
+// (a dot and the model on the connections button, the full line in that panel), so the composer is
+// only the composer. C-CONN-DOT-6 fails if a connection readout reappears in here.
+const btn_base = "icon grid size-[2.7rem] flex-none cursor-pointer place-items-center rounded-md border border-control-border transition-[background,color,filter,transform] duration-120 ease-[ease] active:[transform:translateY(calc(var(--move)*1px))_scale(calc(1_-_var(--move)*0.03))] max-[640px]:size-11 max-[640px]:before:size-4";
+
+pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
+    instrument.bumpComposer();
+    return (
+        <footer
+            @allocator={ctx.allocator}
+            id="composer"
+            class="col-start-2 row-start-3 border-t border-border bg-surface p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] max-[640px]:p-2"
+            @rendering={.client}
+            onclick={ui.onPageClick}
+            onkeydown={ui.onPageKey}
+        >
+            {if (dropdown_demo.enabled()) (
+                <DropdownDemo />
+            )}
+            <div class="mx-auto grid w-full max-w-[var(--reading-measure,var(--measure))] grid-cols-1 gap-1">
+                <div class="flex items-end gap-2">
+                    <button
+                        type="button"
+                        class={btn_base ++ " bg-transparent text-muted hover:bg-surface-2 hover:text-text"}
+                        data-icon="menu"
+                        aria-label="Chat snapshots"
+                        aria-haspopup="dialog"
+                        onclick={undo.onOpenSnapshots}
+                    ></button>
+                    <label for="send_textarea" class="sr-only top-0 left-0">Message</label>
+                    <textarea
+                        id="send_textarea"
+                        name="message"
+                        autocomplete="off"
+                        class="max-h-[40vh] min-h-[2.7rem] flex-1 resize-none rounded-md border border-control-border bg-bg px-[0.85rem] py-[0.6rem] font-serif text-md leading-ui text-text transition-[border-color] duration-120 ease-[ease] placeholder:text-faint placeholder:italic focus:border-accent focus:not-focus-visible:outline-none max-[640px]:max-h-[30vh] max-[640px]:p-2 max-[640px]:text-[16px]"
+                        rows="1"
+                        placeholder="Type a message..."
+                        oninput={ctx.bind(onComposerInput)}
+                        onkeydown={onComposerKeydown}
+                    ></textarea>
+                    <button
+                        type="button"
+                        class={btn_base ++ " composer-send border-accent bg-accent text-on-accent hover:bg-accent hover:text-on-accent hover:brightness-[1.06]"}
+                        data-icon="send"
+                        aria-label="Send"
+                        onclick={onSend}
+                    ></button>
+                    <button
+                        type="button"
+                        class={btn_base ++ " composer-stop bg-surface-2 text-accent"}
+                        data-icon="stop"
+                        aria-label="Stop"
+                        onclick={onStop}
+                    ></button>
+                </div>
+            </div>
+        </footer>
+    );
+}
+
+// The textarea grows to fit its content and shrinks back when lines are deleted. Height is reset to
+// auto BEFORE scrollHeight is read, because scrollHeight of an already-tall box reports the old
+// height, not the content's. Style is a two-step (get the style object, then set height): jsz
+// property names are literal, so a "style.height" set writes a junk property and moves nothing (T2).
+fn onComposerInput(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+
+    const target = dom_event.statefulTarget(e) orelse return;
+    const style = target.get(js.Object, "style") catch return;
+    defer style.deinit();
+
+    style.set("height", js.string("auto")) catch return;
+    const scroll_h: f64 = target.get(f64, "scrollHeight") catch return;
+
+    var buf: [32]u8 = undefined;
+    const height = std.fmt.bufPrint(&buf, "{d}px", .{@as(u32, @intFromFloat(scroll_h))}) catch return;
+    style.set("height", js.string(height)) catch return;
+}
+
+// Send on click, stop on click, Enter to send (Shift+Enter inserts a newline). char_api owns the
+// send/stop behaviour; these are only the bindings. onSend/onStop never touch the raw event, so they
+// need no platform guard; the keydown handler reads the event, so it opens with the comptime guard.
+fn onSend(_: zx.client.Event) void {
+    char_api.sendMessage();
+}
+
+fn onStop(_: zx.client.Event) void {
+    char_api.stopStream();
+}
+
+fn onComposerKeydown(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const key = ev.key() orelse return;
+    defer zx.allocator.free(key);
+    if (!std.mem.eql(u8, key, "Enter")) return;
+    const shift = ev.getEvent().ref.get(bool, "shiftKey") catch false;
+    if (shift) return;
+    ev.preventDefault();
+    char_api.sendMessage();
+}
+
+const zx = @import("zx");
+const js = zx.client.js;
+const ui = @import("../nav/ui.zig");
+const undo = @import("./undo.zig");
+const instrument = @import("../platform/instrument.zig");
+const dom_event = @import("../platform/dom_event.zig");
+const char_api = @import("../cast/char_api.zig");
+const std = @import("std");
+const dropdown_demo = @import("../nav/dropdown_demo.zx");
+const DropdownDemo = dropdown_demo.DropdownDemo;

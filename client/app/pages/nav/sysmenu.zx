@@ -1,0 +1,114 @@
+// PROTOTYPE: the system menu. A gear in the bottom-left corner and a compact popover floating beside
+// it (rework section 4). It is deliberately NOT full-screen: every control in it changes how the app
+// LOOKS, and a menu that covers the app hides the thing being judged. Both controls apply to the live
+// page as they are clicked, with the conversation still visible behind.
+pub fn SysMenu(allocator: zx.Allocator) zx.Component {
+    return (
+        <div @allocator={allocator} class="contents">
+            <button
+                id="sys-gear"
+                type="button"
+                class={gear}
+                style={state.gearOffset(allocator)}
+                data-icon="cog"
+                aria-label="System"
+                aria-haspopup="dialog"
+                aria-expanded={if (state.isOpen()) "true" else "false"}
+                aria-controls="sys-popover"
+                onclick={state.onGear}
+            ></button>
+            {if (state.isOpen()) (
+                <div
+                    id="sys-popover"
+                    class={popover}
+                    style={state.gearOffset(allocator)}
+                    role="dialog"
+                    aria-labelledby="sys-heading"
+                >
+                    <div class="flex items-center justify-between gap-2">
+                        <h2
+                            id="sys-heading"
+                            class="m-0 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase"
+                        >System</h2>
+                        <button
+                            type="button"
+                            class="icon grid size-[1.6rem] flex-none cursor-pointer place-items-center rounded-md border-0 bg-transparent text-muted hover:bg-surface-2 hover:text-text"
+                            data-icon="close"
+                            aria-label="Close system menu"
+                            onclick={state.onClose}
+                        ></button>
+                    </div>
+                    <div class="flex flex-col gap-1">
+                        <span class="font-mono text-[0.62rem] tracking-[0.12em] text-faint uppercase">Motion</span>
+                        <div class="flex gap-1">
+                            {for (motion_opts_slice) |m| (
+                                <button
+                                    type="button"
+                                    class={seg}
+                                    data-motion-set={m.value}
+                                    aria-pressed={if (ui.motionPref() == m.pref) "true" else "false"}
+                                    onclick={state.onMotion}
+                                >{m.label}</button>
+                            )}
+                        </div>
+                    </div>
+                    <div class="flex flex-col gap-1">
+                        <span class="font-mono text-[0.62rem] tracking-[0.12em] text-faint uppercase">Background</span>
+                        <div class="flex gap-2">
+                            {for (swatch_list, 0..) |s, i| (
+                                <button
+                                    type="button"
+                                    class={swatchClass(i)}
+                                    style={swatchStyle(allocator, s.hex)}
+                                    data-bg-index={i}
+                                    aria-label={s.name}
+                                    aria-pressed={if (state.bgIndex() == i) "true" else "false"}
+                                    onclick={state.onSwatch}
+                                ></button>
+                            )}
+                        </div>
+                    </div>
+                    <p class="m-0 font-mono text-[0.62rem] leading-ui text-faint">Changes land on the page behind this card.</p>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// The gear sits in the corner the two panel tabs do not own, and clears the composer's own controls,
+// which stay centred on the reading measure.
+const gear = "icon fixed bottom-3 z-50 grid size-[2.2rem] cursor-pointer place-items-center rounded-md border border-control-border bg-surface text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-accent";
+
+// Capped width, floating clear of the gear. No shadow: this theme carries depth on borders (WD16).
+const popover = "fixed bottom-[3.6rem] z-50 flex w-[17.5rem] max-w-[280px] flex-col gap-3 rounded-lg border border-border bg-surface p-3";
+
+// The segmented motion control. Its selected look rides aria-pressed, which the button carries for
+// assistive tech anyway, so no class is computed for state.
+const seg = "flex-1 cursor-pointer rounded-md border border-control-border bg-transparent px-2 py-1 font-mono text-[0.68rem] text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-text aria-pressed:border-accent aria-pressed:bg-surface-2 aria-pressed:text-accent";
+
+const swatch_base = "size-7 cursor-pointer rounded-md border transition-colors duration-120 ease-[ease]";
+
+fn swatchClass(i: usize) []const u8 {
+    return if (state.bgIndex() == i) swatch_base ++ " border-accent" else swatch_base ++ " border-control-border";
+}
+
+/// The tile paints the colour it sets, so the value has to reach the element; a colour is exactly
+/// what an inline style is for.
+fn swatchStyle(alloc: zx.Allocator, hex: []const u8) []const u8 {
+    return std.fmt.allocPrint(alloc, "background-color:{s}", .{hex}) catch "";
+}
+
+const MotionOpt = struct { pref: ui.MotionPref, value: []const u8, label: []const u8 };
+const motion_opts = [_]MotionOpt{
+    .{ .pref = .system, .value = "system", .label = "System" },
+    .{ .pref = .on, .value = "on", .label = "Full" },
+    .{ .pref = .off, .value = "off", .label = "Still" },
+};
+// ZX1: a {for} target must already be a slice.
+const motion_opts_slice: []const MotionOpt = &motion_opts;
+const swatch_list: []const state.Swatch = state.swatches_slice;
+
+const std = @import("std");
+const zx = @import("zx");
+const ui = @import("./ui.zig");
+const state = @import("./sysmenu_state.zig");

@@ -1,0 +1,170 @@
+diff --git i/src/cli/transpile.zig w/src/cli/transpile.zig
+index c03c2fab..e375d3bf 100644
+--- i/src/cli/transpile.zig
++++ w/src/cli/transpile.zig
+@@ -1872,6 +1872,27 @@ fn transpileCommand(allocator: std.mem.Allocator, opts: TranspileOptions) !void
+         },
+     }
+ 
++    // A shared hydration id makes the client hydrate against the wrong marker and silently drop a
++    // body, so a folder-independent id (basename-hashed) must still be globally unique: fail loudly.
++    {
++        var seen_ids = std.StringHashMap([]const u8).init(allocator);
++        defer seen_ids.deinit();
++        for (all_client_cmps.items) |cmp| {
++            if (seen_ids.get(cmp.id)) |prev_path| {
++                if (!std.mem.eql(u8, prev_path, cmp.path)) {
++                    std.debug.print(
++                        "Error: duplicate client-component hydration id '{s}' from '{s}' and '{s}' " ++
++                            "(component '{s}'). Rename a file so their basenames differ.\n",
++                        .{ cmp.id, prev_path, cmp.path, cmp.name },
++                    );
++                    return error.DuplicateComponentId;
++                }
++            } else {
++                try seen_ids.put(cmp.id, cmp.path);
++            }
++        }
++    }
++
+     // Write dep file (Make format) so zig build can track .zx inputs for caching
+     if (opts.dep_file) |dep_file_path| {
+         writeDepFile(allocator, dep_file_path, dep_file_path, input_files.items) catch |err| {
+diff --git i/src/core/Transpile.zig w/src/core/Transpile.zig
+index 1d3bc72a..6e04bdb3 100644
+--- i/src/core/Transpile.zig
++++ w/src/core/Transpile.zig
+@@ -39,10 +39,17 @@ pub const ClientComponentMetadata = struct {
+     /// Generate a short unique component ID
+     /// Format: c<6-char-hash> (e.g., c1a2b3c)
+     /// Uses first 6 hex chars of MD5 hash for uniqueness (16M combinations)
++    ///
++    /// The hash mixes the file BASENAME, not the full path: the id is the hydration marker that the
++    /// SSR HTML and the wasm must agree on, and the two builds transpile from different working
++    /// directories, so a cwd-relative path differs between them and the ids diverge. The basename is
++    /// identical in both, and is also stable when a component moves between folders. Basenames are
++    /// unique per project, and the build-time guard in cli/transpile.zig fails loudly if two sites
++    /// ever collide, so dropping the folder portion cannot silently break hydration.
+     fn generateComponentIdInner(name: []const u8, path: []const u8, index: ?usize) struct { buf: [56]u8, len: usize } {
+         var hasher = std.crypto.hash.Md5.init(.{});
+         hasher.update(name);
+-        hasher.update(path);
++        hasher.update(std.fs.path.basename(path));
+         if (index) |idx| {
+             var idx_buf: [20]u8 = undefined;
+             const idx_str = std.fmt.bufPrint(&idx_buf, "{d}", .{idx}) catch unreachable;
+diff --git i/test/data/component/csr_react_multiple.html w/test/data/component/csr_react_multiple.html
+index 1ada399c..f41350c0 100644
+--- i/test/data/component/csr_react_multiple.html
++++ w/test/data/component/csr_react_multiple.html
+@@ -1 +1 @@
+-<main><!--$cc92487 CounterComponent {"max_count":10}--><!--/$cc92487--><!--$c36ddbb AnotherComponent--><!--/$c36ddbb--><!--$c77b548 AnotherComponent--><!--/$c77b548--><!--$c005539 AnotherSameComponent--><!--/$c005539--></main>
+\ No newline at end of file
++<main><!--$cb34cd1 CounterComponent {"max_count":10}--><!--/$cb34cd1--><!--$cbbccfa AnotherComponent--><!--/$cbbccfa--><!--$c9625a1 AnotherComponent--><!--/$c9625a1--><!--$caa5394 AnotherSameComponent--><!--/$caa5394--></main>
+\ No newline at end of file
+diff --git i/test/data/component/csr_react_multiple.zig w/test/data/component/csr_react_multiple.zig
+index 995fef8c..fcc93989 100644
+--- i/test/data/component/csr_react_multiple.zig
++++ w/test/data/component/csr_react_multiple.zig
+@@ -7,10 +7,10 @@ pub fn Page(allocator: zx.Allocator) zx.Component {
+         .{
+             .allocator = allocator,
+             .children = &.{
+-                _zx.client(.{ .name = "CounterComponent", .path = "test/data/component/react.tsx", .id = "cc92487" }, .{ .max_count = max_count }),
+-                _zx.client(.{ .name = "AnotherComponent", .path = "test/data/component/csr_react_multiple.tsx", .id = "c36ddbb" }, .{}),
+-                _zx.client(.{ .name = "AnotherComponent", .path = "test/data/component/csr_react_multiple.tsx", .id = "c77b548" }, .{}),
+-                _zx.client(.{ .name = "AnotherSameComponent", .path = "test/data/component/csr_react_multiple.tsx", .id = "c005539" }, .{}),
++                _zx.client(.{ .name = "CounterComponent", .path = "test/data/component/react.tsx", .id = "cb34cd1" }, .{ .max_count = max_count }),
++                _zx.client(.{ .name = "AnotherComponent", .path = "test/data/component/csr_react_multiple.tsx", .id = "cbbccfa" }, .{}),
++                _zx.client(.{ .name = "AnotherComponent", .path = "test/data/component/csr_react_multiple.tsx", .id = "c9625a1" }, .{}),
++                _zx.client(.{ .name = "AnotherSameComponent", .path = "test/data/component/csr_react_multiple.tsx", .id = "caa5394" }, .{}),
+             },
+         },
+     );
+diff --git i/test/data/component/csr_zig.html w/test/data/component/csr_zig.html
+index b28d7491..e106a2e4 100644
+--- i/test/data/component/csr_zig.html
++++ w/test/data/component/csr_zig.html
+@@ -1 +1 @@
+-<main><!--$c8fee6a--><button>Counter</button><!--/$c8fee6a--><button>Counter</button><!--$cd02624 ["Custom Button"]--><button>Custom Button</button><!--/$cd02624--></main>
+\ No newline at end of file
++<main><!--$cade242--><button>Counter</button><!--/$cade242--><button>Counter</button><!--$c727af0 ["Custom Button"]--><button>Custom Button</button><!--/$c727af0--></main>
+\ No newline at end of file
+diff --git i/test/data/component/csr_zig.zig w/test/data/component/csr_zig.zig
+index 72bf4f1e..26faaa1c 100644
+--- i/test/data/component/csr_zig.zig
++++ w/test/data/component/csr_zig.zig
+@@ -7,7 +7,7 @@ pub fn Page(allocator: zx.Allocator) zx.Component {
+             .children = &.{
+                 _zx.cmp(
+                     CounterComponent,
+-                    .{ .name = "CounterComponent", .client = .{ .name = "CounterComponent", .id = "c8fee6a" } },
++                    .{ .name = "CounterComponent", .client = .{ .name = "CounterComponent", .id = "cade242" } },
+                     .{},
+                 ),
+                 _zx.cmp(
+@@ -17,7 +17,7 @@ pub fn Page(allocator: zx.Allocator) zx.Component {
+                 ),
+                 _zx.cmp(
+                     Button,
+-                    .{ .name = "Button", .client = .{ .name = "Button", .id = "cd02624" } },
++                    .{ .name = "Button", .client = .{ .name = "Button", .id = "c727af0" } },
+                     .{ .title = "Custom Button" },
+                 ),
+             },
+diff --git i/test/data/component/csr_zig_props.html w/test/data/component/csr_zig_props.html
+index b514ceba..95fbe9bb 100644
+--- i/test/data/component/csr_zig_props.html
++++ w/test/data/component/csr_zig_props.html
+@@ -1 +1 @@
+-<main><!--$c24eadf [5,"Main Counter"]--><div class="counter"><span class="label">Main Counter</span><span class="value">5</span></div><!--/$c24eadf--><!--$cd768fc [10,"Secondary"]--><div class="counter"><span class="label">Secondary</span><span class="value">10</span></div><!--/$cd768fc--><!--$c9e599a [0,"Count"]--><div class="counter"><span class="label">Count</span><span class="value">0</span></div><!--/$c9e599a--></main>
+\ No newline at end of file
++<main><!--$c748c7a [5,"Main Counter"]--><div class="counter"><span class="label">Main Counter</span><span class="value">5</span></div><!--/$c748c7a--><!--$c715bb0 [10,"Secondary"]--><div class="counter"><span class="label">Secondary</span><span class="value">10</span></div><!--/$c715bb0--><!--$ca4f20d [0,"Count"]--><div class="counter"><span class="label">Count</span><span class="value">0</span></div><!--/$ca4f20d--></main>
+\ No newline at end of file
+diff --git i/test/data/component/csr_zig_props.zig w/test/data/component/csr_zig_props.zig
+index da1c136f..fe18f901 100644
+--- i/test/data/component/csr_zig_props.zig
++++ w/test/data/component/csr_zig_props.zig
+@@ -8,17 +8,17 @@ pub fn Page(allocator: zx.Allocator) zx.Component {
+             .children = &.{
+                 _zx.cmp(
+                     Counter,
+-                    .{ .name = "Counter", .client = .{ .name = "Counter", .id = "c24eadf" } },
++                    .{ .name = "Counter", .client = .{ .name = "Counter", .id = "c748c7a" } },
+                     .{ .initial = 5, .label = "Main Counter" },
+                 ),
+                 _zx.cmp(
+                     Counter,
+-                    .{ .name = "Counter", .client = .{ .name = "Counter", .id = "cd768fc" } },
++                    .{ .name = "Counter", .client = .{ .name = "Counter", .id = "c715bb0" } },
+                     .{ .initial = 10, .label = "Secondary" },
+                 ),
+                 _zx.cmp(
+                     Counter,
+-                    .{ .name = "Counter", .client = .{ .name = "Counter", .id = "c9e599a" } },
++                    .{ .name = "Counter", .client = .{ .name = "Counter", .id = "ca4f20d" } },
+                     .{ .initial = 0 },
+                 ),
+             },
+diff --git i/test/data/component/react.html w/test/data/component/react.html
+index b6b1fbf8..ddfab8a1 100644
+--- i/test/data/component/react.html
++++ w/test/data/component/react.html
+@@ -1 +1 @@
+-<main><!--$cc92487 CounterComponent {"max_count":10}--><!--/$cc92487--></main>
+\ No newline at end of file
++<main><!--$cb34cd1 CounterComponent {"max_count":10}--><!--/$cb34cd1--></main>
+\ No newline at end of file
+diff --git i/test/data/component/react.zig w/test/data/component/react.zig
+index 742306a6..0e310a09 100644
+--- i/test/data/component/react.zig
++++ w/test/data/component/react.zig
+@@ -7,7 +7,7 @@ pub fn Page(allocator: zx.Allocator) zx.Component {
+         .{
+             .allocator = allocator,
+             .children = &.{
+-                _zx.client(.{ .name = "CounterComponent", .path = "test/data/component/react.tsx", .id = "cc92487" }, .{ .max_count = max_count }),
++                _zx.client(.{ .name = "CounterComponent", .path = "test/data/component/react.tsx", .id = "cb34cd1" }, .{ .max_count = max_count }),
+             },
+         },
+     );
