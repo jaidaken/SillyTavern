@@ -76,6 +76,7 @@ import { diskCache } from './endpoints/characters.js';
 import { flushChatBackups } from './endpoints/chats.js';
 import { migrateFlatSecrets } from './endpoints/secrets.js';
 import { runConfigValidation } from './config-validate.js';
+import { initBackendProbe } from './backend-probe.js';
 import { migrateGroupChatsMetadataFormat } from './endpoints/groups.js';
 import { backendErrorHandler } from './endpoints/backends/errors.js';
 
@@ -332,6 +333,7 @@ async function preSetupTasks() {
 
     await settingsInit();
     await statsInit();
+    initBackendProbe();
 
     const pluginsDirectory = path.join(serverDirectory, 'plugins');
     const cleanupPlugins = await loadPlugins(app, pluginsDirectory);
