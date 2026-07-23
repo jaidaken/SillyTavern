@@ -2032,6 +2032,13 @@ async function runMutation(request, response, mutate) {
         // read AFTER the save; delete holds a removed object that keeps its pre-save id (or none).
         const affectedCfId = result.obj && typeof result.obj.cf_id === 'string' ? result.obj.cf_id : null;
         // change_token IS the full token here (the mutation gate), so no separate full_token field;
+        // Invalidation, not hot path: these change existing content, so the client refetches
+        // rather than appending. request.path names the route without touching seven call sites.
+        emitForRequest(request, 'chat-changed', {
+            action: 'message-mutation',
+            op: request.path,
+            card: resolved.cardName,
+        });
         // tail_token refreshes the reader's window path in the same response.
         return response.send({
             ok: true,

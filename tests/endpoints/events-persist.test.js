@@ -104,6 +104,25 @@ describe('persist-site client events', () => {
         await stream.close();
     }, CASE_TIMEOUT_MS);
 
+    test('character_create_with_an_uploaded_avatar_emits_from_its_own_branch', async () => {
+        const stream = await openStream(first);
+
+        // The create route emits from two branches; the no-file branch is covered above, so this
+        // uploads a file to reach the other one.
+        const form = new FormData();
+        form.append('ch_name', 'P2CUploaded');
+        form.append('file_name', 'P2CUploaded');
+        form.append('avatar', new Blob([PNG_PIXEL], { type: 'image/png' }), 'uploaded.png');
+        const created = await first.postForm('/api/characters/create', form);
+        expect(created.status).toBe(200);
+        const avatar = (await created.text()).trim();
+
+        const event = await stream.waitForFrame(frame => frame.event === 'character-changed');
+        expect(JSON.parse(event.data)).toMatchObject({ action: 'create', avatar });
+        expect(fs.existsSync(path.join(server.userDirectory(DEFAULT_HANDLE), 'characters', avatar))).toBe(true);
+        await stream.close();
+    }, CASE_TIMEOUT_MS);
+
     test('preset_save_and_delete_emit_on_their_real_persist_paths', async () => {
         const stream = await openStream(first);
 
