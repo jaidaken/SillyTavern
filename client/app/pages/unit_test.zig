@@ -60,6 +60,8 @@ comptime {
     _ = @import("world_info.zig");
     // w3-wi-engine
     _ = @import("world_info_engine.zig");
+    // P3-A: the zx-free server-event hub (transport; the router lands separately).
+    _ = @import("server_events.zig");
     // P1-A: the zx-free half of the notifications (notifications.zig is the timer + region glue).
     _ = @import("notification_store.zig");
     // H1: the 64-bit crossing register + the door packing convention.

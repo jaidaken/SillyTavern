@@ -354,6 +354,79 @@
         return wasm.__st_conn_poll_armed ? wasm.__st_conn_poll_armed() : -1;
     };
 
+    // P3-A: the live server channel. EventSource is irreducibly JS (the wasm door has no opener for
+    // a persistent stream), but everything it learns crosses straight into Zig; no state is kept here.
+    //
+    // EVERY SERVER EVENT IS NAMED, and `onmessage` receives ONLY unnamed ones. A glue that bound
+    // onmessage alone would connect, hold the socket open, and deliver NOTHING, which presents as a
+    // dead server rather than a missing listener. So each type is bound explicitly, and SERVER_EVENTS
+    // is the list that has to grow when the server grows one.
+    const SERVER_EVENTS = ['hello', 'settings-changed', 'background-changed', 'preset-changed',
+        'worldinfo-changed', 'chat-changed', 'character-changed', 'backend-status'];
+    let serverStream = null;
+
+    function crossServerEvent(type, ev) {
+        if (!wasm || !wasm.__st_server_event) return;
+        // lastEventId is per-EVENT, so it is read here at the crossing and carried over with the
+        // payload. There is no ambient last-id to ask for later, and the router needs it to dedupe
+        // the replay a browser-driven reconnect legitimately produces.
+        const id = parseInt(ev.lastEventId || '0', 10) || 0;
+        const t = writeBytes(type);
+        const d = writeBytes(ev.data || '');
+        try {
+            wasm.__st_server_event(id, t.ptr, t.len, d.ptr, d.len);
+        } finally {
+            freeRaw(t);
+            freeRaw(d);
+        }
+    }
+
+    window.__st_events_open = function (url) {
+        if (serverStream) return 0;
+        serverStream = new EventSource(url || '/api/events');
+        SERVER_EVENTS.forEach(function (type) {
+            serverStream.addEventListener(type, function (ev) { crossServerEvent(type, ev); });
+        });
+        serverStream.onerror = function () { log.net.debug('server events: stream interrupted, the browser will retry'); };
+        return 1;
+    };
+
+    window.__st_events_close = function () {
+        if (!serverStream) return 0;
+        serverStream.close();
+        serverStream = null;
+        return 1;
+    };
+
+    // A stream that outlives its page keeps one of the browser's six per-origin connection slots,
+    // and six abandoned streams starve every later fetch the page makes.
+    window.addEventListener('pagehide', function () { window.__st_events_close(); });
+    window.addEventListener('pageshow', function (ev) { if (ev.persisted) window.__st_events_open(); });
+
+    window.__st_events_state = function () {
+        return serverStream ? serverStream.readyState : -1;
+    };
+
+    // The hub's counters, for the browser gate. Zig holds them; this only reads them out.
+    window.__st_events_stat = function (which) {
+        return wasm && wasm.__st_server_event_stat ? wasm.__st_server_event_stat(which) : -1;
+    };
+
+    // The beacon is POSTED BY ZIG (net.zig owns the csrf token and the 403 refresh), so this is only
+    // the listener: visibilitychange fires on `document` and ziex delegates no such event, which
+    // makes it irreducible here in the same way the uncaught-error handlers are. sendBeacon is not
+    // an option at all: it sets no headers, so the server's csrf layer rejects it before the handler.
+    document.addEventListener('visibilitychange', function () {
+        if (wasm && wasm.__st_visibility_changed) wasm.__st_visibility_changed(document.hidden ? 0 : 1);
+    });
+
+    // Same call the listener makes, for a row that needs to drive it without touching the real
+    // visibility state.
+    window.__st_events_visibility = function (visible) {
+        if (!wasm || !wasm.__st_visibility_changed) return -1;
+        return wasm.__st_visibility_changed(visible ? 1 : 0);
+    };
+
     // __st_read_file (C4): read a file input to bytes for Zig via __st_file_ready. Non-async so
     // js.global.call(void) succeeds; an empty read (cancelled picker) still calls back to settle Zig.
     window.__st_read_file = function (inputId, tag) {

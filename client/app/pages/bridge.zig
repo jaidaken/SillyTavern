@@ -21,6 +21,8 @@ const telemetry = @import("./telemetry.zig"); // C5: uncaught-error + click diag
 const stream_drive = @import("./stream_drive.zig"); // C2: Zig-owned SSE lifecycle + door pump driver
 const notifications = @import("./notifications.zig");
 const connection = @import("./connection.zig");
+const server_events = @import("./server_events.zig");
+const net = @import("./net.zig");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
@@ -182,6 +184,9 @@ fn bootInit() callconv(.c) void {
     char_api.boot();
     // Past the first paint, stagger the messages in (double-rAF adds hydrated/revealing on #chat-root).
     reveal.startReveal();
+    // P3-A: open the live channel. EventSource is the glue's to hold; everything it receives crosses
+    // straight back here through __st_server_event.
+    if (zx.platform.role == .client) zx.client.js.global.call(void, "__st_events_open", .{}) catch {};
 }
 
 /// C4: JS (__st_read_file) hands back the picked file's bytes, name and mime. All three buffers were
@@ -294,6 +299,46 @@ fn pollArmed() callconv(.c) u32 {
     return @intFromBool(connection.pollArmed());
 }
 
+/// P3-A: one live server event, crossing from the glue's EventSource. The id rides ACROSS with the
+/// payload because the browser owns the reconnect: after a resume the server replays what the client
+/// already saw, and only the id tells them apart. Both buffers are the door's and it frees them.
+fn serverEvent(id: u32, name_ptr: usize, name_len: usize, data_ptr: usize, data_len: usize) callconv(.c) void {
+    _ = server_events.accept(id, doorBuf(name_ptr, name_len), doorBuf(data_ptr, data_len));
+}
+
+/// P3-A: the visibility beacon. Posted from ZIG so it rides net.zig's csrf token and 403-refresh,
+/// which the glue has no access to. Returns 0 when there is nothing to report against: the server
+/// keys visibility by connection id and answers 404 for one it has never issued, so a beacon before
+/// the first `hello` is not a request worth making.
+fn visibilityChanged(visible: u32) callconv(.c) u32 {
+    const id = server_events.connectionId();
+    if (id == 0) return 0;
+    var buf: [64]u8 = undefined;
+    const body = std.fmt.bufPrint(&buf, "{{\"id\":{d},\"visible\":{s}}}", .{ id, if (visible != 0) "true" else "false" }) catch return 0;
+    net.request("/api/events/visibility", body, 0, onVisibilityDone, .{});
+    return 1;
+}
+
+fn onVisibilityDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
+    _ = tag;
+    _ = res;
+    if (status < 200 or status >= 300) {
+        stream_log.warn("visibility beacon rejected: {d}", .{status});
+    }
+}
+
+fn serverEventStat(which: u32) callconv(.c) u32 {
+    const s = server_events.stats();
+    return switch (which) {
+        0 => s.total,
+        1 => s.last_id,
+        2 => s.connection_id,
+        3 => s.hellos,
+        4 => s.replayed,
+        else => s.unknown,
+    };
+}
+
 comptime {
     if (is_wasm) {
         // Zig owns the data layer (char_api.zig); the append/clear/select/meta exports
@@ -318,6 +363,10 @@ comptime {
         @export(&onUncaught, .{ .name = "__st_on_uncaught" });
         // P1-A: the notifications injection path for the interactions gate + console debugging.
         @export(&notify, .{ .name = "__st_notify" });
+        // P3-A
+        @export(&serverEvent, .{ .name = "__st_server_event" });
+        @export(&serverEventStat, .{ .name = "__st_server_event_stat" });
+        @export(&visibilityChanged, .{ .name = "__st_visibility_changed" });
         // P1-E
         @export(&startPoll, .{ .name = "__st_conn_start_poll" });
         @export(&stopPoll, .{ .name = "__st_conn_stop_poll" });

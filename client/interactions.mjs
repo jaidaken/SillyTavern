@@ -4496,6 +4496,97 @@ async function main() {
         }
         /* C-CONN-DOT END */
 
+        /* C-SSE: the live server channel (P3-MOCK + P3-A). */
+        // Every server event is NAMED, and onmessage receives only unnamed ones, so a glue that bound
+        // onmessage alone would connect, hold the socket, and deliver nothing: a dead server with a
+        // healthy-looking connection. C-SSE-3 is the row for exactly that, and it is the reason the
+        // counts below are per-TYPE rather than a single total.
+        console.log('== C-SSE the live server channel ==');
+        {
+            const sse = async () => page.eval(`(function(){
+                const s = window.__st_events_stat;
+                return { total: s(0), lastId: s(1), connId: s(2), hellos: s(3), replayed: s(4), unknown: s(5),
+                         readyState: window.__st_events_state ? window.__st_events_state() : -2 };
+            })()`);
+            const emit = async (type, note) =>
+                (await (await fetch(`${args.base}/dev/emit-event?type=${type}&note=${encodeURIComponent(note)}`)).json()).id;
+            const devState = async () => (await (await fetch(`${args.base}/dev/state`)).json());
+
+            await page.navigate(`${args.base}/?demo=1`);
+            await page.waitFor(hydrated, 15000);
+            await page.waitFor("window.__st_events_state && window.__st_events_state() === 1", 8000);
+
+            const opened = await page.eval("window.__st_events_state()");
+            const st0 = await devState();
+            row('must', opened === 1 && st0.events_open >= 1,
+                'C-SSE-1 the client holds a live stream open against the server',
+                `readyState=${opened} serverSideOpen=${st0.events_open}`);
+
+            // Six named events, one at a time, all of which must CROSS into Zig.
+            const before = await page.eval('window.__st_events_stat(0)');
+            const kinds = ['settings-changed', 'background-changed', 'preset-changed',
+                'worldinfo-changed', 'chat-changed', 'backend-status'];
+            const ids = [];
+            for (const k of kinds) ids.push(await emit(k, 'c-sse'));
+            await sleep(1200);
+            const afterEmit = await sse();
+            row('must', afterEmit.total - before === kinds.length && afterEmit.lastId === ids[ids.length - 1],
+                'C-SSE-2 every named event crosses into Zig, not just the first',
+                `crossed=${afterEmit.total - before} of ${kinds.length} lastId=${afterEmit.lastId} wanted=${ids[ids.length - 1]}`);
+
+            // THE NAMED-EVENT TRAP. onmessage sees only UNNAMED events, so if the glue bound nothing
+            // else this count would be zero while the connection looked perfectly healthy.
+            row('must', afterEmit.unknown === 0 && afterEmit.hellos >= 1 && afterEmit.total >= kinds.length + 1,
+                'C-SSE-3 named events arrive through their own listeners, not through onmessage',
+                `unknown=${afterEmit.unknown} hellos=${afterEmit.hellos} total=${afterEmit.total}`);
+
+            // The id has to survive the crossing or a router can never dedupe a replay.
+            row('must', afterEmit.lastId === ids[ids.length - 1] && afterEmit.lastId > 0,
+                'C-SSE-4 the event id crosses with the payload, so a replay is identifiable',
+                `lastId=${afterEmit.lastId} serverLastId=${ids[ids.length - 1]}`);
+
+            // Drop the stream server-side, then let the BROWSER retry on its own.
+            const connBefore = afterEmit.connId;
+            await fetch(`${args.base}/dev/drop-events`);
+            const reconnected = await page.waitFor(
+                `window.__st_events_stat(2) > ${connBefore}`, 10000);
+            const afterDrop = await sse();
+            row('must', reconnected && afterDrop.connId > connBefore && afterDrop.hellos >= 2,
+                'C-SSE-5 the browser reconnects by itself after the stream is dropped',
+                `connBefore=${connBefore} connAfter=${afterDrop.connId} hellos=${afterDrop.hellos}`);
+
+            // RESUME. Events emitted while the client was away must arrive on the reconnect, which
+            // can only happen if Last-Event-ID went out with the retry.
+            const beforeResume = afterDrop.total;
+            await fetch(`${args.base}/dev/drop-events?ms=2000`);
+            // Emitting with zero streams open is the whole row: emit while the client is back and the
+            // events arrive live, which proves nothing about a resume.
+            let awayOpen = -1;
+            for (let i = 0; i < 40 && awayOpen !== 0; i += 1) {
+                awayOpen = (await devState()).events_open;
+                if (awayOpen !== 0) await sleep(50);
+            }
+            const missedA = await emit('settings-changed', 'missed-1');
+            const missedB = await emit('background-changed', 'missed-2');
+            const resumed = await page.waitFor(
+                `window.__st_events_stat(1) >= ${missedB}`, 15000);
+            const afterResume = await sse();
+            row('must', awayOpen === 0 && resumed && afterResume.lastId >= missedB && afterResume.total > beforeResume,
+                'C-SSE-6 events missed while disconnected are replayed on the reconnect',
+                `openWhenEmitted=${awayOpen} missed=[${missedA},${missedB}] lastId=${afterResume.lastId} total=${beforeResume}->${afterResume.total}`);
+
+            // The beacon, posted by Zig through net.zig so it carries the csrf token.
+            const beaconRet = await page.eval('window.__st_events_visibility(false)');
+            await sleep(800);
+            const stAfter = await devState();
+            const recorded = (stAfter.events_visibility || []).slice(-1)[0];
+            row('must', beaconRet === 1 && !!recorded && recorded.visible === false
+                && recorded.id === afterResume.connId,
+                'C-SSE-7 the visibility beacon posts and the server records the right connection',
+                `ret=${beaconRet} recorded=${JSON.stringify(recorded)} connId=${afterResume.connId}`);
+        }
+        /* C-SSE END */
+
         /* C-POLL: the standalone backend-status poll (P1-E). */
         // Counted server-side, never inferred from the dot: a poll that stopped and a backend that
         // stopped changing look identical from the DOM. ?pollms shortens the shipped 20s cadence.
