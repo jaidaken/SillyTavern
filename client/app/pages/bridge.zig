@@ -23,6 +23,8 @@ const notifications = @import("./notifications.zig");
 const connection = @import("./connection.zig");
 const server_events = @import("./server_events.zig");
 const net = @import("./net.zig");
+const config_state = @import("./config_state.zig");
+const wi_actions = @import("./world_info_actions.zig");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
@@ -185,7 +187,8 @@ fn bootInit() callconv(.c) void {
     // Past the first paint, stagger the messages in (double-rAF adds hydrated/revealing on #chat-root).
     reveal.startReveal();
     // P3-A: open the live channel. EventSource is the glue's to hold; everything it receives crosses
-    // straight back here through __st_server_event.
+    // straight back here through __st_server_event. Routes first: the hello arrives on the open.
+    wireLiveRoutes();
     if (zx.platform.role == .client) zx.client.js.global.call(void, "__st_events_open", .{}) catch {};
 }
 
@@ -335,8 +338,51 @@ fn serverEventStat(which: u32) callconv(.c) u32 {
         2 => s.connection_id,
         3 => s.hellos,
         4 => s.replayed,
-        else => s.unknown,
+        5 => s.unknown,
+        else => s.applied,
     };
+}
+
+/// P3-B: the glue reports the stream dropped. The standalone poll takes the status back until the
+/// next hello, so a dead channel does not leave the dot frozen on its last pushed value.
+fn serverEventDown() callconv(.c) void {
+    server_events.streamDown();
+}
+
+/// P3-B: this tab's origin tag, minted in the glue where the browser's crypto lives and handed here
+/// before the stream opens. Every mutation carries it as X-ST-Client-Id so the server can skip
+/// echoing this tab's own writes back to it.
+fn setClientId(ptr: usize, len: usize) callconv(.c) void {
+    server_events.setClientId(doorBuf(ptr, len));
+}
+
+/// The server could not replay what this client missed, so nothing on the page can be trusted to
+/// be current. Every cold path reloads; there is no cheaper honest answer.
+fn resyncAll() void {
+    char_api.fetchPersonas();
+    char_api.fetchCharacters();
+    backgrounds.reload();
+    wi_actions.reloadList();
+    config_state.reloadPresets();
+    char_api.reloadCurrentChat();
+}
+
+/// P3-B: where each event lands. Wired here rather than in server_events.zig because that module is
+/// zx-free so it can join the native test build, and every subsystem below is not.
+fn wireLiveRoutes() void {
+    server_events.setRoutes(.{
+        .resync = resyncAll,
+        .settings = char_api.fetchPersonas,
+        .background = backgrounds.reload,
+        .preset = config_state.reloadPresets,
+        .worldinfo = wi_actions.reloadList,
+        .chat = char_api.reloadCurrentChat,
+        .chat_append = char_api.applyRemoteAppend,
+        .character = char_api.fetchCharacters,
+        .backend_status = connection.applyServerStatus,
+        .stream_up = connection.stopPoll,
+        .stream_down = connection.startPoll,
+    });
 }
 
 comptime {
@@ -367,6 +413,9 @@ comptime {
         @export(&serverEvent, .{ .name = "__st_server_event" });
         @export(&serverEventStat, .{ .name = "__st_server_event_stat" });
         @export(&visibilityChanged, .{ .name = "__st_visibility_changed" });
+        // P3-B
+        @export(&serverEventDown, .{ .name = "__st_server_event_down" });
+        @export(&setClientId, .{ .name = "__st_set_client_id" });
         // P1-E
         @export(&startPoll, .{ .name = "__st_conn_start_poll" });
         @export(&stopPoll, .{ .name = "__st_conn_stop_poll" });

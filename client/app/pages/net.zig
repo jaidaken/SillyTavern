@@ -11,6 +11,7 @@
 const std = @import("std");
 const zx = @import("zx");
 const char_store = @import("./character_store.zig");
+const server_events = @import("./server_events.zig");
 
 const alloc = char_store.page_gpa;
 const log = std.log.scoped(.net);
@@ -26,6 +27,8 @@ extern "__zx" fn _fetchRawAsync(
     ctype_len: usize,
     csrf_ptr: [*]const u8,
     csrf_len: usize,
+    client_ptr: [*]const u8,
+    client_len: usize,
     body_ptr: [*]const u8,
     body_len: usize,
     timeout_ms: u32,
@@ -215,7 +218,7 @@ fn dispatch(i: usize) void {
     log.debug("fetch {s}", .{s.url});
     // The door copies url/body/headers synchronously inside _fetchAsync (S1 probe finding e),
     // so the stack header array is safe.
-    var headers: [2]zx.Fetch.RequestInit.Header = undefined;
+    var headers: [3]zx.Fetch.RequestInit.Header = undefined;
     var n: usize = 0;
     if (s.opts.method == .POST) {
         headers[n] = .{ .name = "Content-Type", .value = "application/json" };
@@ -226,6 +229,13 @@ fn dispatch(i: usize) void {
             headers[n] = .{ .name = "X-CSRF-Token", .value = t };
             n += 1;
         }
+    }
+    // The origin tag the live channel opened with. Without it on the write, the server has no way to
+    // tell this tab's own change from another's and echoes it back, so the tab refetches itself.
+    const origin = server_events.clientId();
+    if (origin.len > 0) {
+        headers[n] = .{ .name = "X-ST-Client-Id", .value = origin };
+        n += 1;
     }
     _ = zx.fetch(zx.Io.wasm(slot_cbs[i]), alloc, s.url, .{
         .method = s.opts.method,
@@ -241,6 +251,7 @@ fn dispatchRaw(i: usize) void {
     const s = &slots[i];
     log.debug("raw fetch {s}", .{s.url});
     const csrf: []const u8 = if (s.opts.with_csrf) (csrf_token orelse "") else "";
+    const origin = server_events.clientId();
     // The slot IS the callback context; rawComplete recovers its index by pointer arithmetic, so the
     // door op's completion lands back on this same 403-retry path.
     const fid = zx.client.allocFetchId(alloc, @ptrCast(s), rawComplete) orelse {
@@ -255,6 +266,8 @@ fn dispatchRaw(i: usize) void {
         s.content_type.len,
         csrf.ptr,
         csrf.len,
+        origin.ptr,
+        origin.len,
         s.body.ptr,
         s.body.len,
         30_000,

@@ -11,9 +11,9 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 function parseArgs(argv) {
-    // Watchdog must exceed the worst-case sum of row waits (~140s all-red), or a fully broken build
-    // dies at the watchdog before the per-row diagnostics print.
-    const out = { base: null, timeout: 420000 };
+    // Watchdog must exceed the worst-case sum of row waits, or a fully broken build dies at the
+    // watchdog before the per-row diagnostics print. Raised with the P3-B rows, which navigate.
+    const out = { base: null, timeout: 600000 };
     for (let i = 0; i < argv.length; i += 2) {
         const k = argv[i], v = argv[i + 1];
         if (k === '--base') out.base = v;
@@ -25,6 +25,37 @@ function parseArgs(argv) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Poll a condition rather than sleeping a guessed interval: a refresh crosses the network, and a
+// fixed wait is either a flake or dead time.
+const waitUntil = async (fn, timeoutMs) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if (await fn()) return true;
+        await sleep(100);
+    }
+    return false;
+};
+
+// A SECOND connection of the same user, held open from the driver. The origin skip is only half
+// proved by this tab staying quiet; the other half is that the change did reach somebody else.
+const openSecondStream = async (base, clientId) => {
+    const controller = new AbortController();
+    const res = await fetch(`${base}/api/events?clientId=${encodeURIComponent(clientId)}`, { signal: controller.signal });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    const state = { frames: [], close: () => controller.abort() };
+    (async () => {
+        try {
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) return;
+                state.frames.push(decoder.decode(value, { stream: true }));
+            }
+        } catch { /* aborted by close() */ }
+    })();
+    return state;
+};
 
 /* W6 */
 // WCAG contrast for the W6 rows, injected into a page eval. The colour is PAINTED to resolve it:
@@ -217,9 +248,32 @@ async function main() {
 
     let mustRows = 0;
     let mustFails = 0;
+
+    // A dead server is the failure that looks like a slow one: every later row waits on a socket
+    // nobody will answer, and the run reads as still-going until the watchdog finally fires. Name it
+    // instead, with the row it died after, so the next reader is not left guessing.
+    let lastRowSeen = '(before the first row)';
+    let serverMisses = 0;
+    const heartbeat = setInterval(async () => {
+        try {
+            const res = await fetch(`${args.base}/dev/state`, { signal: AbortSignal.timeout(4000) });
+            if (!res.ok) throw new Error(`status ${res.status}`);
+            serverMisses = 0;
+        } catch (err) {
+            serverMisses += 1;
+            if (serverMisses < 3) return;
+            process.stderr.write(`interactions.mjs: the mock server stopped answering (${err.message}); `
+                + `last row was ${lastRowSeen}. The suite outliving its server is the usual cause.\n`);
+            clearInterval(heartbeat);
+            cleanup();
+            process.exit(3);
+        }
+    }, 5000);
+    heartbeat.unref();
     let pendingRows = 0;
     let pendingPasses = 0;
     const row = (kind, ok, label, detail) => {
+        lastRowSeen = label;
         let tag;
         if (kind === 'must') {
             mustRows += 1;
@@ -267,6 +321,16 @@ async function main() {
         const ZX_PROBE = 'ST-SENSOR-PROBE';
         const consoleLines = [];
         cdp.onEvent = (msg) => {
+            // A native dialog BLOCKS the renderer, so every later CDP call waits forever and the run
+            // reads as slow rather than stuck. Dismiss it and name the row that opened it: a row that
+            // forgot to stub confirm/prompt should fail loudly, never hang the suite.
+            if (msg.method === 'Page.javascriptDialogOpening' && msg.sessionId === sessionId) {
+                process.stderr.write(`interactions.mjs: a native ${msg.params.type} dialog opened after `
+                    + `${lastRowSeen} (${JSON.stringify(msg.params.message)}); dismissing it. `
+                    + `Stub window.confirm/prompt before the click that opens it.\n`);
+                cdp.send('Page.handleJavaScriptDialog', { accept: true }, sessionId).catch(() => {});
+                return;
+            }
             if (msg.method === 'Runtime.consoleAPICalled' && msg.sessionId === sessionId) {
                 const line = (msg.params.args || [])
                     .map((a) => (a.value !== undefined ? String(a.value) : (a.description || '')))
@@ -4587,6 +4651,169 @@ async function main() {
         }
         /* C-SSE END */
 
+        /* C-LIVE: routing, idempotency, origin skip and the hot path (P3-B). */
+        // The routes are measured SERVER-SIDE, by which endpoint got refetched. A refresh that fired
+        // and a refresh that did not look identical in the DOM when the data has not changed, so the
+        // only honest instrument is the request the client did or did not make.
+        console.log('== C-LIVE the event router ==');
+        {
+            const sse = async () => page.eval(`(function(){
+                const s = window.__st_events_stat;
+                return { total: s(0), lastId: s(1), connId: s(2), hellos: s(3), replayed: s(4),
+                         unknown: s(5), applied: s(6), readyState: window.__st_events_state() };
+            })()`);
+            const devState = async () => (await (await fetch(`${args.base}/dev/state`)).json());
+            const hits = async (p) => ((await devState()).api_hits || {})[p] || 0;
+            const emit = async (type, payload) => (await (await fetch(
+                `${args.base}/dev/emit-event?type=${type}&data=${encodeURIComponent(JSON.stringify(payload))}`)).json()).id;
+
+            await fetch(`${args.base}/dev/status-mode?m=ok`);
+            await fetch(`${args.base}/dev/add-background?name=${encodeURIComponent('live origin.jpg')}`);
+            await page.navigate(`${args.base}/?demo=1`);
+            await page.waitFor(hydrated, 15000);
+            await page.waitFor("window.__st_events_state && window.__st_events_state() === 1", 8000);
+            await page.waitFor('window.__st_events_stat(3) >= 1', 8000);
+
+            // ROUTING. One event type at a time, each asserted against ITS OWN endpoint.
+            const routes = [
+                ['background-changed', '/api/backgrounds/all', { action: 'delete', name: 'x.jpg' }],
+                ['settings-changed', '/api/settings/get', { source: 'settings-save' }],
+                ['character-changed', '/api/characters/all', { action: 'edit', avatar: 'x.png' }],
+                ['worldinfo-changed', '/api/worldinfo/list', { action: 'edit', name: 'lore' }],
+            ];
+            const routed = [];
+            for (const [type, endpoint, payload] of routes) {
+                const before = await hits(endpoint);
+                await emit(type, payload);
+                const landed = await waitUntil(async () => (await hits(endpoint)) > before, 6000);
+                routed.push(`${type}->${endpoint}:${landed ? 'refetched' : 'NOTHING'}`);
+            }
+            row('must', routed.every((r) => r.endsWith('refetched')),
+                'C-LIVE-1 each event type refetches its own subsystem and nothing stands in for it',
+                routed.join(' '));
+
+            // IDEMPOTENCY. A resume replays what this client already applied, so the SAME ids arrive
+            // twice; the second sighting must change nothing.
+            const beforeReplay = await hits('/api/backgrounds/all');
+            const statBefore = await sse();
+            await fetch(`${args.base}/dev/replay-from?id=0`);
+            await sleep(1200);
+            const afterReplay = await hits('/api/backgrounds/all');
+            const statAfter = await sse();
+            row('must', afterReplay === beforeReplay && statAfter.replayed > statBefore.replayed,
+                'C-LIVE-2 a replayed batch is recognised and refreshes nothing a second time',
+                `bgAll=${beforeReplay}->${afterReplay} replayed=${statBefore.replayed}->${statAfter.replayed} total=${statBefore.total}->${statAfter.total}`);
+
+            // ORIGIN SKIP, end to end. The tab's own write must not come back to it, or every write
+            // costs a refetch of the thing just written.
+            // The delete goes through the CLIENT's own request path, so the header under test is the
+            // one net.zig attaches. A hand-written fetch here would prove only that the mock skips.
+            const other = await openSecondStream(args.base, 'c-other-tab');
+            await page.click('#d-backgrounds');
+            const galleryUp = await page.waitFor("!!document.querySelector('#bg-gallery')", 8000);
+            const tilePresent = galleryUp && await page.waitFor(
+                `!!document.querySelector("#bg-gallery [data-bg-delete='live origin.jpg']")`, 8000);
+            const tiles = await page.eval(
+                "Array.from(document.querySelectorAll('#bg-gallery [data-bg-file]')).map(function(e){return e.getAttribute('data-bg-file');}).join('|')");
+            const ownedBefore = await sse();
+            const tabClientId = await page.eval('window.__st_client_id()');
+            // Delete confirms through a NATIVE dialog, which blocks the renderer and hangs every
+            // later CDP call until it is dismissed. Stub it before the click, as the C-BG rows do.
+            // Delete confirms through a NATIVE dialog, which blocks the renderer and hangs every
+            // later CDP call until it is dismissed. Stub it before the click, as the C-BG rows do.
+            await page.eval('window.confirm = function(){ return true; };');
+            if (tilePresent) await page.click("#bg-gallery [data-bg-delete='live origin.jpg']");
+            const deleted = tilePresent && await page.waitFor(
+                `!document.querySelector("#bg-gallery [data-bg-file='live origin.jpg']")`, 8000);
+            await sleep(1200);
+            const ownedAfter = await sse();
+            const otherSaw = other.frames.join('').split('event: background-changed').length - 1;
+            row('must', tilePresent && deleted && ownedAfter.total === ownedBefore.total && otherSaw >= 1,
+                'C-LIVE-3 a write made here is not echoed back here, and another tab still gets it',
+                `thisTab=${ownedBefore.total}->${ownedAfter.total} otherTabSaw=${otherSaw} clientId=${tabClientId.slice(0, 8)} gallery=${galleryUp} tiles=[${tiles}]`);
+            other.close();
+            await page.click('#d-backgrounds');
+
+            // HOT PATH. The turns ride the event, so the open chat gains EXACTLY the ones sent.
+            await page.navigate(`${args.base}/`);
+            await openRecentChat();
+            await page.waitFor("window.__st_events_state && window.__st_events_state() === 1", 8000);
+            await page.waitFor('window.__st_events_stat(3) >= 1', 8000);
+            const mesCount = async () => page.eval("document.querySelectorAll('#chat .mes').length");
+            const beforeAppend = await mesCount();
+            await emit('chat-appended', { card: null, file: null, group_id: null, change_token: 't',
+                messages: [{ name: 'Seraphina', mes: 'a turn from another device', is_user: false }] });
+            const appendedOne = await waitUntil(async () => (await mesCount()) !== beforeAppend, 6000);
+            await sleep(600);
+            const afterAppend = await mesCount();
+            row('must', appendedOne && afterAppend === beforeAppend + 1,
+                'C-LIVE-4 a turn added elsewhere appends exactly one message, not zero and not two',
+                `mes=${beforeAppend}->${afterAppend}`);
+
+            // The same event for a DIFFERENT chat must not land in this one.
+            const beforeForeign = await mesCount();
+            const chatHitsBefore = await hits('/api/chats/get');
+            await emit('chat-appended', { card: 'SomeoneElse', file: 'another chat', group_id: null,
+                messages: [{ name: 'SomeoneElse', mes: 'not for this chat', is_user: false }] });
+            await sleep(1200);
+            row('must', (await mesCount()) === beforeForeign && (await hits('/api/chats/get')) === chatHitsBefore,
+                'C-LIVE-5 a turn belonging to another chat neither lands here nor triggers a reload',
+                `mes=${beforeForeign}->${await mesCount()}`);
+
+            // SCOPING. The draft is the property the region work exists for.
+            await page.focus('#send_textarea');
+            await page.insertText('a draft nobody should take');
+            await emit('settings-changed', { source: 'settings-save' });
+            await sleep(1500);
+            const draft = await page.eval("document.getElementById('send_textarea').value");
+            const caret = await page.eval("document.getElementById('send_textarea').selectionStart");
+            row('must', draft === 'a draft nobody should take' && caret === draft.length,
+                'C-LIVE-6 an incoming event leaves the composer draft and caret alone',
+                `draft=${JSON.stringify(draft)} caret=${caret}`);
+            await page.eval("document.getElementById('send_textarea').value = ''");
+        }
+        /* C-LIVE END */
+
+        /* C-RETIRE: the poll stands down under a live stream and takes over when it drops (P3-B). */
+        console.log('== C-RETIRE the poll handover ==');
+        {
+            const probes = async () => (await (await fetch(`${args.base}/dev/state`)).json()).status_probe_count;
+            await fetch(`${args.base}/dev/status-mode?m=ok`);
+            await page.navigate(`${args.base}/?demo=1&pollms=400`);
+            await page.waitFor(hydrated, 15000);
+            await page.waitFor("window.__st_events_state && window.__st_events_state() === 1", 8000);
+            await page.waitFor('window.__st_events_stat(3) >= 1', 8000);
+
+            // Up: the poll must be standing down, so a 400ms cadence still probes nothing.
+            const upBefore = await probes();
+            await sleep(2500);
+            const upAfter = await probes();
+            const armedUnderStream = await page.eval('window.__st_conn_poll_armed()');
+            row('must', upAfter === upBefore && armedUnderStream === 0,
+                'C-RETIRE-1 a live stream leaves the poll standing down, probing nothing',
+                `probes=+${upAfter - upBefore} over 2.5s at 400ms armed=${armedUnderStream}`);
+
+            // Down: the browser reports the drop, and the poll has to take the status back.
+            await fetch(`${args.base}/dev/drop-events?ms=6000`);
+            const armedAfterDrop = await waitUntil(async () => (await page.eval('window.__st_conn_poll_armed()')) === 1, 8000);
+            const downBefore = await probes();
+            await sleep(2500);
+            const downAfter = await probes();
+            row('must', armedAfterDrop && downAfter > downBefore,
+                'C-RETIRE-2 a dropped stream hands the status back to the poll',
+                `armed=${armedAfterDrop} probes=+${downAfter - downBefore} over 2.5s at 400ms`);
+
+            // And back: the reconnect's hello stands it down again, so both cannot run at once.
+            const backUp = await waitUntil(async () => (await page.eval('window.__st_events_state()')) === 1, 12000);
+            const settledArmed = await waitUntil(async () => (await page.eval('window.__st_conn_poll_armed()')) === 0, 8000);
+            const reBefore = await probes();
+            await sleep(2000);
+            row('must', backUp && settledArmed && (await probes()) === reBefore,
+                'C-RETIRE-3 the reconnect stands the poll down again, so the two never both run',
+                `readyState=${await page.eval('window.__st_events_state()')} armed=${await page.eval('window.__st_conn_poll_armed()')} probes=+${(await probes()) - reBefore}`);
+        }
+        /* C-RETIRE END */
+
         /* C-POLL: the standalone backend-status poll (P1-E). */
         // Counted server-side, never inferred from the dot: a poll that stopped and a backend that
         // stopped changing look identical from the DOM. ?pollms shortens the shipped 20s cadence.
@@ -4598,6 +4825,10 @@ async function main() {
             await page.navigate(`${args.base}/?demo=1&pollms=400`);
             await page.waitFor(hydrated, 15000);
             await page.waitFor("document.getElementById('d-connections').dataset.connState === 'connected'", 10000);
+            // The poll is the FALLBACK for a stream that is down (P3-B), so these rows close the live
+            // channel first. Left open, its hello stands the poll down and every row below measures
+            // the retirement instead of the fallback it is here to test.
+            await page.eval('window.__st_events_close()');
 
             // The dot must follow the backend with NOBODY reloading. Nothing below navigates.
             await fetch(`${args.base}/dev/status-mode?m=asleep`);

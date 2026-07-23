@@ -2,6 +2,12 @@
 // Its own sibling client region, so a Shell panel toggle or a MessageLog token never re-renders it:
 // the textarea's typed value, caret, and auto-grow height survive both. It has no state mutation of
 // its own yet, so it publishes no region handle; it never re-renders after its first mount.
+//
+// THE DRAFT IS BROWSER-OWNED AND MUST STAY THAT WAY. #send_textarea carries no value binding, so the
+// renderer never writes its content and no re-render can take a half-typed message. That, not the
+// region split above, is what actually survives a full rerender: measured 2026-07-23, a live event
+// re-rendering the whole page left the draft and caret intact. Bind this field to state and the
+// draft becomes the renderer's to lose, with nothing in the gate guaranteed to notice.
 // You write prose here, so the input reads in the prose face. Each button carries only the hover it
 // owns: send brightens its amber, stop keeps the active-control look, and only the plain options
 // button takes the ordinary surface hover, so no two rules chase the same property.

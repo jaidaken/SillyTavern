@@ -354,6 +354,11 @@
         return wasm.__st_conn_poll_armed ? wasm.__st_conn_poll_armed() : -1;
     };
 
+    // Read-only: asking whether the poll is armed must not arm it.
+    window.__st_conn_poll_armed = function () {
+        return wasm.__st_conn_poll_armed ? wasm.__st_conn_poll_armed() : -1;
+    };
+
     // P3-A: the live server channel. EventSource is irreducibly JS (the wasm door has no opener for
     // a persistent stream), but everything it learns crosses straight into Zig; no state is kept here.
     //
@@ -362,8 +367,23 @@
     // dead server rather than a missing listener. So each type is bound explicitly, and SERVER_EVENTS
     // is the list that has to grow when the server grows one.
     const SERVER_EVENTS = ['hello', 'settings-changed', 'background-changed', 'preset-changed',
-        'worldinfo-changed', 'chat-changed', 'character-changed', 'backend-status'];
+        'worldinfo-changed', 'chat-changed', 'chat-appended', 'character-changed', 'backend-status'];
     let serverStream = null;
+    let clientId = '';
+
+    // This tab's origin tag, minted once. It goes out BOTH on the stream URL and, through Zig, as
+    // X-ST-Client-Id on every write, and the server skips echoing a write back to the tag that made it.
+    function ensureClientId() {
+        if (clientId) return clientId;
+        clientId = (window.crypto && window.crypto.randomUUID)
+            ? window.crypto.randomUUID()
+            : ('c-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
+        if (wasm && wasm.__st_set_client_id) {
+            const b = writeBytes(clientId);
+            try { wasm.__st_set_client_id(b.ptr, b.len); } finally { freeRaw(b); }
+        }
+        return clientId;
+    }
 
     function crossServerEvent(type, ev) {
         if (!wasm || !wasm.__st_server_event) return;
@@ -383,24 +403,40 @@
 
     window.__st_events_open = function (url) {
         if (serverStream) return 0;
-        serverStream = new EventSource(url || '/api/events');
+        const base = url || '/api/events';
+        const id = ensureClientId();
+        serverStream = new EventSource(base + (base.indexOf('?') < 0 ? '?' : '&') + 'clientId=' + encodeURIComponent(id));
         SERVER_EVENTS.forEach(function (type) {
             serverStream.addEventListener(type, function (ev) { crossServerEvent(type, ev); });
         });
-        serverStream.onerror = function () { log.net.debug('server events: stream interrupted, the browser will retry'); };
+        serverStream.onerror = function () {
+            log.net.debug('server events: stream interrupted, the browser will retry');
+            if (wasm && wasm.__st_server_event_down) wasm.__st_server_event_down();
+        };
         return 1;
     };
 
-    window.__st_events_close = function () {
+    window.__st_client_id = function () { return clientId; };
+
+    function closeStream() {
         if (!serverStream) return 0;
         serverStream.close();
         serverStream = null;
         return 1;
+    }
+
+    // An explicit close means the channel is gone, so the poll has to take the status back; a close
+    // fires no onerror, and without this report the fallback would never learn the stream ended.
+    window.__st_events_close = function () {
+        const closed = closeStream();
+        if (closed && wasm && wasm.__st_server_event_down) wasm.__st_server_event_down();
+        return closed;
     };
 
     // A stream that outlives its page keeps one of the browser's six per-origin connection slots,
-    // and six abandoned streams starve every later fetch the page makes.
-    window.addEventListener('pagehide', function () { window.__st_events_close(); });
+    // and six abandoned streams starve every later fetch the page makes. No down report here: the
+    // page is being torn down, and arming a poll on the way out serves nobody.
+    window.addEventListener('pagehide', closeStream);
     window.addEventListener('pageshow', function (ev) { if (ev.persisted) window.__st_events_open(); });
 
     window.__st_events_state = function () {

@@ -21,6 +21,7 @@ const secret_mask = @import("./secret_mask.zig");
 const char_data = @import("./char_data.zig");
 const regions = @import("./regions.zig");
 const notifications = @import("./notifications.zig");
+const server_events = @import("./server_events.zig");
 
 const alloc = @import("./character_store.zig").page_gpa;
 const log = std.log.scoped(.net);
@@ -136,6 +137,9 @@ var poll_armed: bool = false;
 /// every settings load would double the probe rate for the life of the page.
 pub fn startPoll() void {
     if (zx.platform.role != .client) return;
+    // The live channel owns the status while it is up. The settings load arms the poll every time it
+    // runs, so without this the two would both probe and every settings change would re-arm it.
+    if (server_events.streamLive()) return;
     if (poll_armed) return;
     if (conn == null) return;
     poll_armed = true;
@@ -150,6 +154,16 @@ pub fn stopPoll() void {
 
 pub fn pollArmed() bool {
     return poll_armed;
+}
+
+/// The server pushed the backend's state, so nothing here probed for it. `{"status":"online"|
+/// "asleep"}`; an unrecognised status is left alone rather than guessed at.
+pub fn applyServerStatus(payload: []const u8) void {
+    if (std.mem.indexOf(u8, payload, "\"online\"") != null) {
+        setState(.connected);
+    } else if (std.mem.indexOf(u8, payload, "\"asleep\"") != null) {
+        setState(.asleep);
+    }
 }
 
 fn schedulePoll() void {
@@ -280,9 +294,13 @@ fn checkStatus() void {
 fn onBootStatusDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     _ = tag;
     if (conn == null) return;
+    // Only a CHANGE is worth saying: this is the repeating poll's callback too, so an unchanged
+    // answer that still toasted would warn about the same dead backend every cadence, forever.
+    const was = state;
+    const was_code = state_code;
     if (status == 0 or status == 502 or status == 504) {
         setState(.asleep);
-        notifications.push(.warning, "Backend asleep - unlock at silly", notifications.error_ttl_ms);
+        if (was != .asleep) notifications.push(.warning, "Backend asleep - unlock at silly", notifications.error_ttl_ms);
         return;
     }
     if (status >= 200 and status < 300) {
@@ -298,14 +316,14 @@ fn onBootStatusDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         }
         if (offline) {
             setState(.offline);
-            notifications.push(.warning, "Backend offline - unlock at silly", notifications.error_ttl_ms);
+            if (was != .offline) notifications.push(.warning, "Backend offline - unlock at silly", notifications.error_ttl_ms);
             return;
         }
         setState(.connected);
         return;
     }
     setStateErr(status);
-    notifications.pushFmt(.err, notifications.error_ttl_ms, "Backend error {d}", .{status});
+    if (was != .err or was_code != status) notifications.pushFmt(.err, notifications.error_ttl_ms, "Backend error {d}", .{status});
 }
 
 // ---- interactive connect (the connections panel) --------------------------------------------

@@ -698,6 +698,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     events_open = {}
     events_conn_seq = 0
     events_drop = False
+    # A refetch is only observable server-side: the gallery looks the same either way.
+    bg_all_count = 0
+    api_hits = {}
     events_visibility = []
     # History-prefetch 409: armed once via /dev/arm-get-409, fires on the next prepend GET only, so the
     # scroll-preservation gate can drive the real resync path the mock append 409 cannot reach.
@@ -922,8 +925,30 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 kind = (q.get("type") or ["settings-changed"])[0]
                 note = (q.get("note") or [""])[0]
-                eid = Handler.emit_event(kind, {"note": note})
+                raw = (q.get("data") or [""])[0]
+                origin = (q.get("origin") or [""])[0]
+                try:
+                    payload = json.loads(raw) if raw else {"note": note}
+                except ValueError:
+                    return self.mock_status(400, {"error": "data is not JSON"})
+                eid = Handler.emit_event(kind, payload, origin)
                 return self.mock_json({"id": eid, "type": kind})
+            if self.path.startswith("/dev/add-background"):
+                # Its own fixture, so the origin-skip row does not depend on what the C-BG rows left
+                # behind and does not move their tile count.
+                name = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("name") or ["live origin.jpg"])[0]
+                if name not in Handler.mock_backgrounds:
+                    Handler.mock_backgrounds.append(name)
+                return self.mock_json({"added": name, "count": len(Handler.mock_backgrounds)})
+            if self.path.startswith("/dev/replay-from"):
+                # Re-delivers ring entries a client has ALREADY applied, which is what a resume does
+                # and the only way to see whether the client dedupes them.
+                since = int((urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("id") or ["0"])[0])
+                with Handler.events_lock:
+                    ids = [e["id"] for e in Handler.events_ring if e["id"] > since]
+                    for conn in Handler.events_open.values():
+                        conn["q"].extend(ids)
+                return self.mock_json({"replayed": ids})
             if self.path.startswith("/dev/drop-events"):
                 # Answers at once and clears the refusal on a timer, so a caller can emit with the
                 # client provably away instead of racing its 500ms retry.
@@ -949,6 +974,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "status_probe_count": Handler.status_probe_count,
                     "events_emitted": Handler.events_next_id,
                     "events_open": len(Handler.events_open),
+                    "events_clients": [c["client"] for c in Handler.events_open.values()],
+                    "bg_all_count": Handler.bg_all_count,
+                    "api_hits": dict(Handler.api_hits),
                     "events_visibility": Handler.events_visibility,
                     "last_generate_server": Handler.last_generate_server,
                     "last_generate_prompt": Handler.last_generate_prompt,  # J1 invariant-2
@@ -1093,14 +1121,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # ===== P3-MOCK: the SSE channel =====
 
     @staticmethod
-    def emit_event(kind, data):
-        """Append to the ring and fan out to every open stream. Returns the new event id."""
+    def emit_event(kind, data, origin=""):
+        """Append to the ring and fan out to every open stream except the one that caused it.
+
+        The ring keeps the event either way, mirroring the real server: a resume replays by id and
+        does not re-check who wrote it."""
         with Handler.events_lock:
             Handler.events_next_id += 1
             eid = Handler.events_next_id
             Handler.events_ring.append({"id": eid, "type": kind, "data": data})
-            for q in Handler.events_open.values():
-                q.append(eid)
+            for conn in Handler.events_open.values():
+                if origin and conn["client"] == origin:
+                    continue
+                conn["q"].append(eid)
         return eid
 
     def sse_frame(self, ev):
@@ -1125,11 +1158,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
 
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        client_id = (params.get("clientId") or [""])[0]
         with Handler.events_lock:
             Handler.events_conn_seq += 1
             conn_id = Handler.events_conn_seq
             queue = []
-            Handler.events_open[conn_id] = queue
+            Handler.events_open[conn_id] = {"q": queue, "client": client_id}
             # Everything the client missed, oldest first. This is what makes a resume observable.
             backlog = [e for e in Handler.events_ring if e["id"] > last_seen]
 
@@ -1264,6 +1299,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except ValueError:
             req = {}
         path = urllib.parse.urlparse(self.path).path
+        Handler.api_hits[path] = Handler.api_hits.get(path, 0) + 1
 
         # P3-MOCK: the visibility beacon. Recorded rather than acted on: the client half is what
         # this mock exists to prove, and a row needs to see WHAT was posted.
@@ -1785,6 +1821,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # rows are non-vacuous. The real delete/rename answer the text "ok"; the client reads only
         # the status, so a json body stands in for it here.
         if path == "/api/backgrounds/all":
+            Handler.bg_all_count += 1
             return self.mock_json({
                 "images": [Handler.mock_bg_entry(f) for f in Handler.mock_backgrounds],
                 "config": {"width": 160, "height": 90},
@@ -1797,6 +1834,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if name == Handler.mock_bg_slow_delete:
                 time.sleep(1.5)
             Handler.mock_backgrounds.remove(name)
+            # Mirrors the real endpoint: the write announces itself to every OTHER stream of this
+            # user, and skips the tab that made it (the X-ST-Client-Id it opened its stream with).
+            Handler.emit_event("background-changed", {"action": "delete", "name": name},
+                               self.headers.get("X-ST-Client-Id") or "")
             return self.mock_json({"ok": True})
         if path == "/api/backgrounds/rename":
             old, new = req.get("old_bg"), req.get("new_bg")
@@ -1805,6 +1846,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if new in Handler.mock_backgrounds:
                 return self.mock_status(400, {"error": "exists"})
             Handler.mock_backgrounds[Handler.mock_backgrounds.index(old)] = new
+            Handler.emit_event("background-changed", {"action": "rename", "name": new},
+                               self.headers.get("X-ST-Client-Id") or "")
             return self.mock_json({"ok": True})
         # Every other API POST (create/rename/settings-save/...) acknowledges without state.
         return self.mock_json({})

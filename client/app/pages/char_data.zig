@@ -260,42 +260,54 @@ pub fn chatMessages(alloc: Allocator, root: std.json.Value) Allocator.Error![]Ch
         out.deinit(alloc);
     }
     for (arr.items[1..]) |item| {
-        var name_src: []const u8 = "";
-        var mes_src: []const u8 = "";
-        var is_user = false;
-        var is_system = false;
-        var reasoning_src: []const u8 = "";
-        switch (item) {
-            .object => |o| {
-                if (o.get("name")) |v| switch (v) {
-                    .string => |s| name_src = s,
-                    else => {},
-                };
-                if (o.get("mes")) |v| switch (v) {
-                    .string => |s| mes_src = s,
-                    else => {},
-                };
-                if (o.get("is_user")) |v| is_user = favTruthy(v);
-                if (o.get("is_system")) |v| is_system = favTruthy(v);
-                if (o.get("extra")) |v| switch (v) {
-                    .object => |e| if (e.get("reasoning")) |rv| switch (rv) {
-                        .string => |s| reasoning_src = s,
-                        else => {},
-                    },
-                    else => {},
-                };
-            },
-            else => {},
+        const m = try chatMsgFrom(alloc, item);
+        errdefer {
+            alloc.free(m.name);
+            alloc.free(m.mes);
+            alloc.free(m.reasoning);
         }
-        const name = try alloc.dupe(u8, name_src);
-        errdefer alloc.free(name);
-        const mes = try alloc.dupe(u8, mes_src);
-        errdefer alloc.free(mes);
-        const reasoning = try alloc.dupe(u8, reasoning_src);
-        errdefer alloc.free(reasoning);
-        try out.append(alloc, .{ .name = name, .mes = mes, .is_user = is_user, .is_system = is_system, .reasoning = reasoning });
+        try out.append(alloc, m);
     }
     return try out.toOwnedSlice(alloc);
+}
+
+/// One turn out of one JSON element. Shared with the live channel's append path, which receives
+/// bare message objects with no metadata element in front of them.
+pub fn chatMsgFrom(alloc: Allocator, item: std.json.Value) Allocator.Error!ChatMsg {
+    var name_src: []const u8 = "";
+    var mes_src: []const u8 = "";
+    var is_user = false;
+    var is_system = false;
+    var reasoning_src: []const u8 = "";
+    switch (item) {
+        .object => |o| {
+            if (o.get("name")) |v| switch (v) {
+                .string => |s| name_src = s,
+                else => {},
+            };
+            if (o.get("mes")) |v| switch (v) {
+                .string => |s| mes_src = s,
+                else => {},
+            };
+            if (o.get("is_user")) |v| is_user = favTruthy(v);
+            if (o.get("is_system")) |v| is_system = favTruthy(v);
+            if (o.get("extra")) |v| switch (v) {
+                .object => |e| if (e.get("reasoning")) |rv| switch (rv) {
+                    .string => |s| reasoning_src = s,
+                    else => {},
+                },
+                else => {},
+            };
+        },
+        else => {},
+    }
+    const name = try alloc.dupe(u8, name_src);
+    errdefer alloc.free(name);
+    const mes = try alloc.dupe(u8, mes_src);
+    errdefer alloc.free(mes);
+    const reasoning = try alloc.dupe(u8, reasoning_src);
+    errdefer alloc.free(reasoning);
+    return .{ .name = name, .mes = mes, .is_user = is_user, .is_system = is_system, .reasoning = reasoning };
 }
 
 pub fn freeChatMessages(alloc: Allocator, list: []ChatMsg) void {

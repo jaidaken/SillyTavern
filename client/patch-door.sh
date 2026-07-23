@@ -649,15 +649,17 @@ raw_method_old = """  _notifyFetchComplete(fetchId, statusCode, body, isError) {
   }"""
 
 raw_method_new = raw_method_old + """
-  fetchRawAsync(urlPtr, urlLen, ctypePtr, ctypeLen, csrfPtr, csrfLen, bodyPtr, bodyLen, timeoutMs, fetchId) {
+  fetchRawAsync(urlPtr, urlLen, ctypePtr, ctypeLen, csrfPtr, csrfLen, clientPtr, clientLen, bodyPtr, bodyLen, timeoutMs, fetchId) {
     const url = readString(urlPtr, urlLen);
     const ctype = ctypeLen > 0 ? readString(ctypePtr, ctypeLen) : "application/octet-stream";
     const csrf = csrfLen > 0 ? readString(csrfPtr, csrfLen) : "";
+    const clientId = clientLen > 0 ? readString(clientPtr, clientLen) : "";
     // slice() copies the body out of the growable wasm buffer, so a memory.grow mid-fetch cannot
     // move the bytes the in-flight request is still reading.
     const body = getMemoryView().slice(bodyPtr, bodyPtr + bodyLen);
     const headers = { "Content-Type": ctype };
     if (csrf) headers["X-CSRF-Token"] = csrf;
+    if (clientId) headers["X-ST-Client-Id"] = clientId;
     const controller = new AbortController();
     const timeout = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
     fetch(url, { method: "POST", headers, body, signal: controller.signal }).then(async (response) => {
@@ -681,8 +683,8 @@ raw_import_old = """        _fetchAsync: (urlPtr, urlLen, methodPtr, methodLen, 
         },"""
 
 raw_import_new = raw_import_old + """
-        _fetchRawAsync: (urlPtr, urlLen, ctypePtr, ctypeLen, csrfPtr, csrfLen, bodyPtr, bodyLen, timeoutMs, fetchId) => {
-          bridgeRef.current?.fetchRawAsync(urlPtr, urlLen, ctypePtr, ctypeLen, csrfPtr, csrfLen, bodyPtr, bodyLen, timeoutMs, fetchId);
+        _fetchRawAsync: (urlPtr, urlLen, ctypePtr, ctypeLen, csrfPtr, csrfLen, clientPtr, clientLen, bodyPtr, bodyLen, timeoutMs, fetchId) => {
+          bridgeRef.current?.fetchRawAsync(urlPtr, urlLen, ctypePtr, ctypeLen, csrfPtr, csrfLen, clientPtr, clientLen, bodyPtr, bodyLen, timeoutMs, fetchId);
         },"""
 
 D7_SENTINEL = "fetchRawAsync"

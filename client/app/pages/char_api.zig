@@ -407,7 +407,9 @@ fn recomputeView() void {
 
 // ---- personas ---------------------------------------------------------------------------
 
-fn fetchPersonas() void {
+/// Reload /api/settings/get: personas, tags, the connection, samplers, templates and the
+/// world-info selection all ride that one blob, so this IS the settings refresh.
+pub fn fetchPersonas() void {
     personas_log.debug("persona load start", .{});
     net.request("/api/settings/get", "{}", 0, onPersonasDone, .{});
 }
@@ -811,6 +813,96 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
 /// Reloads the currently open chat's tail window. The scroll-up pump calls this (via the
 /// __st_reader_resync door export) when a prepend returns 409: the file changed above the window,
 /// so history state is dropped and the reader re-syncs to the newest slice.
+/// A chat gained turns somewhere else. The turns RIDE the event, so the open chat appends them
+/// instead of refetching the file; a chat that is not the open one is left for its next open.
+pub fn applyRemoteAppend(payload: []const u8) void {
+    if (zx.platform.role != .client) return;
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const root = std.json.parseFromSliceLeaky(std.json.Value, a, payload, .{}) catch {
+        chars_log.warn("chat-appended payload did not parse: reloading instead of appending", .{});
+        reloadCurrentChat();
+        return;
+    };
+    const obj = switch (root) {
+        .object => |o| o,
+        else => return,
+    };
+    const msgs = switch (obj.get("messages") orelse return) {
+        .array => |arr| arr,
+        else => return,
+    };
+    if (!appendTargetsOpenChat(obj)) return;
+
+    const char = char_store.global.selected();
+    const char_avatar: ?[]u8 = if (open_group_index == null)
+        (if (char) |c| (if (c.avatar.len > 0) data.thumbUrl(alloc, "avatar", c.avatar) catch null else null) else null)
+    else
+        null;
+    defer if (char_avatar) |u| alloc.free(u);
+    const persona = activePersona();
+    const persona_avatar: ?[]u8 = if (persona) |p|
+        (if (p.avatar.len > 0) data.thumbUrl(alloc, "persona", p.avatar) catch null else null)
+    else
+        null;
+    defer if (persona_avatar) |u| alloc.free(u);
+    var member_thumbs: std.ArrayList([]u8) = .empty;
+    defer {
+        for (member_thumbs.items) |t| alloc.free(t);
+        member_thumbs.deinit(alloc);
+    }
+
+    var added: usize = 0;
+    for (msgs.items) |item| {
+        const m = data.chatMsgFrom(a, item) catch continue;
+        const fallback = if (char) |c| c.name else "";
+        const sender = if (m.name.len > 0) m.name else if (m.is_user) "You" else fallback;
+        const avatar = if (m.is_user)
+            (persona_avatar orelse "")
+        else if (open_group_index == null)
+            (char_avatar orelse "")
+        else
+            (groupMemberThumb(m.name, &member_thumbs) orelse "");
+        store.global.appendCopyFull(sender, m.mes, avatar, m.reasoning) catch |err| {
+            chars_log.err("remote append: {s}, message dropped", .{@errorName(err)});
+            continue;
+        };
+        added += 1;
+    }
+    if (added == 0) return;
+    chars_log.info("live: appended {d} turn(s) from another client", .{added});
+    regions.bumpMessageLog();
+}
+
+/// Whether a chat-appended event names the chat this page has open. The identity is the card and
+/// the chat file for a solo chat, the group id for a group one; an event for anything else must not
+/// append here, or a turn from another conversation lands in this one.
+fn appendTargetsOpenChat(obj: std.json.ObjectMap) bool {
+    const group_id = jsonStrField(obj, "group_id");
+    if (group_id.len > 0) {
+        const g = group_store.selected() orelse return false;
+        return open_group_index != null and std.mem.eql(u8, group_id, g.id);
+    }
+    if (open_group_index != null) return false;
+    const c = char_store.global.selected() orelse return false;
+    const card = jsonStrField(obj, "card");
+    if (card.len > 0 and !std.mem.eql(u8, card, charaFilename(c.avatar))) return false;
+    const file = jsonStrField(obj, "file");
+    if (file.len == 0) return true;
+    const open_file = chatFileName(c) orelse return false;
+    defer alloc.free(open_file);
+    return std.mem.eql(u8, file, open_file);
+}
+
+fn jsonStrField(obj: std.json.ObjectMap, key: []const u8) []const u8 {
+    const v = obj.get(key) orelse return "";
+    return switch (v) {
+        .string => |s| s,
+        else => "",
+    };
+}
+
 pub fn reloadCurrentChat() void {
     // w3-chatref: a group chat re-syncs through its own window loader, same anchor mechanics.
     if (open_group_index) |gidx| {
