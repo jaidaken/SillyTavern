@@ -151,9 +151,9 @@ atleast "glue custom.js emits the [zx:dom] guard after minify" "$(count '\[zx:do
 
 echo
 echo "== served html (pre-hydration) =="
-# Four client regions (Shell, MessageLog, Home, Composer), each with one SSR marker; three fixtures,
-# each body a placeholder the client replaces.
-check "region hydration markers in index.html" "$(count '<!--\$' dist/index.html)" 4
+# Five client regions (Shell, MessageLog, Home, Composer, Toasts), each with one SSR marker; three
+# fixtures, each body a placeholder the client replaces.
+check "region hydration markers in index.html" "$(count '<!--\$' dist/index.html)" 5
 # 24 = two sinks per fixture message: the body and the reasoning block (w3-reason), which always
 # renders (hidden when empty) so mid-stream appearance never needs a structural vdom insert.
 check "ssr placeholder, two per message (body + reasoning)" "$(count 'ST_SSR_PLACEHOLDER' dist/index.html)" 24

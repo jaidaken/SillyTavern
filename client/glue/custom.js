@@ -333,6 +333,19 @@
         }
     };
 
+    // P1-A: push a notification by level name (gate driver + console debugging). Zig owns the store,
+    // the toast expiry, and every real source; this only carries a string across.
+    const NOTIFY_LEVELS = { info: 0, success: 1, warning: 2, err: 3 };
+    window.__st_notify = function (level, text, ttlMs) {
+        if (!wasm.__st_notify) return;
+        const buf = writeBytes(String(text));
+        try {
+            wasm.__st_notify(NOTIFY_LEVELS[level] || 0, buf.ptr, buf.len, ttlMs || 0);
+        } finally {
+            freeRaw(buf);
+        }
+    };
+
     // __st_read_file (C4): read a file input to bytes for Zig via __st_file_ready. Non-async so
     // js.global.call(void) succeeds; an empty read (cancelled picker) still calls back to settle Zig.
     window.__st_read_file = function (inputId, tag) {

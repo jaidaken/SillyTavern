@@ -4393,6 +4393,212 @@ async function main() {
         }
         // wi-polish END
 
+        /* C-NOTIF: the toast overlay (P1-PROBE + P1-A). Keep ABOVE C-DBG, which reads the whole run. */
+        // Two claims, and the second is the one the region exists for. First: a toast fades on its own,
+        // driven by one Zig setInterval and nothing else, so these rows never touch the page between
+        // the push and the fade. Second: that whole lifecycle leaves the composer alone. The composer
+        // holds unsaved typing, so a toast that re-rendered it would take the draft, the caret, and the
+        // auto-grown height with it, and nothing in the product would report the loss.
+        //
+        // Isolation is measured with a MutationObserver, not a render counter: the -Dinstrument
+        // counters in instrument.zig have no reader left (render-harness.sh drives a ?rendercount=
+        // probe that lived in the deleted glue/main.js).
+        console.log('== C-NOTIF the toast overlay ==');
+        {
+            // The timer spy, installed before the document exists so it wraps the globals ahead of the
+            // wasm door. No app code used zx.client.setInterval before this chunk, so neither the
+            // repeat nor the CLEAR path has ever run in this product: a sweep that never stops is a
+            // 250ms wakeup for the life of the page, and nothing else here would notice it.
+            const spy = await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+                source: `(function(){
+                    window.__timerLog = { set: [], clear: [] };
+                    const rawSet = window.setInterval.bind(window);
+                    const rawClear = window.clearInterval.bind(window);
+                    window.setInterval = function (fn, ms) {
+                        const id = rawSet(fn, ms);
+                        window.__timerLog.set.push({ id: id, ms: ms });
+                        return id;
+                    };
+                    window.clearInterval = function (id) {
+                        window.__timerLog.clear.push(id);
+                        return rawClear(id);
+                    };
+                })();`,
+            }, sessionId);
+
+            await page.navigate(`${args.base}/?demo=1`);
+            await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=12`, 15000);
+
+            // Deltas, not totals: an unrelated 250ms interval registered at boot would otherwise be
+            // counted as the sweep and make the leak row pass while the sweep leaked.
+            const sweepTimers = async () => page.eval(`(function(){
+                const l = window.__timerLog || { set: [], clear: [] };
+                const s = l.set.filter(function (e) { return e.ms === 250; });
+                return { ids: s.map(function (e) { return e.id; }), cleared: l.clear.slice() };
+            })()`);
+            const timersAtBoot = await sweepTimers();
+
+            const overlay = await page.eval(`(function(){
+                const el = document.getElementById('notifications');
+                if (!el) return null;
+                const cs = getComputedStyle(el);
+                return { kids: el.children.length, pos: cs.position, pe: cs.pointerEvents, live: el.getAttribute('aria-live') };
+            })()`);
+            row('must', !!overlay && overlay.kids === 0 && overlay.pos === 'fixed'
+                && overlay.pe === 'none' && overlay.live === 'polite',
+                'C-NOTIF-1 the overlay mounts empty, fixed, and never eats a click',
+                JSON.stringify(overlay));
+
+            // Typed BEFORE the toast, and asserted afterwards against this exact string. A row that
+            // only compared before to after would pass on two empty reads, which is what a composer
+            // rebuilt on the first push would give it (gate-rows-that-can-fail F3).
+            const draft = 'draft that must survive a toast';
+            await page.focus('#send_textarea');
+            await page.insertText(draft);
+            const before = await page.eval(`(function(){
+                const t = document.getElementById('send_textarea');
+                t.setSelectionRange(6, 6);
+                t.__notifMark = 'COMPOSER-NODE';
+                const chat = document.getElementById('chat');
+                if (chat) chat.__notifMark = 'CHAT-NODE';
+                return { value: t.value, caret: t.selectionStart, height: t.style.height };
+            })()`);
+
+            // The isolation instrument. A MutationObserver rather than the door's [zx:dom] traces:
+            // those need __st_debug(true), and C-DBG-3 reads the whole run so far as a flag-off window,
+            // so turning it on above that row would break it. It also attributes better. A childList
+            // record names the PARENT, so a node the renderer REMOVED is still scored to the region it
+            // was removed from, which is exactly the composer damage a trace-id lookup could not see.
+            // #chat-root itself is bucketed apart and not scored as a stray: it is the grid the regions
+            // sit in, not a region, and reveal.zig plus reading_prefs.zig write classes and custom
+            // properties on it to their own schedule. A real full-page re-render would light up the
+            // composer, chat and shell counts, so excusing the root alone cannot hide one. Every
+            // non-toast record is described, so a red names what moved instead of asking for a rerun.
+            await page.eval(`(function(){
+                window.__notifMuts = { toast: 0, composer: 0, chat: 0, shell: 0, root: 0, other: 0, what: [] };
+                const bucket = function (node) {
+                    const el = node && node.nodeType === 3 ? node.parentElement : node;
+                    if (!el || !el.closest) return 'other';
+                    if (el.closest('#notifications')) return 'toast';
+                    if (el.closest('#composer')) return 'composer';
+                    if (el.closest('#chat')) return 'chat';
+                    if (el.closest('#shell')) return 'shell';
+                    if (el.id === 'chat-root') return 'root';
+                    return 'other';
+                };
+                window.__notifObs = new MutationObserver(function (recs) {
+                    for (const r of recs) {
+                        const b = bucket(r.target);
+                        window.__notifMuts[b] += 1;
+                        if (b !== 'toast' && window.__notifMuts.what.length < 6) {
+                            const t = r.target;
+                            const name = t.nodeType === 3 ? '#text' : ((t.id ? '#' + t.id : '') || t.nodeName.toLowerCase());
+                            window.__notifMuts.what.push(b + ':' + r.type + ':' + name + (r.attributeName ? '[' + r.attributeName + ']' : ''));
+                        }
+                    }
+                });
+                window.__notifObs.observe(document.getElementById('chat-root'),
+                    { subtree: true, childList: true, attributes: true, characterData: true });
+            })()`);
+
+            const ttl = 1200;
+            await page.eval(`window.__st_notify('err', 'probe toast alpha', ${ttl})`);
+            const shown = await page.waitFor("document.querySelector('#notifications div[data-level]')", 4000);
+            const toastAt = Date.now();
+            const toast = await page.eval(`(function(){
+                const el = document.querySelector('#notifications div[data-level]');
+                if (!el) return null;
+                const r = el.getBoundingClientRect();
+                return { text: el.textContent, level: el.getAttribute('data-level'),
+                         onScreen: r.width > 0 && r.height > 0 && r.top < window.innerHeight };
+            })()`);
+            row('must', shown && !!toast && toast.text === 'probe toast alpha'
+                && toast.level === 'err' && toast.onScreen,
+                'C-NOTIF-2 a pushed notification paints as a toast carrying its own text and level',
+                JSON.stringify(toast));
+
+            // Nothing below touches the page: the only thing that can clear this toast is the sweep
+            // interval inside the wasm. No app code called zx.client.setInterval before this chunk, so
+            // this row is also the first proof that the ziex interval reaches Zig at all.
+            const faded = await page.waitFor("document.querySelectorAll('#notifications div[data-level]').length === 0", 6000);
+            const fadeMs = Date.now() - toastAt;
+            row('must', faded && fadeMs >= 900 && fadeMs <= 5000,
+                'C-NOTIF-3 the toast fades on the sweep timer alone, near its own ttl',
+                `faded=${faded} after=${fadeMs}ms ttl=${ttl}ms`);
+
+            const after = await page.eval(`(function(){
+                const t = document.getElementById('send_textarea');
+                const chat = document.getElementById('chat');
+                return { value: t.value, caret: t.selectionStart, height: t.style.height,
+                         sameNode: t.__notifMark === 'COMPOSER-NODE',
+                         chatSame: !!chat && chat.__notifMark === 'CHAT-NODE',
+                         focused: document.activeElement === t };
+            })()`);
+            row('must', after.value === draft && after.caret === before.caret
+                && after.sameNode && after.chatSame && after.height === before.height,
+                'C-NOTIF-4 the composer keeps its draft, caret, height and node across the toast',
+                `value=${JSON.stringify(after.value)} caret=${after.caret} node=${after.sameNode} chat=${after.chatSame} h=${after.height}`);
+
+            await page.eval('window.__notifObs.takeRecords()');
+            const where = await page.eval('window.__notifMuts');
+            const strayed = where.composer + where.chat + where.shell + where.other;
+            // toast > 0 is the instrument's own liveness proof: an observer that never fired reads
+            // exactly like perfect isolation (gate-rows-that-can-fail F17).
+            row('must', where.toast > 0 && strayed === 0,
+                'C-NOTIF-5 the whole toast lifecycle mutated no DOM outside the overlay',
+                JSON.stringify(where));
+
+            const kept = await page.eval(`(function(){
+                const el = document.getElementById('notifications');
+                return { kids: el ? el.children.length : -1 };
+            })()`);
+            row('must', kept.kids === 0,
+                'C-NOTIF-6 the faded toast leaves no empty node behind in the overlay',
+                JSON.stringify(kept));
+
+            await page.eval('window.__notifObs.disconnect()');
+
+            // One interval for the whole toast, and it must be GONE afterwards. A sweep that never
+            // clears is a 250ms wakeup for the life of the page that no other row here would see.
+            const t1 = await sweepTimers();
+            const firstSweep = t1.ids.filter((id) => !timersAtBoot.ids.includes(id));
+            const firstCleared = firstSweep.length === 1 && t1.cleared.includes(firstSweep[0]);
+            row('must', firstSweep.length === 1 && firstCleared,
+                'C-NOTIF-7 one 250ms sweep serves the toast and is cleared when the last one fades',
+                `registered=${firstSweep.length} id=${firstSweep[0]} cleared=${firstCleared} clears=${JSON.stringify(t1.cleared)}`);
+
+            // Two ttls at once. The long toast needs ttl/250 = 8 sweeps, so a timer that fired once,
+            // or a fixed few times, cannot retire it. The short one going FIRST also proves the
+            // per-toast decrement is per-toast: a store that aged them together would drop both at once.
+            const shortTtl = 600;
+            const longTtl = 2000;
+            await page.eval(`window.__st_notify('info', 'probe toast short', ${shortTtl});`
+                + `window.__st_notify('warning', 'probe toast long', ${longTtl});`);
+            const pairAt = Date.now();
+            const bothUp = await page.waitFor("document.querySelectorAll('#notifications div[data-level]').length === 2", 3000);
+            const shortGone = await page.waitFor("document.querySelectorAll('#notifications div[data-level]').length === 1", 5000);
+            const shortAt = Date.now() - pairAt;
+            const survivor = await page.eval("(document.querySelector('#notifications div[data-level]')||{}).textContent");
+            const longGone = await page.waitFor("document.querySelectorAll('#notifications div[data-level]').length === 0", 6000);
+            const longAt = Date.now() - pairAt;
+            row('must', bothUp && shortGone && longGone && survivor === 'probe toast long'
+                && shortAt >= 450 && longAt >= 1800 && longAt > shortAt + 600,
+                'C-NOTIF-8 the sweep keeps firing: the 600ms toast goes, the 2000ms one stays, then goes',
+                `short=${shortAt}ms long=${longAt}ms survivor=${JSON.stringify(survivor)} sweeps>=${Math.floor(longAt / 250)}`);
+
+            // The restart. C-NOTIF-7 proved the timer stops; a stop with no restart would mean the
+            // FIRST toast of the page fades and every later one hangs on screen forever.
+            const t2 = await sweepTimers();
+            const secondSweep = t2.ids.filter((id) => !t1.ids.includes(id));
+            const secondCleared = secondSweep.length === 1 && t2.cleared.includes(secondSweep[0]);
+            row('must', secondSweep.length === 1 && secondCleared,
+                'C-NOTIF-9 a push after the sweep stopped starts a fresh interval, also cleared',
+                `registered=${secondSweep.length} id=${secondSweep[0]} cleared=${secondCleared} totalSweeps=${t2.ids.length}`);
+
+            await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: spy.identifier }, sessionId);
+        }
+        /* C-NOTIF END */
+
         /* C-DBG */
         // The [zx:dom] channel. A live crash (removeChild NotFoundError) came out of the door with the
         // framework's tree and the real DOM already drifted apart, and no reproduction was ever found,

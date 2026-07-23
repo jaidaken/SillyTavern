@@ -13,7 +13,8 @@ pub fn Page(ctx: zx.PageContext) !zx.Component {
     // the width. The column COUNT stays three: MessageLog and Composer are column 2 and the topbar
     // spans 1/-1, so a one-column mobile grid would renumber them into an implicit column and strand
     // the topbar in a zero-width column 1. Horizontal overflow is clipped here rather than on the
-    // body (body overflow clips position:fixed panels on iOS Safari).
+    // body (body overflow clips position:fixed panels on iOS Safari). Toasts is the one region that
+    // claims no cell: it is position:fixed, so it adds no track and reflows nothing when it fills.
     return (
         <div
             @allocator={ctx.arena}
@@ -24,6 +25,7 @@ pub fn Page(ctx: zx.PageContext) !zx.Component {
             <MessageLog @rendering={.client} />
             <Home @rendering={.client} />
             <Composer @rendering={.client} />
+            <Toasts @rendering={.client} />
         </div>
     );
 }
@@ -34,6 +36,7 @@ pub const Shell = @import("./shell.zx").Shell;
 pub const MessageLog = @import("./messagelog.zx").MessageLog;
 pub const Home = @import("./home_body.zx").Home;
 pub const Composer = @import("./composer.zx").Composer;
+pub const Toasts = @import("./toasts.zx").Toasts;
 
 comptime {
     _ = @import("./character_store.zig");

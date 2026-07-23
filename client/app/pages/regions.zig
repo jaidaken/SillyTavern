@@ -16,6 +16,7 @@ pub var shell: ?*zx.State(u32) = null;
 pub var message_log: ?*zx.State(u32) = null;
 pub var character_list: ?*zx.State(u32) = null;
 pub var home: ?*zx.State(u32) = null;
+pub var notifications: ?*zx.State(u32) = null;
 
 /// Re-render the Shell region (topbar + docks) after a ui mutation. No-op before its first render.
 /// Also bumps Home: a character-store load (recomputeView) and a chat open both fire this, and Home's
@@ -43,4 +44,11 @@ pub fn bumpHome() void {
 /// search input keeps focus. No-op before its first render.
 pub fn bumpCharacterList() void {
     if (character_list) |h| h.set(h.get() +% 1);
+}
+
+/// Re-render only the toast overlay after a notification push or a sweep expiry. Bumps nothing else:
+/// a toast arriving or fading must not rebuild the composer, which would cost the typed draft and
+/// the caret, nor the chat log. No-op before its first render.
+pub fn bumpNotifications() void {
+    if (notifications) |h| h.set(h.get() +% 1);
 }

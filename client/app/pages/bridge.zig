@@ -19,6 +19,7 @@ const reveal = @import("./reveal.zig");
 const instrument = @import("./instrument.zig");
 const telemetry = @import("./telemetry.zig"); // C5: uncaught-error + click diagnostics log here
 const stream_drive = @import("./stream_drive.zig"); // C2: Zig-owned SSE lifecycle + door pump driver
+const notifications = @import("./notifications.zig");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
@@ -265,6 +266,19 @@ fn onUncaught(
     );
 }
 
+/// Push a notification from the door. Unlike the append/add exports above, the text is BORROWED:
+/// notifications.push copies it, and the caller frees its buffer once this returns.
+fn notify(level: u32, text_ptr: usize, text_len: usize, ttl_ms: u32) callconv(.c) void {
+    const text = doorBuf(text_ptr, text_len);
+    const lvl: notifications.Level = switch (level) {
+        1 => .success,
+        2 => .warning,
+        3 => .err,
+        else => .info,
+    };
+    notifications.push(lvl, text, ttl_ms);
+}
+
 comptime {
     if (is_wasm) {
         // Zig owns the data layer (char_api.zig); the append/clear/select/meta exports
@@ -287,6 +301,8 @@ comptime {
         // C5: diagnostics forwarded from the two irreducible JS listeners
         @export(&onClickTelemetry, .{ .name = "__st_on_click_telemetry" });
         @export(&onUncaught, .{ .name = "__st_on_uncaught" });
+        // P1-A: the notifications injection path for the interactions gate + console debugging.
+        @export(&notify, .{ .name = "__st_notify" });
         if (instrument.enabled) {
             @export(&messageViewRenders, .{ .name = "__st_mv_renders" });
             @export(&shellRenders, .{ .name = "__st_shell_renders" });
