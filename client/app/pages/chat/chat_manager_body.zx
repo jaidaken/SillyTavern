@@ -19,19 +19,19 @@ pub fn ChatManagerBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                 <p class="panel-empty m-0 text-sm leading-ui text-muted">Select a character to browse its chats.</p>
             ) else (
                 <div class="flex min-h-0 flex-col gap-3">
+                    <input
+                        id="chat-mgr-search"
+                        name="chat-mgr-search"
+                        type="search"
+                        class="w-full rounded-md border border-control-border bg-surface-2 px-3 py-1.5 font-mono text-sm text-text placeholder:text-faint focus-visible:outline-2 focus-visible:outline-tool-ring"
+                        placeholder="Search these chats"
+                        aria-label="Search this character's chats"
+                        autocomplete="off"
+                        value={chat_actions.queryText()}
+                        onkeydown={onSearchKey}
+                        onchange={onSearchChange}
+                    />
                     <div class="flex items-center gap-2">
-                        <input
-                            id="chat-mgr-search"
-                            name="chat-mgr-search"
-                            type="search"
-                            class="min-w-0 flex-1 rounded-md border border-control-border bg-surface-2 px-3 py-1.5 font-mono text-sm text-text placeholder:text-faint focus-visible:outline-2 focus-visible:outline-tool-ring"
-                            placeholder="Search these chats"
-                            aria-label="Search this character's chats"
-                            autocomplete="off"
-                            value={chat_actions.queryText()}
-                            onkeydown={onSearchKey}
-                            onchange={onSearchChange}
-                        />
                         <label class={act_btn ++ " m-0 inline-flex cursor-pointer items-center"} for="chat-import-input">Import</label>
                         <input id="chat-import-input" name="chat-import-input" type="file" accept=".jsonl,.json" class={file_input} aria-label="Import a chat file" onchange={onImportPick} />
                     </div>
