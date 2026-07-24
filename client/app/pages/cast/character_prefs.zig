@@ -20,6 +20,7 @@ const alloc = char_store.page_gpa;
 const log = std.log.scoped(.chars);
 
 const sort_ls_key = "st-char-sort";
+const view_ls_key = "st-char-view";
 
 var hydrated = false;
 
@@ -60,12 +61,24 @@ pub fn storedSort() cv.SortKey {
     return std.meta.stringToEnum(cv.SortKey, stored) orelse cv.View.default_sort;
 }
 
-/// Apply the persisted sort to the global view, once per session. Called at the top of the list and
-/// toolbar renders rather than from boot, so no hot-file wiring is needed: whichever paints first
-/// hydrates, and the recompute lands before this render reads `result`.
+/// The persisted presentation: "grid" for the avatar tiles, "list" for the dense rows, and the View
+/// default when nothing is stored.
+pub fn storedGrid() bool {
+    const stored = getItem(alloc, view_ls_key) orelse return cv.View.default_grid;
+    defer alloc.free(stored);
+    if (std.mem.eql(u8, stored, "grid")) return true;
+    if (std.mem.eql(u8, stored, "list")) return false;
+    return cv.View.default_grid;
+}
+
+/// Apply the persisted sort and presentation to the global view, once per session. Called at the top
+/// of the list and toolbar renders rather than from boot, so no hot-file wiring is needed: whichever
+/// paints first hydrates, and the recompute lands before this render reads `result`.
 pub fn ensureHydrated() void {
     if (zx.platform.role != .client or hydrated) return;
     hydrated = true;
+    // The view mode changes no ordering, so it never needs the recompute the sort below does.
+    cv.global.setGrid(storedGrid());
     const key = storedSort();
     if (key == cv.global.sort) return;
     cv.global.setSort(key);
@@ -86,10 +99,20 @@ pub fn setSort(key: cv.SortKey) void {
     reading_prefs.scheduleSave();
 }
 
+/// Set the presentation, persist it, and queue the account save. The caller re-renders.
+pub fn setGrid(grid: bool) void {
+    cv.global.setGrid(grid);
+    if (zx.platform.role != .client) return;
+    hydrated = true;
+    setItem(view_ls_key, if (grid) "grid" else "list");
+    reading_prefs.scheduleSave();
+}
+
 /// Write the character-list prefs into the settings object reading_prefs is about to save. Called
 /// from reading_prefs.mergedSettings on every save, so this rides the single saver.
 pub fn mergeCharPrefs(a: std.mem.Allocator, root_obj: *std.json.ObjectMap) !void {
     var prefs: std.json.ObjectMap = .empty;
     try prefs.put(a, "sort", .{ .string = try a.dupe(u8, @tagName(cv.global.sort)) });
+    try prefs.put(a, "grid", .{ .bool = cv.global.grid });
     try root_obj.put(a, "clientCharPrefs", .{ .object = prefs });
 }

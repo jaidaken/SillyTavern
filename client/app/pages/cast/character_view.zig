@@ -64,13 +64,18 @@ pub const View = struct {
     /// character_prefs.zig persists a different pick and falls back here.
     pub const default_sort: SortKey = .recent;
 
+    pub const default_grid: bool = true;
+
     allocator: Allocator,
     sort: SortKey = default_sort,
     query: []const u8 = "",
     query_owned: ?[]u8 = null,
     tags: std.ArrayList([]const u8) = .empty,
     fav_only: bool = false,
-    grid: bool = false,
+    /// The Cast opens as an avatar grid (rework principle 3: this panel is about WHO, and a face is
+    /// the fastest way to find a person). The dense row list stays one toolbar toggle away for
+    /// anyone reading it as a table of last-chat times; character_prefs.zig persists the choice.
+    grid: bool = default_grid,
     /// Pagination (client-side; the backend returns the whole list). page_size == 0 means "show all".
     page: usize = 0,
     page_size: usize = 0,
@@ -446,6 +451,14 @@ test "apply preserves the source store index" {
     // B (index 1) sorts first but must keep its store index.
     try testing.expectEqual(@as(usize, 1), r[0].index);
     try testing.expectEqual(@as(usize, 0), r[1].index);
+}
+
+test "a default view opens as the avatar grid" {
+    // Principle 3 of the rework: the Cast is visual. A default that reverted to rows would put the
+    // panel back to a text list without anything in the UI having asked for one.
+    const v: View = .{ .allocator = testing.allocator };
+    try testing.expect(v.grid);
+    try testing.expectEqual(View.default_grid, v.grid);
 }
 
 test "a default view sorts by most recent chat" {
