@@ -6,8 +6,12 @@
 //
 // The key field is WRITE-ONLY: it renders empty on every pass and the plaintext is never read back
 // from the server (connection.zig header). The line beside it reports presence only.
+//
+// The rows wrap and the fields shrink at ANY width: this body is the Setup tab's API section now, so
+// its width is the dock's (240-620px, resizable), never the window's. Keyed to the viewport, a 340px
+// dock pushed Save key and Remove past the panel edge.
 
-const input_cls = "flex-1 rounded-md border border-control-border bg-bg px-[0.7rem] py-[0.45rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
+const input_cls = "min-w-[9rem] flex-1 rounded-md border border-control-border bg-bg px-[0.7rem] py-[0.45rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
 // `conn-connect` is the Connect button's own marker: the gate clicks it by class, so no other
 // control may carry it.
 //
@@ -41,7 +45,7 @@ pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     <span class="conn-dot flex-none" aria-hidden="true"></span>
                     <span id="conn-standing-text" class="text-sm text-text">{standingText(ctx.allocator)}</span>
                 </div>
-                <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
                     <span class={label_cls}>Backend</span>
                     <Dropdown
                         options={textgen.options}
@@ -51,7 +55,7 @@ pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         onchange={&connection.onTypeChange}
                     />
                 </div>
-                <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
                     <label for="llama-url" class={label_cls}>Server URL</label>
                     <input
                         id="llama-url"
@@ -64,7 +68,7 @@ pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     />
                 </div>
                 {if (connection.keyFieldVisible()) (
-                    <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                    <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
                         <label for="conn-api-key" class={label_cls}>API key</label>
                         <input
                             id="conn-api-key"

@@ -80,7 +80,7 @@ const attr_head = raw_attr_tokens[0];
 /// The true count of `.zx` sources under app/pages across all 8 domain folders. The scan walks the
 /// tree recursively, so a walk that silently missed a folder would read fewer files and pass as
 /// clean; pinning the true total makes that a failure. Bump it the day a template lands.
-const total_zx_sources = 37;
+const total_zx_sources = 38;
 const zx_anchor = "chat/message.zx";
 
 /// A test binary inherits the cwd `zig build` was invoked from, which is the client root on every
@@ -117,7 +117,7 @@ const witness_mint_files = [_][]const u8{ "html.zig", "unit_test.zig" };
 /// The true counts of `.zig` sources under app/pages across all 8 domain folders: every `.zig` for
 /// the aggregator-import scan, and that minus the two witness-mint files for the forgery scan. A
 /// recursive walk that missed a folder scans fewer and reads clean; pinning the totals fails it.
-const total_zig_sources = 85;
+const total_zig_sources = 86;
 const total_forgeable_zig = total_zig_sources - witness_mint_files.len;
 
 fn isExcluded(name: []const u8, exclude: []const []const u8) bool {

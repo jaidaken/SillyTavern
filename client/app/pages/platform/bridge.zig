@@ -176,6 +176,9 @@ fn bootInit() callconv(.c) void {
     // char_api without a cycle); wire it before any chat can open.
     reader.resyncFn = char_api.reloadCurrentChat;
     regions.bumpMessageLog();
+    // Each side's remembered section, BEFORE anything can open a dock: the ?openleft flag below and
+    // the first tab click both open on it, so a late read would show the default once and then jump.
+    ui.hydrateSections();
     // PROTOTYPE: the ?showtabs / ?sysopen / ?openleft / ?openright screenshot flags, read before the
     // first paint so a still frame can show a state that a click would otherwise have to open.
     proto_flags.boot();

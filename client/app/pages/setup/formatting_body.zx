@@ -14,8 +14,12 @@
 //
 // Visual language matches the sibling config panels on purpose (WD62): setting-row, setting-label,
 // the accent token, and the mono face that already carries this app's character.
+//
+// The rows wrap and the fields shrink at ANY width, not only under a 768px viewport: this body is a
+// Setup section now, so its width is the dock's (240-620px, resizable), never the window's. Keyed to
+// the viewport, a 340px dock clipped both Save buttons off the panel edge.
 
-const input_cls = "flex-1 rounded-md border border-control-border bg-bg px-[0.7rem] py-[0.45rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
+const input_cls = "min-w-[9rem] flex-1 rounded-md border border-control-border bg-bg px-[0.7rem] py-[0.45rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
 const area_cls = "min-h-[6rem] w-full resize-y rounded-md border border-control-border bg-bg p-[0.7rem] font-mono text-sm leading-ui text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
 const label_cls = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
 const hint_cls = "setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]";
@@ -62,7 +66,7 @@ fn PresetRow(allocator: zx.Allocator, props: PresetProps) zx.Component {
     // already holding its news, announces nothing to a reader who never had it (WD39).
     return (
         <div @allocator={allocator} class="flex flex-col gap-3">
-            <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+            <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
                 <span class={label_cls}>Preset</span>
                 <Dropdown
                     options={presets.optionsFor(props.kind)}
@@ -76,7 +80,7 @@ fn PresetRow(allocator: zx.Allocator, props: PresetProps) zx.Component {
             {if (presets.loadFailed()) (
                 <button type="button" class={retry_cls} onclick={props.onretry}>Retry loading presets</button>
             )}
-            <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+            <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
                 <label class={label_cls} for={props.name_id}>Save as</label>
                 <input
                     id={props.name_id}
@@ -172,7 +176,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                                 <p id={fieldHintId(ctx.allocator, f.id)} class={hint_cls}>{f.hint}</p>
                             </div>
                         )}
-                        <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                        <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
                             <span class={label_cls}>Speaker names</span>
                             <Dropdown
                                 options={config_state.names_options}
@@ -213,7 +217,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     >{config_state.storyString()}</textarea>
                     <p id="ctx-story-hint" class={hint_cls}>Orders the card block. Conditional blocks and field names are supported over system, description, personality, scenario, persona, wiBefore, wiAfter, anchorBefore and anchorAfter.</p>
                 </div>
-                <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
                     <label class={label_cls} for="ctx-chat-start">Chat start</label>
                     <input
                         id="ctx-chat-start"
@@ -225,7 +229,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         oninput={ctx.bind(onChatStartInput)}
                     />
                 </div>
-                <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
                     <label class={label_cls} for="ctx-example-sep">Example separator</label>
                     <input
                         id="ctx-example-sep"
@@ -259,7 +263,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                             >{an_state.prompt()}</textarea>
                             <p id="an-prompt-hint" class={hint_cls}>Sent with every prompt from this chat, at the position below.</p>
                         </div>
-                        <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                        <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
                             <span class={label_cls}>Position</span>
                             <Dropdown
                                 options={an_state.position_options}
@@ -269,7 +273,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                                 onchange={&an_state.setPosition}
                             />
                         </div>
-                        <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                        <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
                             <span class={label_cls}>Speaks as</span>
                             <Dropdown
                                 options={an_state.role_options}
@@ -280,7 +284,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                             />
                         </div>
                         {if (an_state.depthApplies()) (
-                            <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                            <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
                                 <label class={label_cls} for="an-depth">Depth</label>
                                 <input
                                     id="an-depth"
@@ -301,7 +305,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         {if (an_state.depthApplies()) (
                             <p id="an-depth-hint" class={hint_cls}>How many turns back from the newest the note sits. 0 puts it right before the reply.</p>
                         )}
-                        <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                        <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
                             <label class={label_cls} for="an-interval">Every</label>
                             <input
                                 id="an-interval"

@@ -82,6 +82,46 @@ pub fn closeSide(side: Side) void {
 pub fn openIdOn(side: Side) ?PanelId {
     return ui.panels.openId(side);
 }
+
+// ---- the section switcher's half ---------------------------------------------------------------
+// A tab opens the side's remembered SECTION rather than one hardcoded panel; ui_state.zig owns the
+// catalogue and the rules, and these are the reactive plus persisting wrappers over it.
+
+pub fn sectionsFor(side: Side) []const ui_state.Section {
+    return ui_state.sectionsFor(side);
+}
+pub fn sectionOn(side: Side) PanelId {
+    return ui.panels.sectionOn(side);
+}
+pub fn familyLabel(side: Side) []const u8 {
+    return ui_state.familyLabel(side);
+}
+pub fn sectionNavLabel(side: Side) []const u8 {
+    return ui_state.sectionNavLabel(side);
+}
+
+/// A tab click: open the side on its remembered section, or close it if it is already open.
+pub fn toggleSide(side: Side) void {
+    ui.panels.toggleSide(side);
+    syncDocks();
+    regions.bumpShell();
+}
+
+/// A switcher click: show that section in the open drawer and remember it for the next open. The
+/// drawer does not close, so the swap reads as navigation inside one surface.
+pub fn selectSection(side: Side, id: PanelId) void {
+    ui.panels.setSection(side, id);
+    storeSection(side, id);
+    syncDocks();
+    regions.bumpShell();
+}
+
+/// Boot-time open with no rerender, the side's remembered section (the ?openleft / ?openright
+/// flags, which run before the first paint).
+pub fn openSideQuiet(side: Side) void {
+    if (ui.panels.openId(side) == null) ui.panels.openSide(side);
+    syncDocks();
+}
 pub fn anyOpen() bool {
     return ui.panels.anyOpen();
 }
@@ -312,6 +352,33 @@ fn storeMotion(pref: MotionPref) void {
     ls.call(void, "setItem", .{ js.string("st-motion"), js.string(@tagName(pref)) }) catch {
         log.warn("localStorage write refused: st-motion", .{});
     };
+}
+
+/// The section a side last showed, one key per side (the storeMotion twin). Written on every
+/// switcher click, so a reload reopens the tab on the panel it was left on.
+fn storeSection(side: Side, id: PanelId) void {
+    if (zx.platform.role != .client) return;
+    const ls = js.global.get(js.Object, "localStorage") catch return;
+    defer ls.deinit();
+    ls.call(void, "setItem", .{ js.string(ui_state.sectionKey(side)), js.string(@tagName(id)) }) catch {
+        log.warn("localStorage write refused: {s}", .{ui_state.sectionKey(side)});
+    };
+}
+
+/// Both sides' persisted sections, read once at boot BEFORE anything can open a dock. A missing or
+/// junk value leaves that side on its family default, and a value belonging to the other family is
+/// refused by sectionFromStr rather than opening a panel on the wrong flank.
+pub fn hydrateSections() void {
+    if (zx.platform.role != .client) return;
+    const ls = js.global.get(js.Object, "localStorage") catch return;
+    defer ls.deinit();
+    for ([_]Side{ .left, .right }) |side| {
+        const raw = ls.callAlloc(?js.String, zx.allocator, "getItem", .{js.string(ui_state.sectionKey(side))}) catch continue;
+        const value = raw orelse continue;
+        defer zx.allocator.free(value);
+        const id = ui_state.sectionFromStr(side, value) orelse continue;
+        ui.panels.setSection(side, id);
+    }
 }
 
 /// The persisted motion preference, read once at boot. Falls back to `system` when nothing is

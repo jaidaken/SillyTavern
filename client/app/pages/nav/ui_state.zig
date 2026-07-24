@@ -66,6 +66,78 @@ pub const panels = [_]Panel{
     .{ .id = .notifications, .dom_id = "d-notifications", .icon = "bell", .title = "Notifications", .side = .right },
 };
 
+/// One entry in a side's section switcher: the panel the section shows and the short word its
+/// control wears. The Panel's own `title` is the heading the panel head prints, which is too long to
+/// sit in a row of four controls, so the switcher carries its own word.
+pub const Section = struct {
+    id: PanelId,
+    label: []const u8,
+};
+
+/// The two families, in the order their controls read (rework section 3). The left tab is "Setup",
+/// how the AI replies; the right tab is "Cast", who is in the story and which conversation. Every
+/// panel a family lists sits on that family's side, which the tests below hold to.
+///
+/// This table is what makes the other panels reachable: before it, each tab hardcoded one panel and
+/// the rest of the catalogue had no way in at all.
+pub const setup_sections = [_]Section{
+    .{ .id = .ai_config, .label = "AI" },
+    .{ .id = .formatting, .label = "Format" },
+    .{ .id = .world_info, .label = "World" },
+    .{ .id = .connections, .label = "API" },
+};
+
+pub const cast_sections = [_]Section{
+    .{ .id = .characters, .label = "Characters" },
+    .{ .id = .persona, .label = "Personas" },
+    .{ .id = .groups, .label = "Groups" },
+    .{ .id = .chat_manager, .label = "Chats" },
+};
+
+pub fn sectionsFor(side: Side) []const Section {
+    return if (side == .left) &setup_sections else &cast_sections;
+}
+
+/// The section a side shows the first time it is ever opened, before anything is remembered: the
+/// family's first entry, so the order in the table above is the only place that decision is made.
+pub fn defaultSection(side: Side) PanelId {
+    return sectionsFor(side)[0].id;
+}
+
+/// The family's own name, per rework section 5: the app's cast and its setup, not "Settings" and
+/// "Chat". The tab's accessible name and the switcher's accessible name both read from here.
+pub fn familyLabel(side: Side) []const u8 {
+    return if (side == .left) "Setup" else "Cast";
+}
+
+pub fn sectionNavLabel(side: Side) []const u8 {
+    return if (side == .left) "Setup sections" else "Cast sections";
+}
+
+/// True when `id` is one of the sections `side` lists. A panel outside its family (card_editor,
+/// which a character opens, or a system panel) is not selectable from the switcher.
+pub fn inFamily(side: Side, id: PanelId) bool {
+    for (sectionsFor(side)) |sec| {
+        if (sec.id == id) return true;
+    }
+    return false;
+}
+
+/// A section id parsed from a tag name, validated against the side's family. The switcher's click
+/// path and the localStorage restore both come through here, so neither can put a right-side panel
+/// on the left or resurrect a panel that has left the family.
+pub fn sectionFromStr(side: Side, name: []const u8) ?PanelId {
+    for (sectionsFor(side)) |sec| {
+        if (std.mem.eql(u8, @tagName(sec.id), name)) return sec.id;
+    }
+    return null;
+}
+
+/// The localStorage key holding a side's last-shown section (the st-motion pattern, one key a side).
+pub fn sectionKey(side: Side) []const u8 {
+    return if (side == .left) "st-section-left" else "st-section-right";
+}
+
 pub const min_width: f32 = 240;
 pub const max_width: f32 = 620;
 pub const default_width: f32 = 340;
@@ -88,9 +160,18 @@ pub const PanelState = struct {
     last: ?Side = null,
     left_w: f32 = default_width,
     right_w: f32 = default_width,
+    /// The section each side shows when its tab opens it, which the switcher moves and localStorage
+    /// remembers across reloads. Held even while the side is closed, so a tab reopens where it was
+    /// left rather than at the family default.
+    left_section: PanelId = setup_sections[0].id,
+    right_section: PanelId = cast_sections[0].id,
 
     pub fn openId(self: PanelState, side: Side) ?PanelId {
         return if (side == .left) self.left else self.right;
+    }
+
+    pub fn sectionOn(self: PanelState, side: Side) PanelId {
+        return if (side == .left) self.left_section else self.right_section;
     }
 
     pub fn isActive(self: PanelState, id: PanelId) bool {
@@ -146,8 +227,42 @@ pub const PanelState = struct {
             log.debug("close: {s}", .{@tagName(id)});
         } else {
             self.last = p.side;
+            // Opening a family panel by any route (a tab, a flag, a future palette jump) is what the
+            // side remembers, so the memory cannot drift from what was last shown.
+            if (inFamily(p.side, id)) self.setSectionField(p.side, id);
             log.debug("open: {s}", .{@tagName(id)});
         }
+    }
+
+    fn setSectionField(self: *PanelState, side: Side, id: PanelId) void {
+        if (side == .left) self.left_section = id else self.right_section = id;
+    }
+
+    /// Move a side to one of its sections. The drawer stays open across the swap: only which body
+    /// shows changes, which is the whole point of the switcher. A closed side records the choice
+    /// and shows it on the next open, which is how the boot restore lands.
+    pub fn setSection(self: *PanelState, side: Side, id: PanelId) void {
+        if (!inFamily(side, id)) return;
+        self.setSectionField(side, id);
+        if (self.openId(side) == null) return;
+        if (side == .left) self.left = id else self.right = id;
+        self.last = side;
+        log.debug("section {s}: {s}", .{ sideStr(side), @tagName(id) });
+    }
+
+    /// A tab click: close the side if it is open, else open it on its remembered section. The other
+    /// side is untouched, since the two are independent.
+    pub fn toggleSide(self: *PanelState, side: Side) void {
+        if (self.openId(side) != null) return self.closeSide(side);
+        self.openSide(side);
+    }
+
+    /// Open a side on its remembered section without closing anything.
+    pub fn openSide(self: *PanelState, side: Side) void {
+        const id = self.sectionOn(side);
+        if (side == .left) self.left = id else self.right = id;
+        self.last = side;
+        log.debug("open: {s}", .{@tagName(id)});
     }
 
     pub fn closeSide(self: *PanelState, side: Side) void {
@@ -346,6 +461,118 @@ test "panelIdFromDomId rejects unknown or unprefixed ids" {
     try testing.expect(panelIdFromDomId("settings") == null);
     try testing.expect(panelIdFromDomId("") == null);
     try testing.expectEqual(PanelId.settings, panelIdFromDomId("d-settings").?);
+}
+
+test "every section names a real panel that sits on its own family's side" {
+    // A section pointing at a panel from the other side would open a dock on the wrong flank, which
+    // renders as an empty body rather than as an error, so the table is checked rather than trusted.
+    inline for (.{ Side.left, Side.right }) |side| {
+        const list = sectionsFor(side);
+        try testing.expect(list.len > 0);
+        for (list) |sec| {
+            const p = panelFor(sec.id) orelse return error.SectionHasNoPanel;
+            try testing.expectEqual(side, p.side);
+            try testing.expect(sec.label.len > 0);
+            try testing.expect(inFamily(side, sec.id));
+            try testing.expect(!inFamily(if (side == .left) .right else .left, sec.id));
+        }
+    }
+    // The eight are distinct: a panel listed twice would give two controls one body.
+    for (setup_sections) |a| {
+        var seen: usize = 0;
+        for (setup_sections) |b| {
+            if (a.id == b.id) seen += 1;
+        }
+        try testing.expectEqual(@as(usize, 1), seen);
+    }
+    for (cast_sections) |a| {
+        var seen: usize = 0;
+        for (cast_sections) |b| {
+            if (a.id == b.id) seen += 1;
+        }
+        try testing.expectEqual(@as(usize, 1), seen);
+    }
+}
+
+test "a first-ever open lands on the family default, and the two sides are named apart" {
+    const fresh: PanelState = .{};
+    try testing.expectEqual(PanelId.ai_config, defaultSection(.left));
+    try testing.expectEqual(PanelId.characters, defaultSection(.right));
+    try testing.expectEqual(PanelId.ai_config, fresh.sectionOn(.left));
+    try testing.expectEqual(PanelId.characters, fresh.sectionOn(.right));
+    try testing.expectEqualStrings("Setup", familyLabel(.left));
+    try testing.expectEqualStrings("Cast", familyLabel(.right));
+    try testing.expectEqualStrings("Setup sections", sectionNavLabel(.left));
+    try testing.expectEqualStrings("Cast sections", sectionNavLabel(.right));
+    try testing.expect(!std.mem.eql(u8, sectionKey(.left), sectionKey(.right)));
+}
+
+test "a section name round-trips, and a foreign or unknown one is refused" {
+    inline for (.{ Side.left, Side.right }) |side| {
+        for (sectionsFor(side)) |sec| {
+            try testing.expectEqual(sec.id, sectionFromStr(side, @tagName(sec.id)).?);
+        }
+    }
+    // The right side's own sections are not the left's, so a stale stored value cannot cross over.
+    try testing.expect(sectionFromStr(.left, "characters") == null);
+    try testing.expect(sectionFromStr(.right, "ai_config") == null);
+    // Panels outside both families: contextual (card_editor) and system (settings).
+    try testing.expect(sectionFromStr(.left, "card_editor") == null);
+    try testing.expect(sectionFromStr(.left, "settings") == null);
+    try testing.expect(sectionFromStr(.right, "nonesuch") == null);
+    try testing.expect(sectionFromStr(.right, "") == null);
+}
+
+test "a tab opens its remembered section, closes, and reopens where it was left" {
+    var s: PanelState = .{};
+    s.toggleSide(.left);
+    try testing.expectEqual(PanelId.ai_config, s.openId(.left).?);
+    // Switching section swaps the body and leaves the drawer open.
+    s.setSection(.left, .world_info);
+    try testing.expectEqual(PanelId.world_info, s.openId(.left).?);
+    try testing.expectEqual(PanelId.world_info, s.sectionOn(.left));
+    // Closing keeps the memory; the next open restores it rather than the default.
+    s.toggleSide(.left);
+    try testing.expect(s.openId(.left) == null);
+    try testing.expectEqual(PanelId.world_info, s.sectionOn(.left));
+    s.toggleSide(.left);
+    try testing.expectEqual(PanelId.world_info, s.openId(.left).?);
+    // The right side keeps its own memory, untouched by any of that.
+    try testing.expectEqual(PanelId.characters, s.sectionOn(.right));
+    s.toggleSide(.right);
+    s.setSection(.right, .chat_manager);
+    try testing.expectEqual(PanelId.chat_manager, s.openId(.right).?);
+    try testing.expectEqual(PanelId.world_info, s.openId(.left).?);
+}
+
+test "a section chosen while the side is closed shows on the next open, and a foreign one is ignored" {
+    var s: PanelState = .{};
+    // The boot restore path: nothing is open yet, so the choice only arms the next open.
+    s.setSection(.right, .groups);
+    try testing.expect(s.openId(.right) == null);
+    try testing.expectEqual(PanelId.groups, s.sectionOn(.right));
+    s.toggleSide(.right);
+    try testing.expectEqual(PanelId.groups, s.openId(.right).?);
+    // A panel from the other family, or from no family, moves nothing.
+    s.setSection(.right, .ai_config);
+    s.setSection(.right, .card_editor);
+    try testing.expectEqual(PanelId.groups, s.openId(.right).?);
+    try testing.expectEqual(PanelId.groups, s.sectionOn(.right));
+}
+
+test "opening a family panel directly is what the side remembers" {
+    var s: PanelState = .{};
+    // A non-tab route (the ?openleft flag today, a command palette later).
+    s.toggle(.formatting);
+    try testing.expectEqual(PanelId.formatting, s.sectionOn(.left));
+    s.toggle(.formatting);
+    try testing.expect(s.openId(.left) == null);
+    s.toggleSide(.left);
+    try testing.expectEqual(PanelId.formatting, s.openId(.left).?);
+    // card_editor is contextual, not a section, so it shows without becoming the memory.
+    s.toggle(.card_editor);
+    try testing.expectEqual(PanelId.card_editor, s.openId(.left).?);
+    try testing.expectEqual(PanelId.formatting, s.sectionOn(.left));
 }
 
 test "motion pref parses and maps to the right #shell class" {

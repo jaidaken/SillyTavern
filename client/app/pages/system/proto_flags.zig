@@ -10,7 +10,6 @@ const zx = @import("zx");
 const js = zx.client.js;
 
 const ui = @import("../nav/ui.zig");
-const edgetabs_state = @import("../nav/edgetabs_state.zig");
 const sysmenu_state = @import("../nav/sysmenu_state.zig");
 const data = @import("../cast/char_data.zig");
 
@@ -36,7 +35,8 @@ pub fn boot() void {
     defer zx.allocator.free(search);
     force_tabs = data.hasQueryFlag(search, "showtabs");
     if (data.hasQueryFlag(search, "sysopen")) sysmenu_state.setOpen(true);
-    if (data.hasQueryFlag(search, "openleft")) ui.openQuiet(edgetabs_state.left_panel);
-    if (data.hasQueryFlag(search, "openright")) ui.openQuiet(edgetabs_state.right_panel);
+    // The remembered section for that side, so a still frame shows what a real reopen would.
+    if (data.hasQueryFlag(search, "openleft")) ui.openSideQuiet(.left);
+    if (data.hasQueryFlag(search, "openright")) ui.openSideQuiet(.right);
     log.debug("proto flags: tabs={}", .{force_tabs});
 }
