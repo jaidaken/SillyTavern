@@ -66,14 +66,13 @@ pub fn ChatManagerBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                                         )}
                                         <span class="flex-none text-xs whitespace-nowrap text-faint">{r.when}</span>
                                     </div>
-                                    <div class="line-clamp-2 text-sm leading-relaxed text-muted">{r.preview}</div>
                                     <div class="text-xs text-faint">{msgCount(ctx.allocator, r.message_count)}{" \u{00b7} "}{r.file_size}</div>
                                     <div class="flex flex-wrap gap-1 border-t border-border-soft pt-2">
-                                        <button type="button" class={row_btn} data-chat-act="rename" data-chat-row={i} onclick={onRowAct} aria-label="Rename this chat">Rename</button>
-                                        <button type="button" class={row_btn} data-chat-act="duplicate" data-chat-row={i} onclick={onRowAct} aria-label="Duplicate this chat">Duplicate</button>
-                                        <button type="button" class={row_btn} data-chat-act="branch" data-chat-row={i} onclick={onRowAct} aria-label="Branch this chat at a message">Branch</button>
-                                        <button type="button" class={row_btn} data-chat-act="export" data-chat-row={i} onclick={onRowAct} aria-label="Export this chat as jsonl">Export</button>
-                                        <button type="button" class={row_danger} data-chat-act="delete" data-chat-row={i} onclick={onRowAct} aria-label="Delete this chat">Delete</button>
+                                        <button type="button" class={row_btn} data-icon="pencil" data-chat-act="rename" data-chat-row={i} onclick={onRowAct} aria-label="Rename this chat" title="Rename"><span class={row_label}>Rename</span></button>
+                                        <button type="button" class={row_btn} data-icon="copy" data-chat-act="duplicate" data-chat-row={i} onclick={onRowAct} aria-label="Duplicate this chat" title="Duplicate"><span class={row_label}>Duplicate</span></button>
+                                        <button type="button" class={row_btn} data-icon="branch" data-chat-act="branch" data-chat-row={i} onclick={onRowAct} aria-label="Branch this chat at a message" title="Branch"><span class={row_label}>Branch</span></button>
+                                        <button type="button" class={row_btn} data-icon="download" data-chat-act="export" data-chat-row={i} onclick={onRowAct} aria-label="Export this chat as jsonl" title="Export"><span class={row_label}>Export</span></button>
+                                        <button type="button" class={row_danger} data-icon="trash" data-chat-act="delete" data-chat-row={i} onclick={onRowAct} aria-label="Delete this chat" title="Delete"><span class={row_label}>Delete</span></button>
                                     </div>
                                 </div>
                             )}
@@ -90,8 +89,12 @@ pub fn ChatManagerBody(ctx: *zx.ComponentCtx(void)) zx.Component {
 // The persona/character action-button tokens, unchanged (an interactive edge is control-border, the
 // chrome is mono); the row buttons drop to text-xs so five of them fit a drawer row.
 const act_btn = "chatmgr-btn flex-none cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-text hover:bg-tool-hover";
-const row_btn = "chatmgr-row-btn flex-none cursor-pointer rounded border border-control-border bg-surface-2 px-2 py-0.5 font-mono text-xs text-text hover:bg-tool-hover focus-visible:outline-2 focus-visible:outline-tool-ring";
+// The row actions are ICON buttons that fit five across at the default dock width; the text label
+// rides along only once the panel is dragged wide enough to hold all five (@container on the panel
+// scroller), so nothing runs onto a second line at any width. `icon` draws the data-icon glyph.
+const row_btn = "chatmgr-row-btn icon inline-flex flex-none items-center gap-1.5 cursor-pointer rounded border border-control-border bg-surface-2 px-2 py-1 font-mono text-xs text-text hover:bg-tool-hover focus-visible:outline-2 focus-visible:outline-tool-ring max-[768px]:min-h-9 max-[768px]:px-2.5";
 const row_danger = row_btn ++ " hover:bg-danger-hover hover:outline-1 hover:outline-danger-ring";
+const row_label = "hidden @min-[38rem]:inline";
 const file_input = "chatmgr-import-file " ++ panelchrome.file_picker;
 
 fn isCurrent(stem: []const u8) bool {

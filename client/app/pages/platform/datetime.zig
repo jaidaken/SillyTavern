@@ -101,12 +101,15 @@ pub fn friendlyStamp(ms: f64, buf: []u8) []const u8 {
     }) catch "";
 }
 
-/// Epoch ms for a chat file-name stem, or null for a renamed chat. Pulls exactly seven digit runs
-/// (year, month, day, hour, minute, second, milli) ignoring every separator, so the padded and the
-/// spaced/unpadded shapes both read; fieldsToMs range-checks them, so a name that is not seven
-/// date-shaped numbers rejects. An eighth number also rejects (a bare stamp has exactly seven).
+/// Epoch ms for a chat file-name stem, or null for a renamed chat. The timestamp is the TAIL of the
+/// stem and ends with the millisecond "ms" suffix, so a stem not ending that way is a renamed chat
+/// (shown verbatim). Anchoring on the tail matters because stemOf strips only the extension, not the
+/// character-name prefix: a name like `Char 07 Vex - <stamp>` carries its own digits, so the LAST
+/// seven digit runs (year, month, day, hour, minute, second, milli) are the timestamp, not the first
+/// seven. fieldsToMs range-checks them.
 pub fn parseChatStem(s: []const u8) ?f64 {
-    var nums: [7]u32 = undefined;
+    if (!std.mem.endsWith(u8, s, "ms")) return null;
+    var last7: [7]u32 = @splat(0);
     var count: usize = 0;
     var i: usize = 0;
     while (i < s.len) {
@@ -119,19 +122,24 @@ pub fn parseChatStem(s: []const u8) ?f64 {
             val = val * 10 + (s[i] - '0');
             if (val > 999_999) return null;
         }
-        if (count >= 7) return null;
-        nums[count] = val;
+        if (count < 7) {
+            last7[count] = val;
+        } else {
+            var j: usize = 0;
+            while (j < 6) : (j += 1) last7[j] = last7[j + 1];
+            last7[6] = val;
+        }
         count += 1;
     }
-    if (count != 7) return null;
+    if (count < 7) return null;
     return fieldsToMs(.{
-        .year = @intCast(nums[0]),
-        .month = nums[1],
-        .day = nums[2],
-        .hour = nums[3],
-        .minute = nums[4],
-        .second = nums[5],
-        .milli = nums[6],
+        .year = @intCast(last7[0]),
+        .month = last7[1],
+        .day = last7[2],
+        .hour = last7[3],
+        .minute = last7[4],
+        .second = last7[5],
+        .milli = last7[6],
     });
 }
 
@@ -407,13 +415,23 @@ test "parseChatStem reads both the padded and the spaced/unpadded filename shape
     try testing.expectEqual(want, parseChatStem("Char Name - 2026-2-11 @02h 29m 08s 683ms").?);
 }
 
+test "parseChatStem reads the timestamp past a character-name prefix that carries its own digits" {
+    // stemOf keeps the name, so `Char 07 Vex - <stamp>` has eight digit runs; the LAST seven are the
+    // timestamp. This is the first-chat-did-not-convert bug.
+    const want: f64 = 1770776948683;
+    try testing.expectEqual(want, parseChatStem("Char 07 Vex - 2026-2-11 @02h 29m 08s 683ms").?);
+    try testing.expectEqual(want, parseChatStem("Rita 2000 - 2026-02-11@02h29m08s683ms").?);
+}
+
 test "parseChatStem rejects a renamed chat's custom name" {
-    // Not seven date-shaped numbers -> a custom title, shown verbatim.
+    // A custom title, shown verbatim: either it does not end in the ms suffix, or it is not seven
+    // date-shaped numbers.
     try testing.expect(parseChatStem("My Epic Quest") == null);
     try testing.expect(parseChatStem("chat 2 of 3") == null);
     try testing.expect(parseChatStem("") == null);
+    try testing.expect(parseChatStem("brainstorms") == null); // ends in ms, but no digits
     try testing.expect(parseChatStem("2026-13-11@02h29m08s683ms") == null); // month 13
-    try testing.expect(parseChatStem("2026-02-11@02h29m08s683ms999") == null); // an eighth number
+    try testing.expect(parseChatStem("2026-02-11@02h29m08s683") == null); // no ms suffix
 }
 
 test "friendlyStem formats a stem and passes a custom name through as null" {
