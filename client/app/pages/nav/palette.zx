@@ -1,0 +1,243 @@
+// The command palette: Ctrl-K / Cmd-K opens a search box over the page, typing narrows a list of
+// places to go, Enter goes there. It is a SECONDARY accelerator (rework principle 2), never the
+// primary navigation: everything it reaches is reachable from the two edge tabs and their section
+// switchers, and it performs the same action those controls do rather than carrying its own copy of
+// the state rules.
+//
+// Its own client region, sibling of Shell rather than a child of it: a letter typed in the search
+// box re-renders this overlay and nothing else. Inside Shell, every keystroke would rebuild both
+// docks, both tabs and the gear.
+//
+// THREE FILES, one component: this holds the markup and the activation (the only part that needs
+// ui.zig), palette_state.zig holds the region handle and the focus moves, palette_targets.zig holds
+// the catalogue and the filter as pure, natively tested Zig (ZX5).
+//
+// NO ENTRANCE ANIMATION, deliberately: the palette is keyboard-initiated and opened often, which is
+// exactly the case where motion is friction rather than polish (WD24).
+pub fn Palette(ctx: *zx.ComponentCtx(void)) zx.Component {
+    state.region = ctx.state(u32, 0);
+    const allocator = ctx.allocator;
+    return (
+        // The delegation root for the backdrop and the option rows, not a control itself. Every key
+        // path has parity through onkeydown on this same element, and the overlay's own controls are
+        // a real <input> and role=option rows driven by aria-activedescendant (WD37, WD38).
+        // allow-div-onclick: region-level delegation root; keyboard parity via onkeydown here
+        <div @allocator={allocator} id="palette" class="contents" onclick={onClick} onkeydown={onKey}>
+            {if (state.isOpen()) (
+                <div class={frame}>
+                    <div class="absolute inset-0 bg-bg/70" data-palette-dismiss="1" aria-hidden="true"></div>
+                    <div
+                        id="palette-card"
+                        class={card}
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="palette-title"
+                    >
+                        <h2 id="palette-title" class={title}>Jump to</h2>
+                        <input
+                            id="palette-input"
+                            name="palette-query"
+                            type="text"
+                            class={box}
+                            placeholder="Where to?"
+                            autocomplete="off"
+                            spellcheck="false"
+                            role="combobox"
+                            aria-expanded="true"
+                            aria-controls="palette-list"
+                            aria-autocomplete="list"
+                            aria-label="Search places to jump to"
+                            aria-describedby="palette-keys"
+                            aria-activedescendant={activeDesc(allocator)}
+                            oninput={onInput}
+                        />
+                        {if (targets.visibleCount() > 0) (
+                            <ul id="palette-list" class={list} role="listbox" aria-label="Places">
+                                {for (targets.visible(), 0..) |ti, row| (
+                                    <li
+                                        id={optId(allocator, row)}
+                                        class={if (targets.isActiveRow(row)) row_on else row_off}
+                                        role="option"
+                                        aria-selected={boolStr(targets.isActiveRow(row))}
+                                        data-palette-row={row}
+                                    >
+                                        <span class={group_cls}>{rowAt(ti).group}</span>
+                                        <span>{rowAt(ti).label}</span>
+                                    </li>
+                                )}
+                            </ul>
+                        ) else (
+                            <p class={empty} role="status">Nothing here goes by that name. Remove a word to widen the search.</p>
+                        )}
+                        <p id="palette-keys" class={keys}>Up and Down move the highlight, Enter opens it, Escape closes.</p>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ---- appearance (literal strings only: the tailwind scanner reads this file's text, so a class
+// assembled in Zig is never generated) ------------------------------------------------------------
+
+// Docked above centre rather than mid-screen: the list grows downward, and a centred card would
+// shift under the query as rows drop out. Modest and centred, never full-bleed.
+const frame = "fixed inset-0 z-50 flex items-start justify-center px-4 pt-[12vh] max-[640px]:px-2 max-[640px]:pt-[6vh]";
+
+// Depth on borders, no shadow: the house convention for this dark theme (WD16).
+const card = "relative z-10 flex w-[min(34rem,100%)] flex-col gap-2 rounded-lg border border-border bg-surface p-2";
+
+const title = "m-0 px-1 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
+
+const box = "w-full rounded-md border border-control-border bg-bg px-[0.7rem] py-[0.5rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
+
+const list = "m-0 flex max-h-[min(22rem,46vh)] list-none flex-col gap-px overflow-y-auto p-0 [scrollbar-width:thin]";
+
+// The highlighted row wears the same tool-on ground the section switcher's current control does, so
+// one look means "this is the one" across the whole app.
+const row_base = "flex cursor-pointer items-baseline gap-2 rounded-sm px-2 py-[0.35rem] text-sm [@media(pointer:coarse)]:min-h-11";
+const row_off = row_base ++ " text-muted";
+const row_on = row_base ++ " bg-tool-on text-text";
+
+const group_cls = "flex-none font-mono text-[0.62rem] tracking-[0.12em] text-faint uppercase";
+
+const empty = "m-0 px-2 py-3 text-sm text-muted";
+
+const keys = "m-0 px-1 font-mono text-[0.62rem] leading-ui text-faint";
+
+fn boolStr(b: bool) []const u8 {
+    return if (b) "true" else "false";
+}
+
+fn rowAt(ti: u8) targets.Target {
+    return targets.all[ti];
+}
+
+fn optId(allocator: std.mem.Allocator, row: usize) []const u8 {
+    return std.fmt.allocPrint(allocator, "palette-opt-{d}", .{row}) catch "palette-opt";
+}
+
+/// Which option the search box says Enter will take. Empty when nothing matches, which drops the
+/// attribute rather than pointing at a row that is not rendered.
+fn activeDesc(allocator: std.mem.Allocator) []const u8 {
+    if (targets.visibleCount() == 0) return "";
+    return optId(allocator, targets.activeIndex());
+}
+
+// ---- handlers -----------------------------------------------------------------------------------
+
+/// Keys while the palette is up. Arrows move the highlight and Enter takes it; Escape closes and
+/// hands focus back. Home and End are deliberately NOT bound: this is a combobox, and those keys
+/// belong to the caret in the query box (the WAI-ARIA combobox pattern), unlike the plain listbox
+/// dropdown where they move the list.
+///
+/// Tab is swallowed while the palette is open. The dialog holds exactly one focusable control, so
+/// there is nowhere to tab TO, and letting it through would drop focus onto the page behind a modal
+/// overlay (WD39).
+pub fn onKey(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    if (!targets.isOpen()) return;
+    const key = ev.key() orelse return;
+    defer zx.allocator.free(key);
+
+    if (std.mem.eql(u8, key, "Escape")) {
+        consume(ev);
+        state.dismiss();
+        return;
+    }
+    if (std.mem.eql(u8, key, "Enter")) {
+        consume(ev);
+        activateHighlighted();
+        return;
+    }
+    if (std.mem.eql(u8, key, "Tab")) {
+        consume(ev);
+        return;
+    }
+    if (std.mem.eql(u8, key, "ArrowDown")) {
+        consume(ev);
+        targets.moveActive(.down);
+        state.bump();
+        state.keepActiveVisible();
+        return;
+    }
+    if (std.mem.eql(u8, key, "ArrowUp")) {
+        consume(ev);
+        targets.moveActive(.up);
+        state.bump();
+        state.keepActiveVisible();
+    }
+}
+
+/// Each keystroke in the box: take the text off the element and refilter. The input is UNCONTROLLED
+/// (WD53) - the markup carries no value attribute - so a re-render never rewrites what is being
+/// typed, and the caret stays where the user put it.
+pub fn onInput(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const value = state.readInputValue(ev) orelse return;
+    defer zx.allocator.free(value);
+    targets.setQuery(value);
+    state.bump();
+}
+
+/// A click on an option row activates it; a click on the backdrop dismisses. Both ride data-*, so
+/// one delegated handler covers the whole overlay and no row carries its own function pointer.
+pub fn onClick(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    if (!targets.isOpen()) return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    defer target.deinit();
+    if (dom_event.datasetUp(target, "paletteRow")) |raw| {
+        defer zx.allocator.free(raw);
+        const row = std.fmt.parseInt(usize, raw, 10) catch return;
+        targets.setActiveRow(row);
+        activateHighlighted();
+        return;
+    }
+    if (dom_event.datasetUp(target, "paletteDismiss")) |raw| {
+        zx.allocator.free(raw);
+        state.dismiss();
+    }
+}
+
+/// Go where the highlighted row points, by calling the SAME public API the tab and the switcher
+/// call. The palette owns no panel state of its own: selectSection moves the side to that section
+/// and persists it, and openSideQuiet opens a closed side onto what selectSection just armed. A
+/// query that matches nothing has nothing to activate, so Enter just closes.
+fn activateHighlighted() void {
+    const t = targets.activeTarget() orelse {
+        state.dismiss();
+        return;
+    };
+    switch (t.kind) {
+        .section => {
+            ui.selectSection(t.side, t.panel);
+            if (ui.openIdOn(t.side) == null) {
+                ui.openSideQuiet(t.side);
+                regions.bumpShell();
+            }
+            // Focus lands on the tab that owns the side now showing it, which is a real control in
+            // the destination rather than wherever the user happened to be before.
+            state.closeOnto(if (t.side == .left) "tab-setup" else "tab-cast");
+        },
+        .system => {
+            sysmenu.setOpen(true);
+            regions.bumpShell();
+            state.closeOnto("sys-gear");
+        },
+    }
+}
+
+fn consume(ev: zx.client.Event) void {
+    ev.preventDefault();
+    ev.stopPropagation();
+}
+
+const std = @import("std");
+const zx = @import("zx");
+const ui = @import("./ui.zig");
+const state = @import("./palette_state.zig");
+const targets = @import("./palette_targets.zig");
+const sysmenu = @import("./sysmenu_state.zig");
+const regions = @import("../shell/regions.zig");
+const dom_event = @import("../platform/dom_event.zig");

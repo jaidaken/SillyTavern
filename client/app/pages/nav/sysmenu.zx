@@ -1,0 +1,131 @@
+// The system card: a gear in the bottom-left corner and a compact card floating beside it (rework
+// section 4). It reaches the three app-wide panels the drawers do not carry, Look, Settings and
+// Extensions, through the switcher across its top.
+//
+// IT IS DELIBERATELY NOT FULL-SCREEN, and that is the whole point of the component. Every control in
+// it changes how the app LOOKS, and a menu that covers the app hides the thing being judged. So the
+// card is capped at 336px wide and at 28rem tall, its BODY scrolls rather than the card growing, and
+// a background, colour or motion change repaints the conversation that stays visible behind it.
+//
+// The bodies it shows are the real panels (system/*.zx), not a summary of them: the same forms the
+// old top drawer carried, laid out to wrap at this width.
+pub fn SysMenu(allocator: zx.Allocator) zx.Component {
+    return (
+        <div @allocator={allocator} class="contents">
+            <button
+                id="sys-gear"
+                type="button"
+                class={gear}
+                style={state.gearOffset(allocator)}
+                data-icon="cog"
+                aria-label="System"
+                aria-haspopup="dialog"
+                aria-expanded={if (state.isOpen()) "true" else "false"}
+                aria-controls={if (state.isOpen()) "sys-popover" else ""}
+                onclick={state.onGear}
+            ></button>
+            {if (state.isOpen()) (
+                <div
+                    id="sys-popover"
+                    class={popover}
+                    style={state.gearOffset(allocator)}
+                    role="dialog"
+                    aria-labelledby="sys-heading"
+                    tabindex="-1"
+                    onkeydown={state.onKey}
+                >
+                    <div class="flex flex-none items-center justify-between gap-2 px-3 pt-3 pb-2">
+                        <h2 id="sys-heading" class={heading}>System</h2>
+                        <button
+                            type="button"
+                            class={close_btn}
+                            data-icon="close"
+                            aria-label="Close system menu"
+                            onclick={state.onClose}
+                        ></button>
+                    </div>
+
+                    <SysSections />
+
+                    <div class={body} data-sys-body={model.sectionTag(state.section())}>
+                        {if (state.section() == .look) (
+                            <div class="flex flex-col gap-3">
+                                <div class="flex flex-col gap-1">
+                                    <span class={group_label}>Motion</span>
+                                    <div class="flex gap-1">
+                                        {for (motion_opts_slice) |m| (
+                                            <button
+                                                type="button"
+                                                class={seg}
+                                                data-motion-set={m.value}
+                                                aria-pressed={if (ui.motionPref() == m.pref) "true" else "false"}
+                                                onclick={state.onMotion}
+                                            >{m.label}</button>
+                                        )}
+                                    </div>
+                                </div>
+                                <div class="flex flex-col gap-1">
+                                    <span class={group_label}>Background</span>
+                                    <BackgroundsBody />
+                                </div>
+                            </div>
+                        ) else if (state.section() == .settings) (
+                            <SettingsBody />
+                        ) else (
+                            <ExtensionsBody />
+                        )}
+                    </div>
+
+                    <p class={note}>Changes land on the page behind this card.</p>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// The gear sits in the corner the two panel tabs do not own, and clears the composer's own controls,
+// which stay centred on the reading measure.
+const gear = "icon fixed bottom-3 z-50 grid size-[2.2rem] cursor-pointer place-items-center rounded-md border border-control-border bg-surface text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-accent";
+
+// 336px wide and 28rem tall at most, floating clear of the gear: wide enough for the real forms once
+// they wrap, narrow enough that the conversation is still readable beside it. The height cap yields
+// to the viewport on a short window so the card can never run off the top. No shadow: this theme
+// carries depth on borders (WD16). Padding lives on the head, body and footer, not here, so the
+// body's scrollbar rides the card edge instead of floating inside a gutter.
+const popover = "fixed bottom-[3.6rem] z-50 flex max-h-[min(28rem,calc(100dvh_-_7rem))] w-[21rem] max-w-[calc(100vw_-_1.5rem)] flex-col overflow-hidden rounded-lg border border-border bg-surface";
+
+const heading = "m-0 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
+
+const close_btn = "icon grid size-[1.6rem] flex-none cursor-pointer place-items-center rounded-md border-0 bg-transparent text-muted hover:bg-surface-2 hover:text-text";
+
+// The one scrolling region. The card holds its size and this grows a scrollbar, which is what keeps
+// a full-size form from turning the card into the overlay it must not be. It carries data-sys-body,
+// which names the group currently mounted: the browser gate drives this card through that attribute
+// and the three body ids, so neither depends on a class or on visible text surviving a restyle.
+const body = "flex-1 overflow-y-auto px-3 py-3 [scrollbar-width:thin]";
+
+const group_label = "font-mono text-[0.62rem] tracking-[0.12em] text-faint uppercase";
+
+const note = "m-0 flex-none border-t border-border-soft px-3 py-2 font-mono text-[0.62rem] leading-ui text-faint";
+
+// The segmented motion control. Its selected look rides aria-pressed, which the button carries for
+// assistive tech anyway, so no class is computed for state.
+const seg = "flex-1 cursor-pointer rounded-md border border-control-border bg-transparent px-2 py-1 font-mono text-[0.68rem] text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-text aria-pressed:border-accent aria-pressed:bg-surface-2 aria-pressed:text-accent";
+
+const MotionOpt = struct { pref: ui.MotionPref, value: []const u8, label: []const u8 };
+const motion_opts = [_]MotionOpt{
+    .{ .pref = .system, .value = "system", .label = "System" },
+    .{ .pref = .on, .value = "on", .label = "Full" },
+    .{ .pref = .off, .value = "off", .label = "Still" },
+};
+// ZX1: a {for} target must already be a slice.
+const motion_opts_slice: []const MotionOpt = &motion_opts;
+
+const zx = @import("zx");
+const ui = @import("./ui.zig");
+const state = @import("./sysmenu_state.zig");
+const model = @import("./sysmenu_model.zig");
+const SysSections = @import("./sysmenu_sections.zx").SysSections;
+const SettingsBody = @import("../system/settings_body.zx").SettingsBody;
+const BackgroundsBody = @import("../system/backgrounds_body.zx").BackgroundsBody;
+const ExtensionsBody = @import("../system/extensions_body.zx").ExtensionsBody;

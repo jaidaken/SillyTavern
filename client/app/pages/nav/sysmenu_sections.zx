@@ -1,0 +1,36 @@
+// The labeled row of groups across the top of the system card: Look, Settings, Extensions. Clicking
+// one swaps the body underneath without closing the card, which is what makes the three system
+// panels reachable from the bottom-left gear at all.
+//
+// It mirrors the drawer's own switcher (nav/section_switcher.zx) on purpose: one active vocabulary
+// means "this is the one showing" wherever it appears. The vocabulary is copied rather than shared
+// because the two rows differ in their catalogue and their scale, and the drawer's file belongs to
+// another track.
+//
+// A nav, not a tablist: each control shows a group that owns its own controls, and plain buttons are
+// Tab-reachable and Enter/Space-operable with no roving-tabindex machinery (WD35, WD37). The ACTIVE
+// paint is an aria-current variant, so the state lives in the attribute assistive tech reads and Zig
+// computes no appearance.
+const nav_class = "flex flex-none items-center gap-1 border-b border-border-soft px-3 py-1.5";
+
+const section_class = "flex-1 cursor-pointer rounded-sm border border-transparent bg-transparent px-2 py-1 font-mono text-[0.68rem] tracking-[0.06em] whitespace-nowrap text-muted uppercase transition-colors duration-120 ease-[ease] hover:bg-tool-hover hover:text-text aria-[current=true]:border-border aria-[current=true]:bg-tool-on aria-[current=true]:text-text max-[768px]:min-h-11";
+
+pub fn SysSections(allocator: zx.Allocator) zx.Component {
+    return (
+        <nav @allocator={allocator} class={nav_class} aria-label={model.navLabel()}>
+            {for (model.sections_slice) |sec| (
+                <button
+                    type="button"
+                    class={section_class}
+                    data-sys-section={model.sectionTag(sec.id)}
+                    aria-current={state.currentStr(sec.id)}
+                    onclick={state.onSection}
+                >{sec.label}</button>
+            )}
+        </nav>
+    );
+}
+
+const zx = @import("zx");
+const model = @import("./sysmenu_model.zig");
+const state = @import("./sysmenu_state.zig");

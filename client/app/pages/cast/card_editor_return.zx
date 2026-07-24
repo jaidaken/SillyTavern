@@ -1,0 +1,44 @@
+// The card editor's way back. The editor is CONTEXTUAL (ui_state.contextual_panels): it is opened by
+// acting on a character and it takes over the Cast dock, so it owes that dock an obvious return or
+// the only exit is closing the whole side and losing the section you were in.
+//
+// It names the character being edited, because the editor's own heading says "Character Card" and a
+// user who opened it from a grid of sixty faces has no other confirmation of which one they hit.
+pub fn CardEditorReturn(allocator: zx.Allocator) zx.Component {
+    return (
+        <div @allocator={allocator} class="flex flex-none items-center gap-2 pb-3">
+            <button
+                id="card-editor-back"
+                type="button"
+                class={back_btn}
+                onclick={onBack}
+            >Back to characters</button>
+            <span class="min-w-0 flex-1 truncate text-right font-serif text-sm text-muted">{editing(allocator)}</span>
+        </div>
+    );
+}
+
+// Reads as the escape hatch it is: the panel's one filled control is Save (card_editor_body), and a
+// second emphatic button beside it would leave the primary action indistinguishable from the exit.
+const back_btn = "flex-none cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:bg-tool-hover hover:text-text max-[768px]:min-h-11 max-[768px]:px-4";
+
+/// Empty before the card lands, so the row shows the control alone rather than a stray dash.
+fn editing(alloc: zx.Allocator) []const u8 {
+    const name = card_editor.editingName();
+    if (name.len == 0) return "";
+    return std.fmt.allocPrint(alloc, "Editing {s}", .{name}) catch name;
+}
+
+/// Hands the dock back to the section the editor was opened from. The pairing lives in ui_state, so
+/// this control never names `characters` itself.
+fn onBack(_: zx.client.Event) void {
+    const parent = ui_state.contextParent(.card_editor) orelse return;
+    ui.selectSection(.right, parent);
+}
+
+const std = @import("std");
+const zx = @import("zx");
+const ui = @import("../nav/ui.zig");
+// The pairing table direct, since it is pure data: ui.zig re-exports only the reactive surface.
+const ui_state = @import("../nav/ui_state.zig");
+const card_editor = @import("./card_editor.zig");

@@ -1,0 +1,41 @@
+// The labeled row of sections at the top of an open drawer: Setup lists AI / Format / World / API,
+// Cast lists Characters / Personas / Groups / Chats. Clicking one swaps the body underneath without
+// closing the drawer, which is what makes every panel reachable from the two edge tabs.
+//
+// The controls are one literal class string and the ACTIVE paint is an aria-current variant, so the
+// state lives in the attribute assistive tech reads and Zig computes no appearance (the pattern the
+// toolbar's aria-pressed controls already use). Sections come from ui_state's per-side table, so a
+// section added there grows this row with no edit here (WD31).
+pub const SwitcherProps = struct {
+    side: ui.Side,
+};
+
+// A nav, not a tablist: each control opens a panel that owns its own heading, and plain buttons are
+// Tab-reachable and Enter/Space-operable with no roving-tabindex machinery (WD35, WD37).
+const nav_class = "flex flex-none items-center gap-1 overflow-x-auto border-b border-border-soft px-2 py-1.5 [scrollbar-width:none] max-[768px]:px-3";
+
+// text-muted -> text-text on the current one, on a warm accent-mixed ground: the same active
+// vocabulary as the character toolbar, so one look means "this is the one showing" app-wide.
+const section_class = "flex-none cursor-pointer rounded-sm border border-transparent bg-transparent px-2 py-1 font-mono text-xs tracking-[0.06em] whitespace-nowrap text-muted uppercase transition-colors duration-120 ease-[ease] hover:bg-tool-hover hover:text-text aria-[current=true]:border-border aria-[current=true]:bg-tool-on aria-[current=true]:text-text max-[768px]:min-h-11 max-[768px]:px-3";
+
+pub fn SectionSwitcher(allocator: zx.Allocator, props: SwitcherProps) zx.Component {
+    const side = props.side;
+    return (
+        <nav @allocator={allocator} class={nav_class} aria-label={state.navLabel(side)}>
+            {for (state.sections(side)) |sec| (
+                <button
+                    type="button"
+                    class={section_class}
+                    data-side={ui.sideStr(side)}
+                    data-section={state.sectionTag(sec.id)}
+                    aria-current={state.currentStr(side, sec.id)}
+                    onclick={state.onSection}
+                >{sec.label}</button>
+            )}
+        </nav>
+    );
+}
+
+const zx = @import("zx");
+const ui = @import("./ui.zig");
+const state = @import("./section_switcher_state.zig");

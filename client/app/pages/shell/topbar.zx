@@ -1,0 +1,32 @@
+// PROTOTYPE: the top bar is now the wordmark alone.
+//
+// The 13-icon drawer row that used to fill the right of this bar is GONE (rework section 2, CLEAN
+// BASE): thirteen unlabelled monochrome glyphs of equal weight was the thing that read as flattened.
+// Every panel it opened is reached from the two edge tabs (edgetabs.zx) or the system gear
+// (sysmenu.zx) instead, so the base page is the conversation and the composer.
+pub fn TopBar(allocator: zx.Allocator) zx.Component {
+    return (
+        <header
+            @allocator={allocator}
+            id="topbar"
+            class="relative z-20 col-span-full row-start-1 flex h-[var(--topbar-h)] items-center justify-between border-b border-border bg-surface pt-[env(safe-area-inset-top,0px)] pr-2 pb-0 pl-4 max-[768px]:min-w-0 max-[768px]:gap-2 max-[768px]:pl-3"
+        >
+            <h1
+                class="m-0 flex flex-none items-baseline gap-2 font-serif text-[1.1rem] font-semibold tracking-[0.01em] whitespace-nowrap max-[768px]:gap-1 max-[768px]:text-[0.95rem]"
+                aria-label="SillyTavern beta"
+            >
+                <span class="max-[480px]:hidden" aria-hidden="true">SillyTavern</span>
+                <span class="hidden max-[480px]:inline" aria-hidden="true">ST</span>
+                <span
+                    class="rounded-sm border border-beta-edge px-[0.34rem] py-[0.1rem] font-mono text-[0.58rem] font-medium tracking-[0.14em] text-accent uppercase max-[768px]:px-[0.25rem] max-[768px]:py-[0.05rem] max-[768px]:text-[0.5rem] max-[480px]:px-[0.3rem] max-[480px]:py-[0.1rem]"
+                    aria-hidden="true"
+                >
+                    <span class="max-[480px]:hidden">beta</span>
+                    <span class="hidden normal-case tracking-normal max-[480px]:inline">β</span>
+                </span>
+            </h1>
+        </header>
+    );
+}
+
+const zx = @import("zx");

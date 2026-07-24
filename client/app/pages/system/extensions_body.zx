@@ -1,0 +1,19 @@
+// Extensions panel body, shown in the system card's Extensions group.
+//
+// The wrapper is not decoration: it carries the id the browser gate drives this body by. The body
+// itself is one shared PanelEmpty, whose `panel-empty` class six other panels also use, so without a
+// root of its own there is no selector that means THIS body and only this body.
+pub fn ExtensionsBody(allocator: zx.Allocator) zx.Component {
+    return (
+        <div @allocator={allocator} id="extensions-body" class="extensions-body">
+            <PanelEmpty text={copy} />
+        </div>
+    );
+}
+
+// What the panel is for, in the words of the person using it. It used to describe the state of our
+// build instead (WD68).
+const copy = "Extensions bolt extra behaviour onto a chat: a voice reading the replies, pictures for a scene, a memory that outlives the context window. This client does not load them yet.";
+
+const zx = @import("zx");
+const PanelEmpty = @import("../shell/panelchrome.zx").PanelEmpty;

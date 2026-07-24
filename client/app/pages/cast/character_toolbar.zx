@@ -1,0 +1,265 @@
+// Character list toolbar: search, sort, favourites-only, grid/list, and tag-filter chips.
+// Client-only (no backend): every handler mutates cv.global and recomputes the filtered
+// list. Search re-renders only the list region (so the focused input keeps focus); the other
+// controls re-render the Shell region so their active state updates. Mirrors the old frontend's
+// rm_characters_block controls.
+//
+// Sort and page-size are dropdown.zx (the Wave-1 styled listbox), not native <select>s, which the
+// stylesheet could only give a focus ring. They are PLAIN prop-taking children whose dispatch is
+// DELEGATED: this component's root binds onclick/onkeydown and hands them to dropdown.onClick/onKey.
+// The dropdown bakes id + name from its `name` prop, which is where the sort/page-size controls'
+// form identity now comes from (plan item 1b).
+
+const zx = @import("zx");
+const std = @import("std");
+const char_store = @import("./character_store.zig");
+const cv = @import("./character_view.zig");
+const char_prefs = @import("./character_prefs.zig");
+const regions = @import("../shell/regions.zig");
+const dom_event = @import("../platform/dom_event.zig");
+const dropdown = @import("../nav/dropdown.zx");
+const Dropdown = dropdown.Dropdown;
+// w3-reason 3d tags
+const tag_manager = @import("./tag_manager.zx");
+const TagManager = tag_manager.TagManager;
+
+// The pressed state of a toggle (favourites-only, grid, a tag chip) is aria-pressed, which these
+// buttons carry for assistive tech anyway, so the highlight is declared off tailwind's built-in
+// aria-pressed variant. Nothing here computes a class.
+// gap-1 / px-2 py-1: the legacy rules asked for `var(--s-1)`, which the token scale never defined
+// (it starts at --s-2), so these controls rendered with no padding and no gap.
+pub const tool_class = "char-tool inline-flex flex-none cursor-pointer items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-1 text-xs text-text hover:bg-tool-hover aria-pressed:bg-tool-on aria-pressed:outline-1 aria-pressed:outline-tool-ring max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:px-3 max-[768px]:py-2";
+pub const tag_class = "char-tag cursor-pointer rounded-full border border-border bg-surface-2 px-2 py-px text-xs text-muted aria-pressed:bg-tag-on aria-pressed:text-text aria-pressed:outline-1 aria-pressed:outline-tool-ring max-[768px]:min-h-9 max-[768px]:px-3 max-[768px]:py-1";
+const row_class = "char-toolbar-row flex flex-wrap items-center gap-2 max-[640px]:gap-[0.2rem]";
+
+pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
+    char_prefs.ensureHydrated();
+    const view = cv.global;
+    // allow-div-onclick: delegation root for the dropdowns' data-* controls (dropdown.zx is a plain
+    // prop-taking child); every control inside is a real button. Keyboard parity via onkeydown.
+    return (
+        <div
+            @allocator={ctx.allocator}
+            class="char-toolbar flex flex-col gap-2 max-[640px]:gap-[0.2rem]"
+            role="toolbar"
+            aria-label="Character list controls"
+            @rendering={.client}
+            onclick={onToolbarClick}
+            onkeydown={onToolbarKey}
+        >
+            <div class={row_class}>
+                <input
+                    type="search"
+                    class="char-search min-w-0 flex-1 max-[640px]:w-full max-[640px]:flex-none"
+                    name="character_search"
+                    aria-label="Search characters"
+                    placeholder="Search..."
+                    value={view.query}
+                    oninput={ctx.bind(onSearchInput)}
+                />
+                <Dropdown
+                    options={&sort_options}
+                    value={sortValue(view.sort)}
+                    name="char-sort"
+                    label="Sort characters"
+                    onchange={&onSortPick}
+                />
+            </div>
+            <div class={row_class}>
+                <button
+                    type="button"
+                    class={tool_class}
+                    aria-pressed={if (view.fav_only) "true" else "false"}
+                    aria-label="Show favourites only"
+                    onclick={ctx.bind(onFavToggle)}
+                >Favourites</button>
+                <button
+                    type="button"
+                    class={tool_class}
+                    aria-pressed={if (view.grid) "true" else "false"}
+                    aria-label="Toggle grid view"
+                    onclick={ctx.bind(onGridToggle)}
+                >Grid</button>
+                <button
+                    type="button"
+                    class={tool_class}
+                    aria-pressed={if (tag_manager.open) "true" else "false"}
+                    aria-label="Manage tags"
+                    aria-expanded={if (tag_manager.open) "true" else "false"}
+                    onclick={&tag_manager.onOpenToggle}
+                >Tags</button>
+            </div>
+            { if (tag_manager.open) (
+                <TagManager />
+            ) }
+            <div class="char-tags flex flex-wrap gap-1" role="group" aria-label="Filter by tag">
+                {for (view.tags_all.items) |tag| (
+                    <button
+                        type="button"
+                        class={tag_class}
+                        aria-pressed={if (view.isTagActive(tag)) "true" else "false"}
+                        data-tag={tag}
+                        onclick={ctx.bind(onTagToggle)}
+                    >{tag}</button>
+                )}
+            </div>
+            <div class={row_class ++ " char-pager justify-between"} role="group" aria-label="Pagination">
+                <button type="button" class={tool_class} data-page="prev" aria-label="Previous page" onclick={ctx.bind(onPageStep)}>‹</button>
+                <span class="char-page-label flex-1 text-center text-xs text-muted" aria-live="polite">{pageLabel(ctx.allocator, view)}</span>
+                <button type="button" class={tool_class} data-page="next" aria-label="Next page" onclick={ctx.bind(onPageStep)}>›</button>
+                <div class="char-pagesize flex-none max-[640px]:hidden">
+                    <Dropdown
+                        options={&page_size_options}
+                        value={pageSizeValue(view)}
+                        name="char-pagesize"
+                        label="Characters per page"
+                        onchange={&onPageSizePick}
+                    />
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// Every value is a SortKey tag name, so the pick maps back through std.meta.stringToEnum and the
+// option list needs no second key column.
+const sort_options = [_]dropdown.Option{
+    .{ .value = "recent", .label = "Recent" },
+    .{ .value = "name_asc", .label = "A-Z" },
+    .{ .value = "name_desc", .label = "Z-A" },
+    .{ .value = "newest", .label = "Newest" },
+    .{ .value = "oldest", .label = "Oldest" },
+    .{ .value = "favs", .label = "Favourites" },
+    .{ .value = "most_chats", .label = "Most chats" },
+    .{ .value = "least_chats", .label = "Least chats" },
+    .{ .value = "most_tokens", .label = "Most tokens" },
+    .{ .value = "least_tokens", .label = "Least tokens" },
+    .{ .value = "random", .label = "Random" },
+};
+
+const page_size_options = [_]dropdown.Option{
+    .{ .value = "20", .label = "20" },
+    .{ .value = "50", .label = "50" },
+    .{ .value = "100", .label = "100" },
+    .{ .value = "all", .label = "All" },
+};
+
+fn sortValue(key: cv.SortKey) []const u8 {
+    return @tagName(key);
+}
+
+/// The page-size dropdown's controlled value. Static strings: the sizes are a fixed list, and the
+/// allocPrint this used to do leaked its result on every render.
+fn pageSizeValue(view: cv.View) []const u8 {
+    return switch (view.page_size) {
+        0 => "all",
+        20 => "20",
+        50 => "50",
+        100 => "100",
+        else => "all",
+    };
+}
+
+/// Takes the render allocator, which ziex owns: page_gpa is the raw wasm allocator with no free
+/// here, so the old label leaked a string on every toolbar render (one per search keystroke). The
+/// range separator stays an en dash (correct for a numeric range), written as an escape.
+fn pageLabel(alloc: std.mem.Allocator, view: cv.View) []const u8 {
+    if (view.total == 0) return "No characters";
+    return std.fmt.allocPrint(alloc, "{d}\u{2013}{d} of {d}", .{ view.pageFrom(), view.pageTo(), view.total }) catch "";
+}
+
+
+fn onSearchInput(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const event = e.getEvent();
+    const target = event.ref.get(zx.client.js.Object, "target") catch return;
+    const val = target.getAlloc(zx.client.js.String, zx.allocator, "value") catch return;
+    defer zx.allocator.free(val);
+    cv.global.setQuery(val) catch return;
+    cv.global.compute(char_store.slice()) catch return;
+    regions.bumpCharacterList();
+}
+
+// The dropdowns publish no onchange event of their own: the region root delegates to
+// dropdown.onClick/onKey, which call the picked option's registered callback with its value.
+// An event the dropdown CONSUMED stops here: ziex delegates at <body> and hands one event to every
+// ancestor handler, checking cancelBubble between them, and #shell's dismiss handlers sit further up
+// that walk. The KEY half is load-bearing: ui.onPageKey closes the panel on Escape, so without this
+// an Escape aimed at the open menu would take the whole dock with it (gate row C9). The CLICK half
+// is belt-and-braces since ui.onPageClick gained its detached-target guard.
+fn onToolbarClick(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    if (dropdown.onClick(target)) ev.stopPropagation();
+}
+
+fn onToolbarKey(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    if (dropdown.onKey(ev)) ev.stopPropagation();
+}
+
+// A dropdown pick mutates state and STOPS: dropdown.commit fires its own zx.client.rerender() the
+// moment onchange returns, and bumping a region here as well ran a region render inside that click,
+// which tore the panel down (an empty dock, no console error).
+fn onSortPick(val: []const u8) void {
+    const key = std.meta.stringToEnum(cv.SortKey, val) orelse return;
+    char_prefs.setSort(key);
+    cv.global.compute(char_store.slice()) catch return;
+}
+
+fn onPageSizePick(val: []const u8) void {
+    if (std.mem.eql(u8, val, "all")) {
+        cv.global.setPageSize(0);
+    } else {
+        const ps = std.fmt.parseInt(usize, val, 10) catch return;
+        cv.global.setPageSize(ps);
+    }
+    cv.global.compute(char_store.slice()) catch return;
+}
+
+fn onFavToggle(_: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    cv.global.setFavOnly(!cv.global.fav_only);
+    cv.global.compute(char_store.slice()) catch return;
+    regions.bumpShell();
+}
+
+fn onGridToggle(_: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    // Through char_prefs, not the View directly: the choice is remembered across reloads the same
+    // way the sort is, so a user who prefers the dense rows is not handed tiles again every visit.
+    char_prefs.setGrid(!cv.global.grid);
+    regions.bumpShell();
+}
+
+fn onTagToggle(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const event = e.getEvent();
+    const target = event.ref.get(zx.client.js.Object, "target") catch return;
+    const dataset = target.get(zx.client.js.Object, "dataset") catch return;
+    const tag = dataset.getAlloc(zx.client.js.String, zx.allocator, "tag") catch return;
+    defer zx.allocator.free(tag);
+    cv.global.toggleTag(tag) catch return;
+    cv.global.compute(char_store.slice()) catch return;
+    regions.bumpShell();
+}
+
+fn onPageStep(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const step = dom_event.datasetUp(target, "page") orelse {
+        std.log.scoped(.chars).warn("page step: click target has no data-page ancestor", .{});
+        return;
+    };
+    defer zx.allocator.free(step);
+    const cur = cv.global.page;
+    const pc = cv.global.pageCount();
+    if (std.mem.eql(u8, step, "prev")) {
+        if (cur > 0) cv.global.setPage(cur - 1);
+    } else if (std.mem.eql(u8, step, "next")) {
+        if (cur + 1 < pc) cv.global.setPage(cur + 1);
+    }
+    cv.global.compute(char_store.slice()) catch return;
+    regions.bumpShell();
+}
+

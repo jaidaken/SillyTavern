@@ -170,7 +170,14 @@ class Page {
             await sleep(poll);
         }
     }
-    async navigate(url) {
+    // Every load carries ?showtabs: a closed side hides its edge tab until the real pointer nears
+    // that screen edge, and a CDP click teleports to a coordinate without the approach that reveals
+    // it, so the tab is opacity:0 and pointer-events:none at the moment of the press. The reveal is
+    // proximity behaviour and belongs to its own pointer-move row, not to every panel row here.
+    async navigate(url, { pinTabs = true } = {}) {
+        const u = new URL(url);
+        if (pinTabs && !u.searchParams.has('showtabs')) u.searchParams.set('showtabs', '1');
+        url = u.toString();
         this.consoleLines.length = 0;
         this.navState.url = url;
         await this.cdp.send('Page.navigate', { url }, this.sessionId);
@@ -372,6 +379,244 @@ async function main() {
             throw new Error('openRecentChat: no chat opened after resume-last');
         };
 
+        // ---- reaching a panel (the edge tabs replaced the 13-icon topbar) ----
+        // Every panel used to have its own button in the top bar, so a row reached one with a single
+        // click on #d-<panel>. That row is gone (topbar.zx is the wordmark alone). A panel is now two
+        // moves: open its side's edge tab, then pick its section in that drawer's switcher. The
+        // routing table below is the one place the sides live; it mirrors setup_sections and
+        // cast_sections in app/pages/nav/ui_state.zig, and a section added there needs a line here
+        // and no other edit in this file.
+        const PANEL_SIDE = {
+            ai_config: 'left', formatting: 'left', world_info: 'left', connections: 'left',
+            characters: 'right', persona: 'right', groups: 'right', chat_manager: 'right',
+        };
+        const SIDE_TAB = { left: '#tab-setup', right: '#tab-cast' };
+        const dockSel = (side) => `#panel-view.panel-${side}`;
+        const sectionSel = (side, panel) => `${dockSel(side)} nav button[data-section="${panel}"]`;
+        // ---- THE LAUNCHER TABLE (the five panels that are not sections) ----
+        // The topbar deletion left five panels with no section of their own, so the switcher cannot
+        // reach any of them and each needs its own way in. Their rows below are kept whole: every one
+        // is the spec for a panel that already exists and works, and only the door was missing.
+        //
+        // THE SHAPE, and the answer to "what does a non-section opener look like here": an entry
+        // carries a `kind`, which NAMES A STRATEGY, and one function implements each strategy. There
+        // is no per-panel branch in openPanel and no second public helper to remember. openPanel stays
+        // the single entry point every row calls, so a panel changing its door changes this table and
+        // nothing else. Three strategies cover all five:
+        //   popover  - a control opens a floating menu, then a labeled section inside it switches the
+        //              body. The system trio (gear + [data-sys-section]). Not a dock: it never becomes
+        //              #panel-view, so nothing about it is asked of the side/section machinery.
+        //   contextual - the panel is an ACTION ON A SUBJECT, so the host panel opens first, a subject
+        //              is chosen, and only then does the control exist. The card editor (a character
+        //              tile's edit action). `host` + `subject` + `control` describe those three moves.
+        //   toggle   - one control that opens its own surface and closes it again. The bell.
+        // A sixth panel picks one of these three or adds a fourth `kind` beside them; it never edits
+        // openPanel. `reveal` marks a control that only becomes clickable once the pointer is in that
+        // side's flank (the edge-tab proximity model), which the helper drives before clicking.
+        //
+        // A `null` entry means this build has no launcher at all: every row needing it reports one
+        // pending line and the suite keeps running. NON-NULL BUT ABSENT is the same story with a
+        // sharper message, since the helper names the exact selector it could not find.
+        //
+        // NOT EXERCISED AT THIS HEAD: card_editor and notifications do not exist in this worktree, so
+        // their entries carry mreach's frozen selectors verbatim and have never been driven here. The
+        // first merged run is their first run; a wrong field reports itself by name rather than
+        // failing silently.
+        const LAUNCHERS = {
+            settings: { kind: 'popover', gear: '#sys-gear', section: 'settings' },
+            backgrounds: { kind: 'popover', gear: '#sys-gear', section: 'look' },
+            extensions: { kind: 'popover', gear: '#sys-gear', section: 'extensions' },
+            // The action cluster on a tile is hidden at rest on a fine pointer, so the helper hovers
+            // the tile first. Keyed by AVATAR, never by store index: an index moves under any sort or
+            // filter, so an index-keyed row drives the wrong character after a reorder and still passes.
+            card_editor: {
+                kind: 'contextual',
+                host: 'characters',
+                // Pinned by avatar, not position: the first tile is whatever the sort puts there, so an
+                // unpinned subject opens a different card and the deep-fetch row fails for the wrong reason.
+                subject: '#char-list .char-item[data-char-avatar="char41.png"]',
+                control: '.char-row-act[data-char-action="edit"]',
+                selected: '#char-actions-edit',
+                root: '#card-editor',
+                back: '#card-editor-back',
+            },
+            // #notify-bell is ALWAYS in the DOM and rides the Cast tab's reveal, so presence proves
+            // nothing and the pointer has to reach the right flank before the click lands. The count
+            // chip is a separate child, absent at zero unread; the button's aria-label carries the
+            // number, which is the readable half of the same fact.
+            notifications: {
+                kind: 'toggle',
+                control: '#notify-bell',
+                reveal: 'right',
+                root: '#notify-popover',
+                close: '#notify-popover button[aria-label="Close notifications"]',
+            },
+        };
+        // Where a non-section panel's body renders, so a close can be driven when its entry names no
+        // way out of its own. From the `side` field of app/pages/nav/ui_state.zig's panel catalogue.
+        const PANEL_HOME_SIDE = { settings: 'left', backgrounds: 'left', extensions: 'left', card_editor: 'right', notifications: 'right' };
+        class NoLauncher extends Error {}
+        const knownPanel = (panel) => panel in PANEL_SIDE || panel in LAUNCHERS;
+        // A panel this build can actually open. Static for the table (a null entry is a build with no
+        // launcher at all); the helpers below add the runtime half, naming the control that is absent.
+        const hasLauncher = (panel) => !!PANEL_SIDE[panel] || !!LAUNCHERS[panel];
+        const sideOf = (panel) => {
+            const side = PANEL_SIDE[panel];
+            if (!side) throw new NoLauncher(`the ${panel} panel is not a section: it opens from its own launcher`);
+            return side;
+        };
+        // Wraps a run of rows that all need one of the five. A missing launcher is reported once, as
+        // the gate's own 'pending' kind (a known plan item, printed, not fatal), and the suite carries
+        // on: an abort here would hide every row downstream, which is how the original red hid 24.
+        // Anything else that throws is a real failure and keeps propagating.
+        // One verdict per panel per run. Eleven regions need these five panels, and re-probing a
+        // launcher that is already known to be absent costs a page click plus a wait each time; this
+        // suite runs close enough to its mock server's lifetime that the repeats are not free.
+        const launcherMissing = new Map();
+        const needsPanel = async (panel, label, body) => {
+            // Checked BEFORE the body, not caught out of it: a body that got half way would leave a
+            // few real reds behind and only then report the gap.
+            if (!knownPanel(panel)) throw new Error(`needsPanel: ${panel} is not a panel this file knows`);
+            if (!hasLauncher(panel)) {
+                row('pending', false, label, `the ${panel} panel has no launcher at this HEAD (LAUNCHERS.${panel} is null)`);
+                return;
+            }
+            if (launcherMissing.has(panel)) {
+                row('pending', false, label, launcherMissing.get(panel));
+                return;
+            }
+            try {
+                await body();
+            } catch (err) {
+                if (!(err instanceof NoLauncher)) throw err;
+                launcherMissing.set(panel, err.message);
+                row('pending', false, label, err.message);
+            }
+        };
+        // Is this panel the one its side is showing right now? aria-current is the app's own answer,
+        // written by the switcher, so the driver reads the same state assistive tech does. A panel
+        // that is not a section has no such answer to give.
+        const panelShowing = async (panel) => (panel in PANEL_SIDE
+            ? page.eval(`!!document.querySelector('${sectionSel(PANEL_SIDE[panel], panel)}[aria-current="true"]')`)
+            : false);
+        const closeSide = async (side) => {
+            if (!(await page.eval(`!!document.querySelector('${dockSel(side)}')`))) return;
+            await page.click(SIDE_TAB[side]);
+            if (!(await page.waitFor(`!document.querySelector('${dockSel(side)}')`, 4000))) {
+                throw new Error(`closeSide: the ${side} dock stayed open after its tab was clicked`);
+            }
+        };
+        // ---- the five named helpers, one per non-section panel ----
+        // Each throws NoLauncher naming the control it could not find, so a build that has not grown
+        // that launcher yet reports one honest pending line instead of a mystery click failure.
+        const requireLauncher = (panel) => {
+            const l = LAUNCHERS[panel];
+            if (!l) throw new NoLauncher(`the ${panel} panel has no launcher at this HEAD (LAUNCHERS.${panel} is null)`);
+            return l;
+        };
+        // The system menu: a gear that opens a popover, then a labeled section inside it. One body for
+        // the three panels it hosts, since only the section tag differs.
+        const openSysSection = async (panel) => {
+            const { gear, section } = requireLauncher(panel);
+            if (!(await page.eval(`!!document.querySelector('${gear}')`))) {
+                throw new NoLauncher(`the ${panel} panel needs the system menu, and ${gear} is not on the page`);
+            }
+            const sectionCtl = `[data-sys-section="${section}"]`;
+            if (!(await page.eval(`!!document.querySelector('${sectionCtl}')`))) {
+                await page.click(gear);
+                // The popover renders its whole body at once, so a section that is coming is here
+                // within a frame or two; a long wait here only pays out on the absent case.
+                if (!(await page.waitFor(`document.querySelector('${sectionCtl}')`, 1500))) {
+                    // Put the menu back before giving up: a popover left open would sit over the
+                    // corner for every row after this one.
+                    await page.click(gear);
+                    throw new NoLauncher(`the system menu opened but carries no ${sectionCtl} for the ${panel} panel`);
+                }
+            }
+            await page.click(sectionCtl);
+        };
+        const openSettings = () => openSysSection('settings');
+        const openBackgrounds = () => openSysSection('backgrounds');
+        const openExtensions = () => openSysSection('extensions');
+        // The card editor is an action ON a character, not a destination, so the Cast panel and a
+        // selected character both come first: an editor opened with nothing selected has no card.
+        const openCardEditor = async () => {
+            const { subject, selected } = requireLauncher('card_editor');
+            await openPanel('characters');
+            await page.waitFor("document.querySelectorAll('#chat-root .char-item').length > 0", 8000);
+            // Drive the PINNED character: only it carries deep card fields, so an unpinned pick fails the
+            // fetch row for having no data. Via the selected control, which needs no hover.
+            if (!(await page.waitFor(`document.querySelector('${subject}')`, 8000))) {
+                throw new NoLauncher(`no character tile matching ${subject} for the card editor`);
+            }
+            await page.click(`${subject} .char-name`);
+            await page.waitFor(`document.querySelector('${subject}').classList.contains('is-selected')`, 8000);
+            if (!(await page.waitFor(`document.querySelector('${selected}')`, 4000))) {
+                throw new NoLauncher(`no ${selected} control for the card editor`);
+            }
+            await page.click(selected);
+        };
+        const openNotifications = async () => {
+            const { control } = requireLauncher('notifications');
+            if (!(await page.eval(`!!document.querySelector('${control}')`))) {
+                throw new NoLauncher(`the notifications bell ${control} is not on the page`);
+            }
+            await page.click(control);
+        };
+        const NAMED_OPENERS = {
+            settings: openSettings, backgrounds: openBackgrounds, extensions: openExtensions,
+            card_editor: openCardEditor, notifications: openNotifications,
+        };
+
+        const openPanel = async (panel) => {
+            if (!(panel in PANEL_SIDE)) {
+                if (!NAMED_OPENERS[panel]) throw new Error(`openPanel: ${panel} is not a panel this file knows`);
+                return NAMED_OPENERS[panel]();
+            }
+            const side = sideOf(panel);
+            // One dock at a time. The product allows both sides open at once, but then TWO elements
+            // carry id="panel-view" and every '#panel-view ...' assertion below reads whichever the
+            // document happens to hold first, while '!#panel-view' (the dismissed rows) can never be
+            // true. Closing the far side keeps those rows asking what they were written to ask.
+            await closeSide(side === 'left' ? 'right' : 'left');
+            if (!(await page.eval(`!!document.querySelector('${dockSel(side)}')`))) {
+                await page.click(SIDE_TAB[side]);
+                if (!(await page.waitFor(`document.querySelector('${dockSel(side)}')`, 8000))) {
+                    throw new Error(`openPanel: the ${side} dock never opened for ${panel}`);
+                }
+            }
+            // The tab reopens the side on its REMEMBERED section, which is rarely the one wanted, so
+            // the switcher click is unconditional; selecting the section already shown is a no-op the
+            // app absorbs. Retried because page.click dispatches at COORDINATES and the dock arrives
+            // on a transition: a press measured mid-slide lands beside the control.
+            const current = `document.querySelector('${sectionSel(side, panel)}[aria-current="true"]')`;
+            for (let attempt = 1; ; attempt++) {
+                await page.click(sectionSel(side, panel));
+                if (await page.waitFor(current, 4000)) break;
+                if (attempt === 3) throw new Error(`openPanel: ${panel} never became the current section on the ${side}`);
+            }
+        };
+        // A section closes with its side's tab. A system-menu panel closes with the gear that opened
+        // it; the other two render in a dock, so their side's tab is the close.
+        const closePanel = async (panel) => {
+            if (panel in PANEL_SIDE) return closeSide(PANEL_SIDE[panel]);
+            const l = requireLauncher(panel);
+            if (l.gear && await page.eval(`!!document.querySelector('${l.gear}')`)) return page.click(l.gear);
+            return closeSide(PANEL_HOME_SIDE[panel]);
+        };
+        // What the boot probe decided. It used to be readable at any moment off the topbar's
+        // connections button (data-conn-state); that button is deleted and the standing line lives
+        // inside the panel, so a readiness check opens the panel, reads it, and leaves the page the
+        // way it found it.
+        const waitConnState = async (want, ms = 8000, negate = false) => {
+            const wasOpen = await panelShowing('connections');
+            if (!wasOpen) await openPanel('connections');
+            const ok = await page.waitFor(`(function(){var e=document.getElementById('conn-standing');`
+                + `return !!e && e.dataset.connState ${negate ? '!==' : '==='} '${want}';})()`, ms);
+            if (!wasOpen) await closePanel('connections');
+            return ok;
+        };
+
         // ---- Session A: demo fixtures + settings drawer + resize handles ----
         console.log('== session A: demo mode (?demo=1) ==');
         await page.navigate(`${args.base}/?demo=1`);
@@ -404,32 +649,34 @@ async function main() {
             'A1b every wasm export the glue calls exists in the built module',
             `checked=${calledExports.length} missing=${missingExports.length ? missingExports.join(',') : 'none'}`);
 
-        await page.click('#d-settings');
-        row('must', await page.waitFor("document.querySelector('.settings-body')"),
-            'A2 drawer opens the settings panel (plain zx handler)');
+        await needsPanel('settings', 'A2-A5b the user-settings panel rows', async () => {
+            await openPanel('settings');
+            row('must', await page.waitFor("document.querySelector('.settings-body')"),
+                'A2 drawer opens the settings panel (plain zx handler)');
 
-        await page.click('.seg-btn[data-reading-set="size"][data-reading-val="s"]');
-        row('must', await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-size')==='s'", 2500),
-            'A3 reading Small sets data-reading-size on #chat-root');
+            await page.click('.seg-btn[data-reading-set="size"][data-reading-val="s"]');
+            row('must', await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-size')==='s'", 2500),
+                'A3 reading Small sets data-reading-size on #chat-root');
 
-        await page.click('.settings-tab[data-reading-val="appearance"]');
-        row('must', await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-tab')==='appearance'", 2500),
-            'A4 settings tab switches to Appearance');
+            await page.click('.settings-tab[data-reading-val="appearance"]');
+            row('must', await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-tab')==='appearance'", 2500),
+                'A4 settings tab switches to Appearance');
 
-        // The motion buttons sit on the appearance tab, display:none until the tab handler sets
-        // data-reading-tab, so A5a/A5b also prove A4 reached the DOM: a dead tab handler makes the
-        // click itself unreachable (the element is not visible in the viewport) and both rows fail.
-        let motionClicked = false;
-        try {
-            await page.click('[data-motion-set="on"]');
-            motionClicked = true;
-        } catch (_) { /* unreachable if the appearance panel never showed */ }
-        row('must', motionClicked
-            && await page.waitFor("document.getElementById('shell').classList.contains('motion-on')", 2500),
-            'A5a motion On reaches the shell class (zx handler -> ui.selectMotion)');
-        row('must', motionClicked
-            && await page.waitFor("document.querySelector('[data-motion-set=\\'on\\']').getAttribute('aria-checked')==='true'", 2500),
-            'A5b motion On updates the segmented highlight + aria-checked');
+            // The motion buttons sit on the appearance tab, display:none until the tab handler sets
+            // data-reading-tab, so A5a/A5b also prove A4 reached the DOM: a dead tab handler makes the
+            // click itself unreachable (the element is not visible in the viewport) and both rows fail.
+            let motionClicked = false;
+            try {
+                await page.click('[data-motion-set="on"]');
+                motionClicked = true;
+            } catch (_) { /* unreachable if the appearance panel never showed */ }
+            row('must', motionClicked
+                && await page.waitFor("document.getElementById('shell').classList.contains('motion-on')", 2500),
+                'A5a motion On reaches the shell class (zx handler -> ui.selectMotion)');
+            row('must', motionClicked
+                && await page.waitFor("document.querySelector('[data-motion-set=\\'on\\']').getAttribute('aria-checked')==='true'", 2500),
+                'A5b motion On updates the segmented highlight + aria-checked');
+        });
 
         const h0 = await page.eval("document.getElementById('send_textarea').clientHeight");
         await page.focus('#send_textarea');
@@ -438,20 +685,80 @@ async function main() {
             'A6 composer auto-grows on input');
 
         // Close the settings drawer before the resize drag: the appearance tab's custom-CSS textarea
-        // (C-COMP) overlays the chat area and would otherwise intercept the drag on the reading-width handle.
-        await page.click('#d-settings');
-        await page.waitFor("!document.querySelector('.settings-body')", 2500);
+        // (C-COMP) overlays the chat area and would otherwise intercept the drag on the reading-width
+        // handle. Conditional because the rows above may never have opened it.
+        if (await page.eval("!!document.querySelector('.settings-body')")) {
+            await closePanel('settings');
+            await page.waitFor("!document.querySelector('.settings-body')", 2500);
+        }
         await page.drag('.chat-resize', 80);
         row('must', await page.waitFor("document.getElementById('chat-root').style.getPropertyValue('--reading-measure') !== ''", 2500),
             'A7 reading-width handle drags (8198ddf22 regression row)');
 
-        await page.click('#d-characters');
+        await openPanel('characters');
         row('must', await page.waitFor("document.querySelector('#panel-view.panel-right')"),
             'A8 characters dock opens on the right');
         const pw0 = await page.eval("document.querySelector('#panel-view.panel-right').getBoundingClientRect().width");
         await page.drag('#panel-view .panel-resize', -60);
         row('must', await page.waitFor(`Math.abs(document.querySelector('#panel-view.panel-right').getBoundingClientRect().width - ${pw0}) > 20`, 2500),
             'A9 side-panel handle drags the dock width (glue gesture -> Zig state)');
+
+        // ---- the edge tabs themselves ----
+        // Every row above reaches a panel through a tab that ?showtabs pinned, so nothing yet asks
+        // whether an UNPINNED tab appears at all. These three load without the flag and drive the
+        // navigation the way a user meets it: a bare page, a pointer entering the flank, one tab, then
+        // a section swap that leaves the drawer standing.
+        console.log('== edge tabs: proximity reveal + section switcher ==');
+        await page.navigate(`${args.base}/?demo=1`, { pinTabs: false });
+        await page.waitFor(`${hydrated} && document.getElementById('tab-setup')`, 15000);
+        const tabStyle = (id) => page.eval(`(function(){const s=getComputedStyle(document.getElementById('${id}'));`
+            + `return { o: Number(s.opacity), pe: s.pointerEvents };})()`);
+        const tabAtRest = await tabStyle('tab-setup');
+        // The flank is 28% of the viewport bounded by the topbar and the composer (reveal_zone.zig),
+        // so x=40 y=200 is inside the left band and well clear of the right one.
+        const movePointer = (x, y) => page.cdp.send('Input.dispatchMouseEvent',
+            { type: 'mouseMoved', x, y, button: 'none' }, page.sessionId);
+        await movePointer(40, 200);
+        const leftRevealed = await page.waitFor(
+            "Number(getComputedStyle(document.getElementById('tab-setup')).opacity) > 0.9", 4000);
+        const rightStillHidden = (await tabStyle('tab-cast')).o < 0.1;
+        row('must', tabAtRest.o < 0.1 && tabAtRest.pe === 'none' && leftRevealed && rightStillHidden,
+            'A10 a closed tab is hidden and untouchable until the pointer enters its own flank',
+            `atRest=${JSON.stringify(tabAtRest)} revealed=${leftRevealed} farSideHidden=${rightStillHidden}`);
+
+        await movePointer(700, 200);
+        const leftFaded = await page.waitFor(
+            "Number(getComputedStyle(document.getElementById('tab-setup')).opacity) < 0.1", 4000);
+        row('must', leftFaded, 'A11 the tab fades again when the pointer leaves the flank', `faded=${leftFaded}`);
+
+        // The section switcher is what makes every panel reachable from two tabs, so the swap gets its
+        // own row: the body changes, the drawer does NOT close, and the new section says it is current.
+        await movePointer(40, 200);
+        await page.waitFor("Number(getComputedStyle(document.getElementById('tab-setup')).opacity) > 0.9", 4000);
+        await page.click('#tab-setup');
+        const dockUp = await page.waitFor("document.querySelector('#panel-view.panel-left')", 8000);
+        // The dock arrives on a transition and a click dispatches at coordinates, so wait for the
+        // control to stop moving before aiming at it.
+        await (async () => {
+            let last = null;
+            for (let i = 0; i < 80; i++) {
+                const at = await page.eval("(function(){const e=document.querySelector('#panel-view.panel-left nav button[data-section=\\'world_info\\']');"
+                    + "if(!e)return '';const b=e.getBoundingClientRect();return b.top+','+b.left+','+b.width;})()");
+                if (at && at === last) return;
+                last = at;
+                await sleep(50);
+            }
+        })();
+        await page.click('#panel-view.panel-left nav button[data-section="world_info"]');
+        const swapped = await page.waitFor(
+            "document.querySelector('#panel-view.panel-left nav button[data-section=\\'world_info\\'][aria-current=\\'true\\']')", 8000);
+        const stillOpen = await page.eval("!!document.querySelector('#panel-view.panel-left')");
+        const headingMoved = await page.eval("(document.getElementById('panel-heading')||{}).textContent");
+        const onlyOneCurrent = await page.eval(
+            "document.querySelectorAll('#panel-view.panel-left nav button[aria-current=\\'true\\']').length");
+        row('must', dockUp && swapped && stillOpen && headingMoved === 'World Info' && onlyOneCurrent === 1,
+            'A12 a section click swaps the drawer body without closing it, and marks only itself current',
+            `opened=${dockUp} swapped=${swapped} stillOpen=${stillOpen} heading=${JSON.stringify(headingMoved)} current=${onlyOneCurrent}`);
 
         // ---- Session B: mock backend, real boot path ----
         console.log('== session B: mock backend (no demo) ==');
@@ -460,7 +767,7 @@ async function main() {
             && !page.sawConsole('opened chat:'),
             'B1 boot shows the home landing, no chat auto-opened');
 
-        await page.click('#d-characters');
+        await openPanel('characters');
         row('must', await page.waitFor("document.querySelectorAll('#chat-root .char-item').length >= 60", 5000),
             'B2 characters dock lists the 60 mock characters');
         // S2 Zig-path proof: char_api.zig is the line's ONLY emitter (JS twin deleted, grep-gated).
@@ -595,14 +902,14 @@ async function main() {
         const panelDismissed = await page.waitFor("!document.querySelector('#panel-view')", 2500);
         row('must', panelBeforeEsc && panelDismissed,
             'C13 Escape with no menu open still dismisses the panel', `wasOpen=${panelBeforeEsc} dismissed=${panelDismissed}`);
-        await page.click('#d-characters');
+        await openPanel('characters');
         await page.waitFor("document.querySelectorAll('#chat-root .char-item').length >= 60", 5000);
 
         // The pick survives a reload: the list opens on the stored sort, not the .recent default.
         await page.eval("localStorage.setItem('st-char-sort','name_desc')");
         await page.navigate(`${args.base}/`);
         await page.waitFor(hydrated, 15000);
-        await page.click('#d-characters');
+        await openPanel('characters');
         await page.waitFor("document.querySelectorAll('#chat-root .char-item').length >= 60", 5000);
         row('must', await page.waitFor("document.querySelector('#chat-root .char-item .char-name').textContent.trim() === 'Rita Recent' || document.querySelector('#chat-root .char-item .char-name').textContent.trim().startsWith('Char 59')", 3000)
             && await page.eval("document.querySelector('#dd-btn-char-sort span').textContent.trim()") === 'Z-A',
@@ -610,8 +917,10 @@ async function main() {
 
         // Row-hover actions: every one is a real focusable button with its own accessible name, and
         // duplicate (the one with no native dialog in front of it) fires from the keyboard.
-        const actNames = await page.eval("JSON.stringify(Array.from(document.querySelectorAll('#chat-root .char-item .char-row-act')).slice(0,4).map(b=>[b.tagName,b.getAttribute('aria-label')]))");
-        row('must', /BUTTON/.test(actNames) && /Rename /.test(actNames) && /Delete /.test(actNames),
+        // Sampled to 6, not 4: "Edit card" joined the front of the cluster and pushed Delete past a
+        // 4-wide window, which read as Delete having lost its name rather than moved.
+        const actNames = await page.eval("JSON.stringify(Array.from(document.querySelectorAll('#chat-root .char-item .char-row-act')).slice(0,6).map(b=>[b.tagName,b.getAttribute('aria-label')]))");
+        row('must', /BUTTON/.test(actNames) && /Edit card /.test(actNames) && /Rename /.test(actNames) && /Delete /.test(actNames),
             'C7 row actions are named buttons carrying their character', `names=${actNames}`);
 
         await page.focus("#chat-root .char-item .char-row-act[data-char-action='duplicate']");
@@ -659,7 +968,7 @@ async function main() {
             'C11 hovering a row reveals its actions (the pointer twin of C10)',
             `hiddenBefore=${hiddenBefore} revealed=${hoverRevealed}`);
 
-        await page.click('#d-persona');
+        await openPanel('persona');
         row('must', await page.waitFor("document.querySelectorAll('#persona-list .char-item').length >= 2", 5000),
             'B8 persona dock lists the mock personas');
         await page.click('#persona-list .char-item[data-persona-index="1"] .char-name');
@@ -692,7 +1001,7 @@ async function main() {
         };
         await page.navigate(`${args.base}/`);
         await openRecentChat();
-        row('must', await page.waitFor("document.getElementById('d-connections') && document.getElementById('d-connections').dataset.connState === 'connected'", 8000),
+        row('must', await waitConnState('connected', 8000),
             'SL-status shows the configured backend connected');
 
         const beforeSend = await page.eval("document.querySelectorAll('#chat .mes').length");
@@ -840,7 +1149,7 @@ async function main() {
         // --- tags (w3-reason 3d): manager create/assign persists via the settings blob; chips
         // filter on the card tags the 3d data fix made live. Rita Recent = char41.png.
         console.log('== tags (w3-reason 3d) ==');
-        await page.click('#d-characters');
+        await openPanel('characters');
         await page.waitFor("document.querySelector('.char-toolbar')", 4000);
         await page.click('.char-toolbar button[aria-label="Manage tags"]');
         await page.waitFor("document.querySelector('.tag-manager')", 3000);
@@ -863,7 +1172,7 @@ async function main() {
         row('must', tagSaved, 'T3 tags + tag_map land in the settings blob via the one saver');
         await page.navigate(`${args.base}/`);
         await openRecentChat();
-        await page.click('#d-characters');
+        await openPanel('characters');
         await page.waitFor("document.querySelector('.char-toolbar')", 4000);
         await page.click('.char-toolbar button[aria-label="Manage tags"]');
         row('must', await page.waitFor("(function(){var b=document.querySelector('.tag-manager [data-tag-assign=\\'t-gatetag\\']');return !!b && b.getAttribute('aria-pressed')==='true'})()", 6000),
@@ -981,7 +1290,7 @@ async function main() {
         const connUrl = 'http://127.0.0.1:9099';
         await page.navigate(`${args.base}/`);
         await openRecentChat();
-        await page.click('#d-connections');
+        await openPanel('connections');
         await page.waitFor("document.getElementById('llama-url')", 4000);
         await page.eval("document.getElementById('llama-url').value=''");
         await page.focus('#llama-url');
@@ -1027,7 +1336,7 @@ async function main() {
         console.log('== connection url sticky ==');
         await page.navigate(`${args.base}/`);
         await openRecentChat();
-        await page.click('#d-connections');
+        await openPanel('connections');
         await page.waitFor("document.getElementById('llama-url')", 4000);
         await page.eval("document.getElementById('llama-url').value=''");
         await page.focus('#llama-url');
@@ -1046,7 +1355,7 @@ async function main() {
         await page.navigate(`${args.base}/`);
         await openRecentChat();
         // Wait for the connection to load, else the send is a no-op (conn null) and never appends.
-        await page.waitFor("document.getElementById('d-connections') && document.getElementById('d-connections').dataset.connState === 'connected'", 8000);
+        await waitConnState('connected', 8000);
         const st0 = await (await fetch(`${args.base}/dev/state`)).json();
         await page.focus('#send_textarea');
         await page.insertText('409: force a resync');
@@ -1070,7 +1379,7 @@ async function main() {
         console.log('== prefetch 409 preserves scroll ==');
         await page.navigate(`${args.base}/`);
         await openRecentChat();
-        await page.waitFor("document.getElementById('d-connections') && document.getElementById('d-connections').dataset.connState === 'connected'", 8000);
+        await waitConnState('connected', 8000);
         const pf0 = await (await fetch(`${args.base}/dev/state`)).json();
         await fetch(`${args.base}/dev/arm-get-409`);
         // Scroll to the top (fires the armed prepend GET) and capture the top-most on-screen anchor's
@@ -1113,7 +1422,7 @@ async function main() {
         console.log('== J1 connection prefill ==');
         await page.navigate(`${args.base}/`);
         await openRecentChat();
-        await page.click('#d-connections');
+        await openPanel('connections');
         await page.waitFor("document.getElementById('llama-url')", 4000);
         const prefill = await page.eval("document.getElementById('llama-url').value");
         row('must', prefill === 'http://127.0.0.1:5001',
@@ -1125,7 +1434,7 @@ async function main() {
         console.log('== J1 invariant 2: prompt window exceeds the display window ==');
         await page.navigate(`${args.base}/`);
         await openRecentChat();
-        await page.waitFor("document.getElementById('d-connections') && document.getElementById('d-connections').dataset.connState === 'connected'", 8000);
+        await waitConnState('connected', 8000);
         const displayHas150 = await page.eval("document.body.textContent.includes('History message 150')");
         await page.focus('#send_textarea');
         await page.insertText('INV2 PROBE');
@@ -1150,7 +1459,7 @@ async function main() {
         await openRecentChat();
 
         // Open the undo fixture chat by search (kept oldest so it never auto-opens).
-        await page.click('#d-characters');
+        await openPanel('characters');
         await page.waitFor("document.querySelectorAll('#chat-root .char-item').length >= 60", 5000);
         await page.focus('.char-search');
         await page.insertText('Char 00');
@@ -1176,7 +1485,7 @@ async function main() {
 
         // Close the character dock so the message controls are unobstructed, then open message 1's
         // action menu and pick Earlier versions (the history control now lives inside that menu).
-        await page.click('#d-characters');
+        await closePanel('characters');
         await page.click('[data-msg-menu="1"]');
         await page.waitFor("document.querySelector('#msg-menu [data-undo-history=\\'1\\']')", 4000);
         await page.click("#msg-menu [data-undo-history='1']");
@@ -1600,24 +1909,26 @@ async function main() {
         // Invariant 6: a custom rule targeting a chrome id AND the message body. The @scope wrap makes
         // .mes_text (the scope limit) unmatchable, so only the chrome outline lands. outline does not
         // inherit, so this is a clean subject-match test, not an inheritance artefact.
-        await page.click('#d-settings');
-        await page.waitFor("document.querySelector('.settings-body')", 5000);
-        await page.click('.settings-tab[data-reading-val="appearance"]');
-        await page.waitFor("document.getElementById('custom-css')", 3000);
-        await page.focus('#custom-css');
-        await page.insertText('#composer{outline:3px solid rgb(1,2,3)} .mes_text{outline:3px solid rgb(4,5,6)}');
-        await sleep(250);
-        const inv = await page.eval(`(function(){
-            const comp = getComputedStyle(document.getElementById('composer')).outlineColor;
-            const mt = document.querySelector('.mes_text');
-            return { comp, body: mt ? getComputedStyle(mt).outlineColor : 'none', hasMt: !!mt };
-        })()`);
-        row('must', inv.hasMt && inv.comp === 'rgb(1, 2, 3)' && inv.body !== 'rgb(4, 5, 6)',
-            'C-COMP invariant 6: custom CSS styles chrome, never the message body',
-            `chrome=${inv.comp} body=${inv.body}`);
-        // Clear the box through real input so its localStorage copy does not re-inject on the next nav.
-        await page.eval("(function(){var t=document.getElementById('custom-css'); if(t){t.value=''; t.dispatchEvent(new Event('input',{bubbles:true}));}})()");
-        await sleep(150);
+        await needsPanel('settings', 'C-COMP invariant 6 (custom CSS) needs the settings panel', async () => {
+            await openPanel('settings');
+            await page.waitFor("document.querySelector('.settings-body')", 5000);
+            await page.click('.settings-tab[data-reading-val="appearance"]');
+            await page.waitFor("document.getElementById('custom-css')", 3000);
+            await page.focus('#custom-css');
+            await page.insertText('#composer{outline:3px solid rgb(1,2,3)} .mes_text{outline:3px solid rgb(4,5,6)}');
+            await sleep(250);
+            const inv = await page.eval(`(function(){
+                const comp = getComputedStyle(document.getElementById('composer')).outlineColor;
+                const mt = document.querySelector('.mes_text');
+                return { comp, body: mt ? getComputedStyle(mt).outlineColor : 'none', hasMt: !!mt };
+            })()`);
+            row('must', inv.hasMt && inv.comp === 'rgb(1, 2, 3)' && inv.body !== 'rgb(4, 5, 6)',
+                'C-COMP invariant 6: custom CSS styles chrome, never the message body',
+                `chrome=${inv.comp} body=${inv.body}`);
+            // Clear the box through real input so its localStorage copy does not re-inject on the next nav.
+            await page.eval("(function(){var t=document.getElementById('custom-css'); if(t){t.value=''; t.dispatchEvent(new Event('input',{bubbles:true}));}})()");
+            await sleep(150);
+        });
 
         // Send/Stop toggle across a live generation: idle shows send, a streaming .mes (aria-busy)
         // flips the :has() rule to show stop. The mock textgen backend lives at base /; the home
@@ -1625,7 +1936,7 @@ async function main() {
         await page.navigate(`${args.base}/`);
         await openRecentChat();
         await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
-        await page.waitFor("document.getElementById('d-connections') && document.getElementById('d-connections').dataset.connState === 'connected'", 8000);
+        await waitConnState('connected', 8000);
         await page.waitFor(`${idle}`, 5000);
         const disp = (sel) => page.eval(`getComputedStyle(document.querySelector(${JSON.stringify(sel)})).display`);
         const idleSend = await disp('#composer .composer-send');
@@ -1657,7 +1968,7 @@ async function main() {
         await page.navigate(`${args.base}/`);
         await openRecentChat();
         await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
-        await page.click('#d-persona');
+        await openPanel('persona');
         await page.waitFor("document.querySelectorAll('#persona-list .char-item').length >= 3", 5000);
 
         const encoded = await page.eval(
@@ -1682,7 +1993,7 @@ async function main() {
         await page.navigate(`${args.base}/`);
         await openRecentChat();
         await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
-        await page.click('#d-persona');
+        await openPanel('persona');
         await page.waitFor("document.querySelectorAll('#persona-list .char-item').length >= 3", 5000);
         const remembered = await page.waitFor("document.querySelector('#persona-list .char-item[data-persona-index=\\'1\\']').classList.contains('is-selected')", 3000);
         row('must', persistedSel && remembered, 'C-PERS-2 selection persists (user_avatar) and survives a reload', `persisted=${persistedSel} remembered=${remembered}`);
@@ -1748,240 +2059,246 @@ async function main() {
         // The mock gallery is mutable, so a delete/rename shows on the next /all: that is what makes
         // the two server-authoritative rows non-vacuous.
         console.log('== backgrounds: gallery, apply, persist, delete/rename ==');
-        await page.navigate(`${args.base}/`);
-        await page.waitFor(hydrated, 15000);
-        await page.click('#d-backgrounds');
+        await needsPanel('backgrounds', 'C-BG-1 to C-BG-12 the backgrounds gallery rows', async () => {
+            await page.navigate(`${args.base}/`);
+            await page.waitFor(hydrated, 15000);
+            await openPanel('backgrounds');
 
-        // C-BG2 raised the fixture from 4 to 7: three of them carry shapes the old typed parse died on.
-        const listed = await page.waitFor("document.querySelectorAll('#bg-gallery .bg-tile-wrap').length === 7", 8000);
-        row('must', listed, 'C-BG-1 the gallery lists every background the server serves', `tiles=${await page.eval("document.querySelectorAll('#bg-gallery .bg-tile-wrap').length")}`);
+            // C-BG2 raised the fixture from 4 to 7: three of them carry shapes the old typed parse died on.
+            const listed = await page.waitFor("document.querySelectorAll('#bg-gallery .bg-tile-wrap').length === 7", 8000);
+            row('must', listed, 'C-BG-1 the gallery lists every background the server serves', `tiles=${await page.eval("document.querySelectorAll('#bg-gallery .bg-tile-wrap').length")}`);
 
-        // The Wave-1 bug class: a space in a filename must reach the thumbnail url percent-encoded.
-        const thumbEnc = await page.eval(
-            "Array.from(document.querySelectorAll('#bg-gallery img')).some(function(i){return (i.getAttribute('src')||'').indexOf('file=a%20b.jpg')>=0;})");
-        const thumbRaw = await page.eval(
-            "Array.from(document.querySelectorAll('#bg-gallery img')).some(function(i){return (i.getAttribute('src')||'').indexOf('file=a b.jpg')>=0;})");
-        row('must', thumbEnc && !thumbRaw, 'C-BG-2 the tile thumbnail url percent-encodes a spaced filename', `enc=${thumbEnc} raw=${thumbRaw}`);
+            // The Wave-1 bug class: a space in a filename must reach the thumbnail url percent-encoded.
+            const thumbEnc = await page.eval(
+                "Array.from(document.querySelectorAll('#bg-gallery img')).some(function(i){return (i.getAttribute('src')||'').indexOf('file=a%20b.jpg')>=0;})");
+            const thumbRaw = await page.eval(
+                "Array.from(document.querySelectorAll('#bg-gallery img')).some(function(i){return (i.getAttribute('src')||'').indexOf('file=a b.jpg')>=0;})");
+            row('must', thumbEnc && !thumbRaw, 'C-BG-2 the tile thumbnail url percent-encodes a spaced filename', `enc=${thumbEnc} raw=${thumbRaw}`);
 
-        const gifBadge = await page.eval(
-            "!!document.querySelector('#bg-gallery [data-bg-file=\\'loop.webp\\']') && Array.from(document.querySelectorAll('#bg-gallery .bg-tile-wrap')).some(function(w){return w.querySelector('[data-bg-file=\\'loop.webp\\']') && /GIF/.test(w.textContent);})");
-        row('must', gifBadge, 'C-BG-3 the animated background is badged as animated', `badge=${gifBadge}`);
+            const gifBadge = await page.eval(
+                "!!document.querySelector('#bg-gallery [data-bg-file=\\'loop.webp\\']') && Array.from(document.querySelectorAll('#bg-gallery .bg-tile-wrap')).some(function(w){return w.querySelector('[data-bg-file=\\'loop.webp\\']') && /GIF/.test(w.textContent);})");
+            row('must', gifBadge, 'C-BG-3 the animated background is badged as animated', `badge=${gifBadge}`);
 
-        // C-UI: the POINTER half of the tile-actions reveal (.bg-tile-wrap:hover .bg-tile-actions),
-        // inert under the gate until it started declaring a fine, hover-capable pointer. Hidden is
-        // asserted BEFORE the mouse arrives, so an unconditionally-revealed cluster cannot pass.
-        await page.eval("document.activeElement && document.activeElement.blur()");
-        await sleep(200);
-        const tileActSel = "document.querySelectorAll('#bg-gallery .bg-tile-wrap')[0].querySelector('.bg-tile-actions')";
-        const tileHiddenBefore = await page.eval(`getComputedStyle(${tileActSel}).opacity === '0'`);
-        const tileBox = await page.eval("(function(){const r=document.querySelectorAll('#bg-gallery .bg-tile-wrap')[0].getBoundingClientRect();return JSON.stringify({x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)})})()");
-        const tilePt = JSON.parse(tileBox);
-        await page.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: tilePt.x, y: tilePt.y, buttons: 0 }, page.sessionId);
-        const tileHoverRevealed = await page.waitFor(`getComputedStyle(${tileActSel}).opacity === '1'`, 3000);
-        row('must', tileHiddenBefore && tileHoverRevealed,
-            'C-BG-13 hovering a tile reveals its file actions (the pointer twin of the focus reveal)',
-            `hiddenBefore=${tileHiddenBefore} revealed=${tileHoverRevealed}`);
-        await page.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 0, y: 0, buttons: 0 }, page.sessionId);
+            // C-UI: the POINTER half of the tile-actions reveal (.bg-tile-wrap:hover .bg-tile-actions),
+            // inert under the gate until it started declaring a fine, hover-capable pointer. Hidden is
+            // asserted BEFORE the mouse arrives, so an unconditionally-revealed cluster cannot pass.
+            await page.eval("document.activeElement && document.activeElement.blur()");
+            await sleep(200);
+            const tileActSel = "document.querySelectorAll('#bg-gallery .bg-tile-wrap')[0].querySelector('.bg-tile-actions')";
+            const tileHiddenBefore = await page.eval(`getComputedStyle(${tileActSel}).opacity === '0'`);
+            const tileBox = await page.eval("(function(){const r=document.querySelectorAll('#bg-gallery .bg-tile-wrap')[0].getBoundingClientRect();return JSON.stringify({x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)})})()");
+            const tilePt = JSON.parse(tileBox);
+            await page.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: tilePt.x, y: tilePt.y, buttons: 0 }, page.sessionId);
+            const tileHoverRevealed = await page.waitFor(`getComputedStyle(${tileActSel}).opacity === '1'`, 3000);
+            row('must', tileHiddenBefore && tileHoverRevealed,
+                'C-BG-13 hovering a tile reveals its file actions (the pointer twin of the focus reveal)',
+                `hiddenBefore=${tileHiddenBefore} revealed=${tileHoverRevealed}`);
+            await page.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 0, y: 0, buttons: 0 }, page.sessionId);
 
-        // Applying: the url rides a custom property on :root, encoded, and data-background gates the
-        // layer on. Asserting the property (not pixels) keeps this off the browser's image decoder.
-        await page.click("#bg-gallery [data-bg-file='a b.jpg']");
-        const applied = await page.waitFor(
-            "document.documentElement.getAttribute('data-background') === 'on' && document.documentElement.style.getPropertyValue('--chat-bg-image').indexOf('a%20b.jpg') >= 0", 4000);
-        const pressed = await page.eval("document.querySelector('#bg-gallery [data-bg-file=\\'a b.jpg\\']').getAttribute('aria-pressed') === 'true'");
-        row('must', applied && pressed, 'C-BG-4 selecting a background applies it and marks the tile pressed', `applied=${applied} pressed=${pressed}`);
+            // Applying: the url rides a custom property on :root, encoded, and data-background gates the
+            // layer on. Asserting the property (not pixels) keeps this off the browser's image decoder.
+            await page.click("#bg-gallery [data-bg-file='a b.jpg']");
+            const applied = await page.waitFor(
+                "document.documentElement.getAttribute('data-background') === 'on' && document.documentElement.style.getPropertyValue('--chat-bg-image').indexOf('a%20b.jpg') >= 0", 4000);
+            const pressed = await page.eval("document.querySelector('#bg-gallery [data-bg-file=\\'a b.jpg\\']').getAttribute('aria-pressed') === 'true'");
+            row('must', applied && pressed, 'C-BG-4 selecting a background applies it and marks the tile pressed', `applied=${applied} pressed=${pressed}`);
 
-        // C-CONN's panel-dismiss defect: a control that rerenders its own node away on click leaves
-        // ui.onPageClick walking a detached target and dismissing the panel. A tile reselect only
-        // patches aria-pressed in place, so the node survives and this needs no isConnected guard.
-        const panelOpen = await page.eval("!!document.querySelector('#panel-view') && !!document.querySelector('#bg-gallery')");
-        row('must', panelOpen, 'C-BG-5 selecting a background does not dismiss the panel', `open=${panelOpen}`);
+            // C-CONN's panel-dismiss defect: a control that rerenders its own node away on click leaves
+            // ui.onPageClick walking a detached target and dismissing the panel. A tile reselect only
+            // patches aria-pressed in place, so the node survives and this needs no isConnected guard.
+            // Backgrounds moved from a dock into the system popover, so #panel-view is the wrong home
+            // to prove survival by; the card itself is.
+            const panelOpen = await page.eval("!!document.querySelector('#sys-popover') && !!document.querySelector('#bg-gallery')");
+            row('must', panelOpen, 'C-BG-5 selecting a background does not dismiss the panel', `open=${panelOpen}`);
 
-        const stored = await page.eval("localStorage.getItem('st-background')");
-        row('must', stored === 'a b.jpg', 'C-BG-6 the choice persists to localStorage unencoded', `stored=${stored}`);
+            const stored = await page.eval("localStorage.getItem('st-background')");
+            row('must', stored === 'a b.jpg', 'C-BG-6 the choice persists to localStorage unencoded', `stored=${stored}`);
 
-        // The rule itself, not just the property: the layer must exist, sit behind the content, and
-        // carry the scrim over the photo. A property nothing paints would pass every row above.
-        const layer = await page.eval(
-            "JSON.stringify((function(){var s=getComputedStyle(document.body,'::before');" +
-            "return {c:s.content,z:s.zIndex,p:s.position,img:s.backgroundImage};})())");
-        const l = JSON.parse(layer);
-        const layerOk = l.c !== 'none' && l.z === '-1' && l.p === 'fixed'
-            && l.img.indexOf('a%20b.jpg') >= 0 && l.img.indexOf('gradient') >= 0;
-        row('must', layerOk, 'C-BG-7 the layer paints behind the content with its scrim', `z=${l.z} pos=${l.p} scrim=${l.img.indexOf('gradient') >= 0}`);
+            // The rule itself, not just the property: the layer must exist, sit behind the content, and
+            // carry the scrim over the photo. A property nothing paints would pass every row above.
+            const layer = await page.eval(
+                "JSON.stringify((function(){var s=getComputedStyle(document.body,'::before');" +
+                "return {c:s.content,z:s.zIndex,p:s.position,img:s.backgroundImage};})())");
+            const l = JSON.parse(layer);
+            const layerOk = l.c !== 'none' && l.z === '-1' && l.p === 'fixed'
+                && l.img.indexOf('a%20b.jpg') >= 0 && l.img.indexOf('gradient') >= 0;
+            row('must', layerOk, 'C-BG-7 the layer paints behind the content with its scrim', `z=${l.z} pos=${l.p} scrim=${l.img.indexOf('gradient') >= 0}`);
 
-        // None clears it: the property goes back to none and the layer's gate attribute is dropped,
-        // so an unset background costs no scrim over the chrome.
-        await page.click("#bg-gallery [data-bg-none]");
-        const cleared = await page.waitFor(
-            "!document.documentElement.hasAttribute('data-background') && !localStorage.getItem('st-background')", 4000);
-        row('must', cleared, 'C-BG-8 None clears the background and drops the layer', `cleared=${cleared}`);
+            // None clears it: the property goes back to none and the layer's gate attribute is dropped,
+            // so an unset background costs no scrim over the chrome.
+            await page.click("#bg-gallery [data-bg-none]");
+            const cleared = await page.waitFor(
+                "!document.documentElement.hasAttribute('data-background') && !localStorage.getItem('st-background')", 4000);
+            row('must', cleared, 'C-BG-8 None clears the background and drops the layer', `cleared=${cleared}`);
 
-        // Server-authoritative delete: the tile goes only because the server took it, proven by the
-        // gallery re-serving one fewer on a fresh load.
-        await page.eval('window.confirm = function(){ return true; };');
-        await page.click("#bg-gallery [data-bg-delete='study.png']");
-        const tileGone = await page.waitFor("!document.querySelector('#bg-gallery [data-bg-file=\\'study.png\\']')", 6000);
-        const serverGone = await (async () => {
-            const res = await fetch(`${args.base}/api/backgrounds/all`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-            const j = await res.json();
-            return !j.images.some((i) => i.filename === 'study.png');
-        })();
-        row('must', tileGone && serverGone, 'C-BG-9 delete removes the background on the server, not just the tile', `tile=${tileGone} server=${serverGone}`);
-
-        await page.eval("window.prompt = function(){ return 'dusk harbour.jpg'; };");
-        await page.click("#bg-gallery [data-bg-rename='dusk harbor.jpg']");
-        const renamedTile = await page.waitFor("!!document.querySelector('#bg-gallery [data-bg-file=\\'dusk harbour.jpg\\']')", 6000);
-        const renamedServer = await (async () => {
-            const res = await fetch(`${args.base}/api/backgrounds/all`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-            const j = await res.json();
-            return j.images.some((i) => i.filename === 'dusk harbour.jpg') && !j.images.some((i) => i.filename === 'dusk harbor.jpg');
-        })();
-        row('must', renamedTile && renamedServer, 'C-BG-10 rename retitles the background and round-trips', `tile=${renamedTile} server=${renamedServer}`);
-
-        // The blob check runs BEFORE the reload: the saver debounces 3s, and a navigate would discard
-        // the pending timer and read as a save that never fired.
-        await page.click("#bg-gallery [data-bg-file='loop.webp']");
-        await page.waitFor("localStorage.getItem('st-background') === 'loop.webp'", 3000);
-
-        const blobSaved = await (async () => {
-            const deadline = Date.now() + 8000;
-            while (Date.now() < deadline) {
-                const res = await fetch(`${args.base}/api/settings/get`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            // Server-authoritative delete: the tile goes only because the server took it, proven by the
+            // gallery re-serving one fewer on a fresh load.
+            await page.eval('window.confirm = function(){ return true; };');
+            await page.click("#bg-gallery [data-bg-delete='study.png']");
+            const tileGone = await page.waitFor("!document.querySelector('#bg-gallery [data-bg-file=\\'study.png\\']')", 6000);
+            const serverGone = await (async () => {
+                const res = await fetch(`${args.base}/api/backgrounds/all`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
                 const j = await res.json();
-                try {
-                    if (JSON.parse(j.settings).clientBackground?.image === 'loop.webp') return true;
-                } catch (_) { /* blob not written yet */ }
-                await sleep(250);
-            }
-            return false;
-        })();
-        row('must', blobSaved, 'C-BG-11 the chosen background rides the account settings blob', `saved=${blobSaved}`);
+                return !j.images.some((i) => i.filename === 'study.png');
+            })();
+            row('must', tileGone && serverGone, 'C-BG-9 delete removes the background on the server, not just the tile', `tile=${tileGone} server=${serverGone}`);
 
-        await page.navigate(`${args.base}/`);
-        await page.waitFor(hydrated, 15000);
-        const bootApplied = await page.waitFor(
-            "document.documentElement.getAttribute('data-background') === 'on' && document.documentElement.style.getPropertyValue('--chat-bg-image').indexOf('loop.webp') >= 0", 5000);
-        row('must', bootApplied, 'C-BG-12 a chosen background is applied again at boot', `applied=${bootApplied}`);
+            await page.eval("window.prompt = function(){ return 'dusk harbour.jpg'; };");
+            await page.click("#bg-gallery [data-bg-rename='dusk harbor.jpg']");
+            const renamedTile = await page.waitFor("!!document.querySelector('#bg-gallery [data-bg-file=\\'dusk harbour.jpg\\']')", 6000);
+            const renamedServer = await (async () => {
+                const res = await fetch(`${args.base}/api/backgrounds/all`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                const j = await res.json();
+                return j.images.some((i) => i.filename === 'dusk harbour.jpg') && !j.images.some((i) => i.filename === 'dusk harbor.jpg');
+            })();
+            row('must', renamedTile && renamedServer, 'C-BG-10 rename retitles the background and round-trips', `tile=${renamedTile} server=${renamedServer}`);
+
+            // The blob check runs BEFORE the reload: the saver debounces 3s, and a navigate would discard
+            // the pending timer and read as a save that never fired.
+            await page.click("#bg-gallery [data-bg-file='loop.webp']");
+            await page.waitFor("localStorage.getItem('st-background') === 'loop.webp'", 3000);
+
+            const blobSaved = await (async () => {
+                const deadline = Date.now() + 8000;
+                while (Date.now() < deadline) {
+                    const res = await fetch(`${args.base}/api/settings/get`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                    const j = await res.json();
+                    try {
+                        if (JSON.parse(j.settings).clientBackground?.image === 'loop.webp') return true;
+                    } catch (_) { /* blob not written yet */ }
+                    await sleep(250);
+                }
+                return false;
+            })();
+            row('must', blobSaved, 'C-BG-11 the chosen background rides the account settings blob', `saved=${blobSaved}`);
+
+            await page.navigate(`${args.base}/`);
+            await page.waitFor(hydrated, 15000);
+            const bootApplied = await page.waitFor(
+                "document.documentElement.getAttribute('data-background') === 'on' && document.documentElement.style.getPropertyValue('--chat-bg-image').indexOf('loop.webp') >= 0", 5000);
+            row('must', bootApplied, 'C-BG-12 a chosen background is applied again at boot', `applied=${bootApplied}`);
+        });
 
         // ===== C-BG2 (append-only): the odd isAnimated shapes, the second mutation, the upload seam =====
         console.log('== C-BG2 backgrounds: tolerant badge, concurrent mutation, upload ==');
-        await page.click('#d-backgrounds');
-        const bgAll = async () => {
-            const res = await fetch(`${args.base}/api/backgrounds/all`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-            return (await res.json()).images.map((i) => i.filename);
-        };
+        await needsPanel('backgrounds', 'C-BG2-1 to C-BG2-8 the tolerant-badge and upload rows', async () => {
+            await openPanel('backgrounds');
+            const bgAll = async () => {
+                const res = await fetch(`${args.base}/api/backgrounds/all`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                return (await res.json()).images.map((i) => i.filename);
+            };
 
-        // Two of these carry isAnimated as a string and as null. Typed `bool`, ONE of them failed the
-        // whole array parse and the gallery came up EMPTY: the count is what proves it costs no rows.
-        const oddListed = await page.waitFor("document.querySelectorAll('#bg-gallery .bg-tile-wrap').length === 6", 8000);
-        const oddTiles = await page.eval(
-            "!!document.querySelector('#bg-gallery [data-bg-file=\\'odd str.jpg\\']') && !!document.querySelector('#bg-gallery [data-bg-file=\\'odd null.jpg\\']')");
-        row('must', oddListed && oddTiles, 'C-BG2-1 a background with an odd isAnimated shape costs no tile, not the gallery', `six=${oddListed} tiles=${oddTiles}`);
+            // Two of these carry isAnimated as a string and as null. Typed `bool`, ONE of them failed the
+            // whole array parse and the gallery came up EMPTY: the count is what proves it costs no rows.
+            const oddListed = await page.waitFor("document.querySelectorAll('#bg-gallery .bg-tile-wrap').length === 6", 8000);
+            const oddTiles = await page.eval(
+                "!!document.querySelector('#bg-gallery [data-bg-file=\\'odd str.jpg\\']') && !!document.querySelector('#bg-gallery [data-bg-file=\\'odd null.jpg\\']')");
+            row('must', oddListed && oddTiles, 'C-BG2-1 a background with an odd isAnimated shape costs no tile, not the gallery', `six=${oddListed} tiles=${oddTiles}`);
 
-        // The badge is the ONLY thing the odd shape may cost. "true" as a string is not a claim: a
-        // truthiness read would badge it, and would badge a literal "false" just the same.
-        const badged = (f) => `Array.from(document.querySelectorAll('#bg-gallery .bg-tile-wrap')).some(function(w){return w.querySelector("[data-bg-file='${f}']") && /GIF/.test(w.textContent);})`;
-        const oddStrBadge = await page.eval(badged('odd str.jpg'));
-        const oddNullBadge = await page.eval(badged('odd null.jpg'));
-        const realBadge = await page.eval(badged('loop.webp'));
-        row('must', !oddStrBadge && !oddNullBadge && realBadge, 'C-BG2-2 only a real bool badges a background as animated', `str=${oddStrBadge} null=${oddNullBadge} real=${realBadge}`);
+            // The badge is the ONLY thing the odd shape may cost. "true" as a string is not a claim: a
+            // truthiness read would badge it, and would badge a literal "false" just the same.
+            const badged = (f) => `Array.from(document.querySelectorAll('#bg-gallery .bg-tile-wrap')).some(function(w){return w.querySelector("[data-bg-file='${f}']") && /GIF/.test(w.textContent);})`;
+            const oddStrBadge = await page.eval(badged('odd str.jpg'));
+            const oddNullBadge = await page.eval(badged('odd null.jpg'));
+            const realBadge = await page.eval(badged('loop.webp'));
+            row('must', !oddStrBadge && !oddNullBadge && realBadge, 'C-BG2-2 only a real bool badges a background as animated', `str=${oddStrBadge} null=${oddNullBadge} real=${realBadge}`);
 
-        // A single shared pending slot dropped this on the floor: no dialog, no error, no delete. The
-        // first delete is held open server-side, so the second click lands squarely in the in-flight
-        // window the dialog was wrongly read as closing.
-        await page.eval('window.confirm = function(){ return true; };');
-        await page.click("#bg-gallery [data-bg-delete='slow delete.png']");
-        await page.click("#bg-gallery [data-bg-delete='odd null.jpg']");
-        const bothGone = await (async () => {
-            const deadline = Date.now() + 8000;
-            while (Date.now() < deadline) {
-                const names = await bgAll();
-                if (!names.includes('slow delete.png') && !names.includes('odd null.jpg')) return true;
-                await sleep(250);
-            }
-            return false;
-        })();
-        const secondServed = !(await bgAll()).includes('odd null.jpg');
-        row('must', bothGone && secondServed, 'C-BG2-3 a second mutation while one is in flight is not swallowed', `both=${bothGone} second=${secondServed}`);
+            // A single shared pending slot dropped this on the floor: no dialog, no error, no delete. The
+            // first delete is held open server-side, so the second click lands squarely in the in-flight
+            // window the dialog was wrongly read as closing.
+            await page.eval('window.confirm = function(){ return true; };');
+            await page.click("#bg-gallery [data-bg-delete='slow delete.png']");
+            await page.click("#bg-gallery [data-bg-delete='odd null.jpg']");
+            const bothGone = await (async () => {
+                const deadline = Date.now() + 8000;
+                while (Date.now() < deadline) {
+                    const names = await bgAll();
+                    if (!names.includes('slow delete.png') && !names.includes('odd null.jpg')) return true;
+                    await sleep(250);
+                }
+                return false;
+            })();
+            const secondServed = !(await bgAll()).includes('odd null.jpg');
+            row('must', bothGone && secondServed, 'C-BG2-3 a second mutation while one is in flight is not swallowed', `both=${bothGone} second=${secondServed}`);
 
-        // The upload control. The POST is Zig-owned now (net.zig raw multipart via the door op); what
-        // is pinned here is our half: the control, its file typing and its accessible name.
-        const uploadCtl = await page.eval(
-            "(function(){var i=document.getElementById('bg-upload-input');return !!i && i.type==='file' && !!i.getAttribute('aria-label') && !!i.getAttribute('name');})()");
-        row('must', uploadCtl, 'C-BG2-4 the upload control is present, named and typed for files', `ctl=${uploadCtl}`);
+            // The upload control. The POST is Zig-owned now (net.zig raw multipart via the door op); what
+            // is pinned here is our half: the control, its file typing and its accessible name.
+            const uploadCtl = await page.eval(
+                "(function(){var i=document.getElementById('bg-upload-input');return !!i && i.type==='file' && !!i.getAttribute('aria-label') && !!i.getAttribute('name');})()");
+            row('must', uploadCtl, 'C-BG2-4 the upload control is present, named and typed for files', `ctl=${uploadCtl}`);
 
-        const seam = await (async () => {
-            await page.eval('window.__read_file_called = false; window.__st_read_file = function(){ window.__read_file_called = true; };');
-            // bubbles: true is load-bearing. ziex delegates from a root, so a non-bubbling change
-            // event never reaches the handler and the row reads as a dead seam.
-            await page.eval("document.getElementById('bg-upload-input').dispatchEvent(new Event('change', { bubbles: true }))");
-            return await page.waitFor('window.__read_file_called === true', 4000);
-        })();
-        const sending = await page.waitFor("/Uploading/.test(document.querySelector('.bg-upload-row').textContent)", 4000);
-        row('must', seam && sending, 'C-BG2-5 picking a file calls the File->bytes glue and shows the wait', `seam=${seam} sending=${sending}`);
+            const seam = await (async () => {
+                await page.eval('window.__read_file_called = false; window.__st_read_file = function(){ window.__read_file_called = true; };');
+                // bubbles: true is load-bearing. ziex delegates from a root, so a non-bubbling change
+                // event never reaches the handler and the row reads as a dead seam.
+                await page.eval("document.getElementById('bg-upload-input').dispatchEvent(new Event('change', { bubbles: true }))");
+                return await page.waitFor('window.__read_file_called === true', 4000);
+            })();
+            const sending = await page.waitFor("/Uploading/.test(document.querySelector('.bg-upload-row').textContent)", 4000);
+            row('must', seam && sending, 'C-BG2-5 picking a file calls the File->bytes glue and shows the wait', `seam=${seam} sending=${sending}`);
 
-        // C-BG2-5 STUBS __st_read_file, so it pins the seam (uploadPick reached the File->bytes glue)
-        // and nothing past it. Navigate fresh (the reload destroys the stub) and drive the REAL path
-        // with a real picked file, so the Zig multipart build + raw POST run end to end.
-        await page.navigate(`${args.base}/`);
-        await page.waitFor(hydrated, 15000);
-        await page.click('#d-backgrounds');
-        await page.waitFor("document.getElementById('bg-upload-input')", 8000);
-        const bgPngPath = join(mkdtempSync(join(tmpdir(), 'st-bg-')), 'picked bg.png');
-        const bgPngBytes = Buffer.from(
-            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
-            'base64');
-        const bgExpectSha = createHash('sha256').update(bgPngBytes).digest('hex');
-        writeFileSync(bgPngPath, bgPngBytes);
-        const bgDoc = await page.cdp.send('DOM.getDocument', { depth: 1 }, page.sessionId);
-        const bgNodeId = (await page.cdp.send('DOM.querySelector',
-            { nodeId: bgDoc.root.nodeId, selector: '#bg-upload-input' }, page.sessionId)).nodeId;
-        await page.cdp.send('DOM.setFileInputFiles', { files: [bgPngPath], nodeId: bgNodeId }, page.sessionId);
-        const bgPost = await (async () => {
-            const deadline = Date.now() + 8000;
-            while (Date.now() < deadline) {
-                const st = (await (await fetch(`${args.base}/dev/state`)).json()).bg_upload;
-                if (st) return st;
-                await sleep(150);
-            }
-            return null;
-        })();
-        // The wait must LIFT. Reading for the absence of 'Uploading' is what the missing export
-        // failed and what a future glue edit that drops the callback will fail again.
-        const bgWaitLifted = await page.waitFor(
-            "!/Uploading/.test(document.querySelector('.bg-upload-row').textContent)", 8000);
-        const bgLanded = await page.eval(
-            "Array.from(document.querySelectorAll('#bg-gallery .bg-tile-wrap')).some(function(t){return /picked bg\\.png/.test(t.textContent);})");
-        row('must', !!bgPost && bgPost.field_avatar === true && bgWaitLifted && bgLanded,
-            'C-BG2-6 a real upload posts under the field multer reads, lifts the wait, and shows the file',
-            `post=${bgPost ? JSON.stringify(bgPost) : 'NEVER-ARRIVED'} waitLifted=${bgWaitLifted} tile=${bgLanded}`);
-        // The dangerous-property check: the RAW file part the Zig multipart carried must be the PNG
-        // byte-for-byte (a UTF-8 round trip in the door would have corrupted it). The mock parses the
-        // file bytes out of the multipart body and hashes them.
-        row('must', !!bgPost && bgPost.file_sha256 === bgExpectSha && bgPost.file_len === bgPngBytes.length,
-            'C-BG2-7 the uploaded PNG round-trips byte-identical through the raw multipart POST',
-            `sha=${bgPost && bgPost.file_sha256} expect=${bgExpectSha} len=${bgPost && bgPost.file_len}/${bgPngBytes.length}`);
-        // C-BG2-8: a non-ASCII filename (emoji + accent) must reach the server's part header intact;
-        // appendQuoted passes those bytes raw and the raw door op does not decode the body.
-        const bgUniName = 'café🎨 bg.png';
-        const bgUniPath = join(mkdtempSync(join(tmpdir(), 'st-bg2-')), bgUniName);
-        writeFileSync(bgUniPath, bgPngBytes);
-        const bgUniNodeId = (await page.cdp.send('DOM.querySelector',
-            { nodeId: bgDoc.root.nodeId, selector: '#bg-upload-input' }, page.sessionId)).nodeId;
-        await page.cdp.send('DOM.setFileInputFiles', { files: [bgUniPath], nodeId: bgUniNodeId }, page.sessionId);
-        const bgUniPost = await (async () => {
-            const deadline = Date.now() + 8000;
-            while (Date.now() < deadline) {
-                const st = (await (await fetch(`${args.base}/dev/state`)).json()).bg_upload;
-                if (st && st.filename === bgUniName) return st;
-                await sleep(150);
-            }
-            return null;
-        })();
-        row('must', !!bgUniPost && bgUniPost.filename === bgUniName && bgUniPost.file_sha256 === bgExpectSha,
-            'C-BG2-8 a non-ASCII filename reaches the part header intact and the bytes still match',
-            `name=${bgUniPost && JSON.stringify(bgUniPost.filename)} expect=${JSON.stringify(bgUniName)} bytesMatch=${!!bgUniPost && bgUniPost.file_sha256 === bgExpectSha}`);
+            // C-BG2-5 STUBS __st_read_file, so it pins the seam (uploadPick reached the File->bytes glue)
+            // and nothing past it. Navigate fresh (the reload destroys the stub) and drive the REAL path
+            // with a real picked file, so the Zig multipart build + raw POST run end to end.
+            await page.navigate(`${args.base}/`);
+            await page.waitFor(hydrated, 15000);
+            await openPanel('backgrounds');
+            await page.waitFor("document.getElementById('bg-upload-input')", 8000);
+            const bgPngPath = join(mkdtempSync(join(tmpdir(), 'st-bg-')), 'picked bg.png');
+            const bgPngBytes = Buffer.from(
+                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+                'base64');
+            const bgExpectSha = createHash('sha256').update(bgPngBytes).digest('hex');
+            writeFileSync(bgPngPath, bgPngBytes);
+            const bgDoc = await page.cdp.send('DOM.getDocument', { depth: 1 }, page.sessionId);
+            const bgNodeId = (await page.cdp.send('DOM.querySelector',
+                { nodeId: bgDoc.root.nodeId, selector: '#bg-upload-input' }, page.sessionId)).nodeId;
+            await page.cdp.send('DOM.setFileInputFiles', { files: [bgPngPath], nodeId: bgNodeId }, page.sessionId);
+            const bgPost = await (async () => {
+                const deadline = Date.now() + 8000;
+                while (Date.now() < deadline) {
+                    const st = (await (await fetch(`${args.base}/dev/state`)).json()).bg_upload;
+                    if (st) return st;
+                    await sleep(150);
+                }
+                return null;
+            })();
+            // The wait must LIFT. Reading for the absence of 'Uploading' is what the missing export
+            // failed and what a future glue edit that drops the callback will fail again.
+            const bgWaitLifted = await page.waitFor(
+                "!/Uploading/.test(document.querySelector('.bg-upload-row').textContent)", 8000);
+            const bgLanded = await page.eval(
+                "Array.from(document.querySelectorAll('#bg-gallery .bg-tile-wrap')).some(function(t){return /picked bg\\.png/.test(t.textContent);})");
+            row('must', !!bgPost && bgPost.field_avatar === true && bgWaitLifted && bgLanded,
+                'C-BG2-6 a real upload posts under the field multer reads, lifts the wait, and shows the file',
+                `post=${bgPost ? JSON.stringify(bgPost) : 'NEVER-ARRIVED'} waitLifted=${bgWaitLifted} tile=${bgLanded}`);
+            // The dangerous-property check: the RAW file part the Zig multipart carried must be the PNG
+            // byte-for-byte (a UTF-8 round trip in the door would have corrupted it). The mock parses the
+            // file bytes out of the multipart body and hashes them.
+            row('must', !!bgPost && bgPost.file_sha256 === bgExpectSha && bgPost.file_len === bgPngBytes.length,
+                'C-BG2-7 the uploaded PNG round-trips byte-identical through the raw multipart POST',
+                `sha=${bgPost && bgPost.file_sha256} expect=${bgExpectSha} len=${bgPost && bgPost.file_len}/${bgPngBytes.length}`);
+            // C-BG2-8: a non-ASCII filename (emoji + accent) must reach the server's part header intact;
+            // appendQuoted passes those bytes raw and the raw door op does not decode the body.
+            const bgUniName = 'café🎨 bg.png';
+            const bgUniPath = join(mkdtempSync(join(tmpdir(), 'st-bg2-')), bgUniName);
+            writeFileSync(bgUniPath, bgPngBytes);
+            const bgUniNodeId = (await page.cdp.send('DOM.querySelector',
+                { nodeId: bgDoc.root.nodeId, selector: '#bg-upload-input' }, page.sessionId)).nodeId;
+            await page.cdp.send('DOM.setFileInputFiles', { files: [bgUniPath], nodeId: bgUniNodeId }, page.sessionId);
+            const bgUniPost = await (async () => {
+                const deadline = Date.now() + 8000;
+                while (Date.now() < deadline) {
+                    const st = (await (await fetch(`${args.base}/dev/state`)).json()).bg_upload;
+                    if (st && st.filename === bgUniName) return st;
+                    await sleep(150);
+                }
+                return null;
+            })();
+            row('must', !!bgUniPost && bgUniPost.filename === bgUniName && bgUniPost.file_sha256 === bgExpectSha,
+                'C-BG2-8 a non-ASCII filename reaches the part header intact and the bytes still match',
+                `name=${bgUniPost && JSON.stringify(bgUniPost.filename)} expect=${JSON.stringify(bgUniName)} bytesMatch=${!!bgUniPost && bgUniPost.file_sha256 === bgExpectSha}`);
+        });
         /* C-CONN */
         // The connection panel's type selector and its write-only API-key field. The key never
         // round-trips: the field renders empty and only a masked tail reaches the DOM.
@@ -1989,7 +2306,7 @@ async function main() {
         const openConnections = async () => {
             await page.navigate(`${args.base}/`);
             await openRecentChat();
-            await page.click('#d-connections');
+            await openPanel('connections');
             await page.waitFor("document.getElementById('dd-btn-conn-type')", 4000);
         };
         const ddFace = () => page.eval("document.querySelector('#dd-btn-conn-type span').textContent");
@@ -2103,234 +2420,236 @@ async function main() {
         /* C-CARD */
         {
             console.log('== card editor: full-card fetch + save round-trip (3e) ==');
-            await page.click('#d-card_editor');
-            // The form only mounts once the deep card lands, so its presence IS the fetch assertion.
-            const cardLoaded = await page.waitFor(
-                "!!document.querySelector('#card-description') && document.querySelector('#card-description').value.indexOf('lighthouse keeper') >= 0", 8000);
-            const deepFields = await page.eval(
-                "(function(){var g=function(id){var e=document.getElementById(id);return e?e.value:null;};return JSON.stringify({pers:g('card-personality'),ver:g('card-character_version'),tags:g('card-tags'),depth:g('card-depth_prompt_depth')});})()");
-            const deep = JSON.parse(deepFields || '{}');
-            // The shallow /characters/all form carries none of these; only the deep /get fetch can fill them.
-            const deepOk = deep.pers === 'curious and warm' && deep.ver === '1.2' && deep.tags === 'keeper, coastal' && deep.depth === '4';
-            row('must', cardLoaded && deepOk, 'C-CARD-1 opening the panel fetches the FULL card into the form', `loaded=${cardLoaded} ${deepFields}`);
+            await needsPanel('card_editor', 'C-CARD-1 to C-CARD-15 the character card editor rows', async () => {
+                await openPanel('card_editor');
+                // The form only mounts once the deep card lands, so its presence IS the fetch assertion.
+                const cardLoaded = await page.waitFor(
+                    "!!document.querySelector('#card-description') && document.querySelector('#card-description').value.indexOf('lighthouse keeper') >= 0", 8000);
+                const deepFields = await page.eval(
+                    "(function(){var g=function(id){var e=document.getElementById(id);return e?e.value:null;};return JSON.stringify({pers:g('card-personality'),ver:g('card-character_version'),tags:g('card-tags'),depth:g('card-depth_prompt_depth')});})()");
+                const deep = JSON.parse(deepFields || '{}');
+                // The shallow /characters/all form carries none of these; only the deep /get fetch can fill them.
+                const deepOk = deep.pers === 'curious and warm' && deep.ver === '1.2' && deep.tags === 'keeper, coastal' && deep.depth === '4';
+                row('must', cardLoaded && deepOk, 'C-CARD-1 opening the panel fetches the FULL card into the form', `loaded=${cardLoaded} ${deepFields}`);
 
-            await page.eval("(function(){var t=document.getElementById('card-description'); t.value='a keeper who reads the weather and the tide'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
-            await page.click('#card-save');
-            const pollCard = async (pred) => {
-                const deadline = Date.now() + 8000;
-                while (Date.now() < deadline) {
-                    const st = await (await fetch(`${args.base}/dev/state`)).json();
-                    if (st.card_edit && pred(st.card_edit)) return st.card_edit;
-                    await sleep(150);
-                }
-                return null;
-            };
-            const saved = await pollCard((c) => c.description === 'a keeper who reads the weather and the tide');
-            row('must', !!saved, 'C-CARD-2 an edit saves through /characters/edit', `saved=${!!saved}`);
+                await page.eval("(function(){var t=document.getElementById('card-description'); t.value='a keeper who reads the weather and the tide'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
+                await page.click('#card-save');
+                const pollCard = async (pred) => {
+                    const deadline = Date.now() + 8000;
+                    while (Date.now() < deadline) {
+                        const st = await (await fetch(`${args.base}/dev/state`)).json();
+                        if (st.card_edit && pred(st.card_edit)) return st.card_edit;
+                        await sleep(150);
+                    }
+                    return null;
+                };
+                const saved = await pollCard((c) => c.description === 'a keeper who reads the weather and the tide');
+                row('must', !!saved, 'C-CARD-2 an edit saves through /characters/edit', `saved=${!!saved}`);
 
-            // THE CONTRACT TRAPS. charaFormatData _.sets every field it knows unconditionally, so a key
-            // the body omits is written back as its default: the card silently loses it. fav is worse -
-            // the server compares `data.fav == 'true'`, so a JSON boolean reads as false and clears it.
-            const card = saved || {};
-            const favOk = card.fav === 'true';
-            const bookOk = typeof card.json_data === 'string' && card.json_data.indexOf('character_book') >= 0;
-            const talkOk = card.talkativeness === 0.7;
-            const greetOk = Array.isArray(card.alternate_greetings) && card.alternate_greetings.length === 2;
-            const metaOk = !!card.avatar_url && card.chat === `${card.avatar_url} - 2026-01-01` && card.create_date === '2026-01-01T00:00:00.000Z';
-            const depthOk = card.depth_prompt_depth === 4 && card.depth_prompt_role === 'system';
-            row('must', favOk && bookOk && talkOk && greetOk && metaOk && depthOk,
-                'C-CARD-3 the save echoes every field charaFormatData would default away',
-                `fav=${card.fav} book=${bookOk} talk=${card.talkativeness} greets=${greetOk} meta=${metaOk} depth=${card.depth_prompt_depth}/${card.depth_prompt_role}`);
+                // THE CONTRACT TRAPS. charaFormatData _.sets every field it knows unconditionally, so a key
+                // the body omits is written back as its default: the card silently loses it. fav is worse -
+                // the server compares `data.fav == 'true'`, so a JSON boolean reads as false and clears it.
+                const card = saved || {};
+                const favOk = card.fav === 'true';
+                const bookOk = typeof card.json_data === 'string' && card.json_data.indexOf('character_book') >= 0;
+                const talkOk = card.talkativeness === 0.7;
+                const greetOk = Array.isArray(card.alternate_greetings) && card.alternate_greetings.length === 2;
+                const metaOk = !!card.avatar_url && card.chat === `${card.avatar_url} - 2026-01-01` && card.create_date === '2026-01-01T00:00:00.000Z';
+                const depthOk = card.depth_prompt_depth === 4 && card.depth_prompt_role === 'system';
+                row('must', favOk && bookOk && talkOk && greetOk && metaOk && depthOk,
+                    'C-CARD-3 the save echoes every field charaFormatData would default away',
+                    `fav=${card.fav} book=${bookOk} talk=${card.talkativeness} greets=${greetOk} meta=${metaOk} depth=${card.depth_prompt_depth}/${card.depth_prompt_role}`);
 
-            // A full page load, not a Revert click: this gate TYPED into the textarea, which sets its
-            // dirty-value flag, so the browser keeps showing that text whatever the VDOM patches into
-            // the text child. Only a fresh mount proves the text came back from the server.
-            await page.navigate(`${args.base}/`);
-            await openRecentChat();
-            await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
-            await page.click('#d-card_editor');
-            const persisted = await page.waitFor(
-                "!!document.querySelector('#card-description') && document.querySelector('#card-description').value === 'a keeper who reads the weather and the tide'", 8000);
-            row('must', persisted, 'C-CARD-4 the saved text comes back on a fresh load', `persisted=${persisted}`);
+                // A full page load, not a Revert click: this gate TYPED into the textarea, which sets its
+                // dirty-value flag, so the browser keeps showing that text whatever the VDOM patches into
+                // the text child. Only a fresh mount proves the text came back from the server.
+                await page.navigate(`${args.base}/`);
+                await openRecentChat();
+                await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+                await openPanel('card_editor');
+                const persisted = await page.waitFor(
+                    "!!document.querySelector('#card-description') && document.querySelector('#card-description').value === 'a keeper who reads the weather and the tide'", 8000);
+                row('must', persisted, 'C-CARD-4 the saved text comes back on a fresh load', `persisted=${persisted}`);
 
-            // The one enumerated field rides the shared dropdown, delegated from the panel root (ZX11).
-            await page.click('#dd-btn-depth_prompt_role');
-            const menuOpen = await page.waitFor("!!document.querySelector('[role=\"listbox\"]')", 3000);
-            await page.click('[role="option"][data-dd-value="user"]');
-            const rolePicked = await page.waitFor(
-                "document.querySelector('#dd-btn-depth_prompt_role').textContent.indexOf('User') >= 0", 3000);
-            // Non-vacuous: this click also proves the panel SURVIVES it. The menu closing re-renders
-            // synchronously and orphans the clicked option, which the page-click dismiss used to read
-            // as a click outside the panel and close the whole drawer (fixed in ui.onPageClick).
-            const panelAlive = await page.eval("!!document.querySelector('#card-editor')");
-            row('must', menuOpen && rolePicked && panelAlive, 'C-CARD-5 the note-role dropdown opens and stores the pick', `open=${menuOpen} picked=${rolePicked} panelAlive=${panelAlive}`);
+                // The one enumerated field rides the shared dropdown, delegated from the panel root (ZX11).
+                await page.click('#dd-btn-depth_prompt_role');
+                const menuOpen = await page.waitFor("!!document.querySelector('[role=\"listbox\"]')", 3000);
+                await page.click('[role="option"][data-dd-value="user"]');
+                const rolePicked = await page.waitFor(
+                    "document.querySelector('#dd-btn-depth_prompt_role').textContent.indexOf('User') >= 0", 3000);
+                // Non-vacuous: this click also proves the panel SURVIVES it. The menu closing re-renders
+                // synchronously and orphans the clicked option, which the page-click dismiss used to read
+                // as a click outside the panel and close the whole drawer (fixed in ui.onPageClick).
+                const panelAlive = await page.eval("!!document.querySelector('#card-editor')");
+                row('must', menuOpen && rolePicked && panelAlive, 'C-CARD-5 the note-role dropdown opens and stores the pick', `open=${menuOpen} picked=${rolePicked} panelAlive=${panelAlive}`);
 
-            // Escape rides the same delegated keydown to ui.onPageKey, which closes the active panel
-            // without reading the target: a handler that does not CONSUME the key it handled loses the
-            // whole drawer to a menu dismiss. Non-vacuous only if it asserts the panel survived.
-            const escape = async () => {
-                const k = { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, modifiers: 0 };
-                await page.cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...k }, page.sessionId);
-                await page.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...k }, page.sessionId);
-            };
-            await page.click('#dd-btn-depth_prompt_role');
-            await page.waitFor("!!document.querySelector('[role=\"listbox\"]')", 3000);
-            await escape();
-            const escClosedMenu = await page.waitFor("!document.querySelector('[role=\"listbox\"]')", 3000);
-            const escKeptPanel = await page.eval("!!document.querySelector('#card-editor')");
-            row('must', escClosedMenu && escKeptPanel, 'C-CARD-6 Escape closes the menu and the panel survives it', `menuClosed=${escClosedMenu} panelAlive=${escKeptPanel}`);
+                // Escape rides the same delegated keydown to ui.onPageKey, which closes the active panel
+                // without reading the target: a handler that does not CONSUME the key it handled loses the
+                // whole drawer to a menu dismiss. Non-vacuous only if it asserts the panel survived.
+                const escape = async () => {
+                    const k = { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, modifiers: 0 };
+                    await page.cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...k }, page.sessionId);
+                    await page.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...k }, page.sessionId);
+                };
+                await page.click('#dd-btn-depth_prompt_role');
+                await page.waitFor("!!document.querySelector('[role=\"listbox\"]')", 3000);
+                await escape();
+                const escClosedMenu = await page.waitFor("!document.querySelector('[role=\"listbox\"]')", 3000);
+                const escKeptPanel = await page.eval("!!document.querySelector('#card-editor')");
+                row('must', escClosedMenu && escKeptPanel, 'C-CARD-6 Escape closes the menu and the panel survives it', `menuClosed=${escClosedMenu} panelAlive=${escKeptPanel}`);
 
-            // The same Escape with no menu open still dismisses the panel: consuming the key must not
-            // cost the drawer its own Escape.
-            await escape();
-            const escClosedPanel = await page.waitFor("!document.querySelector('#card-editor')", 3000);
-            row('must', escClosedPanel, 'C-CARD-7 Escape with no menu open still closes the panel', `closed=${escClosedPanel}`);
+                // The same Escape with no menu open still dismisses the panel: consuming the key must not
+                // cost the drawer its own Escape.
+                await escape();
+                const escClosedPanel = await page.waitFor("!document.querySelector('#card-editor')", 3000);
+                row('must', escClosedPanel, 'C-CARD-7 Escape with no menu open still closes the panel', `closed=${escClosedPanel}`);
 
-            // C-CARD2: the greetings the save was already echoing are now editable. Structural, so
-            // it drives the buttons rather than the buffers: a removal shifts row 1 up into a node
-            // the user typed in, and a textarea the user has typed in ignores its text child ever
-            // after, so the panel has to write the survivor's text into it explicitly.
-            await page.click('#d-card_editor');
-            await page.waitFor("!!document.querySelector('#card-greeting-0')", 8000);
-            const greetLoaded = await page.eval(
-                "(function(){var g=function(i){var e=document.getElementById('card-greeting-'+i);return e?e.value:null;};" +
-                "return JSON.stringify({n:document.querySelectorAll('[data-card-greeting]').length,a:g(0),b:g(1)});})()");
-            const gl = JSON.parse(greetLoaded || '{}');
-            row('must', gl.n === 2 && gl.a === 'The fog is in.' && gl.b === 'Mind the step.',
-                'C-CARD-8 the card\'s alternate greetings load into their own editors', greetLoaded);
+                // C-CARD2: the greetings the save was already echoing are now editable. Structural, so
+                // it drives the buttons rather than the buffers: a removal shifts row 1 up into a node
+                // the user typed in, and a textarea the user has typed in ignores its text child ever
+                // after, so the panel has to write the survivor's text into it explicitly.
+                await openPanel('card_editor');
+                await page.waitFor("!!document.querySelector('#card-greeting-0')", 8000);
+                const greetLoaded = await page.eval(
+                    "(function(){var g=function(i){var e=document.getElementById('card-greeting-'+i);return e?e.value:null;};" +
+                    "return JSON.stringify({n:document.querySelectorAll('[data-card-greeting]').length,a:g(0),b:g(1)});})()");
+                const gl = JSON.parse(greetLoaded || '{}');
+                row('must', gl.n === 2 && gl.a === 'The fog is in.' && gl.b === 'Mind the step.',
+                    'C-CARD-8 the card\'s alternate greetings load into their own editors', greetLoaded);
 
-            // ISOLATION IS THE WHOLE ROW: Revert re-reads the card, so the footer is empty and the
-            // edit below is the ONLY thing that happens before the read. The inputs deliberately do
-            // not re-render (that would cost the caret), so nothing renders here at all: a notice
-            // computed only at render time reads "". An earlier draft typed after a button click and
-            // passed on that click's render, proving nothing.
-            await page.click('#card-revert');
-            await page.waitFor("!!document.getElementById('card-editor-notice')" +
-                " && document.getElementById('card-editor-notice').textContent === ''" +
-                " && !!document.getElementById('card-personality')", 8000);
-            const noticeBefore = await page.eval("document.getElementById('card-editor-notice').textContent");
-            await page.eval("(function(){var t=document.getElementById('card-personality'); t.value='changed by the gate'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
-            const noticeAfterEdit = await page.waitFor(
-                "document.getElementById('card-editor-notice').textContent.indexOf('Unsaved changes') >= 0", 3000);
-            row('must', noticeBefore === '' && noticeAfterEdit,
-                'C-CARD-10 an edit says so in the footer with no render to carry it',
-                `before="${noticeBefore}" after="${await page.eval("document.getElementById('card-editor-notice').textContent")}"`);
+                // ISOLATION IS THE WHOLE ROW: Revert re-reads the card, so the footer is empty and the
+                // edit below is the ONLY thing that happens before the read. The inputs deliberately do
+                // not re-render (that would cost the caret), so nothing renders here at all: a notice
+                // computed only at render time reads "". An earlier draft typed after a button click and
+                // passed on that click's render, proving nothing.
+                await page.click('#card-revert');
+                await page.waitFor("!!document.getElementById('card-editor-notice')" +
+                    " && document.getElementById('card-editor-notice').textContent === ''" +
+                    " && !!document.getElementById('card-personality')", 8000);
+                const noticeBefore = await page.eval("document.getElementById('card-editor-notice').textContent");
+                await page.eval("(function(){var t=document.getElementById('card-personality'); t.value='changed by the gate'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
+                const noticeAfterEdit = await page.waitFor(
+                    "document.getElementById('card-editor-notice').textContent.indexOf('Unsaved changes') >= 0", 3000);
+                row('must', noticeBefore === '' && noticeAfterEdit,
+                    'C-CARD-10 an edit says so in the footer with no render to carry it',
+                    `before="${noticeBefore}" after="${await page.eval("document.getElementById('card-editor-notice').textContent")}"`);
 
-            await page.click('#card-greeting-add');
-            await page.waitFor("!!document.querySelector('#card-greeting-2')", 3000);
-            await page.focus('#card-greeting-2');
-            await page.insertText('The lamp is out.');
-            // Remove row 0: row 1 and row 2 shift up into nodes that already hold typed-in text.
-            await page.click('[data-card-greeting-remove="0"]');
-            const shifted = await page.waitFor(
-                "document.querySelectorAll('[data-card-greeting]').length === 2" +
-                " && document.getElementById('card-greeting-0').value === 'Mind the step.'" +
-                " && document.getElementById('card-greeting-1').value === 'The lamp is out.'", 3000);
-            row('must', shifted, 'C-CARD-9 adding, typing and removing a greeting leaves every row showing its own text',
-                `shifted=${shifted} ${await page.eval("(function(){var v=[];document.querySelectorAll('[data-card-greeting]').forEach(function(e){v.push(e.value);});return JSON.stringify(v);})()")}`);
+                await page.click('#card-greeting-add');
+                await page.waitFor("!!document.querySelector('#card-greeting-2')", 3000);
+                await page.focus('#card-greeting-2');
+                await page.insertText('The lamp is out.');
+                // Remove row 0: row 1 and row 2 shift up into nodes that already hold typed-in text.
+                await page.click('[data-card-greeting-remove="0"]');
+                const shifted = await page.waitFor(
+                    "document.querySelectorAll('[data-card-greeting]').length === 2" +
+                    " && document.getElementById('card-greeting-0').value === 'Mind the step.'" +
+                    " && document.getElementById('card-greeting-1').value === 'The lamp is out.'", 3000);
+                row('must', shifted, 'C-CARD-9 adding, typing and removing a greeting leaves every row showing its own text',
+                    `shifted=${shifted} ${await page.eval("(function(){var v=[];document.querySelectorAll('[data-card-greeting]').forEach(function(e){v.push(e.value);});return JSON.stringify(v);})()")}`);
 
-            await page.click('#card-save');
-            const savedGreets = await pollCard((c) => Array.isArray(c.alternate_greetings) && c.alternate_greetings.length === 2);
-            const greetBody = savedGreets && savedGreets.alternate_greetings;
-            row('must', !!savedGreets && greetBody[0] === 'Mind the step.' && greetBody[1] === 'The lamp is out.',
-                'C-CARD-11 the edited greetings are what the save sends', JSON.stringify(greetBody));
+                await page.click('#card-save');
+                const savedGreets = await pollCard((c) => Array.isArray(c.alternate_greetings) && c.alternate_greetings.length === 2);
+                const greetBody = savedGreets && savedGreets.alternate_greetings;
+                row('must', !!savedGreets && greetBody[0] === 'Mind the step.' && greetBody[1] === 'The lamp is out.',
+                    'C-CARD-11 the edited greetings are what the save sends', JSON.stringify(greetBody));
 
-            // THE EDIT ABOVE IS THE TRAP, so it has to stay above: reflectNotice writes the footer with
-            // no render, and writing it through textContent REPLACED the text node ziex holds by vnode
-            // id, so every later render patched a detached node and the save reported into thin air.
-            // A row that saves a pristine form proves nothing here (C-CARD-15 passed throughout for
-            // exactly that reason: it never edits first).
-            const aliveAfterSave = await page.eval("!!document.querySelector('#card-editor-notice')");
-            const noticeSaved = aliveAfterSave && await page.waitFor(
-                "document.getElementById('card-editor-notice').textContent.indexOf('Saved') >= 0", 4000);
-            row('must', !!noticeSaved, 'C-CARD-14 a save keeps the character selected and says it saved',
-                `formAlive=${aliveAfterSave} selection=${await page.eval("!document.querySelector('#card-editor p')||document.querySelector('#card-editor p').textContent")}`);
+                // THE EDIT ABOVE IS THE TRAP, so it has to stay above: reflectNotice writes the footer with
+                // no render, and writing it through textContent REPLACED the text node ziex holds by vnode
+                // id, so every later render patched a detached node and the save reported into thin air.
+                // A row that saves a pristine form proves nothing here (C-CARD-15 passed throughout for
+                // exactly that reason: it never edits first).
+                const aliveAfterSave = await page.eval("!!document.querySelector('#card-editor-notice')");
+                const noticeSaved = aliveAfterSave && await page.waitFor(
+                    "document.getElementById('card-editor-notice').textContent.indexOf('Saved') >= 0", 4000);
+                row('must', !!noticeSaved, 'C-CARD-14 a save keeps the character selected and says it saved',
+                    `formAlive=${aliveAfterSave} selection=${await page.eval("!document.querySelector('#card-editor p')||document.querySelector('#card-editor p').textContent")}`);
 
-            // THE REFUSAL PATH, and the one that costs the user most: the same detached-node defect
-            // silenced every notice, and a save that is REFUSED in silence reads as a save that worked.
-            // Clearing the name is the only refusal reachable without the server playing along, and it
-            // runs through an edit, so it re-enters the trap C-CARD-14 guards from the other side.
-            const nameBefore = await page.eval("document.getElementById('card-name').value");
-            await page.eval("(function(){var t=document.getElementById('card-name'); t.value=''; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
-            await page.click('#card-save');
-            const refusal = await page.waitFor(
-                "document.getElementById('card-editor-notice').textContent.indexOf('needs a name') >= 0", 4000);
-            // The guard refuses BEFORE the request, so the server must still hold the last good name.
-            // The body names it ch_name, which is the key the server 400s on (characters.js:1197).
-            await sleep(400);
-            const serverName = (await (await fetch(`${args.base}/dev/state`)).json()).card_edit.ch_name;
-            row('must', refusal && serverName === nameBefore && nameBefore.length > 0,
-                'C-CARD-16 a save refused for a missing name says so instead of failing silently',
-                `notice="${await page.eval("document.getElementById('card-editor-notice').textContent")}" serverName=${JSON.stringify(serverName)} nameBefore=${JSON.stringify(nameBefore)}`);
+                // THE REFUSAL PATH, and the one that costs the user most: the same detached-node defect
+                // silenced every notice, and a save that is REFUSED in silence reads as a save that worked.
+                // Clearing the name is the only refusal reachable without the server playing along, and it
+                // runs through an edit, so it re-enters the trap C-CARD-14 guards from the other side.
+                const nameBefore = await page.eval("document.getElementById('card-name').value");
+                await page.eval("(function(){var t=document.getElementById('card-name'); t.value=''; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
+                await page.click('#card-save');
+                const refusal = await page.waitFor(
+                    "document.getElementById('card-editor-notice').textContent.indexOf('needs a name') >= 0", 4000);
+                // The guard refuses BEFORE the request, so the server must still hold the last good name.
+                // The body names it ch_name, which is the key the server 400s on (characters.js:1197).
+                await sleep(400);
+                const serverName = (await (await fetch(`${args.base}/dev/state`)).json()).card_edit.ch_name;
+                row('must', refusal && serverName === nameBefore && nameBefore.length > 0,
+                    'C-CARD-16 a save refused for a missing name says so instead of failing silently',
+                    `notice="${await page.eval("document.getElementById('card-editor-notice').textContent")}" serverName=${JSON.stringify(serverName)} nameBefore=${JSON.stringify(nameBefore)}`);
 
-            // Every row above is served a card shaped the way we BELIEVE the server shapes them, so
-            // they prove our reading of the contract and nothing else. The server coerces none of a
-            // card's fields (characters.js:426-430); typed, one odd field failed the WHOLE parse.
-            await (await fetch(`${args.base}/dev/arm-hostile-card`)).json();
-            await page.navigate(`${args.base}/`);
-            await openRecentChat();
-            await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
-            await page.click('#d-card_editor');
-            // The form mounting at all IS the assertion: the error screen has no fields.
-            const hostileMounted = await page.waitFor("!!document.querySelector('#card-creator')", 8000);
-            const hostileFields = await page.eval(
-                "(function(){var g=function(id){var e=document.getElementById(id);return e?e.value:null;};" +
-                "return JSON.stringify({name:g('card-name'),desc:g('card-description'),pers:g('card-personality')," +
-                "scen:g('card-scenario'),first:g('card-first_mes'),creator:g('card-creator'),ver:g('card-character_version')," +
-                "tags:g('card-tags'),depth:g('card-depth_prompt_depth'),world:g('card-world')," +
-                "role:(document.querySelector('#dd-btn-depth_prompt_role')||{}).textContent," +
-                "greets:document.querySelectorAll('[data-card-greeting]').length," +
-                "g0:g('card-greeting-0'),err:!!document.querySelector('#card-editor [role=alert]')});})()");
-            const h = JSON.parse(hostileFields || '{}');
-            // Each unreadable shape costs its OWN field and nothing else.
-            const hostileCosts = h.name === '' && h.desc === '' && h.pers === '' && h.scen === '' && h.first === '' && h.world === '';
-            // The readable fields beside them are untouched, which is the whole point of the row.
-            const hostileKeeps = h.creator === 'someone' && h.tags === 'solo, mystery' && h.depth === '3';
-            // A role of 5 matches no option: it falls back to the server's own default rather than
-            // rendering a dropdown with a blank face.
-            const hostileRole = (h.role || '').indexOf('System') >= 0;
-            // Three greetings in, three out: the two unreadable ones are empty rows the user can see.
-            const hostileGreets = h.greets === 3 && h.g0 === 'real one';
-            row('must', hostileMounted && !h.err && hostileCosts && hostileKeeps && hostileRole && hostileGreets,
-                'C-CARD-12 a card another tool wrote still opens, and each odd field costs only itself',
-                `mounted=${hostileMounted} ${hostileFields}`);
+                // Every row above is served a card shaped the way we BELIEVE the server shapes them, so
+                // they prove our reading of the contract and nothing else. The server coerces none of a
+                // card's fields (characters.js:426-430); typed, one odd field failed the WHOLE parse.
+                await (await fetch(`${args.base}/dev/arm-hostile-card`)).json();
+                await page.navigate(`${args.base}/`);
+                await openRecentChat();
+                await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+                await openPanel('card_editor');
+                // The form mounting at all IS the assertion: the error screen has no fields.
+                const hostileMounted = await page.waitFor("!!document.querySelector('#card-creator')", 8000);
+                const hostileFields = await page.eval(
+                    "(function(){var g=function(id){var e=document.getElementById(id);return e?e.value:null;};" +
+                    "return JSON.stringify({name:g('card-name'),desc:g('card-description'),pers:g('card-personality')," +
+                    "scen:g('card-scenario'),first:g('card-first_mes'),creator:g('card-creator'),ver:g('card-character_version')," +
+                    "tags:g('card-tags'),depth:g('card-depth_prompt_depth'),world:g('card-world')," +
+                    "role:(document.querySelector('#dd-btn-depth_prompt_role')||{}).textContent," +
+                    "greets:document.querySelectorAll('[data-card-greeting]').length," +
+                    "g0:g('card-greeting-0'),err:!!document.querySelector('#card-editor [role=alert]')});})()");
+                const h = JSON.parse(hostileFields || '{}');
+                // Each unreadable shape costs its OWN field and nothing else.
+                const hostileCosts = h.name === '' && h.desc === '' && h.pers === '' && h.scen === '' && h.first === '' && h.world === '';
+                // The readable fields beside them are untouched, which is the whole point of the row.
+                const hostileKeeps = h.creator === 'someone' && h.tags === 'solo, mystery' && h.depth === '3';
+                // A role of 5 matches no option: it falls back to the server's own default rather than
+                // rendering a dropdown with a blank face.
+                const hostileRole = (h.role || '').indexOf('System') >= 0;
+                // Three greetings in, three out: the two unreadable ones are empty rows the user can see.
+                const hostileGreets = h.greets === 3 && h.g0 === 'real one';
+                row('must', hostileMounted && !h.err && hostileCosts && hostileKeeps && hostileRole && hostileGreets,
+                    'C-CARD-12 a card another tool wrote still opens, and each odd field costs only itself',
+                    `mounted=${hostileMounted} ${hostileFields}`);
 
-            // The image replace, driven through the real <input type=file> with a real file: a
-            // FormData cannot cross the wasm boundary, so the POST hops to a JS helper, and the
-            // helper is the only thing that knows the field must be named 'avatar'.
-            const pngPath = join(mkdtempSync(join(tmpdir(), 'st-card-')), 'new-face.png');
-            writeFileSync(pngPath, Buffer.from(
-                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
-                'base64'));
-            // Edit BEFORE the pick, deliberately. An edit is what used to detach the footer's text
-            // node, so an upload onto a pristine form reported fine while the same upload after a
-            // keystroke reported into a node no user could see. This row passed throughout the defect
-            // for exactly that reason; now it enters the trap the way a user does.
-            await page.focus('#card-personality');
-            await page.insertText('!');
-            const doc = await page.cdp.send('DOM.getDocument', { depth: 1 }, page.sessionId);
-            const nodeId = (await page.cdp.send('DOM.querySelector',
-                { nodeId: doc.root.nodeId, selector: '#card-avatar-input' }, page.sessionId)).nodeId;
-            await page.cdp.send('DOM.setFileInputFiles', { files: [pngPath], nodeId }, page.sessionId);
-            const post = await (async () => {
-                const deadline = Date.now() + 8000;
-                while (Date.now() < deadline) {
-                    const st = (await (await fetch(`${args.base}/dev/state`)).json()).avatar_post;
-                    if (st) return st;
-                    await sleep(150);
-                }
-                return null;
-            })();
-            // The field name IS the contract: multer is .single('avatar'), so a body naming the file
-            // anything else 400s, which a user only ever sees as an image that did not change.
-            row('must', !!post && post.field_avatar === true && post.avatar_url === 'char41.png' && post.bytes > 100,
-                'C-CARD-13 picking an image posts it to edit-avatar under the field multer reads',
-                `post=${JSON.stringify(post)}`);
+                // The image replace, driven through the real <input type=file> with a real file: a
+                // FormData cannot cross the wasm boundary, so the POST hops to a JS helper, and the
+                // helper is the only thing that knows the field must be named 'avatar'.
+                const pngPath = join(mkdtempSync(join(tmpdir(), 'st-card-')), 'new-face.png');
+                writeFileSync(pngPath, Buffer.from(
+                    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+                    'base64'));
+                // Edit BEFORE the pick, deliberately. An edit is what used to detach the footer's text
+                // node, so an upload onto a pristine form reported fine while the same upload after a
+                // keystroke reported into a node no user could see. This row passed throughout the defect
+                // for exactly that reason; now it enters the trap the way a user does.
+                await page.focus('#card-personality');
+                await page.insertText('!');
+                const doc = await page.cdp.send('DOM.getDocument', { depth: 1 }, page.sessionId);
+                const nodeId = (await page.cdp.send('DOM.querySelector',
+                    { nodeId: doc.root.nodeId, selector: '#card-avatar-input' }, page.sessionId)).nodeId;
+                await page.cdp.send('DOM.setFileInputFiles', { files: [pngPath], nodeId }, page.sessionId);
+                const post = await (async () => {
+                    const deadline = Date.now() + 8000;
+                    while (Date.now() < deadline) {
+                        const st = (await (await fetch(`${args.base}/dev/state`)).json()).avatar_post;
+                        if (st) return st;
+                        await sleep(150);
+                    }
+                    return null;
+                })();
+                // The field name IS the contract: multer is .single('avatar'), so a body naming the file
+                // anything else 400s, which a user only ever sees as an image that did not change.
+                row('must', !!post && post.field_avatar === true && post.avatar_url === 'char41.png' && post.bytes > 100,
+                    'C-CARD-13 picking an image posts it to edit-avatar under the field multer reads',
+                    `post=${JSON.stringify(post)}`);
 
-            const avatarNotice = await page.waitFor(
-                "!!document.getElementById('card-editor-notice') && document.getElementById('card-editor-notice').textContent.indexOf('New image saved') >= 0", 4000);
-            row('must', avatarNotice, 'C-CARD-15 the panel reports the new image in its own footer',
-                `notice=${avatarNotice}`);
+                const avatarNotice = await page.waitFor(
+                    "!!document.getElementById('card-editor-notice') && document.getElementById('card-editor-notice').textContent.indexOf('New image saved') >= 0", 4000);
+                row('must', avatarNotice, 'C-CARD-15 the panel reports the new image in its own footer',
+                    `notice=${avatarNotice}`);
+            });
         }
 
         // --- C-CFG: the config panels (2a samplers, 2b templates, 2c author's note) ---
@@ -2339,7 +2658,7 @@ async function main() {
             // The drawer button toggles, so a second click closes it. There is no #topdrawer id to
             // reach the chrome's own close button by.
             const closeTopDrawer = async () => {
-                await page.click('#d-formatting');
+                await closePanel('formatting');
                 await page.waitFor("!document.getElementById('instruct-input_sequence')", 3000);
             };
             const openChat = async () => {
@@ -2351,7 +2670,7 @@ async function main() {
             // not on the spec default (1.0), or it would silently rewrite the user's sampler on the
             // first save.
             await openChat();
-            await page.click('#d-ai_config');
+            await openPanel('ai_config');
             await page.waitFor("document.getElementById('sampler-temp')", 4000);
             const tempAtOpen = await page.eval("document.getElementById('sampler-temp').value");
             row('must', tempAtOpen === '0.80',
@@ -2408,7 +2727,7 @@ async function main() {
 
             // 2b FORMATTING panel. The instruct fields open on the blob, hostile shapes and all: the
             // fixture writes enabled as the STRING "true" and first_output_sequence as null.
-            await page.click('#d-formatting');
+            await openPanel('formatting');
             await page.waitFor("document.getElementById('instruct-input_sequence')", 4000);
             const inputSeq = await page.eval("document.getElementById('instruct-input_sequence').value");
             const enabledBox = await page.eval("document.getElementById('instruct-enabled').checked");
@@ -2437,7 +2756,7 @@ async function main() {
 
             // 2c the note SAVE round-trip: what the client sends must be the classic client's keys,
             // and it must gate on the FULL token (a tail token would let two edits both pass).
-            await page.click('#d-formatting');
+            await openPanel('formatting');
             await page.waitFor("document.getElementById('an-prompt')", 4000);
             await page.eval("(function(){const n=document.getElementById('an-prompt');n.value='The lamp is out.';n.dispatchEvent(new Event('input',{bubbles:true}));})()");
             await page.eval("(function(){const n=document.getElementById('an-interval');n.value='3';n.dispatchEvent(new Event('input',{bubbles:true}));})()");
@@ -2503,7 +2822,7 @@ async function main() {
         {
             await page.navigate(`${args.base}/`);
             await openRecentChat();
-            await page.click('#d-ai_config');
+            await openPanel('ai_config');
             await page.waitFor("document.getElementById('sampler-temp')", 4000);
             await page.eval("(function(){const r=document.getElementById('sampler-range-temp');r.value='1.25';r.dispatchEvent(new Event('input',{bubbles:true}));})()");
             // The saver is debounced, so poll the server's own copy rather than sleep.
@@ -2553,7 +2872,7 @@ async function main() {
 
             await page.navigate(`${args.base}/`);
             await openRecentChat();
-            await page.click('#d-formatting');
+            await openPanel('formatting');
             await page.waitFor("document.getElementById('instruct-input_sequence')", 4000);
             await page.waitFor("!!document.querySelector('#dd-btn-fmt-instruct-preset')", 4000);
 
@@ -2581,7 +2900,7 @@ async function main() {
             // Null-safe: a regression that drops `enabled` collapses the whole sequence editor, and a
             // throwing read here would abort the block and take every row below it with it.
             const seqAfterPick = await page.eval("(document.getElementById('instruct-input_sequence')||{}).value || 'FIELDS-GONE'");
-            await page.click('#d-formatting');
+            await closePanel('formatting');
             await page.waitFor("!document.getElementById('instruct-input_sequence')", 3000);
             await sendProbe('does the picked preset reshape the prompt');
             const alpacaPrompt = await promptNow();
@@ -2602,12 +2921,12 @@ async function main() {
             // template property) must survive the pick. A wholesale replace reads the struct default
             // and silently switches instruct wrapping OFF, so the user picks a template and gets LESS
             // templating: the prompt would fall back to bare "Name: mes" lines.
-            await page.click('#d-formatting');
+            await openPanel('formatting');
             await page.waitFor("document.getElementById('instruct-input_sequence')", 4000);
             await pick('fmt-instruct-preset', 'Hostile');
             const stillEnabled = await page.eval("document.getElementById('instruct-enabled').checked");
             const hostileOpts = await optionsOf('fmt-instruct-preset');
-            await page.click('#d-formatting');
+            await closePanel('formatting');
             await page.waitFor("!document.getElementById('instruct-input_sequence')", 3000);
             await sendProbe('does the hostile preset still apply its good fields');
             const hostilePrompt = await promptNow();
@@ -2641,13 +2960,13 @@ async function main() {
             // client runs on a picked preset (power-user.js:2032), or the author's note renders
             // NOWHERE and nothing on screen says why. The note is put at the anchorAfter slot first,
             // so it can only arrive through a slot the migration inserted.
-            await page.click('#d-formatting');
+            await openPanel('formatting');
             await page.waitFor("document.getElementById('an-prompt')", 4000);
             await pick('an-position', '0');
             await page.eval("(function(){const n=document.getElementById('an-prompt');n.value='The lighthouse is unmanned.';n.dispatchEvent(new Event('input',{bubbles:true}));})()");
             await sleep(150);
             await pick('fmt-context-preset', 'Unmigrated');
-            await page.click('#d-formatting');
+            await closePanel('formatting');
             await page.waitFor("!document.getElementById('an-prompt')", 3000);
             await sendProbe('does the note survive an unmigrated context preset');
             const notePrompt = await promptNow();
@@ -2662,7 +2981,7 @@ async function main() {
 
             // THE SAVE CONTRACT. The field names ARE the contract: the route 400s without `preset` or
             // `name`, and apiId is what picks the directory it writes to (presets.js:29-32).
-            await page.click('#d-formatting');
+            await openPanel('formatting');
             await page.waitFor("document.getElementById('context-preset-name')", 4000);
             await page.eval("(function(){const n=document.getElementById('context-preset-name');n.value='Lighthouse';n.dispatchEvent(new Event('input',{bubbles:true}));})()");
             await sleep(150);
@@ -2699,11 +3018,10 @@ async function main() {
             //
             // Assert the BLOB THE SERVER HOLDS, never a reloaded panel: a reload row passes on
             // localStorage alone and proves nothing about the channel that would be missing.
-            // #d-formatting TOGGLES, so a blind click here CLOSES the drawer the save rows left open.
-            // Ask, then open only if it is shut.
+            // Ask before opening: the fields are only worth re-fetching if the panel is actually shut.
             const ensureFormattingOpen = async () => {
                 if (await page.eval("!!document.querySelector('#dd-btn-fmt-instruct-preset')")) return;
-                await page.click('#d-formatting');
+                await openPanel('formatting');
                 await page.waitFor("!!document.querySelector('#dd-btn-fmt-instruct-preset')", 4000);
             };
             await ensureFormattingOpen();
@@ -2819,7 +3137,7 @@ async function main() {
             await page.navigate(`${args.base}/`);
             await openRecentChat();
             await (await fetch(`${args.base}/dev/arm-settings-fail`)).json();
-            await page.click('#d-formatting');
+            await openPanel('formatting');
             const hintNow = () => page.eval(
                 "(document.getElementById('instruct-preset-name-hint')||{}).textContent || ''");
             const failShown = await page.waitFor(
@@ -2911,7 +3229,7 @@ async function main() {
             const openPresets = async () => {
                 await page.navigate(`${args.base}/`);
                 await openRecentChat();
-                await page.click('#d-ai_config');
+                await openPanel('ai_config');
                 await page.waitFor("document.getElementById('dd-btn-sampler-preset')", 4000);
             };
             // The options exist only while the menu is open, and the list is fetched lazily on the
@@ -3081,7 +3399,7 @@ async function main() {
 
             // THE SAVE ROW. The field names ARE the contract: /api/presets/save 400s without `name`
             // or `preset`, and routes the file by `apiId`. Assert the POST the client actually made.
-            await page.click('#d-ai_config');
+            await openPanel('ai_config');
             await page.waitFor("document.getElementById('preset-save-name')", 4000);
             await page.focus('#preset-save-name');
             await page.insertText('My Saved Preset');
@@ -3270,7 +3588,7 @@ async function main() {
             await page.navigate(`${args.base}/`);
             await openRecentChat();
             await (await fetch(`${args.base}/dev/arm-settings-fail`)).json();
-            await page.click('#d-ai_config');
+            await openPanel('ai_config');
             const failShown = await page.waitFor(
                 "!!document.querySelector('.preset-retry') && document.getElementById('preset-status').textContent.indexOf('did not load') >= 0", 5000);
             row('must', failShown,
@@ -3352,42 +3670,44 @@ async function main() {
         // navigated and reselected right after a save, restoring the selection by accident before
         // anything looked. This row looks WITHOUT reselecting.
         {
-            await page.navigate(`${args.base}/`);
-            await openRecentChat();
-            await page.click('#d-card_editor');
-            const cardLoaded = await page.waitFor("document.getElementById('card-name')", 5000);
+            await needsPanel('card_editor', 'C-CFG-SEL-1 to C-CFG-SEL-2 the refetch-keeps-selection rows', async () => {
+                await page.navigate(`${args.base}/`);
+                await openRecentChat();
+                await openPanel('card_editor');
+                const cardLoaded = await page.waitFor("document.getElementById('card-name')", 5000);
 
-            // Duplicate refetches /characters/all, which is the rebuild path, with no navigation and
-            // no reselect after it.
-            await page.click('#d-characters');
-            await page.waitFor("document.querySelectorAll('#chat-root .char-item').length > 0", 5000);
-            const selBefore = await page.eval("(function(){const r=document.querySelector('#chat-root .char-item.is-selected');return r?r.querySelector('.char-name').textContent:null})()");
-            await page.focus("#chat-root .char-item.is-selected .char-row-act[data-char-action='duplicate']");
-            await page.click("#chat-root .char-item.is-selected .char-row-act[data-char-action='duplicate']");
-            // Wait on the SERVER seeing the duplicate, so the refetch it triggers has actually been
-            // issued before the selection is read back.
-            const dupSeen = await (async () => {
-                const deadline = Date.now() + 4000;
-                while (Date.now() < deadline) {
-                    const s = await (await fetch(`${args.base}/dev/state`)).json();
-                    if (s.duplicated_avatar) return true;
-                    await sleep(100);
-                }
-                return false;
-            })();
-            await page.waitFor("document.querySelectorAll('#chat-root .char-item').length > 0", 4000);
-            await sleep(400);
-            const selAfter = await page.eval("(function(){const r=document.querySelector('#chat-root .char-item.is-selected');return r?r.querySelector('.char-name').textContent:null})()");
-            row('must', cardLoaded && dupSeen && selBefore != null && selAfter === selBefore,
-                'C-CFG-SEL-1 a refetch keeps the same character selected',
-                `dupSeen=${dupSeen} before=${JSON.stringify(selBefore)} after=${JSON.stringify(selAfter)}`);
+                // Duplicate refetches /characters/all, which is the rebuild path, with no navigation and
+                // no reselect after it.
+                await openPanel('characters');
+                await page.waitFor("document.querySelectorAll('#chat-root .char-item').length > 0", 5000);
+                const selBefore = await page.eval("(function(){const r=document.querySelector('#chat-root .char-item.is-selected');return r?r.querySelector('.char-name').textContent:null})()");
+                await page.focus("#chat-root .char-item.is-selected .char-row-act[data-char-action='duplicate']");
+                await page.click("#chat-root .char-item.is-selected .char-row-act[data-char-action='duplicate']");
+                // Wait on the SERVER seeing the duplicate, so the refetch it triggers has actually been
+                // issued before the selection is read back.
+                const dupSeen = await (async () => {
+                    const deadline = Date.now() + 4000;
+                    while (Date.now() < deadline) {
+                        const s = await (await fetch(`${args.base}/dev/state`)).json();
+                        if (s.duplicated_avatar) return true;
+                        await sleep(100);
+                    }
+                    return false;
+                })();
+                await page.waitFor("document.querySelectorAll('#chat-root .char-item').length > 0", 4000);
+                await sleep(400);
+                const selAfter = await page.eval("(function(){const r=document.querySelector('#chat-root .char-item.is-selected');return r?r.querySelector('.char-name').textContent:null})()");
+                row('must', cardLoaded && dupSeen && selBefore != null && selAfter === selBefore,
+                    'C-CFG-SEL-1 a refetch keeps the same character selected',
+                    `dupSeen=${dupSeen} before=${JSON.stringify(selBefore)} after=${JSON.stringify(selAfter)}`);
 
-            // The blast radius: the card editor reads the same selected(), so a deselect empties it.
-            await page.click('#d-card_editor');
-            const cardStillOpen = await page.waitFor("document.getElementById('card-name')", 4000);
-            row('must', cardStillOpen,
-                'C-CFG-SEL-2 the card editor still has its character after a refetch',
-                `cardOpen=${cardStillOpen}`);
+                // The blast radius: the card editor reads the same selected(), so a deselect empties it.
+                await openPanel('card_editor');
+                const cardStillOpen = await page.waitFor("document.getElementById('card-name')", 4000);
+                row('must', cardStillOpen,
+                    'C-CFG-SEL-2 the card editor still has its character after a refetch',
+                    `cardOpen=${cardStillOpen}`);
+            });
         }
 
         /* W6 */
@@ -3398,7 +3718,7 @@ async function main() {
         {
             await page.navigate(`${args.base}/`);
             await openRecentChat();
-            await page.click('#d-characters');
+            await openPanel('characters');
             await page.waitFor("document.querySelectorAll('#chat-root .char-item').length > 0", 5000);
 
             // A search that matches nothing is NOT the same nothing as a list that never loaded, and
@@ -3480,7 +3800,7 @@ async function main() {
                 'W6-5 every character row publishes its selection state in ARIA, not just in a class',
                 `list=${ca.list} rowRoles=${JSON.stringify(ca.roles)} ariaMatchesClass=${ca.agree}`);
 
-            await page.click('#d-persona');
+            await openPanel('persona');
             await page.waitFor("document.querySelectorAll('#persona-list .char-item').length >= 2", 5000);
             await page.click('#persona-list .char-item[data-persona-index="1"] .char-name');
             await page.waitFor("document.querySelector('#persona-list .char-item[data-persona-index=\\'1\\']').classList.contains('is-selected')", 2500);
@@ -3493,15 +3813,17 @@ async function main() {
             // new surface: a real Connect must leave the connections button reporting the backend it
             // just probed, in its state attribute AND by name. A row that only checked the attribute
             // was still there would stay green with the dot frozen while the backend was down.
-            const statusBefore = await page.eval("document.getElementById('d-connections').dataset.connState");
-            // #d-connections TOGGLES and five rows click it, so a blind click CLOSES a drawer a prior
-            // row left open. Ask, then open only if it is shut.
+            // togglePanel TOGGLES and five rows use it, so a blind call CLOSES a drawer a prior row
+            // left open. Ask, then open only if it is shut.
             if (!await page.eval("!!document.querySelector('.conn-connect')")) {
-                await page.click('#d-connections');
+                await openPanel('connections');
                 if (!await page.waitFor("document.querySelector('.conn-connect')", 8000)) {
                     throw new Error('W6-7: the connections drawer never opened');
                 }
             }
+            // Read the standing line only once the panel is up: the readout used to ride the topbar
+            // button, which existed whether or not the panel was open, and that button is gone.
+            const statusBefore = await page.eval("document.getElementById('conn-standing').dataset.connState");
             // page.click dispatches at COORDINATES, and the drawer opens on a transition, so a click
             // measured mid-animation lands on empty space. Wait for the button to stop moving.
             await (async () => {
@@ -3529,17 +3851,20 @@ async function main() {
                 return false;
             })();
             const statusMoved = landed && await page.waitFor(
-                "document.getElementById('d-connections').dataset.connState === 'connected'", 6000);
+                "document.getElementById('conn-standing').dataset.connState === 'connected'", 6000);
             const after = await page.eval(`(function(){
-                const b = document.getElementById('d-connections');
-                const m = b.querySelector('.conn-model');
-                return { state: b.dataset.connState, label: b.getAttribute('aria-label'),
+                const b = document.getElementById('conn-standing');
+                const m = document.getElementById('conn-standing-text');
+                const h = document.getElementById('panel-heading');
+                return { state: b.dataset.connState, heading: h ? h.textContent.trim() : null,
                          model: m ? m.textContent.trim() : null };
             })()`);
             // The model name is the mock's own ("mock-model", devserve.py:1434), so this cannot pass
-            // off a hardcoded string or a stale boot value as a probe result.
-            row('must', statusMoved && after.state === 'connected' && after.model === 'mock-model'
-                && after.label === 'API Connections, Connected: mock-model',
+            // off a hardcoded string or a stale boot value as a probe result. The topbar button that
+            // used to carry state + name in one aria-label is deleted; the two halves of that claim
+            // now live on the panel's standing line and the panel's own heading.
+            row('must', statusMoved && after.state === 'connected' && after.model === 'Connected: mock-model'
+                && after.heading === 'API Connections',
                 'W6-7 the backend readout tracks the backend it is reporting on',
                 `landed=${landed} before=${JSON.stringify(statusBefore)} ${JSON.stringify(after)}`);
 
@@ -3548,7 +3873,10 @@ async function main() {
             // much of the chat it covered has nothing left to measure and the honest replacement is
             // the stronger claim: NO connection readout survives anywhere in the composer. The
             // wordmark check rides the same 390px override.
-            await page.click('#d-connections');
+            // The drawer STAYS OPEN for this measurement, where the old row closed it: the dot rode
+            // the topbar button then and lives on the panel's standing line now, so closing the panel
+            // would take the dot the row asserts on with it.
+            await openPanel('connections');
             const wideW = await page.eval('window.innerWidth');
             await page.cdp.send('Emulation.setDeviceMetricsOverride',
                 { width: 390, height: 844, deviceScaleFactor: 1, mobile: false }, page.sessionId);
@@ -3564,7 +3892,7 @@ async function main() {
                     return t.length > 0 && words.some(function (w) { return t.includes(w); });
                 }).map(function (el) { return (el.id || el.tagName.toLowerCase()) + ':' + el.textContent.trim().slice(0, 40); });
                 const h1 = document.querySelector('#topbar h1');
-                const dot = document.querySelector('#d-connections .conn-dot');
+                const dot = document.querySelector('#conn-standing .conn-dot');
                 return JSON.stringify({ legacy: !!document.getElementById('send-status'),
                     bearers: bearers,
                     dotVisible: !!dot && dot.getBoundingClientRect().width > 0,
@@ -3599,61 +3927,63 @@ async function main() {
         // route 3/3 clean; drawer-closed-first 3/3 clean. With patch 13, 12/12 cells clean, orphans 0.
         console.log('== C-SWAP the straight swap into a cold card editor ==');
         {
-            // Cold is half the trigger, so the route navigates every time: a page that already opened
-            // the card editor takes the warm path, where every assertion below is vacuous.
-            const swapRoute = async (clickSelect) => {
-                await page.navigate(`${args.base}/`);
-                await openRecentChat();
-                await page.click('#d-characters');
-                const listed = await page.waitFor("document.querySelectorAll('#chat-root .char-item').length > 0", 8000);
-                if (clickSelect) {
-                    await page.click('#chat-root .char-item .char-name');
-                    await page.waitFor("!!document.querySelector('#chat-root .char-item.is-selected')", 8000);
-                }
-                const selected = await page.eval("!!document.querySelector('#chat-root .char-item.is-selected')");
-                const cold = await page.eval("!document.querySelector('#card-name')");
-                const from = zxAnomalies.length;
-                // Straight in, drawer still open. Closing it first is the route that never drifts.
-                await page.click('#d-card_editor');
-                // The form mounting is the swap's own completion signal (W6-7: never a wall clock).
-                const mounted = await page.waitFor("!!document.querySelector('#card-name')", 8000);
-                // An anomaly has no completion signal to wait on, so one bounded settle gives a late
-                // one the same room C-DBG-6 gives an absent trace.
-                await sleep(1000);
-                return {
-                    drove: listed && selected && cold && mounted,
-                    listed, selected, cold, mounted,
-                    anomalies: zxAnomalies.slice(from).filter((e) => !e.text.includes(ZX_PROBE)),
-                    shellAlive: await page.eval("document.getElementById('shell') !== null"),
-                    // -1, never a skip: an audit that is gone cannot prove zero orphans.
-                    orphans: await page.eval(
-                        "(typeof globalThis.__zx_audit === 'function') ? globalThis.__zx_audit().orphanCount : -1"),
+            await needsPanel('card_editor', 'C-SWAP-1 to C-SWAP-2 the cold card-editor swap rows', async () => {
+                // Cold is half the trigger, so the route navigates every time: a page that already
+                // opened the card editor takes the warm path, where every assertion below is vacuous.
+                const swapRoute = async (clickSelect) => {
+                    await page.navigate(`${args.base}/`);
+                    await openRecentChat();
+                    await openPanel('characters');
+                    const listed = await page.waitFor("document.querySelectorAll('#chat-root .char-item').length > 0", 8000);
+                    if (clickSelect) {
+                        await page.click('#chat-root .char-item .char-name');
+                        await page.waitFor("!!document.querySelector('#chat-root .char-item.is-selected')", 8000);
+                    }
+                    const selected = await page.eval("!!document.querySelector('#chat-root .char-item.is-selected')");
+                    const cold = await page.eval("!document.querySelector('#card-name')");
+                    const from = zxAnomalies.length;
+                    // Straight in, drawer still open. Closing it first is the route that never drifts.
+                    await openPanel('card_editor');
+                    // The form mounting is the swap's own completion signal (W6-7: never a wall clock).
+                    const mounted = await page.waitFor("!!document.querySelector('#card-name')", 8000);
+                    // An anomaly has no completion signal to wait on, so one bounded settle gives a late
+                    // one the same room C-DBG-6 gives an absent trace.
+                    await sleep(1000);
+                    return {
+                        drove: listed && selected && cold && mounted,
+                        listed, selected, cold, mounted,
+                        anomalies: zxAnomalies.slice(from).filter((e) => !e.text.includes(ZX_PROBE)),
+                        shellAlive: await page.eval("document.getElementById('shell') !== null"),
+                        // -1, never a skip: an audit that is gone cannot prove zero orphans.
+                        orphans: await page.eval(
+                            "(typeof globalThis.__zx_audit === 'function') ? globalThis.__zx_audit().orphanCount : -1"),
+                    };
                 };
-            };
-            const say = (r) => `drove=${r.drove} (listed=${r.listed} selected=${r.selected}`
-                + ` coldBefore=${r.cold} mounted=${r.mounted}) anomalies=${r.anomalies.length}`
-                + ` shellAlive=${r.shellAlive} orphanCount=${r.orphans}`
-                + (r.anomalies.length ? ` first=${JSON.stringify(r.anomalies[0].text.slice(0, 150))}` : '');
+                const say = (r) => `drove=${r.drove} (listed=${r.listed} selected=${r.selected}`
+                    + ` coldBefore=${r.cold} mounted=${r.mounted}) anomalies=${r.anomalies.length}`
+                    + ` shellAlive=${r.shellAlive} orphanCount=${r.orphans}`
+                    + (r.anomalies.length ? ` first=${JSON.stringify(r.anomalies[0].text.slice(0, 150))}` : '');
 
-            // Three assertions in one row on purpose, because they are blind in different places. The
-            // audit reads its registry against the DOM; the door REFUSING a garbage patch (f245755e6)
-            // leaves #shell alive and can leave that registry coherent, so either alone can go green
-            // one patch from the crash. #shell is the blast radius: the refused patch named parent and
-            // child BOTH #0, and id 0 is Shell's root. The drove= terms are IN the conjunction: a swap
-            // that silently fails to drive reports no anomaly, a live #shell and no orphan, and that
-            // is this row's green (F12).
-            const fresh = await swapRoute(true);
-            row('must', fresh.drove && fresh.anomalies.length === 0 && fresh.shellAlive && fresh.orphans === 0,
-                'C-SWAP-1 picking a character then opening its card from the panel drifts nothing',
-                say(fresh));
+                // Three assertions in one row on purpose, because they are blind in different places. The
+                // audit reads its registry against the DOM; the door REFUSING a garbage patch (f245755e6)
+                // leaves #shell alive and can leave that registry coherent, so either alone can go green
+                // one patch from the crash. #shell is the blast radius: the refused patch named parent and
+                // child BOTH #0, and id 0 is Shell's root. The drove= terms are IN the conjunction: a swap
+                // that silently fails to drive reports no anomaly, a live #shell and no orphan, and that
+                // is this row's green (F12).
+                const fresh = await swapRoute(true);
+                row('must', fresh.drove && fresh.anomalies.length === 0 && fresh.shellAlive && fresh.orphans === 0,
+                    'C-SWAP-1 picking a character then opening its card from the panel drifts nothing',
+                    say(fresh));
 
-            // The same swap with a SETTLED selection (resume-last, no click in the list): red 3/3 at
-            // 7e180f05b as well, so the click is not the trigger and this is a second real entry, the
-            // user who resumes a chat, opens the panel to browse, then opens the card.
-            const settled = await swapRoute(false);
-            row('must', settled.drove && settled.anomalies.length === 0 && settled.shellAlive && settled.orphans === 0,
-                'C-SWAP-2 the same swap with a settled selection drifts nothing either',
-                say(settled));
+                // The same swap with a SETTLED selection (resume-last, no click in the list): red 3/3 at
+                // 7e180f05b as well, so the click is not the trigger and this is a second real entry, the
+                // user who resumes a chat, opens the panel to browse, then opens the card.
+                const settled = await swapRoute(false);
+                row('must', settled.drove && settled.anomalies.length === 0 && settled.shellAlive && settled.orphans === 0,
+                    'C-SWAP-2 the same swap with a settled selection drifts nothing either',
+                    say(settled));
+            });
         }
 
         // ===== w3-chatmgr (append-only): chat management panel (3a). Keep ABOVE C-DBG. =====
@@ -3668,7 +3998,7 @@ async function main() {
             const mgrNames = `JSON.stringify(${mgrNamesArr})`;
             const openMgr = async () => {
                 if (!(await page.eval("!!document.querySelector('#panel-view .chatmgr')"))) {
-                    await page.click('#d-chat_manager');
+                    await openPanel('chat_manager');
                 }
                 await page.waitFor("document.querySelector('#panel-view .chatmgr')", 5000);
             };
@@ -3691,7 +4021,7 @@ async function main() {
             // Land on char07's default chat: fresh load, characters dock, search, click the row.
             await page.navigate(`${args.base}/`);
             await page.waitFor(`${hydrated} && document.querySelector('#chat-home')`, 15000);
-            await page.click('#d-characters');
+            await openPanel('characters');
             await page.waitFor("document.querySelectorAll('#chat-root .char-item').length > 0", 8000);
             await page.eval("(function(){const s=document.querySelector('.char-search'); s.value='Char 07'; s.dispatchEvent(new Event('input',{bubbles:true}));})()");
             await page.waitFor("document.querySelectorAll('#chat-root .char-item').length === 1", 5000);
@@ -3861,7 +4191,7 @@ async function main() {
 
             await page.navigate(`${args.base}/`);
             await page.waitFor(hydrated, 15000);
-            await page.click('#d-groups');
+            await openPanel('groups');
             const emptyState = await page.waitFor(
                 "!!document.querySelector('.group-panel') && /No groups yet/.test(document.querySelector('.group-panel').textContent)", 8000);
             row('must', emptyState, 'W3-GRP-1 the groups panel opens on its empty state', `empty=${emptyState}`);
@@ -3902,7 +4232,7 @@ async function main() {
                 && Array.isArray(gs[0].members) && gs[0].members[0] === 'char01.png');
             await page.navigate(`${args.base}/`);
             await page.waitFor(hydrated, 15000);
-            await page.click('#d-groups');
+            await openPanel('groups');
             await page.waitFor("document.querySelectorAll('#group-list [data-group-index]').length === 1", 8000);
             await page.click("[data-group-edit='0']");
             const orderKept = await page.waitFor(
@@ -3961,7 +4291,7 @@ async function main() {
             // (bookless) card was live, so pick a never-deep-loaded character and wait on the mock's
             // own request counter: the fresh /characters/get is what carries the embedded book in.
             const wiGetsBefore = (await wiState()).card_get_count;
-            await page.click('#d-characters');
+            await openPanel('characters');
             await page.waitFor("document.querySelectorAll('#chat-root .char-item').length >= 14", 8000);
             await page.eval("document.querySelectorAll('#chat-root .char-item .char-name')[13].click()");
             const wiDeepFetched = await (async () => {
@@ -3973,7 +4303,7 @@ async function main() {
                 return false;
             })();
             row('must', wiDeepFetched, 'W3WI-0 selecting a fresh character deep-fetches its card', `fetched=${wiDeepFetched}`);
-            await page.click('#d-world_info');
+            await openPanel('world_info');
 
             const wiRows = await page.waitFor("document.querySelectorAll('.wi-books ul li').length === 2", 8000);
             row('must', wiRows, 'W3WI-1 the book list renders every server book with its display name',
@@ -4022,7 +4352,7 @@ async function main() {
                 && created.triggers && Object.keys(created).length >= 40;
             await page.navigate(`${args.base}/`);
             await page.waitFor(hydrated, 15000);
-            await page.click('#d-world_info');
+            await openPanel('world_info');
             await page.waitFor("document.querySelectorAll('.wi-books ul li').length === 2", 8000);
             await page.click("[data-wi-open='gate-lore']");
             const survived = await page.waitFor("document.querySelectorAll('.wi-entries ul li').length === 3 && document.querySelector('.wi-entries').textContent.indexOf('GATE NEW') >= 0", 8000);
@@ -4063,9 +4393,9 @@ async function main() {
 
             // Chat link, request shape only (merged-tree server accepts world_info since 9bc8ee713).
             // Row 5's reload left no chat open and the chatlink needs a live chat identity: resume one first.
-            await page.eval("document.getElementById('d-world_info').click()");
+            await closePanel('world_info');
             await openRecentChat();
-            await page.eval("document.getElementById('d-world_info').click()");
+            await openPanel('world_info');
             await page.waitFor("!!document.querySelector(\"[data-wi-open='beta-lore']\")", 8000);
             await page.click("[data-wi-open='beta-lore']");
             await page.waitFor("!!document.querySelector('[data-wi-chatlink]')", 8000);
@@ -4100,7 +4430,7 @@ async function main() {
             await page.navigate(`${args.base}/`);
             await page.waitFor(hydrated, 15000);
             await page.eval("window.prompt = function(){ return 'Ref Party'; }; window.confirm = function(){ return true; };");
-            await page.click('#d-groups');
+            await openPanel('groups');
             await page.waitFor("!!document.querySelector('.group-panel')", 8000);
             await page.click("[data-group-action='new']");
             await page.waitFor("!!document.querySelector('.group-editor')", 5000);
@@ -4156,7 +4486,7 @@ async function main() {
 
             // (c) Switching back to a solo character loads the solo chat; a follow-up send lands in
             // the solo file while the group file holds still (no group state leak).
-            await page.click('#d-characters');
+            await openPanel('characters');
             await page.waitFor("document.querySelectorAll('#chat-root .char-item').length >= 14", 8000);
             await page.eval("document.querySelectorAll('#chat-root .char-item .char-name')[5].click()");
             const refSoloLoaded = await page.waitFor(
@@ -4234,7 +4564,7 @@ async function main() {
             // client's own debounced settings save): budget 1%, engine-budget globally selected.
             await page.navigate(`${args.base}/`);
             await openRecentChat();
-            await page.click('#d-world_info');
+            await openPanel('world_info');
             await page.waitFor("!!document.querySelector('#wi-budget')", 8000);
             await page.eval("(function(){var t=document.querySelector('#wi-budget'); t.value='1'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
             await page.eval("(function(){var c=document.querySelector('[data-wi-global=\\'engine-budget\\']'); c.checked=true; c.dispatchEvent(new Event('change',{bubbles:true}));})()");
@@ -4255,7 +4585,7 @@ async function main() {
 
             // E3: unlink writes world_info:"" through the server allowlist and the next payload
             // carries nothing from the unlinked book (the global engine-budget book stays live).
-            await page.click('#d-world_info');
+            await openPanel('world_info');
             await page.waitFor("!!document.querySelector(\"[data-wi-open='engine-lore']\")", 8000);
             await page.click("[data-wi-open='engine-lore']");
             await page.waitFor("!!document.querySelector('[data-wi-chatlink]')", 8000);
@@ -4281,7 +4611,7 @@ async function main() {
 
             // E4: a stock ST world book FILE imports through the real input and round-trips into
             // the list (server-side entries intact, display name from inside the file).
-            await page.click('#d-world_info');
+            await openPanel('world_info');
             await page.waitFor("!!document.querySelector('[data-wi-back]')", 5000);
             await page.click('[data-wi-back]');
             await page.waitFor("!!document.querySelector('#wi-import-input')", 8000);
@@ -4342,7 +4672,7 @@ async function main() {
             // a reload back into a checked box.
             await page.navigate(`${args.base}/`);
             await page.waitFor(hydrated, 15000);
-            await page.click('#d-world_info');
+            await openPanel('world_info');
             await page.waitFor("!!document.querySelector('#wi-recursive')", 8000);
             await page.eval("(function(){var t=document.querySelector('#wi-budget'); t.value='40'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
             await page.eval("(function(){var c=document.querySelector('#wi-recursive'); c.checked=true; c.dispatchEvent(new Event('change',{bubbles:true}));})()");
@@ -4357,7 +4687,7 @@ async function main() {
             })();
             await page.navigate(`${args.base}/`);
             await page.waitFor(hydrated, 15000);
-            await page.click('#d-world_info');
+            await openPanel('world_info');
             await page.waitFor("!!document.querySelector('#wi-recursive')", 8000);
             const wpReloadedChecked = await page.eval("document.querySelector('#wi-recursive').checked === true");
             row('must', wpOnPersisted && wpReloadedChecked === true,
@@ -4366,7 +4696,7 @@ async function main() {
 
             // R2: with recursion ON a recursion-only entry reaches the payload. The drawer closes
             // first so resume-last is clickable.
-            await page.click('#d-world_info');
+            await closePanel('world_info');
             await openRecentChat();
             await sendProbe('the RECURSEGATE stands open');
             const wpP1 = (await wpState()).last_generate_prompt || '';
@@ -4375,7 +4705,7 @@ async function main() {
                 `first=${wpP1.includes('WI-RECURSE-FIRST')} second=${wpP1.includes('WI-RECURSE-SECOND')}`);
 
             // R3: toggled OFF the chained entry stays out while the keyed one still lands.
-            await page.click('#d-world_info');
+            await openPanel('world_info');
             await page.waitFor("!!document.querySelector('#wi-recursive')", 8000);
             await page.eval("(function(){var c=document.querySelector('#wi-recursive'); c.checked=false; c.dispatchEvent(new Event('change',{bubbles:true}));})()");
             const wpOffPersisted = await (async () => {
@@ -4400,7 +4730,7 @@ async function main() {
             const wpOpenGroup = async () => {
                 await page.navigate(`${args.base}/`);
                 await page.waitFor(hydrated, 15000);
-                await page.click('#d-groups');
+                await openPanel('groups');
                 await page.waitFor("!!document.querySelector(\"#group-list [data-group-index='0']\")", 8000);
                 await page.click("#group-list [data-group-index='0']");
                 await page.waitFor(`document.getElementById('chat').textContent.includes('GROUP ROTATION PROBE') && ${idle}`, 10000);
@@ -4408,7 +4738,7 @@ async function main() {
 
             // G1: the note panel is live in a group chat and its save carries group_id, not a solo ref.
             await wpOpenGroup();
-            await page.click('#d-formatting');
+            await openPanel('formatting');
             const wpNoteLive = await page.waitFor("!!document.getElementById('an-prompt')", 8000);
             await page.eval("(function(){const n=document.getElementById('an-prompt');n.value='GROUP NOTE HOLDS';n.dispatchEvent(new Event('input',{bubbles:true}));})()");
             await page.click('.an-save');
@@ -4430,7 +4760,7 @@ async function main() {
 
             // G2: the group note survives a full reload of the group chat (loaded from the header).
             await wpOpenGroup();
-            await page.click('#d-formatting');
+            await openPanel('formatting');
             await page.waitFor("!!document.getElementById('an-prompt')", 8000);
             const wpNoteReloaded = await page.eval("document.getElementById('an-prompt').value");
             row('must', wpNoteReloaded === 'GROUP NOTE HOLDS',
@@ -4439,8 +4769,8 @@ async function main() {
 
             // G3: linking a book to the OPEN GROUP writes world_info by group_id, the engine's chat
             // scope activates it in the group rotation payload, and the solo header never moved.
-            await page.click('#d-formatting');
-            await page.click('#d-world_info');
+            await closePanel('formatting');
+            await openPanel('world_info');
             await page.waitFor("!!document.querySelector(\"[data-wi-open='engine-lore']\")", 8000);
             await page.click("[data-wi-open='engine-lore']");
             await page.waitFor("!!document.querySelector('[data-wi-chatlink]')", 8000);
@@ -4456,7 +4786,7 @@ async function main() {
             })();
             const wpLinkShape = !!wpLinkBody && typeof wpLinkBody.group_id === 'string' && wpLinkBody.group_id.length > 0
                 && wpLinkBody.avatar_url === undefined;
-            await page.click('#d-world_info');
+            await closePanel('world_info');
             await page.click('#send_textarea');
             await (await fetch(`${args.base}/dev/clear-generate`)).json();
             const wpGrpMsgs = await page.eval("document.querySelectorAll('#chat .mes').length");
@@ -4475,36 +4805,38 @@ async function main() {
 
         /* C-CONN-DOT: the connection readout after P1-C moved it out of the composer. */
         // The dot is the fast channel and the words are the real one. Colour alone is unreadable to a
-        // screen reader and to a red-green reader, so every state row asserts the aria-label TEXT as
+        // screen reader and to a red-green reader, so every state row asserts the readout TEXT as
         // well as the attribute, and the colours are only checked for being distinct from each other.
+        // The surface moved again with the topbar deletion: the button that carried state + words in
+        // one aria-label is gone, and the standing line inside the connections panel is what survived
+        // it, so every read here opens that panel first.
         console.log('== C-CONN-DOT the connection readout ==');
         {
             const connState = async () => page.eval(`(function(){
-                const b = document.getElementById('d-connections');
+                const b = document.getElementById('conn-standing');
                 if (!b) return null;
                 const dot = b.querySelector('.conn-dot');
-                const model = b.querySelector('.conn-model');
-                return { state: b.dataset.connState, label: b.getAttribute('aria-label'),
+                const words = document.getElementById('conn-standing-text');
+                return { state: b.dataset.connState, words: words ? words.textContent.trim() : null,
                          dot: dot ? getComputedStyle(dot).backgroundColor : null,
-                         dotW: dot ? Math.round(dot.getBoundingClientRect().width) : 0,
-                         model: model ? model.textContent.trim() : null };
+                         dotW: dot ? Math.round(dot.getBoundingClientRect().width) : 0 };
             })()`);
             const reloadWith = async (mode) => {
                 await fetch(`${args.base}/dev/status-mode?m=${mode}`);
                 await page.navigate(`${args.base}/?demo=1`);
                 await page.waitFor(hydrated, 15000);
-                await page.waitFor(`document.getElementById('d-connections').dataset.connState !== 'configured'`, 10000);
+                await openPanel('connections');
+                await page.waitFor(`document.getElementById('conn-standing').dataset.connState !== 'configured'`, 10000);
                 return connState();
             };
 
             const ok = await reloadWith('ok');
-            row('must', !!ok && ok.state === 'connected' && ok.label === 'API Connections, Connected: mock-model'
-                && ok.model === 'mock-model' && ok.dotW > 0,
+            row('must', !!ok && ok.state === 'connected' && ok.words === 'Connected: mock-model' && ok.dotW > 0,
                 'C-CONN-DOT-1 a reachable backend shows connected, names the model, and says so in words',
                 JSON.stringify(ok));
 
             const asleep = await reloadWith('asleep');
-            row('must', asleep.state === 'asleep' && asleep.label === 'API Connections, Backend asleep - unlock at silly',
+            row('must', asleep.state === 'asleep' && asleep.words === 'Backend asleep - unlock at silly',
                 'C-CONN-DOT-2 a 502 at the edge reads as asleep, in the attribute and in the name',
                 JSON.stringify(asleep));
 
@@ -4514,21 +4846,28 @@ async function main() {
             const asleepToast = await page.eval(`(function(){
                 const t = [...document.querySelectorAll('#notifications div[data-level]')]
                     .map(function (e) { return { level: e.getAttribute('data-level'), text: e.textContent }; });
-                const badge = document.querySelector('#d-notifications .notif-badge');
+                const badge = document.querySelector('#notify-count');
                 return { toasts: t, badge: badge ? badge.textContent : null };
             })()`);
             row('must', asleepToast.toasts.length === 1 && asleepToast.toasts[0].level === 'warning'
-                && asleepToast.toasts[0].text === 'Backend asleep - unlock at silly' && asleepToast.badge === '1',
-                'C-CONN-DOT-8 an asleep backend also raises a notification, and the bell counts it',
+                && asleepToast.toasts[0].text === 'Backend asleep - unlock at silly',
+                'C-CONN-DOT-8 an asleep backend also raises a notification',
                 JSON.stringify(asleepToast));
+            // The counting half of the old row, kept as its own claim rather than dropped with the
+            // bell it was written against: the badge rode the topbar's notifications button.
+            // Reads the badge rather than opening anything, so it goes fatal the moment the bell is
+            // in the table, with no edit here.
+            row(LAUNCHERS.notifications ? 'must' : 'pending', asleepToast.badge === '1',
+                'C-CONN-DOT-8b the unread badge counts that notification',
+                `badge=${JSON.stringify(asleepToast.badge)} (LAUNCHERS.notifications ${LAUNCHERS.notifications ? 'set' : 'is null'})`);
 
             const offline = await reloadWith('offline');
-            row('must', offline.state === 'offline' && offline.label === 'API Connections, Backend offline - unlock at silly',
+            row('must', offline.state === 'offline' && offline.words === 'Backend offline - unlock at silly',
                 'C-CONN-DOT-3 an online:false probe reads as offline, not as connected',
                 JSON.stringify(offline));
 
             const errored = await reloadWith('error');
-            row('must', errored.state === 'err' && errored.label === 'API Connections, Backend error 500',
+            row('must', errored.state === 'err' && errored.words === 'Backend error 500',
                 'C-CONN-DOT-4 a 500 carries its status code into the readout',
                 JSON.stringify(errored));
 
@@ -4542,6 +4881,7 @@ async function main() {
             await fetch(`${args.base}/dev/status-mode?m=ok`);
             await page.navigate(`${args.base}/?demo=1`);
             await page.waitFor(hydrated, 15000);
+            await openPanel('connections');
             // The relocation itself. Scoped to #composer and keyed on the readout's own vocabulary, so
             // a status line reintroduced under any id is caught, not only one called #send-status.
             const composerClean = await page.eval(`(function(){
@@ -4557,11 +4897,11 @@ async function main() {
             })()`);
             row('must', composerClean.legacy === false && composerClean.bearers.length === 0
                 && composerClean.inShell,
-                'C-CONN-DOT-6 the composer carries no connection readout, and the topbar does',
+                'C-CONN-DOT-6 the composer carries no connection readout, and the Setup panel does',
                 JSON.stringify(composerClean));
 
-            // The panel's standing line is the full readout the topbar only abbreviates.
-            await page.click('#d-connections');
+            // The panel's standing line, the full readout the deleted topbar button abbreviated.
+            await openPanel('connections');
             await page.waitFor("document.querySelector('#conn-standing')", 6000);
             const standing = await page.eval(`(function(){
                 const el = document.getElementById('conn-standing');
@@ -4569,7 +4909,7 @@ async function main() {
                          text: document.getElementById('conn-standing-text').textContent.trim(),
                          progressEmpty: (document.getElementById('conn-status').textContent || '').trim() === '' };
             })()`);
-            await page.click('#d-connections');
+            await closePanel('connections');
             row('must', standing.state === 'connected' && standing.text === 'Connected: mock-model'
                 && standing.progressEmpty,
                 'C-CONN-DOT-7 the panel shows the standing line, with Connect progress still its own',
@@ -4725,31 +5065,33 @@ async function main() {
             // costs a refetch of the thing just written.
             // The delete goes through the CLIENT's own request path, so the header under test is the
             // one net.zig attaches. A hand-written fetch here would prove only that the mock skips.
-            const other = await openSecondStream(args.base, 'c-other-tab');
-            await page.click('#d-backgrounds');
-            const galleryUp = await page.waitFor("!!document.querySelector('#bg-gallery')", 8000);
-            const tilePresent = galleryUp && await page.waitFor(
-                `!!document.querySelector("#bg-gallery [data-bg-delete='live origin.jpg']")`, 8000);
-            const tiles = await page.eval(
-                "Array.from(document.querySelectorAll('#bg-gallery [data-bg-file]')).map(function(e){return e.getAttribute('data-bg-file');}).join('|')");
-            const ownedBefore = await sse();
-            const tabClientId = await page.eval('window.__st_client_id()');
-            // Delete confirms through a NATIVE dialog, which blocks the renderer and hangs every
-            // later CDP call until it is dismissed. Stub it before the click, as the C-BG rows do.
-            // Delete confirms through a NATIVE dialog, which blocks the renderer and hangs every
-            // later CDP call until it is dismissed. Stub it before the click, as the C-BG rows do.
-            await page.eval('window.confirm = function(){ return true; };');
-            if (tilePresent) await page.click("#bg-gallery [data-bg-delete='live origin.jpg']");
-            const deleted = tilePresent && await page.waitFor(
-                `!document.querySelector("#bg-gallery [data-bg-file='live origin.jpg']")`, 8000);
-            await sleep(1200);
-            const ownedAfter = await sse();
-            const otherSaw = other.frames.join('').split('event: background-changed').length - 1;
-            row('must', tilePresent && deleted && ownedAfter.total === ownedBefore.total && otherSaw >= 1,
-                'C-LIVE-3 a write made here is not echoed back here, and another tab still gets it',
-                `thisTab=${ownedBefore.total}->${ownedAfter.total} otherTabSaw=${otherSaw} clientId=${tabClientId.slice(0, 8)} gallery=${galleryUp} tiles=[${tiles}]`);
-            other.close();
-            await page.click('#d-backgrounds');
+            await needsPanel('backgrounds', 'C-LIVE-3 the origin-skip row (needs the gallery)', async () => {
+                const other = await openSecondStream(args.base, 'c-other-tab');
+                await openPanel('backgrounds');
+                const galleryUp = await page.waitFor("!!document.querySelector('#bg-gallery')", 8000);
+                const tilePresent = galleryUp && await page.waitFor(
+                    `!!document.querySelector("#bg-gallery [data-bg-delete='live origin.jpg']")`, 8000);
+                const tiles = await page.eval(
+                    "Array.from(document.querySelectorAll('#bg-gallery [data-bg-file]')).map(function(e){return e.getAttribute('data-bg-file');}).join('|')");
+                const ownedBefore = await sse();
+                const tabClientId = await page.eval('window.__st_client_id()');
+                // Delete confirms through a NATIVE dialog, which blocks the renderer and hangs every
+                // later CDP call until it is dismissed. Stub it before the click, as the C-BG rows do.
+                // Delete confirms through a NATIVE dialog, which blocks the renderer and hangs every
+                // later CDP call until it is dismissed. Stub it before the click, as the C-BG rows do.
+                await page.eval('window.confirm = function(){ return true; };');
+                if (tilePresent) await page.click("#bg-gallery [data-bg-delete='live origin.jpg']");
+                const deleted = tilePresent && await page.waitFor(
+                    `!document.querySelector("#bg-gallery [data-bg-file='live origin.jpg']")`, 8000);
+                await sleep(1200);
+                const ownedAfter = await sse();
+                const otherSaw = other.frames.join('').split('event: background-changed').length - 1;
+                row('must', tilePresent && deleted && ownedAfter.total === ownedBefore.total && otherSaw >= 1,
+                    'C-LIVE-3 a write made here is not echoed back here, and another tab still gets it',
+                    `thisTab=${ownedBefore.total}->${ownedAfter.total} otherTabSaw=${otherSaw} clientId=${tabClientId.slice(0, 8)} gallery=${galleryUp} tiles=[${tiles}]`);
+                other.close();
+                await closePanel('backgrounds');
+            });
 
             // HOT PATH. The turns ride the event, so the open chat gains EXACTLY the ones sent.
             await page.navigate(`${args.base}/`);
@@ -4841,7 +5183,10 @@ async function main() {
             await fetch(`${args.base}/dev/status-mode?m=ok`);
             await page.navigate(`${args.base}/?demo=1&pollms=400`);
             await page.waitFor(hydrated, 15000);
-            await page.waitFor("document.getElementById('d-connections').dataset.connState === 'connected'", 10000);
+            // The readout is only on screen while its panel is, so this block keeps the connections
+            // panel open and watches the standing line the deleted topbar button used to carry.
+            await openPanel('connections');
+            await page.waitFor("document.getElementById('conn-standing').dataset.connState === 'connected'", 10000);
             // The poll is the FALLBACK for a stream that is down (P3-B), so these rows close the live
             // channel first. Left open, its hello stands the poll down and every row below measures
             // the retirement instead of the fallback it is here to test.
@@ -4850,15 +5195,15 @@ async function main() {
             // The dot must follow the backend with NOBODY reloading. Nothing below navigates.
             await fetch(`${args.base}/dev/status-mode?m=asleep`);
             const flipped = await page.waitFor(
-                "document.getElementById('d-connections').dataset.connState === 'asleep'", 10000);
-            const flippedLabel = await page.eval("document.getElementById('d-connections').getAttribute('aria-label')");
-            row('must', flipped && flippedLabel === 'API Connections, Backend asleep - unlock at silly',
+                "document.getElementById('conn-standing').dataset.connState === 'asleep'", 10000);
+            const flippedLabel = await page.eval("document.getElementById('conn-standing-text').textContent.trim()");
+            row('must', flipped && flippedLabel === 'Backend asleep - unlock at silly',
                 'C-POLL-1 the poll flips the dot when the backend changes, with no reload',
                 `flipped=${flipped} label=${JSON.stringify(flippedLabel)}`);
 
             await fetch(`${args.base}/dev/status-mode?m=ok`);
             const back = await page.waitFor(
-                "document.getElementById('d-connections').dataset.connState === 'connected'", 10000);
+                "document.getElementById('conn-standing').dataset.connState === 'connected'", 10000);
             row('must', back, 'C-POLL-2 the poll recovers the dot when the backend comes back', `recovered=${back}`);
 
             // A hidden tab probes NOTHING. document.hidden is overridden rather than stubbed out of
@@ -4931,13 +5276,13 @@ async function main() {
                 await fetch(`${args.base}/dev/status-mode?m=${mode}`);
                 await page.navigate(`${args.base}/?demo=1`);
                 await page.waitFor(hydrated, 15000);
-                await page.waitFor("document.getElementById('d-connections').dataset.connState !== 'configured'", 10000);
+                await waitConnState('configured', 10000, true);
                 await sleep(200);
                 return toastsNow();
             };
             const openConnections = async () => {
                 if (!await page.eval("!!document.querySelector('.conn-connect')")) {
-                    await page.click('#d-connections');
+                    await openPanel('connections');
                     await page.waitFor("document.querySelector('.conn-connect')", 8000);
                 }
                 // The drawer opens on a transition and page.click dispatches at coordinates, so a
@@ -5060,82 +5405,86 @@ async function main() {
             // :272, :304). Each navigate here restores the NATIVE dialogs, and a native modal blocks
             // the page: an unstubbed confirm hangs every later CDP eval, which is what a 420s
             // watchdog timeout after the upload rows turned out to be.
-            const openBackgrounds = async () => {
-                await page.navigate(`${args.base}/?demo=1`);
-                await page.waitFor(hydrated, 15000);
-                await page.eval("window.confirm = function(){ return true; };"
-                    + "window.prompt = function(){ return 'push renamed.png'; };");
-                await page.click('#d-backgrounds');
-                await page.waitFor("document.getElementById('bg-upload-input')", 8000);
-                await sleep(300);
-            };
+            await needsPanel('backgrounds', 'C-PUSH-14 to C-PUSH-17 the background upload and file-action push rows', async () => {
+                const openBackgrounds = async () => {
+                    await page.navigate(`${args.base}/?demo=1`);
+                    await page.waitFor(hydrated, 15000);
+                    await page.eval("window.confirm = function(){ return true; };"
+                        + "window.prompt = function(){ return 'push renamed.png'; };");
+                    await openPanel('backgrounds');
+                    await page.waitFor("document.getElementById('bg-upload-input')", 8000);
+                    await sleep(300);
+                };
 
-            await openBackgrounds();
-            await pickFile('bg-upload-input', 'push probe.png');
-            const bgUploaded = await settled(8000);
-            row('must', bgUploaded.some((t) => t.level === 'success' && t.text === 'Background uploaded'),
-                'C-PUSH-14 a background upload that lands confirms it', JSON.stringify(bgUploaded));
+                await openBackgrounds();
+                await pickFile('bg-upload-input', 'push probe.png');
+                const bgUploaded = await settled(8000);
+                row('must', bgUploaded.some((t) => t.level === 'success' && t.text === 'Background uploaded'),
+                    'C-PUSH-14 a background upload that lands confirms it', JSON.stringify(bgUploaded));
 
-            await openBackgrounds();
-            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/backgrounds/upload')}&code=500`);
-            await pickFile('bg-upload-input', 'push fail.png');
-            const bgUpFailed = await settled(8000);
-            row('must', bgUpFailed.some((t) => t.level === 'err' && t.text === 'Background upload failed: 500'),
-                'C-PUSH-15 a rejected background upload says so, with the code', JSON.stringify(bgUpFailed));
+                await openBackgrounds();
+                await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/backgrounds/upload')}&code=500`);
+                await pickFile('bg-upload-input', 'push fail.png');
+                const bgUpFailed = await settled(8000);
+                row('must', bgUpFailed.some((t) => t.level === 'err' && t.text === 'Background upload failed: 500'),
+                    'C-PUSH-15 a rejected background upload says so, with the code', JSON.stringify(bgUpFailed));
 
-            await openBackgrounds();
-            const delTarget = await page.eval("(document.querySelector('#bg-gallery [data-bg-delete]')||{}).dataset ? document.querySelector('#bg-gallery [data-bg-delete]').getAttribute('data-bg-delete') : ''");
-            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/backgrounds/delete')}&code=500`);
-            await page.click(`#bg-gallery [data-bg-delete='${delTarget}']`);
-            const bgDelFailed = await settled(8000);
-            row('must', bgDelFailed.some((t) => t.level === 'err' && t.text === 'Background delete failed: 500'),
-                'C-PUSH-16 a rejected background delete says so, with the code',
-                `target=${JSON.stringify(delTarget)} ${JSON.stringify(bgDelFailed)}`);
+                await openBackgrounds();
+                const delTarget = await page.eval("(document.querySelector('#bg-gallery [data-bg-delete]')||{}).dataset ? document.querySelector('#bg-gallery [data-bg-delete]').getAttribute('data-bg-delete') : ''");
+                await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/backgrounds/delete')}&code=500`);
+                await page.click(`#bg-gallery [data-bg-delete='${delTarget}']`);
+                const bgDelFailed = await settled(8000);
+                row('must', bgDelFailed.some((t) => t.level === 'err' && t.text === 'Background delete failed: 500'),
+                    'C-PUSH-16 a rejected background delete says so, with the code',
+                    `target=${JSON.stringify(delTarget)} ${JSON.stringify(bgDelFailed)}`);
 
-            await openBackgrounds();
-            const renTarget = await page.eval("document.querySelector('#bg-gallery [data-bg-rename]').getAttribute('data-bg-rename')");
-            await page.eval("window.prompt = function(){ return 'push renamed.png'; };");
-            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/backgrounds/rename')}&code=500`);
-            await page.click(`#bg-gallery [data-bg-rename='${renTarget}']`);
-            const bgRenFailed = await settled(8000);
-            row('must', bgRenFailed.some((t) => t.level === 'err' && t.text === 'Background rename failed: 500'),
-                'C-PUSH-17 a rejected background rename says so, with the code',
-                `target=${JSON.stringify(renTarget)} ${JSON.stringify(bgRenFailed)}`);
+                await openBackgrounds();
+                const renTarget = await page.eval("document.querySelector('#bg-gallery [data-bg-rename]').getAttribute('data-bg-rename')");
+                await page.eval("window.prompt = function(){ return 'push renamed.png'; };");
+                await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/backgrounds/rename')}&code=500`);
+                await page.click(`#bg-gallery [data-bg-rename='${renTarget}']`);
+                const bgRenFailed = await settled(8000);
+                row('must', bgRenFailed.some((t) => t.level === 'err' && t.text === 'Background rename failed: 500'),
+                    'C-PUSH-17 a rejected background rename says so, with the code',
+                    `target=${JSON.stringify(renTarget)} ${JSON.stringify(bgRenFailed)}`);
+            });
 
             // The card editor. Opening it fetches the deep card, so the form's presence is the signal
             // that the panel is ready to save from.
             // The editor only has a card to show once one is selected, which resuming a chat does. A
             // bare navigate leaves it empty, and the form never mounts.
-            const openCardEditor = async () => {
-                await page.navigate(`${args.base}/`);
-                await openRecentChat();
-                await page.click('#d-card_editor');
-                if (!await page.waitFor("!!document.querySelector('#card-description')", 10000)) {
-                    throw new Error('C-PUSH: the card editor form never mounted');
-                }
-                await sleep(200);
-            };
+            await needsPanel('card_editor', 'C-PUSH-18 to C-PUSH-19 the card-save and card-avatar push rows', async () => {
+                const openCardEditor = async () => {
+                    await page.navigate(`${args.base}/`);
+                    await openRecentChat();
+                    await openPanel('card_editor');
+                    if (!await page.waitFor("!!document.querySelector('#card-description')", 10000)) {
+                        throw new Error('C-PUSH: the card editor form never mounted');
+                    }
+                    await sleep(200);
+                };
 
-            await openCardEditor();
-            await page.eval("(function(){var t=document.getElementById('card-description');"
-                + "t.value='push probe edit'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
-            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/characters/edit')}&code=500`);
-            await page.click('#card-save');
-            const cardSaveFailed = await settled(8000);
-            row('must', cardSaveFailed.some((t) => t.level === 'err' && t.text === 'Character save failed: 500'),
-                'C-PUSH-18 a rejected card save says so, with the code', JSON.stringify(cardSaveFailed));
+                await openCardEditor();
+                await page.eval("(function(){var t=document.getElementById('card-description');"
+                    + "t.value='push probe edit'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
+                await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/characters/edit')}&code=500`);
+                await page.click('#card-save');
+                const cardSaveFailed = await settled(8000);
+                row('must', cardSaveFailed.some((t) => t.level === 'err' && t.text === 'Character save failed: 500'),
+                    'C-PUSH-18 a rejected card save says so, with the code', JSON.stringify(cardSaveFailed));
 
-            await openCardEditor();
-            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/characters/edit-avatar')}&code=500`);
-            await pickFile('card-avatar-input', 'card push.png');
-            const cardAvatarFailed = await settled(8000);
-            row('must', cardAvatarFailed.some((t) => t.level === 'err' && t.text === 'Avatar upload failed: 500'),
-                'C-PUSH-19 a rejected card avatar upload says so, with the code', JSON.stringify(cardAvatarFailed));
+                await openCardEditor();
+                await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/characters/edit-avatar')}&code=500`);
+                await pickFile('card-avatar-input', 'card push.png');
+                const cardAvatarFailed = await settled(8000);
+                row('must', cardAvatarFailed.some((t) => t.level === 'err' && t.text === 'Avatar upload failed: 500'),
+                    'C-PUSH-19 a rejected card avatar upload says so, with the code', JSON.stringify(cardAvatarFailed));
+            });
 
             const openPersona = async () => {
                 await page.navigate(`${args.base}/?demo=1`);
                 await page.waitFor(hydrated, 15000);
-                await page.click('#d-persona');
+                await openPanel('persona');
                 if (!await page.waitFor("document.getElementById('persona-avatar-input')", 10000)) {
                     throw new Error('C-PUSH: the persona panel never mounted its avatar input');
                 }
@@ -5383,55 +5732,63 @@ async function main() {
 
             await cdp.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: spy.identifier }, sessionId);
 
-            // Three pushes have happened above and none were read, so the badge is the count of them.
-            // Asserting the NUMBER, not merely that a badge exists: a badge stuck at 1 looks correct.
-            const bell = await page.eval(`(function(){
-                const b = document.getElementById('d-notifications');
-                if (!b) return null;
-                const badge = b.querySelector('.notif-badge');
-                return { icon: b.getAttribute('data-icon'), label: b.getAttribute('aria-label'),
-                         badge: badge ? badge.textContent : null,
-                         badgeHidden: badge ? badge.getAttribute('aria-hidden') : null };
-            })()`);
-            row('must', !!bell && bell.icon === 'bell' && bell.badge === '3'
-                && bell.label === 'Notifications, 3 unread' && bell.badgeHidden === 'true',
-                'C-NOTIF-10 the bell carries the unread count in its badge and in its name',
-                JSON.stringify(bell));
+            await needsPanel('notifications', 'C-NOTIF-10 to C-NOTIF-13 the bell badge and history drawer rows', async () => {
+                // Three pushes have happened above and none were read, so the badge is the count of them.
+                // Asserting the NUMBER, not merely that a badge exists: a badge stuck at 1 looks correct.
+                // Found by its badge rather than by an element id: the button that carried it was the
+                // topbar's #d-notifications, and whatever wears the unread count next is the bell.
+                const bell = await page.eval(`(function(){
+                    const badge = document.querySelector('#notify-count');
+                    const b = badge && badge.closest('button');
+                    if (!b) return null;
+                    return { icon: b.getAttribute('data-icon'), label: b.getAttribute('aria-label'),
+                             badge: badge ? badge.textContent : null,
+                             badgeHidden: badge ? badge.getAttribute('aria-hidden') : null };
+                })()`);
+                row('must', !!bell && bell.icon === 'bell' && bell.badge === '3'
+                    && bell.label === 'Notifications, 3 unread' && bell.badgeHidden === 'true',
+                    'C-NOTIF-10 the bell carries the unread count in its badge and in its name',
+                    JSON.stringify(bell));
 
-            await page.click('#d-notifications');
-            const listed = await page.waitFor("document.querySelectorAll('#notif-list li').length === 3", 4000);
-            const drawer = await page.eval(`(function(){
-                const li = [...document.querySelectorAll('#notif-list li')];
-                return { rows: li.map(function (e) {
-                             return { text: e.querySelector('.notif-text').textContent,
-                                      age: e.querySelector('.notif-age').textContent,
-                                      level: e.getAttribute('data-level') };
-                         }),
-                         empty: !!document.querySelector('.panel-empty') };
-            })()`);
-            const r = drawer.rows;
-            row('must', listed && r.length === 3
-                && r[0].text === 'probe toast long' && r[2].text === 'probe toast alpha'
-                && r[0].level === 'warning' && r[2].level === 'err'
-                && r.every((e) => e.age.length > 0) && !drawer.empty,
-                'C-NOTIF-11 the drawer lists the history newest first, with each level and age',
-                JSON.stringify(r));
+                await openPanel('notifications');
+                const listed = await page.waitFor("document.querySelectorAll('#notif-list li').length === 3", 4000);
+                const drawer = await page.eval(`(function(){
+                    const li = [...document.querySelectorAll('#notif-list li')];
+                    return { rows: li.map(function (e) {
+                                 return { text: e.querySelector('.notif-text').textContent,
+                                          age: e.querySelector('.notif-age').textContent,
+                                          level: e.getAttribute('data-level') };
+                             }),
+                             empty: !!document.querySelector('.panel-empty') };
+                })()`);
+                const r = drawer.rows;
+                row('must', listed && r.length === 3
+                    && r[0].text === 'probe toast long' && r[2].text === 'probe toast alpha'
+                    && r[0].level === 'warning' && r[2].level === 'err'
+                    && r.every((e) => e.age.length > 0) && !drawer.empty,
+                    'C-NOTIF-11 the drawer lists the history newest first, with each level and age',
+                    JSON.stringify(r));
 
-            // Opening the drawer is the read receipt, so the badge must be gone WHILE the list is up.
-            const afterOpen = await page.eval(`(function(){
-                const b = document.getElementById('d-notifications');
-                return { badge: !!b.querySelector('.notif-badge'), label: b.getAttribute('aria-label') };
-            })()`);
-            row('must', afterOpen.badge === false && afterOpen.label === 'Notifications',
-                'C-NOTIF-12 opening the drawer marks the list read and clears the badge',
-                JSON.stringify(afterOpen));
+                // Opening the drawer is the read receipt, so the badge must be gone WHILE the list is up.
+                // While the popover is up the same button IS the close affordance, so its name is
+                // "Close notifications", not "Notifications". Found by id, not by name prefix.
+                const afterOpen = await page.eval(`(function(){
+                    const b = document.querySelector('#notify-bell');
+                    return { badge: !!document.querySelector('#notify-count'),
+                             label: b ? b.getAttribute('aria-label') : null };
+                })()`);
+                row('must', afterOpen.badge === false && afterOpen.label === 'Close notifications',
+                    'C-NOTIF-12 opening the drawer marks the list read and clears the badge',
+                    JSON.stringify(afterOpen));
 
-            await page.click('#notif-clear');
-            const cleared = await page.waitFor("document.querySelector('#panel-view .panel-empty') && !document.querySelector('#notif-list')", 4000);
-            const emptyText = await page.eval("(document.querySelector('#panel-view .panel-empty')||{}).textContent || ''");
-            row('must', cleared && emptyText.length > 40 && /reload/i.test(emptyText),
-                'C-NOTIF-13 Clear empties the list and leaves a real empty state, not a blank panel',
-                `cleared=${cleared} copy=${JSON.stringify(emptyText.slice(0, 60))}`);
+                await page.click('#notif-clear');
+                // The history is a popover now, not a dock, so its empty state lives in #notify-popover.
+                const cleared = await page.waitFor("document.querySelector('#notify-popover .panel-empty') && !document.querySelector('#notif-list')", 4000);
+                const emptyText = await page.eval("(document.querySelector('#notify-popover .panel-empty')||{}).textContent || ''");
+                row('must', cleared && emptyText.length > 40 && /reload/i.test(emptyText),
+                    'C-NOTIF-13 Clear empties the list and leaves a real empty state, not a blank panel',
+                    `cleared=${cleared} copy=${JSON.stringify(emptyText.slice(0, 60))}`);
+            });
 
             // Four levels at once, to prove the ramp DISCRIMINATES. Four identical borders would pass
             // any "is it coloured" row, so the assertion is on the count of DISTINCT colours, plus a
@@ -5644,9 +6001,9 @@ async function main() {
             if (hasSwitch) await page.eval('window.__st_debug(true)');
             // A trace needs the door to patch something. Boot is the only other churn and it is over,
             // so the panel open is what gives the switch something to say, with no reload.
-            const drawer = await page.waitFor("document.getElementById('d-characters')", 5000);
+            const drawer = await page.waitFor("document.getElementById('tab-cast')", 5000);
             if (drawer) {
-                await page.click('#d-characters');
+                await openPanel('characters');
                 await page.waitFor("document.querySelector('#chat-root .char-item, #chat-root .panel-empty')", 5000);
                 await grewBy(zxTraces, liveFrom, 5000);
             }

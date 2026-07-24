@@ -151,9 +151,9 @@ atleast "glue custom.js emits the [zx:dom] guard after minify" "$(count '\[zx:do
 
 echo
 echo "== served html (pre-hydration) =="
-# Five client regions (Shell, MessageLog, Home, Composer, Toasts), each with one SSR marker; three
-# fixtures, each body a placeholder the client replaces.
-check "region hydration markers in index.html" "$(count '<!--\$' dist/index.html)" 5
+# Six client regions (Shell, MessageLog, Home, Composer, Toasts, Palette), each with one SSR marker;
+# three fixtures, each body a placeholder the client replaces.
+check "region hydration markers in index.html" "$(count '<!--\$' dist/index.html)" 6
 # 24 = two sinks per fixture message: the body and the reasoning block (w3-reason), which always
 # renders (hidden when empty) so mid-stream appearance never needs a structural vdom insert.
 check "ssr placeholder, two per message (body + reasoning)" "$(count 'ST_SSR_PLACEHOLDER' dist/index.html)" 24
@@ -281,7 +281,9 @@ tally "markdown code-fence stage" $?
 echo
 echo "== dev endpoints are opt-in =="
 refuse_taken_port $((PORT + 1)) "the no-dev server"
-setsid timeout -k 5 20 python3 devserve.py --port $((PORT + 1)) --dist dist >/dev/null 2>&1 &
+# The timeout is an orphan backstop, not a perf assertion; match the primary server (line 168) so
+# heavy host load (eg many sibling chrome instances) cannot kill it mid-section and read a dead socket.
+setsid timeout -k 5 320 python3 devserve.py --port $((PORT + 1)) --dist dist >/dev/null 2>&1 &
 NODEV=$!
 nodev_ready=no
 for _ in $(seq 1 50); do
@@ -409,9 +411,9 @@ if "__load_error" in mob:
 panels = mob.get("panels", [])
 tb = mob.get("topbar", {})
 check("mobile: no horizontal overflow", not mob.get("overflowX", True))
-# w3-chatmgr + w3-grp: 10 -> 12; P1-B notifications drawer: 12 -> 13.
-check("mobile: topbar 13 taps >=44px reachable", tb.get("count") == 13 and not has(mob, "topbar-count", "topbar-tap", "topbar-reachable", "topbar-scroll"))
-check("mobile: 13 panels open >=80% wide in view", len(panels) == 13 and all(p.get("open") for p in panels) and not has(mob, "panel-open", "panel-width", "panel-inviewport"), f"{len(panels)} panels")
+# The 13-button top bar is gone: the two edge tabs are the launchers, and on touch they never hide.
+check("mobile: 2 edge tabs >=44px reachable", tb.get("count") == 2 and not has(mob, "topbar-count", "topbar-tap", "topbar-reachable"))
+check("mobile: 2 panels open >=80% wide in view", len(panels) == 2 and all(p.get("open") for p in panels) and not has(mob, "panel-open", "panel-width", "panel-inviewport"), f"{len(panels)} panels")
 check("mobile: panels scrollable on overflow", not has(mob, "panel-scroll"))
 check("mobile: reachability sweep 0 clipped", not has(mob, "panel-reachable"), f"{sum(p.get('clippedControls', 0) for p in panels)} clipped")
 check("mobile: 0 console errors", not has(mob, "console-errors"), f"{len(mob.get('consoleErrors', []))} err")
@@ -495,7 +497,7 @@ echo
 echo "== interactions (real input against the served client) =="
 # Self-contained stage: verify-interactions.sh starts its own mock-api server on its own port.
 # One row, and it is a row about a runner, not about the client: interactions.mjs prints its own
-# count of its own rows and only an exit code reaches here. Reading its 221 rows into this total
+# count of its own rows and only an exit code reaches here. Reading those rows into this total
 # would mean parsing its output, which is a claim about text rather than about counters.
 if [ "${INTERACTIONS:-1}" = "1" ]; then
     if ./verify-interactions.sh; then

@@ -1,0 +1,54 @@
+// Shared panel chrome composed by both the docked SidePanel and the TopDrawer, so the title bar and
+// the placeholder body live in one place instead of being hand-written in each.
+pub const HeadProps = struct {
+    title: []const u8,
+    /// Which dock this head belongs to, read back by ui.onClose: with both sides openable at once a
+    /// close click has to name its own side. Empty on the top drawer, which has no side.
+    side: []const u8 = "",
+};
+
+pub fn PanelHead(allocator: zx.Allocator, props: HeadProps) zx.Component {
+    return (
+        <div
+            @allocator={allocator}
+            class="flex flex-none items-center justify-between gap-2 border-b border-border p-2 pl-4 max-[768px]:p-3 max-[768px]:pl-4"
+        >
+            <h2
+                id="panel-heading"
+                class="m-0 overflow-hidden font-mono text-xs font-medium tracking-[0.1em] text-ellipsis whitespace-nowrap text-muted uppercase max-[640px]:text-[0.7rem]"
+            >{props.title}</h2>
+            <button
+                class="icon grid size-[1.9rem] flex-none cursor-pointer place-items-center rounded-md border-0 bg-transparent text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-text max-[768px]:size-10 max-[768px]:min-h-11 max-[768px]:min-w-11"
+                data-icon="close"
+                data-side={props.side}
+                type="button"
+                aria-label="Close"
+                onclick={ui.onClose}
+            ></button>
+        </div>
+    );
+}
+
+// The empty-state look is declared once; WHAT a given panel has to say is its own copy, passed in.
+// It used to be one hardcoded sentence about the build, which every panel wearing it then told the
+// user (WD68).
+pub const EmptyProps = struct {
+    text: []const u8,
+};
+
+pub fn PanelEmpty(allocator: zx.Allocator, props: EmptyProps) zx.Component {
+    return (
+        <p @allocator={allocator} class="panel-empty m-0 text-sm leading-ui text-muted">{props.text}</p>
+    );
+}
+
+// The one file-picker appearance, shared by every panel that takes a file (it was declared four
+// times, three identical and one divergent). The BUTTON inside the control is Chrome's own shadow
+// node, which no class of ours can reach, so its style is the ::file-selector-button rule in
+// app-input.css; this class is the hook that rule keys off. The input stays a real, visible,
+// focusable <input type=file>: two of these are driven by DOM.setFileInputFiles and one by .click()
+// while detached, so hiding it behind a label would trade a cosmetic defect for a broken control.
+pub const file_picker = "file-picker max-w-[13rem] font-mono text-xs text-muted";
+
+const zx = @import("zx");
+const ui = @import("../nav/ui.zig");

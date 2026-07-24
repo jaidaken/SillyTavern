@@ -1,0 +1,95 @@
+// The notification bell that rides the Cast edge tab, and the small card it opens.
+//
+// The bell left the 13-icon topbar with the rest of that row (rework section 3). It arrives WITH
+// the Cast tab, on the same proximity reveal and the same fade: reaching for the right edge is
+// already the gesture that summons navigation, so the history costs nothing at rest and is always
+// reachable, where a bell that appeared only with unread items could never show you what you had
+// already read. The unread COUNT is the part that comes and goes.
+//
+// Like the tab, a hidden bell drops its pointer events as well as its opacity, so the square it
+// occupies stays clickable through to the page underneath until it is actually showing.
+//
+// Bell and card both offset off --dock-w-right, the same custom property the Cast tab reads, so an
+// open right dock pushes all three inward together and a resize drag moves them at pointer rate.
+pub fn NotifyBell(allocator: zx.Allocator) zx.Component {
+    return (
+        <div @allocator={allocator} class="contents">
+            <button
+                id="notify-bell"
+                type="button"
+                class={bellClass()}
+                style={ui.tabOffsetStyle(.right)}
+                data-icon={if (state.isOpen()) "close" else "bell"}
+                aria-label={state.buttonLabel(allocator)}
+                aria-haspopup="dialog"
+                aria-expanded={state.expandedStr()}
+                aria-controls="notify-popover"
+                onclick={state.onToggle}
+                onkeydown={state.onKey}
+            >
+                {if (state.hasCount()) (
+                    <span id="notify-count" class={count_chip} aria-hidden="true">{state.countText(allocator)}</span>
+                )}
+            </button>
+            {if (state.isOpen()) (
+                <div
+                    id="notify-popover"
+                    class={popover}
+                    style={ui.tabOffsetStyle(.right)}
+                    role="dialog"
+                    aria-labelledby="notify-heading"
+                    onkeydown={state.onKey}
+                >
+                    <div class="flex flex-none items-center justify-between gap-2">
+                        <h2
+                            id="notify-heading"
+                            class="m-0 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase"
+                        >Notifications</h2>
+                        <button
+                            type="button"
+                            class="icon grid size-[1.6rem] flex-none cursor-pointer place-items-center rounded-md border-0 bg-transparent text-muted hover:bg-surface-2 hover:text-text"
+                            data-icon="close"
+                            aria-label="Close notifications"
+                            onclick={state.onClose}
+                        ></button>
+                    </div>
+                    <div class="min-h-0 flex-1 overflow-y-auto [scrollbar-width:thin]">
+                        <NotificationsBody />
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// The tab's own vocabulary, one notch down the edge: same size, same left-rounded shape, same fade,
+// so the pair reads as one stack of handles rather than as a tab with a stray chip beneath it.
+// A coarse pointer never hovers, so both stay lit and live there, at the 44px tap minimum.
+const bell_base = "icon fixed top-[calc(var(--topbar-h)+3.2rem)] z-40 grid size-[2.4rem] cursor-pointer place-items-center rounded-l-md border border-r-0 border-border bg-surface-2 transition-opacity duration-200 ease-[ease] hover:text-accent focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(pointer:coarse)]:size-11 [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100";
+
+// Three literals rather than a computed string: the tailwind scanner reads .zx text, so a utility
+// assembled in Zig is never generated. Open takes the accent because the bell is then the close
+// affordance, exactly as an open side's tab does.
+const bell_open = bell_base ++ " pointer-events-auto text-accent opacity-100";
+const bell_shown = bell_base ++ " pointer-events-auto text-muted opacity-100";
+const bell_hidden = bell_base ++ " pointer-events-none text-muted opacity-0";
+
+fn bellClass() []const u8 {
+    if (state.isOpen()) return bell_open;
+    return if (state.bellShown()) bell_shown else bell_hidden;
+}
+
+// The count sits on the bell's outer corner, the one edge with page behind it rather than screen
+// edge or tab. Amber is the single colour this theme spends on a live signal. aria-hidden because
+// the button's own name already says how many are unread, and a screen reader should hear that
+// sentence once, not a bare digit after it (WD38).
+const count_chip = "pointer-events-none absolute -top-1 -left-1 grid h-4 min-w-4 place-items-center rounded-full bg-accent px-1 font-mono text-[0.6rem] leading-none text-on-accent";
+
+// Capped height with its own scroll, so fifty notifications cannot grow a card taller than the
+// window. No shadow: depth in this theme is carried on borders (WD16).
+const popover = "fixed top-[calc(var(--topbar-h)+6rem)] z-50 flex max-h-[min(60vh,26rem)] w-[19rem] max-w-[calc(100vw-1.5rem)] flex-col gap-3 rounded-lg border border-border bg-surface p-3";
+
+const zx = @import("zx");
+const ui = @import("../nav/ui.zig");
+const state = @import("./notify_bell_state.zig");
+const NotificationsBody = @import("./notifications_body.zx").NotificationsBody;

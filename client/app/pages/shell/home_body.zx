@@ -1,0 +1,193 @@
+// The home landing: a fourth grid sibling (page.zx) shown when no chat is open. Its ONE job is to
+// get the user back into a recent conversation, so it leads with the recent-thread list and an
+// explicit "resume last" (which replaces char_api's old silent auto-open). Hidden behind an open
+// chat via the chatShowing check, so it never nests inside MessageLog (regions stay DOM-disjoint).
+//
+// Design brief (WD58): a returning single-user roleplay operator reopening the app to pick a thread
+// back up; the recent list IS this client's memory, not a SaaS dashboard, so no centred hero + card
+// grid. Signature (WD63): one page-load staggered reveal of the threads (--rd, gated by --move so
+// reduced motion keeps the serif/amber identity without movement). Styling is utilities in this
+// markup (ZX14); Zig owns the data and the four-state machine (home.zig).
+pub fn Home(ctx: *zx.ComponentCtx(void)) zx.Component {
+    regions.home = ctx.state(u32, 0);
+    home.ensureLoaded();
+    const showing = home.chatShowing();
+    const st = home.recentState();
+    const skel: []const u8 = &skeleton_rows;
+    return (
+        <section
+            @allocator={ctx.allocator}
+            id="chat-home"
+            class={if (showing) "hidden" else section_class}
+            aria-hidden={if (showing) "true" else "false"}
+            aria-label="Home"
+        >
+            { if (!showing) (
+                <div class="mx-auto flex min-h-0 w-full max-w-[var(--measure)] flex-col gap-6 px-4 pt-[calc(var(--topbar-h)+2rem)] pb-10 max-[640px]:px-3 max-[640px]:pt-[calc(var(--topbar-h)+1.25rem)]">
+                    <header class="flex flex-col gap-3">
+                        <p class="m-0 text-xs font-medium tracking-[0.14em] text-faint uppercase">Welcome back</p>
+                        <h1 class="m-0 font-serif text-[1.75rem] leading-[1.15] font-semibold text-text max-[640px]:text-2xl">Pick up where you left off</h1>
+                        <div class="mt-1 flex flex-wrap items-center gap-x-4 gap-y-2">
+                            <button
+                                type="button"
+                                id="home-resume"
+                                name="home-resume"
+                                class="inline-flex cursor-pointer items-center gap-2 rounded-md border border-beta-edge bg-tool-on px-3 py-2 font-serif text-sm font-semibold text-text transition-colors duration-150 ease-[ease] hover:bg-tool-hover focus-visible:outline-2 focus-visible:outline-tool-ring"
+                                onclick={ctx.bind(onResume)}
+                                aria-label="Resume the most recent conversation"
+                            >Resume last conversation</button>
+                            <p class="m-0 text-sm text-muted">or open a character from the sidebar</p>
+                        </div>
+                    </header>
+
+                    { if (st == .loading) (
+                        <div class="flex flex-col gap-2" role="list" aria-busy="true" aria-label="Loading recent conversations">
+                            {for (skel) |_| (
+                                <div class="home-skel flex items-center gap-3 rounded-md border border-border-soft p-3">
+                                    <div class="size-11 flex-none rounded-md bg-surface-2"></div>
+                                    <div class="flex min-w-0 flex-1 flex-col gap-2">
+                                        <div class="h-3 w-2/5 rounded bg-surface-2"></div>
+                                        <div class="h-3 w-4/5 rounded bg-surface"></div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    ) else if (st == .err) (
+                        <div class="flex flex-col items-start gap-3 rounded-md border border-border-soft p-4" role="alert">
+                            <p class="m-0 text-sm text-muted">Could not load your recent conversations. The backend may be unreachable.</p>
+                            <button
+                                type="button"
+                                class="cursor-pointer rounded-md border border-border bg-surface-2 px-3 py-1.5 text-sm text-text transition-colors duration-150 ease-[ease] hover:bg-tool-hover focus-visible:outline-2 focus-visible:outline-tool-ring"
+                                onclick={ctx.bind(onRetry)}
+                            >Try again</button>
+                        </div>
+                    ) else if (home.recentRows().len == 0) (
+                        <div class="flex flex-col gap-2 rounded-md border border-dashed border-border-soft p-6">
+                            <p class="m-0 font-serif text-base text-text">No conversations yet</p>
+                            <p class="m-0 text-sm text-muted">Open a character from the sidebar and say hello to start your first one.</p>
+                        </div>
+                    ) else (
+                        <div class="home-threads flex flex-col gap-2" role="list" aria-label="Recent conversations">
+                            {for (home.recentRows(), 0..) |r, i| (
+                                <div
+                                    class="home-thread group/thread flex cursor-pointer items-center gap-3 rounded-md border border-border-soft p-3 transition-colors duration-150 ease-[ease] select-none hover:border-border hover:bg-surface-2 focus-within:border-border focus-visible:outline-2 focus-visible:outline-tool-ring max-[640px]:min-h-[56px]"
+                                    role="listitem"
+                                    tabindex="0"
+                                    data-home-row={i}
+                                    style={rowDelay(ctx.allocator, i)}
+                                    onclick={ctx.bind(onRowOpen)}
+                                    onkeydown={ctx.bind(onRowKey)}
+                                >
+                                    <img
+                                        class="size-11 flex-none rounded-md bg-bg object-cover"
+                                        src={home.rowAvatarUrl(ctx.allocator, r)}
+                                        alt={home.rowDisplayName(ctx.allocator, r)}
+                                        loading="lazy"
+                                    />
+                                    <div class="flex min-w-0 flex-1 flex-col">
+                                        <div class="truncate font-serif text-sm font-semibold text-text">{home.rowDisplayName(ctx.allocator, r)}</div>
+                                        <div class="mt-px truncate text-xs text-muted">{r.preview}</div>
+                                    </div>
+                                    <div class="flex flex-none items-center gap-1 self-stretch">
+                                        <time class="mr-1 text-xs whitespace-nowrap text-faint">{r.when}</time>
+                                        <button
+                                            type="button"
+                                            class="flex size-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent text-muted opacity-0 transition-opacity duration-150 ease-[ease] group-hover/thread:opacity-100 hover:text-text focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-tool-ring max-[640px]:opacity-100"
+                                            data-home-action="rename"
+                                            data-home-row={i}
+                                            onclick={ctx.bind(onRowAction)}
+                                            aria-label="Rename this conversation"
+                                        >
+                                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L18.5 9.5l-4-4L4 16v4z"></path><path d="M13.5 6.5l4 4"></path></svg>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            class="flex size-8 cursor-pointer items-center justify-center rounded-md border-none bg-transparent text-muted opacity-0 transition-opacity duration-150 ease-[ease] group-hover/thread:opacity-100 hover:text-text focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-danger-ring max-[640px]:opacity-100"
+                                            data-home-action="delete"
+                                            data-home-row={i}
+                                            onclick={ctx.bind(onRowAction)}
+                                            aria-label="Delete this conversation"
+                                        >
+                                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7h14"></path><path d="M9 7V5h6v2"></path><path d="M6.5 7l1 12h9l1-12"></path></svg>
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
+        </section>
+    );
+}
+
+// col 2 / row 2 of the app grid (the centre column, same cell as MessageLog), painted opaque so an
+// empty MessageLog behind it never shows through; scrolls on its own. Hidden (class="hidden") the
+// moment a chat is showing, so it captures no clicks over the log.
+const section_class = "col-start-2 row-start-2 z-[1] min-h-0 min-w-0 overflow-y-auto bg-bg [scrollbar-color:var(--color-border)_transparent] [scrollbar-width:thin]";
+
+const skeleton_rows = [_]u8{ 0, 0, 0, 0 };
+
+// Staggered page-load reveal (WD63 signature): each thread's --rd steps the home-thread animation
+// (defined in the CSS), capped so a long list does not trail. --move (CSS) zeroes the movement under
+// reduced motion; the opacity fade still plays. Owned by the render arena.
+fn rowDelay(arena: std.mem.Allocator, i: usize) []const u8 {
+    return std.fmt.allocPrint(arena, "--rd:{d}ms", .{@as(usize, @min(i, 8)) * 45}) catch "";
+}
+
+fn onResume(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    _ = e;
+    home.resumeLast();
+}
+
+fn onRetry(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    _ = e;
+    home.retryRecent();
+}
+
+fn onRowOpen(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    // An inline action control (rename/delete) owns its click; the open handler stands down.
+    if (dom_event.datasetUp(target, "homeAction")) |act| {
+        zx.allocator.free(act);
+        return;
+    }
+    const row_str = dom_event.datasetUp(target, "homeRow") orelse {
+        home_log.warn("home open: click target has no data-home-row ancestor", .{});
+        return;
+    };
+    defer zx.allocator.free(row_str);
+    const index = std.fmt.parseInt(usize, row_str, 10) catch return;
+    home.openRow(index);
+}
+
+// Enter/Space on a focused row opens it (WD37 keyboard parity), matching the click path.
+fn onRowKey(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    if (!dom_event.isActivationKey(e)) return;
+    onRowOpen(e);
+}
+
+fn onRowAction(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.statefulTarget(e) orelse return;
+    const action = dom_event.datasetUp(target, "homeAction") orelse {
+        home_log.warn("home action: click target has no data-home-action ancestor", .{});
+        return;
+    };
+    defer zx.allocator.free(action);
+    const row_str = dom_event.datasetUp(target, "homeRow") orelse return;
+    defer zx.allocator.free(row_str);
+    const index = std.fmt.parseInt(usize, row_str, 10) catch return;
+    if (std.mem.eql(u8, action, "rename")) home.renameRow(index) else if (std.mem.eql(u8, action, "delete")) home.deleteRow(index);
+}
+
+const zx = @import("zx");
+const std = @import("std");
+const home = @import("./home.zig");
+const regions = @import("./regions.zig");
+const dom_event = @import("../platform/dom_event.zig");
+const home_log = std.log.scoped(.home);

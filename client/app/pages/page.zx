@@ -2,7 +2,7 @@ pub fn Page(ctx: zx.PageContext) !zx.Component {
     // SSR-only skeleton: fixture prose fills the pre-hydration frames. The runtime store does NOT
     // mirror it (demo is opt-in via __st_seed_demo); hydration replaces these with real state.
     if (comptime zx.platform.role == .server) {
-        const fixtures = @import("./fixtures.zig");
+        const fixtures = @import("./platform/fixtures.zig");
         _ = fixtures.loadRoleplay(&store.global);
     }
 
@@ -26,18 +26,22 @@ pub fn Page(ctx: zx.PageContext) !zx.Component {
             <Home @rendering={.client} />
             <Composer @rendering={.client} />
             <Toasts @rendering={.client} />
+            <Palette @rendering={.client} />
         </div>
     );
 }
 
 const zx = @import("zx");
-const store = @import("./store.zig");
-pub const Shell = @import("./shell.zx").Shell;
-pub const MessageLog = @import("./messagelog.zx").MessageLog;
-pub const Home = @import("./home_body.zx").Home;
-pub const Composer = @import("./composer.zx").Composer;
-pub const Toasts = @import("./toasts.zx").Toasts;
+const store = @import("./platform/store.zig");
+pub const Shell = @import("./shell/shell.zx").Shell;
+pub const MessageLog = @import("./chat/messagelog.zx").MessageLog;
+pub const Home = @import("./shell/home_body.zx").Home;
+pub const Composer = @import("./chat/composer.zx").Composer;
+pub const Toasts = @import("./notify/toasts.zx").Toasts;
+// Like Toasts, the palette claims no grid cell: its root is display:contents and its overlay is
+// position:fixed, so mounting it adds no track and reflows nothing.
+pub const Palette = @import("./nav/palette.zx").Palette;
 
 comptime {
-    _ = @import("./character_store.zig");
+    _ = @import("./cast/character_store.zig");
 }
