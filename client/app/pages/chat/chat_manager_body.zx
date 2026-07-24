@@ -52,30 +52,28 @@ pub fn ChatManagerBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         <div class="chatmgr-list flex flex-col gap-2" role="list" aria-label="This character's chats">
                             {for (chat_actions.rowsSlice(), 0..) |r, i| (
                                 <div
-                                    class="chatmgr-row group/chat flex cursor-pointer flex-col gap-1 rounded-md border border-border-soft p-3 transition-colors duration-150 ease-[ease] select-none hover:border-border hover:bg-surface-2 focus-within:border-border focus-visible:outline-2 focus-visible:outline-tool-ring"
+                                    class="chatmgr-row group/chat flex cursor-pointer flex-col gap-2 rounded-md border border-border-soft p-3 transition-colors duration-150 ease-[ease] select-none hover:border-border hover:bg-surface-2 focus-within:border-border focus-visible:outline-2 focus-visible:outline-tool-ring"
                                     role="listitem"
                                     tabindex="0"
                                     data-chat-row={i}
                                     onclick={onRowOpen}
                                     onkeydown={onRowKey}
                                 >
-                                    <div class="flex min-w-0 items-center gap-2">
-                                        <span class="truncate font-serif text-sm font-semibold text-text">{r.file_name}</span>
+                                    <div class="flex min-w-0 items-baseline gap-2">
+                                        <span class="min-w-0 flex-1 truncate font-serif text-sm font-semibold text-text">{titleText(ctx.allocator, r.file_name)}</span>
                                         {if (isCurrent(r.file_name)) (
                                             <span class="flex-none rounded border border-beta-edge bg-tool-on px-1.5 py-px text-[0.65rem] tracking-wide text-text uppercase">open</span>
                                         )}
-                                        <span class="ml-auto flex-none text-xs whitespace-nowrap text-faint">{r.when}</span>
+                                        <span class="flex-none text-xs whitespace-nowrap text-faint">{r.when}</span>
                                     </div>
-                                    <div class="truncate text-xs text-muted">{r.preview}</div>
-                                    <div class="flex items-center gap-2">
-                                        <span class="text-xs text-faint">{msgCount(ctx.allocator, r.message_count)}{" \u{00b7} "}{r.file_size}</span>
-                                        <div class="ml-auto flex items-center gap-1 opacity-0 transition-opacity duration-150 ease-[ease] group-hover/chat:opacity-100 focus-within:opacity-100 max-[768px]:opacity-100">
-                                            <button type="button" class={row_btn} data-chat-act="rename" data-chat-row={i} onclick={onRowAct} aria-label="Rename this chat">Rename</button>
-                                            <button type="button" class={row_btn} data-chat-act="duplicate" data-chat-row={i} onclick={onRowAct} aria-label="Duplicate this chat">Duplicate</button>
-                                            <button type="button" class={row_btn} data-chat-act="branch" data-chat-row={i} onclick={onRowAct} aria-label="Branch this chat at a message">Branch</button>
-                                            <button type="button" class={row_btn} data-chat-act="export" data-chat-row={i} onclick={onRowAct} aria-label="Export this chat as jsonl">Export</button>
-                                            <button type="button" class={row_danger} data-chat-act="delete" data-chat-row={i} onclick={onRowAct} aria-label="Delete this chat">Delete</button>
-                                        </div>
+                                    <div class="line-clamp-2 text-sm leading-relaxed text-muted">{r.preview}</div>
+                                    <div class="text-xs text-faint">{msgCount(ctx.allocator, r.message_count)}{" \u{00b7} "}{r.file_size}</div>
+                                    <div class="flex flex-wrap gap-1 border-t border-border-soft pt-2">
+                                        <button type="button" class={row_btn} data-chat-act="rename" data-chat-row={i} onclick={onRowAct} aria-label="Rename this chat">Rename</button>
+                                        <button type="button" class={row_btn} data-chat-act="duplicate" data-chat-row={i} onclick={onRowAct} aria-label="Duplicate this chat">Duplicate</button>
+                                        <button type="button" class={row_btn} data-chat-act="branch" data-chat-row={i} onclick={onRowAct} aria-label="Branch this chat at a message">Branch</button>
+                                        <button type="button" class={row_btn} data-chat-act="export" data-chat-row={i} onclick={onRowAct} aria-label="Export this chat as jsonl">Export</button>
+                                        <button type="button" class={row_danger} data-chat-act="delete" data-chat-row={i} onclick={onRowAct} aria-label="Delete this chat">Delete</button>
                                     </div>
                                 </div>
                             )}
@@ -102,6 +100,14 @@ fn isCurrent(stem: []const u8) bool {
 
 fn msgCount(alloc: std.mem.Allocator, n: u64) []const u8 {
     return std.fmt.allocPrint(alloc, "{d} messages", .{n}) catch "";
+}
+
+/// The row's title: a human date for an unrenamed chat (whose stem is a creation timestamp), or the
+/// custom name verbatim for a renamed one. Into the render arena, freed with the render.
+fn titleText(alloc: std.mem.Allocator, stem: []const u8) []const u8 {
+    var buf: [24]u8 = undefined;
+    if (datetime.friendlyStem(stem, &buf)) |t| return alloc.dupe(u8, t) catch stem;
+    return stem;
 }
 
 fn onRetry(ev: zx.client.Event) void {
@@ -185,3 +191,4 @@ const char_store = @import("../cast/character_store.zig");
 const chat_actions = @import("./chat_actions.zig");
 const dom_event = @import("../platform/dom_event.zig");
 const panelchrome = @import("../shell/panelchrome.zx");
+const datetime = @import("../platform/datetime.zig");

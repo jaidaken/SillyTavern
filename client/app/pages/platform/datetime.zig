@@ -73,6 +73,68 @@ pub fn isoDate(ms: f64, buf: *[10]u8) []const u8 {
     }) catch "1970-01-01";
 }
 
+const month_abbr = [_][]const u8{ "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+
+/// A human chat title for a file-name stem, or null when the stem is not a creation timestamp (a
+/// renamed chat, whose custom name is shown verbatim). Tolerant of both shapes real data carries:
+/// the padded `2026-02-11@02h29m08s683ms` and the older spaced/unpadded `2026-2-11 @02h 29m 08s 683ms`.
+pub fn friendlyStem(s: []const u8, buf: []u8) ?[]const u8 {
+    const ms = parseChatStem(s) orelse return null;
+    return friendlyStamp(ms, buf);
+}
+
+/// "11 Feb 2026, 02:29" (UTC) for an epoch-ms stamp. Same UTC caveat as isoDate: the humanized stems
+/// are written from the server's local clock with no zone, so the client reads them as UTC.
+pub fn friendlyStamp(ms: f64, buf: []u8) []const u8 {
+    var secs: u64 = 0;
+    if (std.math.isFinite(ms) and ms > 0) secs = @intFromFloat(@trunc(ms / 1000.0));
+    const es = std.time.epoch.EpochSeconds{ .secs = secs };
+    const yd = es.getEpochDay().calculateYearDay();
+    const md = yd.calculateMonthDay();
+    const ds = es.getDaySeconds();
+    return std.fmt.bufPrint(buf, "{d} {s} {d}, {d:0>2}:{d:0>2}", .{
+        @as(u32, md.day_index) + 1,
+        month_abbr[md.month.numeric() - 1],
+        yd.year,
+        ds.getHoursIntoDay(),
+        ds.getMinutesIntoHour(),
+    }) catch "";
+}
+
+/// Epoch ms for a chat file-name stem, or null for a renamed chat. Pulls exactly seven digit runs
+/// (year, month, day, hour, minute, second, milli) ignoring every separator, so the padded and the
+/// spaced/unpadded shapes both read; fieldsToMs range-checks them, so a name that is not seven
+/// date-shaped numbers rejects. An eighth number also rejects (a bare stamp has exactly seven).
+pub fn parseChatStem(s: []const u8) ?f64 {
+    var nums: [7]u32 = undefined;
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i < s.len) {
+        if (!std.ascii.isDigit(s[i])) {
+            i += 1;
+            continue;
+        }
+        var val: u32 = 0;
+        while (i < s.len and std.ascii.isDigit(s[i])) : (i += 1) {
+            val = val * 10 + (s[i] - '0');
+            if (val > 999_999) return null;
+        }
+        if (count >= 7) return null;
+        nums[count] = val;
+        count += 1;
+    }
+    if (count != 7) return null;
+    return fieldsToMs(.{
+        .year = @intCast(nums[0]),
+        .month = nums[1],
+        .day = nums[2],
+        .hour = nums[3],
+        .minute = nums[4],
+        .second = nums[5],
+        .milli = nums[6],
+    });
+}
+
 // ---- shape parsers ---------------------------------------------------------------------------
 
 const Fields = struct {
@@ -335,6 +397,30 @@ test "isoDate formats UTC dates and degrades to the epoch" {
     try testing.expectEqualStrings("2026-07-14", isoDate(ref_ms, &buf));
     try testing.expectEqualStrings("1970-01-01", isoDate(std.math.nan(f64), &buf));
     try testing.expectEqualStrings("1970-01-01", isoDate(-5, &buf));
+}
+
+test "parseChatStem reads both the padded and the spaced/unpadded filename shapes" {
+    // Same instant, three ways a real chat stem is written. 2026-02-11 02:29:08.683 UTC.
+    const want: f64 = 1770776948683;
+    try testing.expectEqual(want, parseChatStem("2026-02-11@02h29m08s683ms").?);
+    try testing.expectEqual(want, parseChatStem("2026-2-11 @02h 29m 08s 683ms").?);
+    try testing.expectEqual(want, parseChatStem("Char Name - 2026-2-11 @02h 29m 08s 683ms").?);
+}
+
+test "parseChatStem rejects a renamed chat's custom name" {
+    // Not seven date-shaped numbers -> a custom title, shown verbatim.
+    try testing.expect(parseChatStem("My Epic Quest") == null);
+    try testing.expect(parseChatStem("chat 2 of 3") == null);
+    try testing.expect(parseChatStem("") == null);
+    try testing.expect(parseChatStem("2026-13-11@02h29m08s683ms") == null); // month 13
+    try testing.expect(parseChatStem("2026-02-11@02h29m08s683ms999") == null); // an eighth number
+}
+
+test "friendlyStem formats a stem and passes a custom name through as null" {
+    var buf: [24]u8 = undefined;
+    try testing.expectEqualStrings("11 Feb 2026, 02:29", friendlyStem("2026-2-11 @02h 29m 08s 683ms", &buf).?);
+    try testing.expectEqualStrings("14 Jul 2026, 12:30", friendlyStem("2026-07-14@12h30m00s000ms", &buf).?);
+    try testing.expect(friendlyStem("Renamed Chat", &buf) == null);
 }
 
 test "an ISO stamp round-trips through isoDate for a span of dates" {
