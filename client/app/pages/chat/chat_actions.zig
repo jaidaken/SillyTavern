@@ -26,7 +26,6 @@ const char_api = @import("../cast/char_api.zig");
 const chat_names = @import("./chat_names.zig");
 const datetime = @import("../platform/datetime.zig");
 const home = @import("../shell/home.zig");
-const ui = @import("../nav/ui.zig");
 
 const alloc = char_store.page_gpa;
 const log = std.log.scoped(.chatmgr);
@@ -237,8 +236,9 @@ fn dupePreview(mes: []const u8) ![]u8 {
 
 // ---- row actions ------------------------------------------------------------------------------
 
-/// Switch the reader to the chat at `index`. Goes through char_api.loadChatByName (invariant 4);
-/// the drawer closes so the switched chat is visible immediately.
+/// Switch the reader to the chat at `index`, via char_api.loadChatByName (invariant 4). The side
+/// panels STAY OPEN: both flank the centre chat, so opening one from the Chats tab must not close the
+/// menu the way it did in the old one-drawer-at-a-time model (the chat is already visible).
 pub fn openRow(index: usize) void {
     if (zx.platform.role != .client) return;
     if (index >= rows.len) return;
@@ -247,13 +247,9 @@ pub fn openRow(index: usize) void {
         setStatus("open failed: character not loaded", .{});
         return;
     };
-    if (std.mem.eql(u8, stem, currentStem())) {
-        ui.close();
-        return;
-    }
+    if (std.mem.eql(u8, stem, currentStem())) return;
     log.info("switch chat: {s}", .{stem});
     char_api.loadChatByName(ci, stem);
-    ui.close();
 }
 
 pub fn renameRow(index: usize) void {
@@ -436,7 +432,6 @@ fn onBranchDone(tag: u64, http_status: u16, res: ?*zx.Fetch.Response) void {
     }
     if (charIndexByAvatar(pend_avatar)) |ci| {
         char_api.loadChatByName(ci, pend_new);
-        ui.close();
     }
     setStatus("branched as \"{s}\"", .{pend_new});
     refreshAfterMutation(pend_avatar);

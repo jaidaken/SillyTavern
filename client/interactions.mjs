@@ -4125,11 +4125,12 @@ async function main() {
                 'CM-1 the manager lists all three of the character\'s chats with metadata',
                 `names=${JSON.stringify(names)}`);
 
-            // CM-2: switching to an older chat renders that chat and closes the drawer.
+            // CM-2: switching to an older chat renders that chat and LEAVES THE PANEL OPEN. Both panels
+            // persist (no autohide); the old close-on-open was the bug Jamie reported 2026-07-24.
             await rowActByName('old adventure', 'open');
             const switched = await page.waitFor(
-                "document.querySelectorAll('#chat .mes').length === 2 && document.body.textContent.includes('peppermint dragon') && !document.querySelector('#panel-view')", 8000);
-            row('must', switched, 'CM-2 switching to an older chat renders it and closes the drawer');
+                "document.querySelectorAll('#chat .mes').length === 2 && document.body.textContent.includes('peppermint dragon') && !!document.querySelector('#panel-view')", 8000);
+            row('must', switched, 'CM-2 switching to an older chat renders it and keeps the panel open');
 
             // CM-3 (the wrong-file hazard): a send AFTER the switch persists into the SWITCHED file.
             // char_api re-derives the file per send, so without the override this lands in the default.
@@ -4187,11 +4188,12 @@ async function main() {
             row('must', dupListed && dupEqual,
                 'CM-6 duplicate creates a byte-equal copy and the original is untouched');
 
-            // CM-7: branch at message 1 creates a one-message prefix copy and opens it.
+            // CM-7: branch at message 1 creates a one-message prefix copy, opens it, and keeps the panel
+            // open (both-panels-persist; branch no longer force-closes the drawer either).
             await page.eval("window.prompt = function(){ return '1'; };");
             await rowActByName('keep me', 'branch');
             const branchOpened = await page.waitFor(
-                "document.querySelectorAll('#chat .mes').length === 1 && document.body.textContent.includes('Sibling canary line one') && !document.querySelector('#panel-view')", 8000);
+                "document.querySelectorAll('#chat .mes').length === 1 && document.body.textContent.includes('Sibling canary line one') && !!document.querySelector('#panel-view')", 8000);
             const stBranch = await mgrState();
             const branchRight = (stBranch.files['keep me branch 1'] || []).length === 1
                 && (stBranch.files['keep me'] || []).length === 2;
