@@ -13,6 +13,7 @@ const char_store = @import("./character_store.zig");
 const char_api = @import("./char_api.zig");
 const dom_event = @import("../platform/dom_event.zig");
 const panelchrome = @import("../shell/panelchrome.zx");
+const ui = @import("../nav/ui.zig");
 
 // Delete is the one destructive action, so it wears the danger hover instead of the ordinary one:
 // its class list carries hover:bg-danger-hover and NOT hover:bg-tool-hover, which keeps the two
@@ -27,6 +28,10 @@ const panelchrome = @import("../shell/panelchrome.zx");
 // and were the only chrome in the app set in Newsreader.
 const act_base = "flex-none cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-text max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:px-3 max-[768px]:py-2 max-[640px]:flex-1 max-[640px]:justify-center";
 const act_btn = "char-act-btn " ++ act_base ++ " hover:bg-tool-hover";
+// The one control in this row that OPENS something rather than acting in place, and the card
+// editor's only other door is a hover control on the row itself, so it carries the accent edge that
+// marks it as the way through.
+const act_edit = "char-act-btn char-act-edit " ++ act_base ++ " border-accent text-accent hover:bg-tool-hover";
 const act_danger = "char-act-btn char-act-danger " ++ act_base ++ " hover:bg-danger-hover hover:outline-1 hover:outline-danger-ring";
 const file_input = "char-import-input " ++ panelchrome.file_picker;
 const hint_class = "char-actions-hint m-0 text-xs text-muted";
@@ -71,6 +76,7 @@ fn selectedBlock(ctx: *zx.ComponentCtx(void), index: usize) zx.Component {
                 </div>
             )}
             <div class="char-actions-row flex flex-wrap gap-1 max-[640px]:gap-[0.4rem]">
+                <button id="char-actions-edit" class={act_edit} type="button" data-char-action="edit" data-char-index={index} onclick={ctx.bind(onCharAction)}>Edit card</button>
                 <button class={act_btn} type="button" data-char-action="fav" data-char-index={index} onclick={ctx.bind(onCharAction)}>{if (c.fav) "Unfavourite" else "Favourite"}</button>
                 <button class={act_btn} type="button" data-char-action="rename" data-char-index={index} onclick={ctx.bind(onCharAction)}>Rename</button>
                 <button class={act_btn} type="button" data-char-action="duplicate" data-char-index={index} onclick={ctx.bind(onCharAction)}>Duplicate</button>
@@ -106,6 +112,9 @@ fn onCharAction(e: *zx.client.Event.Stateful) void {
         return;
     }
     const idx = index orelse return;
+    // The card editor is contextual: it reads whoever the store has selected, which this block's
+    // very existence already proves is this character.
+    if (std.mem.eql(u8, action, "edit")) ui.toggle(.card_editor);
     if (std.mem.eql(u8, action, "avatar")) char_api.replaceAvatarFile(idx);
     if (std.mem.eql(u8, action, "fav")) char_api.toggleFav(idx);
     if (std.mem.eql(u8, action, "rename")) char_api.renameCharacter(idx);

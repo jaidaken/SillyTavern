@@ -226,7 +226,9 @@ fn onFavToggle(_: *zx.client.Event.Stateful) void {
 
 fn onGridToggle(_: *zx.client.Event.Stateful) void {
     if (zx.platform.role != .client) return;
-    cv.global.setGrid(!cv.global.grid);
+    // Through char_prefs, not the View directly: the choice is remembered across reloads the same
+    // way the sort is, so a user who prefers the dense rows is not handed tiles again every visit.
+    char_prefs.setGrid(!cv.global.grid);
     regions.bumpShell();
 }
 

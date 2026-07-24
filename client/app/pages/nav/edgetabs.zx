@@ -35,6 +35,7 @@ pub fn EdgeTabs(allocator: zx.Allocator) zx.Component {
                 aria-controls="panel-view"
                 onclick={state.onCastTab}
             ></button>
+            <NotifyBell />
         </div>
     );
 }
@@ -67,3 +68,6 @@ fn tabClass(side: ui.Side) []const u8 {
 const zx = @import("zx");
 const ui = @import("./ui.zig");
 const state = @import("./edgetabs_state.zig");
+// The unread badge rides the Cast tab and owns its own popover; it is not a panel, so it mounts
+// with the tabs rather than through the dock router.
+const NotifyBell = @import("../notify/notify_bell.zx").NotifyBell;

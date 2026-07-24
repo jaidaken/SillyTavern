@@ -11,10 +11,9 @@
 // utility is important-flagged; nothing else can beat an inline style.
 //
 // The head is followed by the section switcher, which is what makes the other panels reachable: the
-// dock now shows any of its side's four sections, so the router carries all eight family bodies.
-// The trailing else is the panels that are NOT sections and have no dock body of their own
-// (card_editor, opened from a character; notifications, the bell's popover), both of which belong to
-// other tracks and render through the drawer router today.
+// dock now shows any of its side's four sections, so the router carries all eight family bodies plus
+// the contextual card editor a character opens. The trailing else is the notifications panel, which
+// no longer opens as a dock at all: its history is the Cast tab's badge popover (notify_bell.zx).
 pub const PanelProps = struct {
     panel: ui.Panel,
 };
@@ -57,6 +56,13 @@ pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
                 // w3-chatmgr
                 ) else if (p.id == .chat_manager) (
                     <ChatManagerBody />
+                // C-CARD: contextual, so it arrives with its own way back to the list it came from
+                // rather than through the switcher, which shows no current section while it is up.
+                ) else if (p.id == .card_editor) (
+                    <div class="flex min-h-0 flex-col">
+                        <CardEditorReturn />
+                        <CardEditorBody />
+                    </div>
                 ) else (
                     <></>
                 )}
@@ -95,6 +101,9 @@ const PersonaList = @import("../cast/persona_list.zx").PersonaList;
 const CharacterToolbar = @import("../cast/character_toolbar.zx").CharacterToolbar;
 const CharacterActions = @import("../cast/character_actions.zx").CharacterActions;
 const CharacterListRegion = @import("../cast/character_list_region.zx").CharacterListRegion;
+// C-CARD
+const CardEditorBody = @import("../cast/card_editor_body.zx").CardEditorBody;
+const CardEditorReturn = @import("../cast/card_editor_return.zx").CardEditorReturn;
 // w3-grp
 const GroupBody = @import("../cast/group_body.zx").GroupBody;
 const GroupQuickList = @import("../cast/group_quick_list.zx").GroupQuickList;

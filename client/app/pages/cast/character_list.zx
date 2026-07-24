@@ -8,7 +8,10 @@
 //
 // Selection is a listbox option's aria-selected as well as that class: the class is what paints the
 // amber wash, and paint is not something a screen reader can hear (WD38).
-pub const row_class = "char-item group/row relative flex cursor-pointer items-center gap-3 rounded-md p-2 select-none hover:bg-surface-2 selected:bg-selected selected:outline-1 selected:outline-selected-ring group-data-[view=grid]/list:flex-col group-data-[view=grid]/list:items-stretch group-data-[view=grid]/list:text-center max-[640px]:min-h-[52px] max-[640px]:px-2 max-[640px]:py-[10px]";
+// A tile is the same row turned on its side: the picture takes the width, the name becomes its
+// caption, and the gap closes up so the faces sit near enough to scan as a set rather than as rows
+// that happen to wrap.
+pub const row_class = "char-item group/row relative flex cursor-pointer items-center gap-3 rounded-md p-2 select-none hover:bg-surface-2 selected:bg-selected selected:outline-1 selected:outline-selected-ring group-data-[view=grid]/list:flex-col group-data-[view=grid]/list:items-stretch group-data-[view=grid]/list:gap-1.5 group-data-[view=grid]/list:p-1.5 group-data-[view=grid]/list:text-center max-[640px]:min-h-[52px] max-[640px]:px-2 max-[640px]:py-[10px]";
 pub const avatar_class = "char-avatar size-[2.4rem] flex-none rounded-md bg-bg object-cover group-data-[view=grid]/list:aspect-square group-data-[view=grid]/list:h-auto group-data-[view=grid]/list:w-full max-[640px]:size-10";
 pub const info_class = "min-w-0 flex-1";
 pub const name_class = "char-name truncate font-serif text-sm font-semibold text-text";
@@ -33,6 +36,7 @@ pub fn CharacterList(ctx: *zx.ComponentCtx(void)) zx.Component {
     return (
         <div
             @allocator={ctx.allocator}
+            id="char-list"
             class="char-list group/list flex min-h-[8rem] flex-col gap-[2px] data-[view=grid]:grid data-[view=grid]:grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] data-[view=grid]:items-start data-[view=grid]:gap-2"
             data-view={if (view.grid) "grid" else "list"}
             role="listbox"
@@ -45,6 +49,7 @@ pub fn CharacterList(ctx: *zx.ComponentCtx(void)) zx.Component {
                     role="option"
                     aria-selected={if (isSelected(it.index)) "true" else "false"}
                     data-char-select={it.index}
+                    data-char-avatar={it.char.avatar}
                     tabindex="0"
                     onclick={ctx.bind(onCharSelect)}
                     onkeydown={ctx.bind(onCharKey)}
@@ -91,6 +96,12 @@ pub fn CharacterList(ctx: *zx.ComponentCtx(void)) zx.Component {
     );
 }
 
+// data-char-select is the row's position in the STORE, which is what every handler dispatches on,
+// and it moves the moment a sort or a filter changes. data-char-avatar is the character's own file
+// name, which is the identity the server keys on and the one thing about a row that does not move,
+// so anything naming a specific character (a script driving the panel, a future deep link) has a
+// handle that survives a re-sort. Both ride the row: the handlers keep the index, callers get the id.
+//
 // Row-hover affordances: icon-only chrome revealed on row hover or focus (the stylesheet's C-CHAR
 // zone owns the reveal, gated to hover-capable pointers per WD25). Each is a real <button> with its
 // own accessible name, so Tab reaches every one and Enter fires it with no CSS involved (WD37/WD38).
@@ -99,7 +110,13 @@ pub fn CharacterList(ctx: *zx.ComponentCtx(void)) zx.Component {
 // STATE as well as a control). In flow it reserved ~120px of a ~250px row for controls that are
 // invisible most of the time, and the subtitle truncated to "4d ..." at rest. pointer-events-none
 // while hidden, or the invisible box would swallow row-select clicks along the row's right edge.
-const actions_class = "char-row-actions pointer-events-none absolute top-1/2 right-9 flex -translate-y-1/2 items-center gap-px rounded-md border border-border bg-surface px-1 py-0.5 opacity-0 transition-opacity duration-120 ease-[ease] group-data-[view=grid]/list:hidden";
+// In GRID view the cluster moves off the row's right edge and sits across the bottom of the tile's
+// image, clear of the name beneath it. It used to be hidden outright in grid, which was survivable
+// while the grid was an opt-in; now the grid is what the Cast opens as, and the card editor's only
+// door is the Edit control in here, so hiding it would put the editor back out of reach.
+// A pointer that cannot hover never gets the reveal (the C-CHAR stylesheet zone gates it), so on
+// touch the cluster is simply always up: the alternative there is no access at all.
+const actions_class = "char-row-actions pointer-events-none absolute top-1/2 right-9 flex -translate-y-1/2 items-center gap-px rounded-md border border-border bg-surface px-1 py-0.5 opacity-0 transition-opacity duration-120 ease-[ease] group-data-[view=grid]/list:top-auto group-data-[view=grid]/list:right-1 group-data-[view=grid]/list:bottom-[1.75rem] group-data-[view=grid]/list:left-1 group-data-[view=grid]/list:translate-y-0 group-data-[view=grid]/list:justify-center [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100";
 const act_base = "char-row-act icon grid size-6 flex-none cursor-pointer place-items-center rounded-sm border-0 bg-transparent transition-colors duration-120 ease-[ease] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent max-[768px]:size-9";
 const act_class = act_base ++ " text-muted hover:bg-surface-2 hover:text-text";
 const act_danger_class = act_base ++ " char-row-act-danger text-muted hover:bg-danger-hover hover:text-text";
@@ -249,6 +266,14 @@ fn loadCharacterChat(index: u32) void {
     char_api.loadCharacterChat(index);
 }
 
+/// Open the card editor on this character. Selects FIRST: the store's selection is normally set by a
+/// completed chat load (char_api.onChatDone), and the editor fetches the deep card for whoever is
+/// selected, so editing a card without first opening its chat has to say who it means.
+fn openCard(index: u32) void {
+    char_store.select(index);
+    ui.toggle(.card_editor);
+}
+
 fn onItemAction(e: *zx.client.Event.Stateful) void {
     if (zx.platform.role != .client) return;
     const target = dom_event.statefulTarget(e) orelse return;
@@ -262,6 +287,7 @@ fn onItemAction(e: *zx.client.Event.Stateful) void {
     const index = std.fmt.parseInt(u32, idx_str, 10) catch return;
     // The row's own affordances reach the same char_api entry points the actions panel calls; the
     // panel stays as the place to act on the selected character without hunting for its row.
+    if (std.mem.eql(u8, action, "edit")) openCard(index);
     if (std.mem.eql(u8, action, "fav")) char_api.toggleFav(index);
     if (std.mem.eql(u8, action, "rename")) char_api.renameCharacter(index);
     if (std.mem.eql(u8, action, "duplicate")) char_api.duplicateCharacter(index);
@@ -279,3 +305,4 @@ const character_row = @import("./character_row.zig");
 const character_view = @import("./character_view.zig");
 const dom_event = @import("../platform/dom_event.zig");
 const regions = @import("../shell/regions.zig");
+const ui = @import("../nav/ui.zig");

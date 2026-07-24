@@ -56,8 +56,9 @@ pub const panels = [_]Panel{
     .{ .id = .extensions, .dom_id = "d-extensions", .icon = "cubes", .title = "Extensions", .side = .right },
     .{ .id = .persona, .dom_id = "d-persona", .icon = "user", .title = "Persona Management", .side = .right, .kind = .dock },
     .{ .id = .characters, .dom_id = "d-characters", .icon = "card", .title = "Character Management", .side = .right, .kind = .dock },
-    // C-CARD
-    .{ .id = .card_editor, .dom_id = "d-card_editor", .icon = "pencil", .title = "Character Card", .side = .left },
+    // C-CARD: contextual, opened from a character rather than from a menu, so it sits on the Cast
+    // side and takes over that dock the way a detail view takes over the list it was opened from.
+    .{ .id = .card_editor, .dom_id = "d-card_editor", .icon = "pencil", .title = "Character Card", .side = .right, .kind = .dock },
     // w3-chatmgr
     .{ .id = .chat_manager, .dom_id = "d-chat_manager", .icon = "chats", .title = "Chat Management", .side = .right },
     // w3-grp
@@ -131,6 +132,35 @@ pub fn sectionFromStr(side: Side, name: []const u8) ?PanelId {
         if (std.mem.eql(u8, @tagName(sec.id), name)) return sec.id;
     }
     return null;
+}
+
+/// A CONTEXTUAL panel is one no menu lists: it is reached by acting on a row inside another panel,
+/// and it takes over that panel's dock while it is up. The card editor is the only one today, opened
+/// from a character in the Cast drawer, which is why it left the top-level catalogue (rework section
+/// 3). The pairing is data rather than a branch in the markup so the return path and the family test
+/// below read the same table.
+pub const Contextual = struct {
+    id: PanelId,
+    /// The section its dock returns to when it closes, which is also where it was opened from.
+    parent: PanelId,
+};
+
+pub const contextual_panels = [_]Contextual{
+    .{ .id = .card_editor, .parent = .characters },
+};
+
+/// The section a contextual panel hands its dock back to, or null for anything else. The back
+/// control reads this rather than naming `characters` itself, so a second contextual panel needs no
+/// new return handler.
+pub fn contextParent(id: PanelId) ?PanelId {
+    for (contextual_panels) |c| {
+        if (c.id == id) return c.parent;
+    }
+    return null;
+}
+
+pub fn isContextual(id: PanelId) bool {
+    return contextParent(id) != null;
 }
 
 /// The localStorage key holding a side's last-shown section (the st-motion pattern, one key a side).
@@ -569,10 +599,42 @@ test "opening a family panel directly is what the side remembers" {
     try testing.expect(s.openId(.left) == null);
     s.toggleSide(.left);
     try testing.expectEqual(PanelId.formatting, s.openId(.left).?);
-    // card_editor is contextual, not a section, so it shows without becoming the memory.
+    // card_editor is contextual, not a section, so it shows on the Cast side without becoming that
+    // side's memory: closing it hands the dock back to the character list it was opened from.
     s.toggle(.card_editor);
-    try testing.expectEqual(PanelId.card_editor, s.openId(.left).?);
-    try testing.expectEqual(PanelId.formatting, s.sectionOn(.left));
+    try testing.expectEqual(PanelId.card_editor, s.openId(.right).?);
+    try testing.expectEqual(PanelId.characters, s.sectionOn(.right));
+    try testing.expectEqual(PanelId.formatting, s.openId(.left).?);
+}
+
+test "the card editor opens on the Cast side and hands the dock back to the character list" {
+    // The reachability contract: no menu lists this panel, so a parent on the other flank (or one
+    // that is not a section of its own side) would strand the user inside it with no way back.
+    const card = panelFor(.card_editor) orelse return error.CardEditorHasNoPanel;
+    try testing.expectEqual(Side.right, card.side);
+    try testing.expect(!inFamily(.right, .card_editor));
+    try testing.expect(!inFamily(.left, .card_editor));
+    try testing.expect(isContextual(.card_editor));
+    try testing.expectEqual(PanelId.characters, contextParent(.card_editor).?);
+    for (contextual_panels) |c| {
+        const panel = panelFor(c.id) orelse return error.ContextualHasNoPanel;
+        const parent = panelFor(c.parent) orelse return error.ContextParentHasNoPanel;
+        try testing.expectEqual(panel.side, parent.side);
+        try testing.expect(inFamily(parent.side, c.parent));
+        try testing.expect(!inFamily(panel.side, c.id));
+    }
+    // Ordinary panels are not contextual, so the return control never appears on one.
+    try testing.expect(!isContextual(.characters));
+    try testing.expect(contextParent(.settings) == null);
+
+    var s: PanelState = .{};
+    s.toggleSide(.right);
+    try testing.expectEqual(PanelId.characters, s.openId(.right).?);
+    s.toggle(.card_editor);
+    try testing.expectEqual(PanelId.card_editor, s.openId(.right).?);
+    // The return: the parent section is a family member, so setSection takes it and the dock stays open.
+    s.setSection(.right, contextParent(.card_editor).?);
+    try testing.expectEqual(PanelId.characters, s.openId(.right).?);
 }
 
 test "motion pref parses and maps to the right #shell class" {

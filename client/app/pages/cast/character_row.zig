@@ -22,6 +22,9 @@ pub const RowAction = struct {
 /// The row-hover cluster, in visual order. Delete sits last and wears the danger styling, so the
 /// destructive control is never adjacent to the one you reach for most (rename).
 pub const row_actions = [_]RowAction{
+    // First, and the only one that opens a surface rather than acting in place: the card editor has
+    // no menu entry anywhere, so this control IS the way into it (rework section 3, contextual).
+    .{ .id = "edit", .label = "Edit card", .icon = "card" },
     .{ .id = "rename", .label = "Rename", .icon = "pencil" },
     .{ .id = "duplicate", .label = "Duplicate", .icon = "copy" },
     .{ .id = "export", .label = "Export", .icon = "download" },
@@ -87,7 +90,10 @@ test "chatVolumeText is empty at zero and scales past a kilobyte" {
     try testing.expectEqualStrings("2.0 MB", chatVolumeText(&buf, 2097152));
 }
 
-test "row_actions carries delete last and marks it the only danger" {
+test "row_actions opens with the card editor, carries delete last, and marks it the only danger" {
+    // The editor is reachable from nowhere else, so its loss from this table is a reachability
+    // regression rather than a missing convenience.
+    try testing.expectEqualStrings("edit", row_actions[0].id);
     try testing.expectEqualStrings("delete", row_actions[row_actions.len - 1].id);
     var dangers: usize = 0;
     for (row_actions) |a| {
