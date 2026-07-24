@@ -11,6 +11,9 @@ const ui_state = @import("./ui_state.zig");
 const regions = @import("../shell/regions.zig");
 const dom_event = @import("../platform/dom_event.zig");
 const dropdown_nav = @import("./dropdown_nav.zig");
+// The palette's browser half. It deliberately does NOT import this file back (palette.zx carries
+// anything needing ui.zig), so the pair is a one-way edge, not a cycle.
+const palette_state = @import("./palette_state.zig");
 const notifications = @import("../notify/notifications.zig");
 const dock_metrics = @import("./dock_metrics.zig");
 
@@ -186,19 +189,34 @@ pub fn onPageClick(ev: zx.client.Event) void {
     _ = ev;
 }
 
-/// Escape closes the open panel: the keyboard equivalent of clicking outside it, so the dismiss is
-/// not mouse-only (WD37). An open dropdown menu owns Escape first (the innermost dismissable wins,
-/// per the WAI-ARIA layering convention), so this stands down while one is open rather than tearing
-/// the whole dock down under it. The check lives here, not in each panel: dropdown.onKey stops a key
-/// it consumes, but a panel root that never called onKey would still leave a menu open, and the dock
-/// must survive that too. dropdown_nav.zig holds the state because ui.zig cannot import dropdown.zx.
+/// The page's two keyboard duties: Ctrl-K opens the command palette, and Escape closes the open
+/// panel so the dismiss is not mouse-only (WD37).
+///
+/// LAYERING, innermost dismissable wins (the WAI-ARIA convention). An open dropdown menu owns
+/// Escape first, and so does an open palette, so this stands down while either is up rather than
+/// tearing the whole dock down underneath it. Both checks live here, not in each panel:
+/// dropdown.onKey stops a key it consumes, but a panel root that never called onKey would still
+/// leave a menu open, and the dock must survive that too. The two flags sit in plain .zig siblings
+/// (dropdown_nav.zig, palette_targets.zig) because ui.zig cannot import a .zx.
+///
+/// The palette hotkey is read BEFORE the anyOpen guard: it is a global accelerator that has to work
+/// on the clean base surface, where no panel is open at all.
 pub fn onPageKey(ev: zx.client.Event) void {
     if (zx.platform.role != .client) return;
-    if (!ui.panels.anyOpen()) return;
     const key = ev.key() orelse return;
     defer zx.allocator.free(key);
+    if (palette_state.isHotkey(ev, key)) {
+        // Ctrl-K is the browser's own search-from-address-bar shortcut, so the default has to go or
+        // the omnibox takes focus out of the page as the palette appears.
+        ev.preventDefault();
+        ev.stopPropagation();
+        palette_state.open();
+        return;
+    }
+    if (!ui.panels.anyOpen()) return;
     if (!std.mem.eql(u8, key, "Escape")) return;
     if (dropdown_nav.isOpenAny()) return;
+    if (palette_state.isOpen()) return;
     // Escape takes the side that opened most recently, not both at once.
     ui.panels.closeLast();
     regions.bumpShell();

@@ -908,6 +908,49 @@ else:
     notes.append("patch-door: D11 ambient pointer tracking added "
                  "(rAF-coalesced window pointermove -> __st_pointer_move, no delegation, no handles)")
 
+# D12: a document-level printable-key report (the command palette's Ctrl-K has to work with nothing
+# focused)
+# ---------------------------------------------------------------------------
+# ziex delegates every event at <body> and walks UP from event.target (initEventDelegation), so a
+# keydown whose target is <body> - which is what document.activeElement is after a click on any
+# non-focusable text - reaches no handler at all. Measured, not assumed: the palette's own probe
+# found Ctrl-K dead from the base surface and live from the composer, which is exactly that walk.
+# A global accelerator cannot depend on where focus happens to be, so the door reports the key.
+#
+# It crosses TWO NUMBERS (the key's code unit and a modifier bitmask) and no handle, the same
+# discipline D11 uses, so it cannot leak a jsz slot however long the user types. Only single-
+# character keys are reported: Escape, Tab and the arrows stay entirely on the delegated path, so
+# this can never reach past an in-region handler that already owns one of them. Policy stays in Zig
+# (palette_state.__st_page_key decides); the door only asks. Bubble phase on window, so an in-region
+# handler that consumed the key with stopPropagation is never second-guessed here.
+# A build with no __st_page_key export skips the whole block.
+
+key_block = ptr_anchor + """
+  (function () {
+    const exp = instance.exports;
+    if (!exp.__st_page_key) return;
+    // Bit order is shared with palette_state.zig; the two must be changed together.
+    window.addEventListener("keydown", (e) => {
+      const k = e.key || "";
+      if (k.length !== 1) return;
+      const mods = (e.ctrlKey ? 1 : 0) | (e.metaKey ? 2 : 0) | (e.altKey ? 4 : 0) | (e.shiftKey ? 8 : 0);
+      if (exp.__st_page_key(k.charCodeAt(0), mods) === 1) e.preventDefault();
+    });
+  })();"""
+
+D12_SENTINEL = "__st_page_key"
+
+if D12_SENTINEL in s:
+    notes.append("patch-door: D12 already patched, nothing to do")
+elif s.count(ptr_anchor) != 1:
+    errors.append("patch-door: D12 could not find the ZxBridge construction anchor verbatim "
+                  "(found %d, want 1); door version changed, update patch-door.sh" % s.count(ptr_anchor))
+else:
+    s = s.replace(ptr_anchor, key_block, 1)
+    changed = True
+    notes.append("patch-door: D12 document-level printable-key report added "
+                 "(window keydown -> __st_page_key, two numbers, no handles)")
+
 # All-or-nothing: any stale expectation aborts before the write, so a door bump can never ship a
 # half-patched door.
 if errors:

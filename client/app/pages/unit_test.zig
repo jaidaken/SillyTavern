@@ -31,6 +31,8 @@ comptime {
     _ = @import("./setup/tokenizer.zig");
     _ = @import("./platform/log_spec.zig");
     _ = @import("./nav/dropdown_nav.zig");
+    // The command palette's catalogue + query filter; palette_state.zig is the zx-importing half.
+    _ = @import("./nav/palette_targets.zig");
     _ = @import("./system/background_store.zig");
     // C4: the pure multipart/form-data assembler behind the Zig-owned uploads.
     _ = @import("./platform/multipart.zig");

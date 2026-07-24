@@ -26,6 +26,7 @@ pub fn Page(ctx: zx.PageContext) !zx.Component {
             <Home @rendering={.client} />
             <Composer @rendering={.client} />
             <Toasts @rendering={.client} />
+            <Palette @rendering={.client} />
         </div>
     );
 }
@@ -37,6 +38,9 @@ pub const MessageLog = @import("./chat/messagelog.zx").MessageLog;
 pub const Home = @import("./shell/home_body.zx").Home;
 pub const Composer = @import("./chat/composer.zx").Composer;
 pub const Toasts = @import("./notify/toasts.zx").Toasts;
+// Like Toasts, the palette claims no grid cell: its root is display:contents and its overlay is
+// position:fixed, so mounting it adds no track and reflows nothing.
+pub const Palette = @import("./nav/palette.zx").Palette;
 
 comptime {
     _ = @import("./cast/character_store.zig");
