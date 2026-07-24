@@ -460,6 +460,13 @@ async function main() {
         // A panel this build can actually open. Static for the table (a null entry is a build with no
         // launcher at all); the helpers below add the runtime half, naming the control that is absent.
         const hasLauncher = (panel) => !!PANEL_SIDE[panel] || !!LAUNCHERS[panel];
+        // The DOM control that opens this panel, so needsPanel can probe for it rather than trust the
+        // table. contextual (the card editor) has none until a subject is picked, so it returns null.
+        const entryControl = (panel) => {
+            const l = LAUNCHERS[panel];
+            if (!l) return null;
+            return l.kind === 'popover' ? l.gear : (l.kind === 'toggle' ? l.control : null);
+        };
         const sideOf = (panel) => {
             const side = PANEL_SIDE[panel];
             if (!side) throw new NoLauncher(`the ${panel} panel is not a section: it opens from its own launcher`);
@@ -483,6 +490,15 @@ async function main() {
             }
             if (launcherMissing.has(panel)) {
                 row('pending', false, label, launcherMissing.get(panel));
+                return;
+            }
+            // A filled table entry says what to look for, never that it is HERE: probe the DOM so a
+            // build without the control reports one pending line, not reds from rows reading its markup.
+            const entry = entryControl(panel);
+            if (entry && !(await page.eval(`!!document.querySelector('${entry}')`))) {
+                const why = `the ${panel} launcher ${entry} is not in this build`;
+                launcherMissing.set(panel, why);
+                row('pending', false, label, why);
                 return;
             }
             try {
