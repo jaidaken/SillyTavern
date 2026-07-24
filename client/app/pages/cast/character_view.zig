@@ -261,7 +261,10 @@ fn searchMatch(query: []const u8, c: Character) bool {
     return containsCi(query, c.name) or containsCi(query, c.description);
 }
 
-fn containsCi(needle: []const u8, haystack: []const u8) bool {
+/// Case-insensitive substring test, `needle` inside `haystack`. Public because the filter bar's
+/// tag suggestions match the typed text the same way the row search does: two different answers to
+/// "does this text appear in that text" would have the field offer a tag it then failed to match.
+pub fn containsCi(needle: []const u8, haystack: []const u8) bool {
     if (needle.len == 0) return true;
     if (needle.len > haystack.len) return false;
     var i: usize = 0;

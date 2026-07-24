@@ -100,6 +100,10 @@ pub fn CardEditorBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     )}
 
                     <div class={field_col}>
+                        <CardTags />
+                    </div>
+
+                    <div class={field_col}>
                         <span class={field_label}>Alternate greetings</span>
                         <p class={field_hint} id="card-greetings-hint">Other openings the user can swipe to instead of the first message.</p>
                         {for (0..card_editor.greetingCount()) |i| (
@@ -276,5 +280,8 @@ const panelchrome = @import("../shell/panelchrome.zx");
 const nav = @import("../nav/dropdown_nav.zig");
 const dropdown = @import("../nav/dropdown.zx");
 const Dropdown = dropdown.Dropdown;
+// The account-level tags for this character. Assignment used to hang off the character list's
+// toolbar, which put an edit TO a character in the panel that lists them all.
+const CardTags = @import("./card_tags.zx").CardTags;
 
 const log = std.log.scoped(.card);
