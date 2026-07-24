@@ -366,6 +366,13 @@ async function main() {
             }
         };
         const page = new Page(cdp, sessionId, consoleLines, navState);
+        // Render proof, opt in with ST_SHOTS=<dir>: a green row proves a predicate, never that the
+        // surface it read is the one a person sees. Unset (the normal gate run) captures nothing.
+        const shot = async (name) => {
+            if (!process.env.ST_SHOTS) return;
+            const { data } = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
+            writeFileSync(join(process.env.ST_SHOTS, `${name}.png`), Buffer.from(data, 'base64'));
+        };
         const hydrated = "document.querySelector('#chat-root.hydrated')";
         // Boot shows the home landing now, not an auto-opened chat, so flows needing an open chat resume
         // first. Retry the click: resume-last needs the character store, which races the recent-list load.
@@ -1162,21 +1169,42 @@ async function main() {
         }
         row('must', cancelOk, 'R5-cancel discards the edit and restores the body (no mutation)', `cancelled=${cancelOk}`);
 
-        // --- tags (w3-reason 3d): manager create/assign persists via the settings blob; chips
-        // filter on the card tags the 3d data fix made live. Rita Recent = char41.png.
+        // --- tags (w3-reason 3d): ASSIGNMENT lives in the character card editor now, so T1/T2/T4
+        // drive the card that is open (openPanel('card_editor') pins char41.png = Rita Recent, the
+        // same character the blob rows assert on). FILTERING lives in the character toolbar's one
+        // filter bar: T5-T8 type a fragment, take the tag off the autocomplete, and read the list.
         console.log('== tags (w3-reason 3d) ==');
-        await openPanel('characters');
-        await page.waitFor("document.querySelector('.char-toolbar')", 4000);
-        await page.click('.char-toolbar button[aria-label="Manage tags"]');
-        await page.waitFor("document.querySelector('.tag-manager')", 3000);
+        await openPanel('card_editor');
+        await page.waitFor("document.querySelector('.card-tags')", 6000);
+        // The card is a long form, so the section has to be brought into view before it can be read
+        // (by a person or by a screenshot).
+        await page.eval("document.querySelector('.card-tags').scrollIntoView({block:'center'})");
+        await shot('d-card-editor-tags');
         await page.focus('#tag-create-name');
         await page.insertText('gatetag');
-        await page.click('.tag-manager [data-tag-create]');
-        row('must', await page.waitFor("Array.from(document.querySelectorAll('.tag-row-name')).some(function(n){return n.textContent==='gatetag'})", 3000),
-            'T1 tag create adds a manager row');
-        await page.click('.tag-manager [data-tag-assign="t-gatetag"]');
-        row('must', await page.waitFor("(function(){var b=document.querySelector('.tag-manager [data-tag-assign=\\'t-gatetag\\']');return !!b && b.getAttribute('aria-pressed')==='true'})()", 3000),
-            'T2 assign toggles pressed for the open character');
+        await page.click('.card-tags [data-tag-create]');
+        row('must', await page.waitFor("Array.from(document.querySelectorAll('.card-tags .tag-row-name')).some(function(n){return n.textContent==='gatetag'})", 3000),
+            'T1 tag create adds a row in the card editor');
+        // Assignment is NOT reachable from the list toolbar any more: the Tags toggle and the
+        // toolbar-hosted manager are gone, and a row that only asserted the editor works would
+        // still pass with both of them left behind.
+        row('must', await page.eval("!document.querySelector('.char-toolbar button[aria-label=\"Manage tags\"]') && !document.querySelector('.char-toolbar .tag-manager')"),
+            'T1b the character toolbar carries no tag-assignment control');
+        // Enter in the name field is the other way in, and the one a typist reaches for first.
+        await page.focus('#tag-create-name');
+        await page.insertText('keytag');
+        await page.cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }, page.sessionId);
+        await page.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }, page.sessionId);
+        const keyRow = await page.waitFor("Array.from(document.querySelectorAll('.card-tags .tag-row-name')).some(function(n){return n.textContent==='keytag'})", 3000);
+        const panelAliveAfterEnter = await page.eval("!!document.querySelector('.card-tags')");
+        row('must', keyRow && panelAliveAfterEnter,
+            'T1c Enter in the tag name field creates the tag without taking the panel with it',
+            `row=${keyRow} panel=${panelAliveAfterEnter}`);
+        await page.click('.card-tags [data-tag-assign="t-gatetag"]');
+        row('must', await page.waitFor("(function(){var b=document.querySelector('.card-tags [data-tag-assign=\\'t-gatetag\\']');return !!b && b.getAttribute('aria-pressed')==='true'})()", 3000),
+            'T2 assign toggles pressed for the character whose card is open');
+        await page.eval("document.querySelector('.card-tags').scrollIntoView({block:'center'})");
+        await shot('d2-card-editor-assigned');
         let tagSaved = false;
         for (let i = 0; i < 20 && !tagSaved; i += 1) {
             await sleep(500);
@@ -1188,17 +1216,46 @@ async function main() {
         row('must', tagSaved, 'T3 tags + tag_map land in the settings blob via the one saver');
         await page.navigate(`${args.base}/`);
         await openRecentChat();
-        await openPanel('characters');
-        await page.waitFor("document.querySelector('.char-toolbar')", 4000);
-        await page.click('.char-toolbar button[aria-label="Manage tags"]');
-        row('must', await page.waitFor("(function(){var b=document.querySelector('.tag-manager [data-tag-assign=\\'t-gatetag\\']');return !!b && b.getAttribute('aria-pressed')==='true'})()", 6000),
+        await openPanel('card_editor');
+        row('must', await page.waitFor("(function(){var b=document.querySelector('.card-tags [data-tag-assign=\\'t-gatetag\\']');return !!b && b.getAttribute('aria-pressed')==='true'})()", 8000),
             'T4 created tag and assignment survive a reload (mined from the blob)');
+
+        // The filter bar. "night" is a CARD tag six fixture characters carry, so it is what the
+        // suggestions and the narrowing are read against.
+        await openPanel('characters');
+        await page.waitFor("document.querySelector('.char-filter-field')", 4000);
+        row('must', await page.eval("!document.querySelector('.char-tags')"),
+            'T5 the always-visible tag wall is gone from the toolbar');
+        await shot('a-filter-bar-no-wall');
         const chipRowsBefore = await page.eval("document.querySelectorAll('#chat-root .char-item').length");
-        await page.click('.char-tags [data-tag="night"]');
-        row('must', await page.waitFor("document.querySelectorAll('#chat-root .char-item').length === 6", 3000),
-            'T5 filter chip narrows the list to the tagged cards', `before=${chipRowsBefore}`);
-        await page.click('.char-tags [data-tag="night"]');
-        await page.waitFor(`document.querySelectorAll('#chat-root .char-item').length === ${chipRowsBefore}`, 3000);
+        await page.focus('.char-search');
+        await page.insertText('nigh');
+        const sugShown = await page.waitFor("(function(){var l=document.querySelectorAll('#char-filter-suggest [role=\\'option\\']');return l.length>0 && Array.prototype.some.call(l,function(o){return o.textContent==='night'})})()", 4000);
+        const sugExpanded = await page.eval("document.querySelector('.char-search').getAttribute('aria-expanded') === 'true'");
+        row('must', sugShown && sugExpanded, 'T6 typing a tag fragment offers the matching tag in the autocomplete',
+            `shown=${sugShown} expanded=${sugExpanded}`);
+        await shot('b-autocomplete-open');
+        // Keyboard path: Down highlights the first suggestion (and says so through
+        // aria-activedescendant), Enter turns it into a chip.
+        const tagPress = async (key, vk) => {
+            await page.cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key, code: key, windowsVirtualKeyCode: vk }, page.sessionId);
+            await page.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key, windowsVirtualKeyCode: vk }, page.sessionId);
+        };
+        await tagPress('ArrowDown', 40);
+        const activeDesc = await page.waitFor("(function(){var f=document.querySelector('.char-search');var id=f.getAttribute('aria-activedescendant');return !!id && !!document.getElementById(id) && document.getElementById(id).getAttribute('aria-selected')==='true'})()", 3000);
+        await tagPress('Enter', 13);
+        const chipOn = await page.waitFor("!!document.querySelector('.char-filter [data-chip-tag=\\'night\\']')", 3000);
+        const narrowed = await page.waitFor("document.querySelectorAll('#chat-root .char-item').length === 6", 4000);
+        const boxSpent = await page.eval("document.querySelector('.char-search').value === ''");
+        row('must', activeDesc && chipOn && narrowed && boxSpent,
+            'T7 Enter on the highlighted tag adds a filter chip and narrows the list',
+            `active=${activeDesc} chip=${chipOn} rows=${narrowed} cleared=${boxSpent}`);
+        await shot('c-chip-added-list-narrowed');
+        await page.click(".char-filter [data-chip-remove='night']");
+        const chipOff = await page.waitFor("!document.querySelector('.char-filter [data-chip-tag=\\'night\\']')", 3000);
+        const widened = await page.waitFor(`document.querySelectorAll('#chat-root .char-item').length === ${chipRowsBefore}`, 4000);
+        row('must', chipOff && widened, 'T8 removing the chip drops the filter and the list widens back',
+            `chipGone=${chipOff} rows=${widened} before=${chipRowsBefore}`);
         /* w3-reason END reasoning + tag rows */
 
         // PERSIST: send, let the reply seal (user append on send + assistant append on seal), then

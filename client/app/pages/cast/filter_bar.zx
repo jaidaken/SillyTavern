@@ -1,0 +1,306 @@
+// The character list's one filter surface: a field that narrows the list by name as you type, and
+// offers the matching TAGS underneath it so a pick becomes a filter chip in the same bar.
+//
+// It replaces two controls that used to sit above the list: the search box, and a wall of buttons
+// carrying every tag in the account. The wall cost the whole top of a ~300px dock to show tags that
+// were mostly not the one wanted, so the tags now arrive on demand, filtered by the same text the
+// search is already using (tag_filter.suggest -> character_view.containsCi, one matching rule for
+// both halves of the field).
+//
+// RE-RENDER DISCIPLINE, load-bearing: a keystroke bumps the CHARACTER LIST region, never the Shell.
+// The list region's bump falls through to a full-page render whose vdom diff keeps this input's
+// element identity, so the caret and the focus survive; a Shell bump rebuilds the toolbar subtree
+// and the field loses focus mid-word (the bug the old toolbar's comment was written around).
+//
+// The suggestion list is a WAI-ARIA combobox popup: the input owns role=combobox and points at the
+// highlighted option through aria-activedescendant, so focus never leaves the field and a screen
+// reader still hears which tag Enter would add (WD38). Escape closes the list and STOPS THERE:
+// ui.onPageKey closes the whole panel on any Escape it sees, so a key this field consumed has to
+// end here (the same contract dropdown.zx documents for its menu).
+
+pub fn FilterBar(allocator: zx.Allocator) zx.Component {
+    const view = cv.global;
+    const sug = tag_filter.suggest(allocator, view.tags_all.items, view.tags.items, view.query) catch &.{};
+    const open = !dismissed and sug.len > 0;
+    const hi = if (open) tag_filter.clampHighlight(highlight, sug.len) else null;
+    // allow-div-onclick: delegation root for the chips' and suggestions' data-* controls (ZX11
+    // walks up from the event target); every control inside is a real button or a listbox option
+    // driven from the field's own keyboard handler.
+    return (
+        <div
+            @allocator={allocator}
+            class="char-filter relative flex flex-col"
+            onclick={&onBarClick}
+            onkeydown={&onBarKey}
+        >
+            <div class={field_class}>
+                {for (view.tags.items) |t| (
+                    <span class={chip_class} data-chip-tag={t}>
+                        <span class="max-w-[8rem] truncate">{t}</span>
+                        <button
+                            type="button"
+                            class={chip_x_class}
+                            data-chip-remove={t}
+                            aria-label={removeLabel(allocator, t)}
+                        >×</button>
+                    </span>
+                )}
+                <input
+                    type="text"
+                    id="char-filter-input"
+                    class={input_class}
+                    name="character_search"
+                    role="combobox"
+                    aria-label="Search characters, or type a tag to filter by it"
+                    aria-describedby="char-filter-hint"
+                    aria-autocomplete="list"
+                    aria-expanded={boolStr(open)}
+                    aria-controls="char-filter-suggest"
+                    aria-activedescendant={activeDesc(allocator, hi)}
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="Search or tag..."
+                    value={view.query}
+                    oninput={&onInput}
+                />
+            </div>
+            <p id="char-filter-hint" class="sr-only">Typing filters characters by name. Matching tags appear below the field; Arrow Down then Enter adds one as a filter.</p>
+            {if (open) (
+                <ul
+                    id="char-filter-suggest"
+                    class={list_class}
+                    role="listbox"
+                    aria-label="Matching tags"
+                >
+                    {for (sug, 0..) |t, i| (
+                        <li
+                            id={optId(allocator, i)}
+                            role="option"
+                            class={if (isHi(hi, i)) option_on_class else option_class}
+                            aria-selected={boolStr(isHi(hi, i))}
+                            data-tag-suggest={t}
+                        >{t}</li>
+                    )}
+                </ul>
+            )}
+        </div>
+    );
+}
+
+// The field wears the app's control edge rather than the browser's, because it now contains chips
+// and a bare input: two boxes with two different borders read as two controls. focus-within moves
+// the accent to the whole field, which is what the user is actually focused on.
+const field_class = "char-filter-field flex flex-wrap items-center gap-1 rounded-md border border-control-border bg-bg px-2 py-1 transition-[border-color] duration-120 ease-[ease] focus-within:border-accent";
+const input_class = "char-search min-w-[6rem] flex-1 border-0 bg-transparent p-0 font-mono text-xs text-text outline-none placeholder:text-faint max-[768px]:min-h-9 max-[768px]:text-base";
+// An ACTIVE filter, so it wears the same tag-on ground the old wall's pressed chips did: the bar
+// has to say which tags are narrowing the list without the user opening anything.
+const chip_class = "char-chip inline-flex items-center gap-1 rounded-full border border-border bg-tag-on py-px pr-1 pl-2 text-xs text-text";
+const chip_x_class = "char-chip-x inline-grid cursor-pointer place-items-center rounded-full border-0 bg-transparent px-1 text-sm leading-none text-muted hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent max-[768px]:min-h-9 max-[768px]:min-w-9";
+// NO entry animation, unlike the dropdown menu this otherwise mirrors. That list opens on a click,
+// a few times a session; this one opens, refilters and closes on EVERY KEYSTROKE, and WD24 puts a
+// surface at that frequency in the no-animation band. It also showed: a captured render caught the
+// list mid-fade, drawing the toolbar row straight through it.
+const list_class = "char-filter-suggest absolute top-full right-0 left-0 z-40 m-0 mt-1 flex max-h-[14rem] list-none flex-col gap-px overflow-y-auto rounded-md border border-border bg-surface p-1 [scrollbar-width:thin]";
+const option_class = "char-filter-opt cursor-pointer truncate rounded-sm px-2 py-1 font-mono text-xs text-muted";
+const option_on_class = "char-filter-opt cursor-pointer truncate rounded-sm bg-surface-2 px-2 py-1 font-mono text-xs text-text";
+
+/// Which suggestion the keyboard is on, and whether Escape has closed the list until the next
+/// keystroke. Session-local UI state: neither is worth persisting, and neither belongs in the View,
+/// which is the FILTER model the list computes from.
+var highlight: ?usize = null;
+var dismissed: bool = false;
+
+fn boolStr(b: bool) []const u8 {
+    return if (b) "true" else "false";
+}
+
+fn isHi(hi: ?usize, i: usize) bool {
+    return hi != null and hi.? == i;
+}
+
+fn optId(arena: std.mem.Allocator, i: usize) []const u8 {
+    return std.fmt.allocPrint(arena, "char-filter-opt-{d}", .{i}) catch "char-filter-opt";
+}
+
+/// The id of the highlighted option, or an empty string when nothing is highlighted (an absent
+/// aria-activedescendant is what tells assistive tech the typed text is the whole filter).
+fn activeDesc(arena: std.mem.Allocator, hi: ?usize) []const u8 {
+    const i = hi orelse return "";
+    return optId(arena, i);
+}
+
+/// "Remove tag filter night", not "Remove": a row of chips whose controls all announce the same
+/// word gives a screen-reader user no way to tell which one they are about to drop (WD38).
+fn removeLabel(arena: std.mem.Allocator, tag: []const u8) []const u8 {
+    return std.fmt.allocPrint(arena, "Remove tag filter {s}", .{tag}) catch "Remove tag filter";
+}
+
+// ---- handlers ---------------------------------------------------------------------------------
+
+fn onInput(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    const val = target.getAlloc(js.String, zx.allocator, "value") catch return;
+    defer zx.allocator.free(val);
+    cv.global.setQuery(val) catch return;
+    // A new fragment means a new list, so an index taken against the old one means nothing, and a
+    // list the user closed with Escape is welcome back.
+    highlight = null;
+    dismissed = false;
+    recompute();
+}
+
+fn onBarClick(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    if (dom_event.datasetUp(target, "tagSuggest")) |tag| {
+        defer zx.allocator.free(tag);
+        ev.stopPropagation();
+        addTag(tag);
+        return;
+    }
+    if (dom_event.datasetUp(target, "chipRemove")) |tag| {
+        defer zx.allocator.free(tag);
+        ev.stopPropagation();
+        // datasetUp already handed back a copy, which is what toggleTag needs: it frees the string
+        // it is holding, so the stored slice itself would be read after free on the way out.
+        dropTag(tag);
+        return;
+    }
+}
+
+fn onBarKey(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const key = ev.key() orelse return;
+    defer zx.allocator.free(key);
+
+    if (std.mem.eql(u8, key, "Escape")) {
+        if (dismissed or !hasSuggestions()) return;
+        dismissed = true;
+        highlight = null;
+        consume(ev);
+        render();
+        return;
+    }
+    if (std.mem.eql(u8, key, "ArrowDown") or std.mem.eql(u8, key, "ArrowUp")) {
+        const count = suggestionCount();
+        if (count == 0) return;
+        dismissed = false;
+        highlight = tag_filter.moveHighlight(highlight, count, if (std.mem.eql(u8, key, "ArrowDown")) .down else .up);
+        consume(ev);
+        render();
+        return;
+    }
+    if (std.mem.eql(u8, key, "Enter")) {
+        if (dismissed or highlight == null) return;
+        consume(ev);
+        addHighlighted();
+        return;
+    }
+    if (std.mem.eql(u8, key, "Backspace")) {
+        // Only on an EMPTY field: with text in it, Backspace is editing that text, and eating a
+        // chip instead would delete a filter the user never aimed at.
+        if (cv.global.query.len > 0) return;
+        const tags = cv.global.tags.items;
+        if (tags.len == 0) return;
+        const last = zx.allocator.dupe(u8, tags[tags.len - 1]) catch return;
+        defer zx.allocator.free(last);
+        consume(ev);
+        dropTag(last);
+    }
+}
+
+/// End the key here: no default action, and no ancestor handler after us. ziex re-reads cancelBubble
+/// between ancestors, so this is what keeps #shell's Escape dismiss off a key the field owns.
+fn consume(ev: zx.client.Event) void {
+    ev.preventDefault();
+    ev.stopPropagation();
+}
+
+// ---- filter mutation --------------------------------------------------------------------------
+
+/// The suggestions as the handlers see them. Recomputed rather than remembered: the render's copy
+/// lives in ziex's render arena, which is gone by the time a key arrives, and the strings inside it
+/// point into tags_all, which the next compute frees.
+fn suggestionsAlloc() ?[]const []const u8 {
+    const view = cv.global;
+    return tag_filter.suggest(zx.allocator, view.tags_all.items, view.tags.items, view.query) catch null;
+}
+
+fn suggestionCount() usize {
+    const sug = suggestionsAlloc() orelse return 0;
+    defer zx.allocator.free(sug);
+    return sug.len;
+}
+
+fn hasSuggestions() bool {
+    return suggestionCount() > 0;
+}
+
+fn addHighlighted() void {
+    const i = highlight orelse return;
+    const sug = suggestionsAlloc() orelse return;
+    defer zx.allocator.free(sug);
+    if (i >= sug.len) return;
+    // Copy before mutating: the suggestion borrows from tags_all, which compute() frees and rebuilds.
+    const tag = zx.allocator.dupe(u8, sug[i]) catch return;
+    defer zx.allocator.free(tag);
+    addTag(tag);
+}
+
+/// A picked tag becomes a chip, and the text that found it is spent: leaving "nig" in the field
+/// would keep filtering the list by NAME on a fragment the user meant as a tag, so the list would
+/// come back empty the moment the filter they asked for went on.
+fn addTag(tag: []const u8) void {
+    if (cv.global.isTagActive(tag)) return;
+    cv.global.toggleTag(tag) catch return;
+    cv.global.setQuery("") catch {};
+    highlight = null;
+    dismissed = false;
+    log.debug("filter bar: tag filter on {s}", .{tag});
+    recompute();
+    focusField();
+}
+
+fn dropTag(tag: []const u8) void {
+    if (!cv.global.isTagActive(tag)) return;
+    cv.global.toggleTag(tag) catch return;
+    highlight = null;
+    log.debug("filter bar: tag filter off {s}", .{tag});
+    recompute();
+    focusField();
+}
+
+/// Refilter the list and repaint. bumpCharacterList, never bumpShell: see the header. The bar's own
+/// chips and field ride the same render, because the list region's bump falls through to a
+/// full-page render (character_list_region.zx documents that fallback).
+fn recompute() void {
+    cv.global.compute(char_store.slice()) catch return;
+    regions.bumpCharacterList();
+}
+
+/// A repaint with no filter change (the suggestion list opening, closing or moving its highlight).
+fn render() void {
+    regions.bumpCharacterList();
+}
+
+/// Puts the caret back after a chip changed. A click on a chip control moved focus to that button,
+/// and removing a chip destroys the button that had it, which would drop focus onto <body> and end
+/// the keyboard's place in the bar (WD39).
+fn focusField() void {
+    if (zx.platform.role != .client) return;
+    const el = dom_event.elementById(zx.allocator, "char-filter-input") orelse return;
+    defer el.deinit();
+    el.ref.call(void, "focus", .{}) catch {};
+}
+
+const zx = @import("zx");
+const std = @import("std");
+const js = zx.client.js;
+const cv = @import("./character_view.zig");
+const tag_filter = @import("./tag_filter.zig");
+const char_store = @import("./character_store.zig");
+const regions = @import("../shell/regions.zig");
+const dom_event = @import("../platform/dom_event.zig");
+
+const log = std.log.scoped(.chars);

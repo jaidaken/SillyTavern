@@ -95,6 +95,13 @@ pub fn editingName() []const u8 {
     return value(.name);
 }
 
+/// The avatar filename of the character this editor is holding, which is the identity the server
+/// and the tag map both key on. Empty before a card has landed. card_tags.zx assigns against this
+/// rather than the store's selection, so a tag can only land on the card actually on screen.
+pub fn editingAvatar() []const u8 {
+    return owned_avatar;
+}
+
 /// The field's `data-card-field` key, which is also how a change finds its way back to setField.
 pub fn fieldKey(f: Field) []const u8 {
     return @tagName(f);

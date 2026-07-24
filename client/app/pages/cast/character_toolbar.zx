@@ -1,8 +1,13 @@
-// Character list toolbar: search, sort, favourites-only, grid/list, and tag-filter chips.
-// Client-only (no backend): every handler mutates cv.global and recomputes the filtered
-// list. Search re-renders only the list region (so the focused input keeps focus); the other
-// controls re-render the Shell region so their active state updates. Mirrors the old frontend's
+// Character list toolbar: the filter bar, sort, favourites-only, grid/list, and the pager.
+// Client-only (no backend): every handler mutates cv.global and recomputes the filtered list. The
+// filter bar is its own component (filter_bar.zx) and owns the search text, the tag suggestions and
+// the active-filter chips, including the re-render rule a keystroke has to follow; the controls
+// here re-render the Shell region so their active state updates. Mirrors the old frontend's
 // rm_characters_block controls.
+//
+// TAG ASSIGNMENT IS NOT HERE. Creating a tag, colouring it and putting it on a character are edits
+// TO a character, so they live in the character card editor (card_tags.zx, inside
+// card_editor_body.zx) next to the rest of that character's fields. This toolbar only FILTERS.
 //
 // Sort and page-size are dropdown.zx (the Wave-1 styled listbox), not native <select>s, which the
 // stylesheet could only give a focus ring. They are PLAIN prop-taking children whose dispatch is
@@ -20,16 +25,15 @@ const dom_event = @import("../platform/dom_event.zig");
 const dropdown = @import("../nav/dropdown.zx");
 const Dropdown = dropdown.Dropdown;
 // w3-reason 3d tags
-const tag_manager = @import("./tag_manager.zx");
-const TagManager = tag_manager.TagManager;
+const filter_bar = @import("./filter_bar.zx");
+const FilterBar = filter_bar.FilterBar;
 
-// The pressed state of a toggle (favourites-only, grid, a tag chip) is aria-pressed, which these
+// The pressed state of a toggle (favourites-only, grid) is aria-pressed, which these
 // buttons carry for assistive tech anyway, so the highlight is declared off tailwind's built-in
 // aria-pressed variant. Nothing here computes a class.
 // gap-1 / px-2 py-1: the legacy rules asked for `var(--s-1)`, which the token scale never defined
 // (it starts at --s-2), so these controls rendered with no padding and no gap.
 pub const tool_class = "char-tool inline-flex flex-none cursor-pointer items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-1 text-xs text-text hover:bg-tool-hover aria-pressed:bg-tool-on aria-pressed:outline-1 aria-pressed:outline-tool-ring max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:px-3 max-[768px]:py-2";
-pub const tag_class = "char-tag cursor-pointer rounded-full border border-border bg-surface-2 px-2 py-px text-xs text-muted aria-pressed:bg-tag-on aria-pressed:text-text aria-pressed:outline-1 aria-pressed:outline-tool-ring max-[768px]:min-h-9 max-[768px]:px-3 max-[768px]:py-1";
 const row_class = "char-toolbar-row flex flex-wrap items-center gap-2 max-[640px]:gap-[0.2rem]";
 
 pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
@@ -48,15 +52,9 @@ pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
             onkeydown={onToolbarKey}
         >
             <div class={row_class}>
-                <input
-                    type="search"
-                    class="char-search min-w-0 flex-1 max-[640px]:w-full max-[640px]:flex-none"
-                    name="character_search"
-                    aria-label="Search characters"
-                    placeholder="Search..."
-                    value={view.query}
-                    oninput={ctx.bind(onSearchInput)}
-                />
+                <div class="min-w-0 flex-1 max-[640px]:w-full max-[640px]:flex-none">
+                    <FilterBar />
+                </div>
                 <Dropdown
                     options={&sort_options}
                     value={sortValue(view.sort)}
@@ -80,28 +78,6 @@ pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
                     aria-label="Toggle grid view"
                     onclick={ctx.bind(onGridToggle)}
                 >Grid</button>
-                <button
-                    type="button"
-                    class={tool_class}
-                    aria-pressed={if (tag_manager.open) "true" else "false"}
-                    aria-label="Manage tags"
-                    aria-expanded={if (tag_manager.open) "true" else "false"}
-                    onclick={&tag_manager.onOpenToggle}
-                >Tags</button>
-            </div>
-            { if (tag_manager.open) (
-                <TagManager />
-            ) }
-            <div class="char-tags flex flex-wrap gap-1" role="group" aria-label="Filter by tag">
-                {for (view.tags_all.items) |tag| (
-                    <button
-                        type="button"
-                        class={tag_class}
-                        aria-pressed={if (view.isTagActive(tag)) "true" else "false"}
-                        data-tag={tag}
-                        onclick={ctx.bind(onTagToggle)}
-                    >{tag}</button>
-                )}
             </div>
             <div class={row_class ++ " char-pager justify-between"} role="group" aria-label="Pagination">
                 <button type="button" class={tool_class} data-page="prev" aria-label="Previous page" onclick={ctx.bind(onPageStep)}>‹</button>
@@ -169,17 +145,6 @@ fn pageLabel(alloc: std.mem.Allocator, view: cv.View) []const u8 {
 }
 
 
-fn onSearchInput(e: *zx.client.Event.Stateful) void {
-    if (zx.platform.role != .client) return;
-    const event = e.getEvent();
-    const target = event.ref.get(zx.client.js.Object, "target") catch return;
-    const val = target.getAlloc(zx.client.js.String, zx.allocator, "value") catch return;
-    defer zx.allocator.free(val);
-    cv.global.setQuery(val) catch return;
-    cv.global.compute(char_store.slice()) catch return;
-    regions.bumpCharacterList();
-}
-
 // The dropdowns publish no onchange event of their own: the region root delegates to
 // dropdown.onClick/onKey, which call the picked option's registered callback with its value.
 // An event the dropdown CONSUMED stops here: ziex delegates at <body> and hands one event to every
@@ -229,18 +194,6 @@ fn onGridToggle(_: *zx.client.Event.Stateful) void {
     // Through char_prefs, not the View directly: the choice is remembered across reloads the same
     // way the sort is, so a user who prefers the dense rows is not handed tiles again every visit.
     char_prefs.setGrid(!cv.global.grid);
-    regions.bumpShell();
-}
-
-fn onTagToggle(e: *zx.client.Event.Stateful) void {
-    if (zx.platform.role != .client) return;
-    const event = e.getEvent();
-    const target = event.ref.get(zx.client.js.Object, "target") catch return;
-    const dataset = target.get(zx.client.js.Object, "dataset") catch return;
-    const tag = dataset.getAlloc(zx.client.js.String, zx.allocator, "tag") catch return;
-    defer zx.allocator.free(tag);
-    cv.global.toggleTag(tag) catch return;
-    cv.global.compute(char_store.slice()) catch return;
     regions.bumpShell();
 }
 

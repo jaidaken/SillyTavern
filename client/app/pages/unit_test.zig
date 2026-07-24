@@ -46,6 +46,9 @@ comptime {
     // character_view's tests never reached the runner: the module was absent here.
     _ = @import("./cast/tag_store.zig");
     _ = @import("./cast/character_view.zig");
+    // The filter bar's tag suggestions: pure, so the matching and the highlight walk are proven
+    // here and only the DOM half rides the browser gate.
+    _ = @import("./cast/tag_filter.zig");
     _ = @import("./cast/character_row.zig");
     _ = @import("./cast/card_form.zig");
     _ = @import("./platform/datetime.zig");
