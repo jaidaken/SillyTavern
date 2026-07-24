@@ -719,6 +719,20 @@ async function main() {
         row('must', await page.waitFor(`Math.abs(document.querySelector('#panel-view.panel-right').getBoundingClientRect().width - ${pw0}) > 20`, 2500),
             'A9 side-panel handle drags the dock width (glue gesture -> Zig state)');
 
+        // Conditional docks were POSITIONAL children of #shell, so opening the left one moved the
+        // right <aside>, and a reattached node comes back scrolled to the top. The tab is clicked
+        // directly here because openPanel deliberately closes the far side.
+        const rightScroll = "document.querySelector('#panel-view.panel-right .panel-scroll')";
+        await page.eval(`${rightScroll}.scrollTop = 200`);
+        const scrolledTo = await page.eval(`${rightScroll}.scrollTop`);
+        await page.click(SIDE_TAB.left);
+        const bothOpen = await page.waitFor("!!document.querySelector('#panel-view.panel-left') && !!document.querySelector('#panel-view.panel-right')", 8000);
+        const keptScroll = await page.eval(`${rightScroll} ? ${rightScroll}.scrollTop : -1`);
+        row('must', bothOpen && scrolledTo > 0 && keptScroll === scrolledTo,
+            'A9b opening the left dock leaves the right dock scrolled where it was',
+            `bothOpen=${bothOpen} scrolledTo=${scrolledTo} after=${keptScroll}`);
+        await closeSide('left');
+
         // ---- the edge tabs themselves ----
         // Every row above reaches a panel through a tab that ?showtabs pinned, so nothing yet asks
         // whether an UNPINNED tab appears at all. These three load without the flag and drive the

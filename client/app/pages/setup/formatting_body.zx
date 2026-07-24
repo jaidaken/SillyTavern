@@ -125,7 +125,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
     return (
         <div
             @allocator={ctx.allocator}
-            class="settings-body flex flex-col gap-5"
+            class="settings-body grid grid-cols-1 items-start gap-5 @min-[38rem]:grid-cols-2"
             @rendering={.client}
             onclick={onBodyClick}
             onkeydown={onBodyKey}

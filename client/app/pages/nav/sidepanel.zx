@@ -32,7 +32,15 @@ pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
         >
             <PanelHead title={p.title} side={ui.sideStr(p.side)} />
             <SectionSwitcher side={p.side} />
-            <div class="flex-1 overflow-y-auto p-4 [scrollbar-width:thin] max-[768px]:px-3 max-[768px]:pt-3 max-[768px]:pb-[calc(0.75rem_+_env(safe-area-inset-bottom,0px))] max-[768px]:[-webkit-overflow-scrolling:touch]">
+            // @container makes this scroller a QUERY CONTAINER, which is what lets the bodies inside
+            // lay out against the dock's own width. A dock is sized by a drag, not by the window, so
+            // a viewport breakpoint cannot see it: on a wide screen every body stayed one long column
+            // however far the panel was pulled open, and on a narrow window a wide dock would have
+            // been told it was narrow. The bodies key their column counts off @min-[...] variants,
+            // which read THIS element's inline size.
+            // panel-scroll is this element's identity, not part of its look: the browser gate reads
+            // its scrollTop to prove that opening one dock leaves the other one's scroll alone.
+            <div class="panel-scroll @container flex-1 overflow-y-auto p-4 [scrollbar-width:thin] max-[768px]:px-3 max-[768px]:pt-3 max-[768px]:pb-[calc(0.75rem_+_env(safe-area-inset-bottom,0px))] max-[768px]:[-webkit-overflow-scrolling:touch]">
                 {if (p.id == .ai_config) (
                     <AiConfigBody />
                 ) else if (p.id == .formatting) (
@@ -76,7 +84,7 @@ pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
                 aria-label="Resize panel"
                 aria-valuenow={ui.widthFor(p.side)}
                 aria-valuemin={ui.min_width}
-                aria-valuemax={ui.max_width}
+                aria-valuemax={ui.maxWidthFor(p.side)}
                 onkeydown={ui.onResizeKey}
                 onpointerdown={ui.onResizeDown}
                 onpointermove={ui.onResizeMove}

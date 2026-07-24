@@ -135,9 +135,23 @@ pub fn openQuiet(id: PanelId) void {
     syncDocks();
 }
 pub fn setWidth(side: Side, w: f32) void {
-    ui.panels.setWidth(side, w);
+    ui.panels.setWidth(side, w, viewportWidth());
     syncDocks();
     regions.bumpShell();
+}
+
+/// The window's inner width, or 0 where there is no window (the server render), which ui_state reads
+/// as "unknown" and answers with the absolute ceiling.
+fn viewportWidth() f32 {
+    if (zx.platform.role != .client) return 0;
+    const w = js.global.get(f64, "innerWidth") catch return 0;
+    return @floatCast(w);
+}
+
+/// The ceiling the separator advertises and the drag enforces. It is a live value, not the constant:
+/// it depends on the window and on how much the other dock is already holding.
+pub fn maxWidthFor(side: Side) f32 {
+    return ui.panels.maxWidthFor(side, viewportWidth());
 }
 
 pub fn dockWidthStyle(side: Side) []const u8 {
@@ -260,15 +274,17 @@ pub fn onResizeKey(ev: zx.client.Event) void {
 // setPointerCapture keeps the drag alive when the cursor leaves the separator (plain delegation
 // cannot), so the gesture is Zig, not glue. onResizeKey above is the keyboard twin.
 
-const PanelDrag = struct { start_x: f64, start_w: f64, left: bool, last: ?f64, root_style: js.Object, handle: js.Object };
+const PanelDrag = struct { start_x: f64, start_w: f64, max_w: f64, left: bool, last: ?f64, root_style: js.Object, handle: js.Object };
 var panel_drag: ?PanelDrag = null;
 
-/// A left dock widens as the separator moves right; a right dock does the opposite. Clamped to the
-/// allowed range and rounded, matching the keyboard path's bounds.
+/// A left dock widens as the separator moves right; a right dock does the opposite. Clamped and
+/// rounded, matching the keyboard path's bounds. The ceiling is the one measured at pointerdown
+/// rather than a constant: it depends on the window and on the other dock, and neither can change
+/// mid-gesture, so measuring once keeps the move handler free of DOM reads.
 fn panelWidthAt(drag: PanelDrag, cx: f64) f64 {
     const dx = cx - drag.start_x;
     const raw = if (drag.left) drag.start_w + dx else drag.start_w - dx;
-    return @round(std.math.clamp(raw, @as(f64, min_width), @as(f64, max_width)));
+    return @round(std.math.clamp(raw, @as(f64, min_width), drag.max_w));
 }
 
 /// Pointerdown on the .panel-resize separator inside #panel-view: capture start geometry + which
@@ -294,10 +310,12 @@ pub fn onResizeDown(ev: zx.client.Event) void {
         handle.deinit();
         return;
     };
+    const side: Side = if (std.mem.eql(u8, side_str, "left")) .left else .right;
     panel_drag = .{
         .start_x = dom_event.eventNum(ev, "clientX") orelse 0,
         .start_w = dom_event.rectWidth(panel) orelse 0,
-        .left = std.mem.eql(u8, side_str, "left"),
+        .max_w = @floatCast(maxWidthFor(side)),
+        .left = side == .left,
         .last = null,
         .root_style = root_style,
         .handle = handle,

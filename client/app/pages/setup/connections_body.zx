@@ -36,10 +36,10 @@ pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
             onclick={onBodyClick}
             onkeydown={onBodyKey}
         >
-            <div class="flex flex-col gap-3">
+            <div class="grid grid-cols-1 items-start gap-3 @min-[34rem]:grid-cols-2">
                 <div
                     id="conn-standing"
-                    class="setting-row flex items-center gap-2 rounded-md border border-border bg-surface-2 px-3 py-2"
+                    class="setting-row col-span-full flex items-center gap-2 rounded-md border border-border bg-surface-2 px-3 py-2"
                     data-conn-state={connection.stateName()}
                 >
                     <span class="conn-dot flex-none" aria-hidden="true"></span>
@@ -93,7 +93,7 @@ pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     <button type="button" class={btn_cls} onclick={onConnect}>Connect</button>
                     <span id="conn-status" role="status" aria-live="polite" class="text-sm text-muted empty:hidden"></span>
                 </div>
-                <p class="setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]">Saved to your SillyTavern settings and shared with the classic client.</p>
+                <p class="setting-note col-span-full m-0 text-sm text-muted max-[768px]:text-[0.78rem]">Saved to your SillyTavern settings and shared with the classic client.</p>
             </div>
         </div>
     );

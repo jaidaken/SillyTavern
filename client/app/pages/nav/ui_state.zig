@@ -169,8 +169,23 @@ pub fn sectionKey(side: Side) []const u8 {
 }
 
 pub const min_width: f32 = 240;
-pub const max_width: f32 = 620;
+/// The absolute ceiling on a dock, hit only on a wide screen. It is deliberately far past the old
+/// 620, which capped a dock at roughly a third of a 1080p window and stopped the Setup panel long
+/// before it was wide enough to lay its settings out in columns.
+pub const max_width: f32 = 1200;
 pub const default_width: f32 = 340;
+/// The centre column a drag may never eat into. The ceiling above is absolute; this is the one that
+/// actually binds on a normal screen, and it is what keeps a two-dock layout from squeezing the
+/// conversation down to nothing.
+pub const min_reading: f32 = 320;
+
+/// The widest this dock may be RIGHT NOW: the window, less whatever the other dock already occupies,
+/// less the reading column that has to survive. `viewport_w` of 0 means "unknown" (the server render,
+/// or any path with no window), which falls back to the absolute ceiling.
+pub fn maxWidthAvailable(viewport_w: f32, other_w: f32) f32 {
+    if (viewport_w <= 0) return max_width;
+    return std.math.clamp(viewport_w - other_w - min_reading, min_width, max_width);
+}
 
 /// Motion policy. `system` honours the OS prefers-reduced-motion (the default); `on`/`off` override
 /// it from the in-app setting.
@@ -313,8 +328,18 @@ pub const PanelState = struct {
         self.last = null;
     }
 
-    pub fn setWidth(self: *PanelState, side: Side, w: f32) void {
-        const c = std.math.clamp(w, min_width, max_width);
+    /// This side's live ceiling, which depends on the OTHER side: two open docks share one window, so
+    /// widening one has to account for the width the other is already holding.
+    pub fn maxWidthFor(self: PanelState, side: Side, viewport_w: f32) f32 {
+        const other: Side = if (side == .left) .right else .left;
+        const other_w: f32 = if (self.openId(other) == null) 0 else self.widthFor(other);
+        return maxWidthAvailable(viewport_w, other_w);
+    }
+
+    /// `viewport_w` is the window's inner width, or 0 where there is no window (the server render and
+    /// the native tests), which falls back to the absolute ceiling.
+    pub fn setWidth(self: *PanelState, side: Side, w: f32, viewport_w: f32) void {
+        const c = std.math.clamp(w, min_width, self.maxWidthFor(side, viewport_w));
         if (side == .left) self.left_w = c else self.right_w = c;
         log.debug("width {s}: {d}", .{ @tagName(side), c });
     }
@@ -461,13 +486,39 @@ test "each panel opens on its catalogue side, and Escape closes the last one ope
 
 test "width clamps to the allowed range" {
     var s: PanelState = .{};
-    s.setWidth(.left, 10);
+    s.setWidth(.left, 10, 0);
     try testing.expectEqual(min_width, s.widthFor(.left));
-    s.setWidth(.left, 9999);
+    s.setWidth(.left, 9999, 0);
     try testing.expectEqual(max_width, s.widthFor(.left));
-    s.setWidth(.left, 400);
+    s.setWidth(.left, 400, 0);
     try testing.expectEqual(@as(f32, 400), s.widthFor(.left));
     try testing.expectEqual(default_width, s.widthFor(.right));
+}
+
+test "the live ceiling leaves the reading column standing, and the other dock is counted" {
+    // The defect this shape exists to kill: a single constant ceiling let two docks on a 1280px
+    // window take 1200 each and squeeze the conversation out of existence.
+    var s: PanelState = .{};
+    // Nothing else open: the window minus the reading column, capped by the absolute ceiling.
+    try testing.expectEqual(@as(f32, 1200), maxWidthAvailable(2560, 0));
+    try testing.expectEqual(@as(f32, 1280 - 320), maxWidthAvailable(1280, 0));
+    // The other dock's width comes off the top.
+    try testing.expectEqual(@as(f32, 1280 - 340 - 320), maxWidthAvailable(1280, 340));
+    // A window too narrow to satisfy anyone still yields a usable dock, never a negative one.
+    try testing.expectEqual(min_width, maxWidthAvailable(400, 340));
+    // Unknown viewport (server render, native test) falls back to the ceiling.
+    try testing.expectEqual(max_width, maxWidthAvailable(0, 0));
+
+    // Through the state: a closed right side contributes nothing, an open one does.
+    s.toggleSide(.left);
+    // 1600-320 is past the absolute ceiling, so that is what binds while the right side is shut.
+    try testing.expectEqual(max_width, s.maxWidthFor(.left, 1600));
+    s.toggleSide(.right);
+    s.setWidth(.right, 500, 1600);
+    try testing.expectEqual(@as(f32, 1600 - 500 - 320), s.maxWidthFor(.left, 1600));
+    // And the clamp honours it: 1200 is inside the absolute ceiling but past what is free.
+    s.setWidth(.left, 1200, 1600);
+    try testing.expectEqual(@as(f32, 1600 - 500 - 320), s.widthFor(.left));
 }
 
 test "every panel id has a matching data entry with a d- dom id that round-trips" {

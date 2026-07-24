@@ -32,8 +32,8 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
     return (
         <div @allocator={ctx.allocator} class="wi-body flex flex-col gap-3" @rendering={.client}>
             {if (editingEntry()) (
-                <div class="wi-editor flex flex-col gap-3">
-                    <div class="flex items-center gap-2">
+                <div class="wi-editor grid grid-cols-1 items-start gap-3 @min-[36rem]:grid-cols-2">
+                    <div class="col-span-full flex items-center gap-2">
                         <button class={ghost_btn} type="button" data-wi-toentries="1" onclick={onBackToEntries}>Back</button>
                         <h3 class="m-0 min-w-0 flex-1 truncate font-mono text-sm text-text">{entryTitle(e)}</h3>
                     </div>
@@ -65,7 +65,7 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         <Dropdown options={logic_options_slice} value={logicValue(ctx.allocator, e)} name="wi-logic" label="How the filter keywords apply" onchange={&setLogicStr} />
                     </div>
 
-                    <div class="setting-row flex flex-col gap-1">
+                    <div class="setting-row col-span-full flex flex-col gap-1">
                         <label class={label_cls} for="wi-content">Lore</label>
                         <textarea id="wi-content" name="wi-content" class={area_cls} spellcheck="false" autocomplete="off"
                             aria-describedby="wi-content-hint"
