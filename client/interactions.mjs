@@ -432,7 +432,9 @@ async function main() {
             card_editor: {
                 kind: 'contextual',
                 host: 'characters',
-                subject: '#char-list .char-item[data-char-avatar]',
+                // Pinned by avatar, not position: the first tile is whatever the sort puts there, so an
+                // unpinned subject opens a different card and the deep-fetch row fails for the wrong reason.
+                subject: '#char-list .char-item[data-char-avatar="char41.png"]',
                 control: '.char-row-act[data-char-action="edit"]',
                 selected: '#char-actions-edit',
                 root: '#card-editor',
@@ -539,17 +541,20 @@ async function main() {
         // The card editor is an action ON a character, not a destination, so the Cast panel and a
         // selected character both come first: an editor opened with nothing selected has no card.
         const openCardEditor = async () => {
-            const { control } = requireLauncher('card_editor');
+            const { subject, selected } = requireLauncher('card_editor');
             await openPanel('characters');
             await page.waitFor("document.querySelectorAll('#chat-root .char-item').length > 0", 8000);
-            if (!(await page.eval("!!document.querySelector('#chat-root .char-item.is-selected')"))) {
-                await page.click('#chat-root .char-item .char-name');
-                await page.waitFor("!!document.querySelector('#chat-root .char-item.is-selected')", 8000);
+            // Drive the PINNED character: only it carries deep card fields, so an unpinned pick fails the
+            // fetch row for having no data. Via the selected control, which needs no hover.
+            if (!(await page.waitFor(`document.querySelector('${subject}')`, 8000))) {
+                throw new NoLauncher(`no character tile matching ${subject} for the card editor`);
             }
-            if (!(await page.waitFor(`document.querySelector('${control}')`, 4000))) {
-                throw new NoLauncher(`no ${control} control on a character row for the card editor`);
+            await page.click(`${subject} .char-name`);
+            await page.waitFor(`document.querySelector('${subject}').classList.contains('is-selected')`, 8000);
+            if (!(await page.waitFor(`document.querySelector('${selected}')`, 4000))) {
+                throw new NoLauncher(`no ${selected} control for the card editor`);
             }
-            await page.click(control);
+            await page.click(selected);
         };
         const openNotifications = async () => {
             const { control } = requireLauncher('notifications');
@@ -912,8 +917,10 @@ async function main() {
 
         // Row-hover actions: every one is a real focusable button with its own accessible name, and
         // duplicate (the one with no native dialog in front of it) fires from the keyboard.
-        const actNames = await page.eval("JSON.stringify(Array.from(document.querySelectorAll('#chat-root .char-item .char-row-act')).slice(0,4).map(b=>[b.tagName,b.getAttribute('aria-label')]))");
-        row('must', /BUTTON/.test(actNames) && /Rename /.test(actNames) && /Delete /.test(actNames),
+        // Sampled to 6, not 4: "Edit card" joined the front of the cluster and pushed Delete past a
+        // 4-wide window, which read as Delete having lost its name rather than moved.
+        const actNames = await page.eval("JSON.stringify(Array.from(document.querySelectorAll('#chat-root .char-item .char-row-act')).slice(0,6).map(b=>[b.tagName,b.getAttribute('aria-label')]))");
+        row('must', /BUTTON/.test(actNames) && /Edit card /.test(actNames) && /Rename /.test(actNames) && /Delete /.test(actNames),
             'C7 row actions are named buttons carrying their character', `names=${actNames}`);
 
         await page.focus("#chat-root .char-item .char-row-act[data-char-action='duplicate']");
@@ -2099,7 +2106,9 @@ async function main() {
             // C-CONN's panel-dismiss defect: a control that rerenders its own node away on click leaves
             // ui.onPageClick walking a detached target and dismissing the panel. A tile reselect only
             // patches aria-pressed in place, so the node survives and this needs no isConnected guard.
-            const panelOpen = await page.eval("!!document.querySelector('#panel-view') && !!document.querySelector('#bg-gallery')");
+            // Backgrounds moved from a dock into the system popover, so #panel-view is the wrong home
+            // to prove survival by; the card itself is.
+            const panelOpen = await page.eval("!!document.querySelector('#sys-popover') && !!document.querySelector('#bg-gallery')");
             row('must', panelOpen, 'C-BG-5 selecting a background does not dismiss the panel', `open=${panelOpen}`);
 
             const stored = await page.eval("localStorage.getItem('st-background')");
@@ -4837,7 +4846,7 @@ async function main() {
             const asleepToast = await page.eval(`(function(){
                 const t = [...document.querySelectorAll('#notifications div[data-level]')]
                     .map(function (e) { return { level: e.getAttribute('data-level'), text: e.textContent }; });
-                const badge = document.querySelector('.notif-badge');
+                const badge = document.querySelector('#notify-count');
                 return { toasts: t, badge: badge ? badge.textContent : null };
             })()`);
             row('must', asleepToast.toasts.length === 1 && asleepToast.toasts[0].level === 'warning'
@@ -5729,7 +5738,7 @@ async function main() {
                 // Found by its badge rather than by an element id: the button that carried it was the
                 // topbar's #d-notifications, and whatever wears the unread count next is the bell.
                 const bell = await page.eval(`(function(){
-                    const badge = document.querySelector('.notif-badge');
+                    const badge = document.querySelector('#notify-count');
                     const b = badge && badge.closest('button');
                     if (!b) return null;
                     return { icon: b.getAttribute('data-icon'), label: b.getAttribute('aria-label'),
@@ -5761,18 +5770,21 @@ async function main() {
                     JSON.stringify(r));
 
                 // Opening the drawer is the read receipt, so the badge must be gone WHILE the list is up.
+                // While the popover is up the same button IS the close affordance, so its name is
+                // "Close notifications", not "Notifications". Found by id, not by name prefix.
                 const afterOpen = await page.eval(`(function(){
-                    const b = document.querySelector('[aria-label^="Notifications"]');
-                    return { badge: !!document.querySelector('.notif-badge'),
+                    const b = document.querySelector('#notify-bell');
+                    return { badge: !!document.querySelector('#notify-count'),
                              label: b ? b.getAttribute('aria-label') : null };
                 })()`);
-                row('must', afterOpen.badge === false && afterOpen.label === 'Notifications',
+                row('must', afterOpen.badge === false && afterOpen.label === 'Close notifications',
                     'C-NOTIF-12 opening the drawer marks the list read and clears the badge',
                     JSON.stringify(afterOpen));
 
                 await page.click('#notif-clear');
-                const cleared = await page.waitFor("document.querySelector('#panel-view .panel-empty') && !document.querySelector('#notif-list')", 4000);
-                const emptyText = await page.eval("(document.querySelector('#panel-view .panel-empty')||{}).textContent || ''");
+                // The history is a popover now, not a dock, so its empty state lives in #notify-popover.
+                const cleared = await page.waitFor("document.querySelector('#notify-popover .panel-empty') && !document.querySelector('#notif-list')", 4000);
+                const emptyText = await page.eval("(document.querySelector('#notify-popover .panel-empty')||{}).textContent || ''");
                 row('must', cleared && emptyText.length > 40 && /reload/i.test(emptyText),
                     'C-NOTIF-13 Clear empties the list and leaves a real empty state, not a blank panel',
                     `cleared=${cleared} copy=${JSON.stringify(emptyText.slice(0, 60))}`);
