@@ -497,7 +497,7 @@ echo
 echo "== interactions (real input against the served client) =="
 # Self-contained stage: verify-interactions.sh starts its own mock-api server on its own port.
 # One row, and it is a row about a runner, not about the client: interactions.mjs prints its own
-# count of its own rows and only an exit code reaches here. Reading its 221 rows into this total
+# count of its own rows and only an exit code reaches here. Reading those rows into this total
 # would mean parsing its output, which is a claim about text rather than about counters.
 if [ "${INTERACTIONS:-1}" = "1" ]; then
     if ./verify-interactions.sh; then
