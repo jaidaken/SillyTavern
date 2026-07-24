@@ -15,20 +15,26 @@ const tile_btn = "bg-tile block w-full cursor-pointer overflow-hidden rounded-md
 const file_input = "bg-upload-file " ++ panelchrome.file_picker;
 const none_btn = "bg-tile grid aspect-[16/9] cursor-pointer place-items-center rounded-md border border-control-border bg-bg font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text aria-pressed:border-accent aria-pressed:text-accent";
 
+// The gallery and its skeleton share one track definition so the tiles cannot land on a different
+// grid than the placeholder that reserved their space (WD43). 7.5rem is the narrowest tile still
+// legible, chosen so two fit across the system card's 336px body (nav/sysmenu.zx) while a wide
+// drawer simply fits more; auto-fill does the rest, so neither width needs a breakpoint.
+const tile_grid = "grid grid-cols-[repeat(auto-fill,minmax(7.5rem,1fr))] gap-3";
+
 pub fn BackgroundsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
     backgrounds.region = ctx.state(u32, 0);
     backgrounds.ensureLoaded();
 
     const sel = backgrounds.selected(ctx.allocator);
     return (
-        <div @allocator={ctx.allocator} class="backgrounds-body flex flex-col gap-3" @rendering={.client}>
+        <div @allocator={ctx.allocator} id="backgrounds-body" class="backgrounds-body flex flex-col gap-3" @rendering={.client}>
             {if (backgrounds.state() == .failed) (
                 <div class="flex flex-col items-start gap-2 rounded-md border border-control-border bg-bg p-3" role="alert">
                     <p class="m-0 text-sm text-text">{backgrounds.errorText()}</p>
                     <button class={retry_btn} type="button" data-bg-retry="1" onclick={onRetry}>Try again</button>
                 </div>
             ) else if (backgrounds.state() == .loading) (
-                <div class="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-3" aria-busy="true" aria-label="Loading backgrounds">
+                <div class={tile_grid} aria-busy="true" aria-label="Loading backgrounds">
                     {for (skeleton_slots) |_| (
                         <div class="aspect-[16/9] animate-pulse rounded-md border border-control-border bg-surface-2"></div>
                     )}
@@ -40,7 +46,7 @@ pub fn BackgroundsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     <button class={retry_btn} type="button" data-bg-retry="1" onclick={onRetry}>Reload</button>
                 </div>
             ) else (
-                <div id="bg-gallery" class="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-3" role="group" aria-label="Backgrounds">
+                <div id="bg-gallery" class={tile_grid} role="group" aria-label="Backgrounds">
                     <button
                         class={none_btn}
                         type="button"

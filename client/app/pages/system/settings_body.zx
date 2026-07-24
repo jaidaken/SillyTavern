@@ -12,41 +12,51 @@ const seg_btn = "seg-btn cursor-pointer rounded-sm border-0 bg-transparent px-[0
 const seg_motion = "seg-btn cursor-pointer rounded-sm border-0 bg-transparent px-[0.7rem] py-[0.3rem] font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text aria-checked:bg-surface-2 aria-checked:text-accent";
 const settings_tab = "settings-tab cursor-pointer border-0 border-b-2 border-b-transparent bg-transparent px-[0.8rem] py-[0.4rem] font-mono text-sm text-muted hover:text-text";
 
+// This body renders inside the system card, which is capped at 336px so it never covers the app it
+// restyles (nav/sysmenu.zx). The rows therefore WRAP on their own rather than at a viewport
+// breakpoint: a media query cannot see how wide the card is, and the same markup has to read at
+// drawer width and at card width. A label and its control sit side by side while both fit and stack
+// when they do not; a segmented group wraps its own buttons rather than overflowing the card.
+const row = "setting-row flex flex-wrap items-center justify-between gap-x-4 gap-y-2";
+const seg_group = "seg inline-flex flex-wrap rounded-md border border-control-border bg-bg p-[2px]";
+const label_text = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
+const note_text = "setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]";
+
 pub fn SettingsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
     return (
-        <div @allocator={ctx.allocator} class="settings-body flex flex-col gap-3" @rendering={.client}>
+        <div @allocator={ctx.allocator} id="settings-body" class="settings-body flex flex-col gap-3" @rendering={.client}>
             <div class="settings-tabs mb-3 flex gap-[2px] border-b border-border" role="group" aria-label="Settings sections">
                 <button class={settings_tab} data-reading-set="tab" data-reading-val="reading" type="button" onclick={onReadingClick}>Reading</button>
                 <button class={settings_tab} data-reading-set="tab" data-reading-val="appearance" type="button" onclick={onReadingClick}>Appearance</button>
             </div>
 
             <div class="settings-panel" data-tab="reading" aria-label="Reading">
-                <div class="setting-row flex items-center justify-between gap-4 max-[768px]:flex-wrap max-[768px]:gap-2">
-                    <span class="setting-label text-base font-medium max-[768px]:text-[0.88rem]">Text size</span>
-                    <div class="seg inline-flex rounded-md border border-control-border bg-bg p-[2px]" role="group" aria-label="Text size">
+                <div class={row}>
+                    <span class={label_text}>Text size</span>
+                    <div class={seg_group} role="group" aria-label="Text size">
                         <button class={seg_btn} data-reading-set="size" data-reading-val="s" type="button" onclick={onReadingClick}>Small</button>
                         <button class={seg_btn} data-reading-set="size" data-reading-val="m" type="button" onclick={onReadingClick}>Medium</button>
                         <button class={seg_btn} data-reading-set="size" data-reading-val="l" type="button" onclick={onReadingClick}>Large</button>
                     </div>
                 </div>
-                <div class="setting-row flex items-center justify-between gap-4 max-[768px]:flex-wrap max-[768px]:gap-2">
-                    <span class="setting-label text-base font-medium max-[768px]:text-[0.88rem]">Line height</span>
-                    <div class="seg inline-flex rounded-md border border-control-border bg-bg p-[2px]" role="group" aria-label="Line height">
+                <div class={row}>
+                    <span class={label_text}>Line height</span>
+                    <div class={seg_group} role="group" aria-label="Line height">
                         <button class={seg_btn} data-reading-set="lh" data-reading-val="tight" type="button" onclick={onReadingClick}>Tight</button>
                         <button class={seg_btn} data-reading-set="lh" data-reading-val="normal" type="button" onclick={onReadingClick}>Normal</button>
                         <button class={seg_btn} data-reading-set="lh" data-reading-val="loose" type="button" onclick={onReadingClick}>Loose</button>
                     </div>
                 </div>
-                <div class="setting-row flex items-center justify-between gap-4 max-[768px]:flex-wrap max-[768px]:gap-2">
-                    <span class="setting-label text-base font-medium max-[768px]:text-[0.88rem]">Justify</span>
-                    <div class="seg inline-flex rounded-md border border-control-border bg-bg p-[2px]" role="group" aria-label="Justify long messages">
+                <div class={row}>
+                    <span class={label_text}>Justify</span>
+                    <div class={seg_group} role="group" aria-label="Justify long messages">
                         <button class={seg_btn} data-reading-set="justify" data-reading-val="on" type="button" onclick={onReadingClick}>On</button>
                         <button class={seg_btn} data-reading-set="justify" data-reading-val="off" type="button" onclick={onReadingClick}>Off</button>
                     </div>
                 </div>
-                <div class="setting-row flex items-center justify-between gap-4 max-[768px]:flex-wrap max-[768px]:gap-2">
-                    <span class="setting-label text-base font-medium max-[768px]:text-[0.88rem]">Paragraphs</span>
-                    <div class="seg inline-flex rounded-md border border-control-border bg-bg p-[2px]" role="group" aria-label="Paragraph style">
+                <div class={row}>
+                    <span class={label_text}>Paragraphs</span>
+                    <div class={seg_group} role="group" aria-label="Paragraph style">
                         <button class={seg_btn} data-reading-set="indent" data-reading-val="chat" type="button" onclick={onReadingClick}>Chat</button>
                         <button class={seg_btn} data-reading-set="indent" data-reading-val="novel" type="button" onclick={onReadingClick}>Novel</button>
                         <button class={seg_btn} data-reading-set="indent" data-reading-val="blockquote" type="button" onclick={onReadingClick}>Quoted</button>
@@ -54,35 +64,35 @@ pub fn SettingsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         <button class={seg_btn} data-reading-set="indent" data-reading-val="vn" type="button" onclick={onReadingClick}>VN</button>
                     </div>
                 </div>
-                <div class="setting-row flex items-center justify-between gap-4 max-[768px]:flex-wrap max-[768px]:gap-2">
-                    <span class="setting-label text-base font-medium max-[768px]:text-[0.88rem]">Font</span>
-                    <div class="seg inline-flex rounded-md border border-control-border bg-bg p-[2px]" role="group" aria-label="Reading font">
+                <div class={row}>
+                    <span class={label_text}>Font</span>
+                    <div class={seg_group} role="group" aria-label="Reading font">
                         <button class={seg_btn} data-reading-set="font" data-reading-val="serif" type="button" onclick={onReadingClick}>Serif</button>
                         <button class={seg_btn} data-reading-set="font" data-reading-val="sans" type="button" onclick={onReadingClick}>Sans</button>
                     </div>
                 </div>
-                <div class="setting-row flex items-center justify-between gap-4 max-[768px]:flex-wrap max-[768px]:gap-2">
-                    <span class="setting-label text-base font-medium max-[768px]:text-[0.88rem]">Theme</span>
-                    <div class="seg inline-flex rounded-md border border-control-border bg-bg p-[2px]" role="group" aria-label="Reading theme">
+                <div class={row}>
+                    <span class={label_text}>Theme</span>
+                    <div class={seg_group} role="group" aria-label="Reading theme">
                         <button class={seg_btn} data-reading-set="theme" data-reading-val="dark" type="button" onclick={onReadingClick}>Dark</button>
                         <button class={seg_btn} data-reading-set="theme" data-reading-val="sepia" type="button" onclick={onReadingClick}>Sepia</button>
                         <button class={seg_btn} data-reading-set="theme" data-reading-val="paper" type="button" onclick={onReadingClick}>Paper</button>
                     </div>
                 </div>
-                <div class="setting-row flex items-center justify-between gap-4 max-[768px]:flex-wrap max-[768px]:gap-2">
-                    <span class="setting-label text-base font-medium max-[768px]:text-[0.88rem]">Avatars</span>
-                    <div class="seg inline-flex rounded-md border border-control-border bg-bg p-[2px]" role="group" aria-label="Chat message avatars">
+                <div class={row}>
+                    <span class={label_text}>Avatars</span>
+                    <div class={seg_group} role="group" aria-label="Chat message avatars">
                         <button class={seg_btn} data-reading-set="avatars" data-reading-val="on" type="button" onclick={onReadingClick}>On</button>
                         <button class={seg_btn} data-reading-set="avatars" data-reading-val="off" type="button" onclick={onReadingClick}>Off</button>
                     </div>
                 </div>
-                <p class="setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]">Reading styles apply to the chat area only.</p>
+                <p class={note_text}>Reading styles apply to the chat area only.</p>
             </div>
 
             <div class="settings-panel" data-tab="appearance" aria-label="Appearance">
-                <div class="setting-row flex items-center justify-between gap-4 max-[768px]:flex-wrap max-[768px]:gap-2">
-                    <span class="setting-label text-base font-medium max-[768px]:text-[0.88rem]" id="motion-label">Motion</span>
-                    <div class="seg inline-flex rounded-md border border-control-border bg-bg p-[2px]" role="radiogroup" aria-labelledby="motion-label" aria-describedby="motion-note">
+                <div class={row}>
+                    <span class={label_text} id="motion-label">Motion</span>
+                    <div class={seg_group} role="radiogroup" aria-labelledby="motion-label" aria-describedby="motion-note">
                         <button
                             class={seg_motion}
                             data-motion-set="system"
@@ -109,11 +119,11 @@ pub fn SettingsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         >Off</button>
                     </div>
                 </div>
-                <p class="setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]" id="motion-note">System follows your OS reduced-motion preference.</p>
+                <p class={note_text} id="motion-note">System follows your OS reduced-motion preference.</p>
 
                 {for (appearance.vars_slice) |v| (
-                    <div class="setting-row flex items-center justify-between gap-4 max-[768px]:flex-wrap max-[768px]:gap-2">
-                        <span class="setting-label text-base font-medium max-[768px]:text-[0.88rem]">{v.label}</span>
+                    <div class={row}>
+                        <span class={label_text}>{v.label}</span>
                         <input
                             class="theme-color size-8 flex-none cursor-pointer rounded-md border border-control-border bg-transparent p-[2px]"
                             type="color"
@@ -125,12 +135,12 @@ pub fn SettingsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         />
                     </div>
                 )}
-                <div class="setting-row flex items-center justify-between gap-4">
-                    <span class="setting-label text-base font-medium max-[768px]:text-[0.88rem]">Reset colours</span>
+                <div class={row}>
+                    <span class={label_text}>Reset colours</span>
                     <button class="cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text" type="button" onclick={onResetColours}>Reset</button>
                 </div>
                 <div class="setting-col flex flex-col gap-2">
-                    <label class="setting-label text-base font-medium max-[768px]:text-[0.88rem]" for="custom-css">Custom CSS</label>
+                    <label class={label_text} for="custom-css">Custom CSS</label>
                     <textarea
                         id="custom-css"
                         name="custom-css"
@@ -141,7 +151,7 @@ pub fn SettingsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         placeholder="/* Chrome CSS. Message bodies are out of reach. */"
                         oninput={ctx.bind(onCssInput)}
                     >{appearance.storedCss(ctx.allocator)}</textarea>
-                    <p class="setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]">These colours and CSS restyle the app chrome; the message body stays out of reach.</p>
+                    <p class={note_text}>These colours and CSS restyle the app chrome; the message body stays out of reach.</p>
                 </div>
             </div>
         </div>

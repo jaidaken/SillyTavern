@@ -1,8 +1,14 @@
-// Extensions panel body. Top-bar drawer.
+// Extensions panel body, shown in the system card's Extensions group.
+//
+// The wrapper is not decoration: it carries the id the browser gate drives this body by. The body
+// itself is one shared PanelEmpty, whose `panel-empty` class six other panels also use, so without a
+// root of its own there is no selector that means THIS body and only this body.
 pub fn ExtensionsBody(allocator: zx.Allocator) zx.Component {
-    // A bare component root transpiles to ziex's failing-allocator context; allocInit mounts it with the real one.
-    var zctx = zx.x.allocInit(allocator);
-    return zctx.cmp(PanelEmpty, .{ .name = "PanelEmpty" }, .{ .text = copy });
+    return (
+        <div @allocator={allocator} id="extensions-body" class="extensions-body">
+            <PanelEmpty text={copy} />
+        </div>
+    );
 }
 
 // What the panel is for, in the words of the person using it. It used to describe the state of our
