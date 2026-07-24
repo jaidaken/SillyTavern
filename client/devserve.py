@@ -1811,6 +1811,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/chats/backups/restore-deleted":
             return self._undo_restore_deleted(req)
         if path == "/api/characters/edit-attribute":
+            # Mirror the real server's first gate: it rejects a missing/empty ch_name with 400
+            # before touching the field, so a client that omits it (the fav 400 bug) fails here too.
+            name = req.get("ch_name")
+            if not name or name == ".":
+                return self.mock_status(400, {"error": "invalid name"})
             if req.get("field") == "fav":
                 Handler.mock_favs[req.get("avatar_url")] = bool(req.get("value"))
             return self.mock_json({})

@@ -1012,8 +1012,11 @@ pub fn deleteCharacter(index: usize) void {
 pub fn toggleFav(index: usize) void {
     if (zx.platform.role != .client) return;
     const c = charAt(index) orelse return;
+    // ch_name is required: the server 400s "invalid name" before anything else (characters.js
+    // edit-attribute); the mock does not enforce it, so a body without it passed the gate.
     const body = std.json.Stringify.valueAlloc(alloc, .{
         .avatar_url = c.avatar,
+        .ch_name = c.name,
         .field = "fav",
         .value = !c.fav,
     }, .{}) catch return;
