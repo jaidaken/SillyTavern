@@ -21,13 +21,17 @@ pub fn Shell(ctx: *zx.ComponentCtx(void)) zx.Component {
         <div @allocator={ctx.allocator} id="shell" class={ui.motionClass()} onclick={ui.onPageClick} onkeydown={ui.onPageKey}>
             <TopBar key="topbar" />
             <EdgeTabs key="edgetabs" />
-            <SysMenu key="sysmenu" />
             {if (ui.openOn(.left)) |p| (
                 <SidePanel panel={p} key="dock-left" />
             )}
             {if (ui.openOn(.right)) |p| (
                 <SidePanel panel={p} key="dock-right" />
             )}
+            // SysMenu renders LAST on purpose. It and SidePanel both sit at z-50, so paint order is
+            // DOM order, and below 768px a dock goes full-screen: rendered before the docks the
+            // system card was painted over by one, which is exactly when you need it (it is the
+            // control that changes the app's look, so it must stay visible over whatever is open).
+            <SysMenu key="sysmenu" />
         </div>
     );
 }

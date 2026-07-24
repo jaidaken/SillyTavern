@@ -83,7 +83,7 @@ const attr_head = raw_attr_tokens[0];
 /// The true count of `.zx` sources under app/pages across all 8 domain folders. The scan walks the
 /// tree recursively, so a walk that silently missed a folder would read fewer files and pass as
 /// clean; pinning the true total makes that a failure. Bump it the day a template lands.
-const total_zx_sources = 42;
+const total_zx_sources = 41;
 const zx_anchor = "chat/message.zx";
 
 /// A test binary inherits the cwd `zig build` was invoked from, which is the client root on every
