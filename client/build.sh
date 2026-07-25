@@ -47,15 +47,15 @@ b=$(wc -c < dist/glue/custom.js)
 esbuild dist/glue/custom.js --minify --allow-overwrite --outfile=dist/glue/custom.js
 echo "minify dist/glue/custom.js: $b -> $(wc -c < dist/glue/custom.js) bytes"
 
-# The reset we will swap in when tailwind goes must cover every selector/property pair tailwind's
-# preflight provides; the reference fixture is the denominator, so a regression fails here not by eye.
+# The reset must still cover every selector/property pair tailwind's preflight provided; the reference
+# fixture is the denominator, so a regression fails here rather than by eye.
 python3 check-reset-coverage.py
 python3 check-primitives-parity.py
 python3 check-classes.py
 
-# Tailwind now compiles inside `zig build` (ziex's plugin, patch 10) and lands in zig-out/static;
-# the export step copies it to dist. Nothing to run here.
-echo "tailwind -> dist/glue/app.css: $(wc -c < dist/glue/app.css) bytes (built by zig)"
+# esbuild bundles glue/app-input.css inside `zig build` and it lands in zig-out/static; the export
+# step copies it to dist. Nothing to run here.
+echo "css -> dist/glue/app.css: $(wc -c < dist/glue/app.css) bytes (esbuild, via zig build)"
 
 # Private site: keep crawlers out, and give Lighthouse a valid robots.txt to parse instead of the
 # SPA index.html fallback. Written before prune, which keeps it via its allowlist.
