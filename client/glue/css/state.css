@@ -1,0 +1,9 @@
+/* ---- State hooks: Zig publishes the STATE, the markup declares what it LOOKS like ----
+   Zig emits a data attribute, or a class where the interaction gate already pins the name; the
+   variant turns that state into an appearance the markup asks for (selected:bg-selected). No
+   appearance class is computed in Zig, so nothing here needs safelisting. Where valid ARIA already
+   carries the state (aria-expanded on a drawer button, aria-pressed on a toggle, aria-checked on a
+   motion radio), the markup styles off tailwind's built-in aria-* variants instead of inventing a
+   hook. */
+@custom-variant selected (&:is([data-selected="true"], .is-selected));
+@custom-variant dragging (&.is-dragging);

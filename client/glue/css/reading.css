@@ -1,0 +1,545 @@
+/* ===================================================================================
+   THE READING SURFACE.
+   A message body is markdown turned into HTML at runtime, so we never author its
+   elements and no utility can reach them: their styling is here, and only here. The
+   frame around the body (.mes, the speaker name, the candlelight margin rule) stays
+   with it, because the regression gate pins those three class attributes exactly as
+   they read today and the signature has to survive intact.
+   =================================================================================== */
+.mes {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.75rem 1rem;
+    align-items: start;
+    position: relative;
+    padding-block: 1rem;
+    padding-inline-start: 1rem;
+    border-bottom: 1px solid var(--color-border-soft);
+    /* Skip layout + paint for off-screen messages so a long roleplay log stays cheap; the intrinsic
+       size reserves scroll height for what is not yet rendered. */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 5rem;
+}
+
+.mes:last-child {
+    border-bottom: 0;
+}
+
+/* Signature (WD63): a candlelight margin rule down each message; it draws in as the arrival "ink". */
+.mes::before {
+    content: "";
+    position: absolute;
+    inset-block: 1rem;
+    inset-inline-start: 0;
+    width: 2px;
+    background: color-mix(in oklch, var(--color-accent) 42%, transparent);
+    transform-origin: top;
+}
+
+/* The speaker name is the character's voice on the page: book serif, warm-tinted, mixed case. */
+.mes_name {
+    grid-column: 2;
+    font-family: var(--font-serif);
+    font-size: var(--text-name);
+    font-weight: 600;
+    letter-spacing: 0.005em;
+    color: color-mix(in oklch, var(--color-accent) 24%, var(--color-text));
+    margin-block-end: 0.5rem;
+}
+
+/* The rendered-message body. Every child rule below is a descendant of sanitizer-generated markup
+   that can carry no class of ours, so they are nested under this one container prefix rather than
+   repeated on 20 flat selectors (native CSS nesting, passed through by Tailwind v4's Lightning CSS;
+   pure readability, identical rendering). */
+.mes_text {
+    grid-column: 2;
+    /* The reading Font control points --reading-font at the chosen family; unset falls back to the
+       Newsreader serif base. */
+    font-family: var(--reading-font, var(--font-serif));
+    /* Size and line-height are reading-control vars (the settings panel sets them per user); they
+       default to the base tokens. */
+    font-size: var(--reading-size, var(--text-md));
+    line-height: var(--reading-lh, var(--leading-prose));
+    color: var(--color-text);
+    overflow-wrap: break-word;
+    /* Avoid stranded single lines at paragraph breaks. */
+    orphans: 2;
+    widows: 2;
+    /* Reading-surface typography: pretty wrapping avoids a stranded last word; Newsreader's oldstyle
+       proportional figures sit like lowercase for a book feel. Code is in <pre> (no wrap) and mono
+       (fixed width) so neither tweak affects it. */
+    text-wrap: pretty;
+    hanging-punctuation: first allow-end;
+    font-variant-numeric: oldstyle-figures proportional-nums;
+    /* Trim the font leading so text sits optically centred; progressive, ignored where unsupported. */
+    text-box: trim-both cap alphabetic;
+
+    & > *:first-child { margin-top: 0; }
+    & > *:last-child { margin-bottom: 0; }
+
+    p { margin: 0 0 0.7em; }
+
+    /* Speech in warm amber, action/scene text in muted italic: the RP reading convention. */
+    q {
+        color: var(--color-st-quote);
+        quotes: none;
+    }
+    q i,
+    q em { color: inherit; }
+
+    em,
+    i { color: var(--color-st-em); }
+
+    a {
+        color: var(--color-accent);
+        text-decoration: underline;
+        text-decoration-thickness: 1px;
+        text-underline-offset: 0.15em;
+    }
+    a:hover { color: var(--color-st-quote); }
+
+    h1,
+    h2 {
+        font-size: var(--text-lg);
+        font-weight: 600;
+        line-height: var(--leading-tight);
+        margin: 0.7em 0 0.3em;
+    }
+
+    h3,
+    h4,
+    h5,
+    h6 {
+        font-size: var(--text-md);
+        font-weight: 600;
+        line-height: var(--leading-tight);
+        margin: 0.7em 0 0.3em;
+    }
+
+    blockquote {
+        margin: 0.6em 0;
+        padding-left: 0.75rem;
+        border-left: 2px solid color-mix(in oklch, var(--color-accent) 55%, transparent);
+        color: var(--color-muted);
+        font-style: italic;
+    }
+
+    table {
+        display: block;
+        max-width: 100%;
+        overflow-x: auto;
+        border-collapse: collapse;
+        margin: 0.5em 0;
+        font-family: var(--font-serif);
+        font-size: var(--text-sm);
+    }
+
+    th,
+    td {
+        border: 1px solid var(--color-border);
+        padding: 0.25rem 0.6rem;
+        text-align: left;
+    }
+
+    pre {
+        background: var(--color-code-bg);
+        border: 1px solid var(--color-border-soft);
+        border-radius: var(--radius-md);
+        padding: 0.75rem 1rem;
+        overflow-x: auto;
+        font-family: var(--font-mono);
+        font-size: var(--text-sm);
+        line-height: 1.5;
+    }
+
+    /* hljs paints its own cool bg + 1em padding on code.hljs; strip both so only the warm pre shows. */
+    pre code.hljs {
+        background: transparent;
+        padding: 0;
+    }
+
+    :not(pre) > code {
+        background: var(--color-surface-2);
+        border-radius: var(--radius-sm);
+        padding: 0.1rem 0.3rem;
+        font-family: var(--font-mono);
+        font-size: 0.85em;
+    }
+
+    hr {
+        border: 0;
+        border-top: 1px solid var(--color-border);
+        margin: 1em 0;
+    }
+
+    img {
+        max-width: 100%;
+        height: auto;
+        vertical-align: middle;
+    }
+
+    ul,
+    ol { padding-inline-start: 1.5rem; }
+
+    /* Match the bullet-list indent (no negative pull): checklist and bullet items align in one column. */
+    li.task-list-item { list-style: none; }
+    li.task-list-item input { margin-inline-end: 0.4rem; }
+}
+
+/* Inline message editor: a live-markdown contenteditable in place of the rendered body. It keeps
+   .mes_text so the source sits at the same measure and family; pre-wrap preserves the raw whitespace
+   (so markdown indentation shows as typed) and the highlight styles content while the markers stay. */
+.mes_edit {
+    grid-column: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+/* Inline-editor markdown tokens: the highlighter tags spans (.md-*) inside the contenteditable, so
+   like .mes_text above they carry no class of ours to hook and nest under the one container prefix. */
+.mes_edit_field {
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    outline: none;
+    border-radius: var(--radius-md);
+    padding: 0.55rem 0.7rem;
+    background: var(--color-code-bg);
+    border: 1px solid var(--color-control-border);
+    caret-color: var(--color-accent);
+    font-variant-numeric: normal;
+    text-box: normal;
+
+    &:focus-visible { border-color: var(--color-accent); }
+
+    .md-mark {
+        color: var(--color-faint);
+        opacity: 0.65;
+    }
+
+    .md-bold {
+        font-weight: 700;
+        color: var(--color-text);
+    }
+
+    .md-italic {
+        font-style: italic;
+        color: var(--color-st-em);
+    }
+
+    .md-strike {
+        text-decoration: line-through;
+        color: var(--color-muted);
+    }
+
+    .md-code,
+    .md-fence {
+        font-family: var(--font-mono);
+        color: var(--color-st-quote);
+    }
+
+    .md-link {
+        color: var(--color-accent);
+        text-decoration: underline;
+    }
+
+    .md-url { color: var(--color-faint); }
+
+    .md-h1,
+    .md-h2 {
+        font-weight: 600;
+        font-size: var(--text-lg);
+        color: color-mix(in oklch, var(--color-accent) 30%, var(--color-text));
+    }
+
+    .md-h3,
+    .md-h4,
+    .md-h5,
+    .md-h6 {
+        font-weight: 600;
+        color: color-mix(in oklch, var(--color-accent) 20%, var(--color-text));
+    }
+
+    .md-bq {
+        color: var(--color-muted);
+        font-style: italic;
+    }
+}
+
+.mes_edit_actions {
+    display: flex;
+    gap: 0.4rem;
+}
+
+.mes_edit_save,
+.mes_edit_cancel {
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    width: 1.9rem;
+    height: 1.9rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-2);
+    font-size: 0.95rem;
+    line-height: 1;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.mes_edit_save {
+    color: color-mix(in oklch, var(--color-accent) 60%, var(--color-text));
+}
+
+.mes_edit_save:hover {
+    background: var(--color-tool-on);
+    border-color: var(--color-accent);
+}
+
+.mes_edit_cancel {
+    color: var(--color-muted);
+}
+
+.mes_edit_cancel:hover {
+    background: var(--color-surface);
+    color: var(--color-text);
+}
+
+.mes_edit_save:focus-visible,
+.mes_edit_cancel:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+/* ---- Reading controls ----
+   The client sets data-reading-* on #chat-root, which does NOT re-render with the Shell region, so
+   the values (and the control highlights keyed off them) survive a settings re-render. Every rule is
+   scoped to the message reading area, never the app chrome. */
+#chat-root[data-reading-measure="narrow"] { --reading-measure: 34rem; }
+#chat-root[data-reading-measure="normal"] { --reading-measure: min(var(--measure), var(--reading-cap)); }
+#chat-root[data-reading-measure="wide"] { --reading-measure: 48rem; }
+#chat-root[data-reading-avatars="off"] .mes_avatar { display: none; }
+
+/* The comfort ceiling on line length. A fixed px measure yields MORE characters per line as the text
+   shrinks (40rem is ~75ch at the default size but ~84ch a size down), past the 45-75ch reading band.
+   The cap scales with --reading-size so it holds a near-constant ~74ch at every size: 1ch is about
+   0.5em for the reading faces, so 37em is ~74ch. The column reads min(measure, cap) below, so the
+   preset/drag width wins until it would run wider than 74ch, and the cap wins from there. */
+#chat-root { --reading-cap: calc(var(--reading-size, var(--text-md)) * 37); }
+
+/* Justify defaults on; only long messages carry mes-justify (message.zx). Hyphenation is what stops
+   native justification opening whitespace rivers. The pref turns it off. */
+.mes_text.mes-justify {
+    text-align: justify;
+    hyphens: auto;
+    -webkit-hyphens: auto;
+    hyphenate-limit-chars: 6 3 2;
+}
+#chat-root[data-reading-justify="off"] .mes_text.mes-justify {
+    text-align: left;
+    hyphens: none;
+    -webkit-hyphens: none;
+}
+
+/* Paragraph styles differ in the first-line indent AND, for novel, the gap. Indent and gap are
+   exclusive separators (Butterick): a first-line indent carries the paragraph break on its own, so
+   pairing it with a blank-line gap is the belts-and-braces mistake. chat is flush and keeps the base
+   0.7em gap; novel indents every paragraph (including the first, so the indent shows on a single-
+   paragraph message) and drops the gap to zero so the indent is the only separator. */
+#chat-root[data-reading-indent="chat"] .mes_text p {
+    text-indent: 0;
+}
+#chat-root[data-reading-indent="novel"] .mes_text p {
+    text-indent: 2em;
+    margin-bottom: 0;
+}
+
+/* Speech on its own line: blockquote / stage / vn share the mechanism. quotes.zig tags a quote that
+   opens a speech turn (class custom-q-turn; its delimiters wrapped in custom-qd), so each turn becomes
+   a block and the run-together message unpacks onto lines. Section colours match every other mode:
+   speech amber, *action* emphasis grey, plain narration in the text colour; the layout does the
+   distinguishing, not a recolour. A quoted word mid-sentence is not a turn, so it stays inline. */
+#chat-root[data-reading-indent="blockquote"] .mes_text p,
+#chat-root[data-reading-indent="stage"] .mes_text p,
+#chat-root[data-reading-indent="vn"] .mes_text p {
+    text-indent: 0;
+}
+#chat-root[data-reading-indent="blockquote"] .mes_text q.custom-q-turn,
+#chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn,
+#chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn {
+    display: block;
+    margin-block: 0.2em 0;
+}
+
+/* Blockquote keeps the quote marks; the speech insets from the flush narration like a set-apart quote. */
+#chat-root[data-reading-indent="blockquote"] .mes_text q.custom-q-turn {
+    padding-left: 1.6em;
+}
+
+/* A speech turn that ends its paragraph reads as a new line, not a set-apart block: the paragraph's
+   0.7em trailing margin would otherwise leave a blank-line gap under the speech, so tighten it to the
+   turn's own 0.2em rhythm. Narration-only paragraphs keep their normal spacing. */
+#chat-root[data-reading-indent="blockquote"] .mes_text p:has(> q.custom-q-turn:last-child) {
+    margin-bottom: 0.2em;
+}
+
+/* Stage: the NAME. and the spoken line sit flush at the left margin; the direction beneath is the
+   indented block. This is the inverse of blockquote, which insets the speech and leaves narration
+   flush. The name prints inline before the speech (no column), quote marks hidden. */
+#chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn {
+    /* The turn nests inside the 6em-indented paragraph; pull it back so the spoken line is flush at the
+       margin while the surrounding narration stays indented. Block margin sets the dialogue apart from
+       the directions above and below. */
+    margin-left: -6em;
+    text-indent: 0;
+    margin-block: 0.5em;
+}
+#chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn .custom-qd {
+    display: none;
+}
+#chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn::before {
+    content: var(--speaker, "") ". ";
+    text-transform: uppercase;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    color: var(--color-text);
+}
+#chat-root[data-reading-indent="stage"] .mes_text p {
+    padding-left: 6em;
+}
+
+/* Visual novel: a colon-tagged name per turn in the same aligned column, quote marks hidden. The face
+   is the separate Font control, not this mode. */
+#chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn {
+    padding-left: 5.5em;
+    text-indent: -5.5em;
+}
+#chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn .custom-qd {
+    display: none;
+}
+#chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn::before {
+    content: var(--speaker, "") ":";
+    display: inline-block;
+    min-width: 5em;
+    padding-right: 0.5em;
+    text-indent: 0;
+    font-weight: 700;
+    color: var(--color-text);
+}
+
+/* Reading font: an axis of its own, orthogonal to the paragraph style. Each value points
+   --reading-font at a family (the .mes_text rule above reads it, falling back to the Newsreader
+   default). Newsreader is the editorial serif base; Literata is the book serif built for on-screen
+   reading; Atkinson Hyperlegible is the legibility face with disambiguated letterforms. The speaker
+   name stays on --font-serif regardless, so the character's voice reads consistently. */
+#chat-root[data-reading-font="newsreader"] { --reading-font: var(--font-serif); }
+#chat-root[data-reading-font="literata"] { --reading-font: "Literata", ui-serif, Georgia, Cambria, "Times New Roman", serif; }
+#chat-root[data-reading-font="atkinson"] { --reading-font: "Atkinson Hyperlegible", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+
+/* Dark reading body: the app text token is L 0.905 for chrome, which halates over sustained reading
+   on the dark ground (pure-bright text glows, worst for astigmatism). The message area drops to
+   L 0.870 so the prose reads softer than the UI around it. Scoped to #chat so only the reading body
+   and the name (a mix off this token) soften, never the app chrome; the sepia/paper rules below are
+   more specific (#chat-root[...] #chat) and repoint the token for their light grounds. */
+#chat { --color-text: oklch(0.870 0.010 80); }
+
+/* Reading themes recolour the message area only (scoped to #chat); the accent darkens so links and
+   names stay legible on the light grounds. The default (dark) needs no override. */
+#chat-root[data-reading-theme="sepia"] #chat {
+    --color-bg: oklch(0.923 0.028 84);
+    --color-text: oklch(0.315 0.021 60);
+    --color-accent: oklch(0.520 0.110 55);
+    --color-border-soft: oklch(0.86 0.02 84);
+    /* Speech + emphasis must darken too, or dialogue (the most common styled RP text) sits near-invisible. */
+    --color-st-quote: oklch(0.450 0.115 72);
+    --color-st-em: oklch(0.400 0.020 66);
+    background: var(--color-bg);
+}
+#chat-root[data-reading-theme="paper"] #chat {
+    --color-bg: oklch(0.968 0.006 90);
+    --color-text: oklch(0.255 0.012 60);
+    --color-accent: oklch(0.470 0.130 45);
+    --color-border-soft: oklch(0.90 0.006 90);
+    --color-st-quote: oklch(0.420 0.125 55);
+    --color-st-em: oklch(0.360 0.015 60);
+    background: var(--color-bg);
+}
+
+/* ---- Focus mode (immersive reading) ----
+   While focus mode is on, the two edge tabs and the composer fade out so the reading column stands
+   alone; a pointer move or a keypress adds focus-awake (focus_mode.zig) and they return, then fade
+   again after an idle beat. The message log is never a target. The fade is opacity only, no movement
+   (WD25); the DURATION is --move-gated, so a reduced-motion reader gets an instant hide/show rather
+   than a fade. pointer-events drop with the opacity so a faded composer never intercepts a click, but
+   a keypress on the already-focused input still wakes it (keyboard is unaffected by pointer-events). */
+#chat-root[data-reading-focus="on"] #tab-setup,
+#chat-root[data-reading-focus="on"] #tab-cast,
+#chat-root[data-reading-focus="on"] #composer {
+    transition: opacity calc(var(--move) * 220ms) ease;
+}
+#chat-root[data-reading-focus="on"]:not(.focus-awake) #tab-setup,
+#chat-root[data-reading-focus="on"]:not(.focus-awake) #tab-cast,
+#chat-root[data-reading-focus="on"]:not(.focus-awake) #composer {
+    opacity: 0;
+    pointer-events: none;
+}
+
+@media (max-width: 640px) {
+    .mes {
+        font-size: 0.92rem;
+        line-height: 1.55;
+        gap: 0.5rem 0.75rem;
+        padding-inline-start: 0.75rem;
+    }
+
+    .mes_name {
+        font-size: 0.82rem;
+    }
+
+    /* Headings tighten with the body text. Unscoped on purpose: it has to reach the headings inside
+       a rendered message, which carry no class of ours. */
+    h1, h2, h3, h4, h5, h6 {
+        line-height: 1.3;
+    }
+}
+
+/* ---- The arrival settle (WD63, the one signature move) ----
+   The block lifts in, the speaker name follows, and the amber margin rule draws down like ink. ziex
+   keeps stable element identity, so this fires once per message, not per re-render. --move zeroes
+   the movement alone under reduced motion: the opacity and the amber still play, and the character
+   carries on serif names, amber and warm ground regardless. Messages are held invisible until the
+   client adds .hydrated to #chat-root after the first render, so a message settles in complete (its
+   name never precedes its body) and the load reveals top to bottom. */
+#chat-root:not(.hydrated) .mes { opacity: 0; }
+
+#chat-root.hydrated .mes {
+    animation: mes-rise 300ms var(--ease-settle) both;
+    animation-delay: var(--md, 0ms);
+}
+
+#chat-root.hydrated .mes_name {
+    animation: mes-name 300ms var(--ease-settle) both;
+    animation-delay: calc(var(--md, 0ms) + 45ms);
+}
+
+#chat-root.hydrated .mes::before {
+    animation: mes-ink 420ms var(--ease-settle) both;
+    animation-delay: calc(var(--md, 0ms) + 80ms);
+}
+
+/* Stagger the initial reveal top-to-bottom. Gated on .revealing, which the client holds only for the
+   first settle then drops, so a later arrival (a prepended history page) keeps --md at its 0ms
+   default and rises in at once instead of inheriting a position delay that would hide it (BUG-3). */
+#chat-root.revealing .chat-inner .mes:nth-child(1) { --md: 0ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(2) { --md: 100ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(3) { --md: 200ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(4) { --md: 300ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(5) { --md: 400ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(6) { --md: 500ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(7) { --md: 600ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(8) { --md: 700ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(9) { --md: 800ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(10) { --md: 900ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(11) { --md: 1000ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(12) { --md: 1100ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(13) { --md: 1200ms; }
+#chat-root.revealing .chat-inner .mes:nth-child(14) { --md: 1300ms; }

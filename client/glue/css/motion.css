@@ -1,0 +1,115 @@
+/* Animation definitions. @keyframes names are GLOBAL identifiers, so they cannot live in a
+   per-page sheet: every page that animates references one of these by name. Each block keeps
+   the note it carried in the original stylesheet. */
+
+/* --move scales MOVEMENT (transform) only; the opacity fade always plays, so reduced motion is
+   gentler rather than absent (WD25). */
+
+@keyframes panel-in {
+    from { opacity: 0; transform: translateX(calc(var(--move) * -12px)); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes panel-in-right {
+    from { opacity: 0; transform: translateX(calc(var(--move) * 12px)); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes drawer-in {
+    from { opacity: 0; transform: translateY(calc(var(--move) * -10px)); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* A toast slides in from its own edge and leaves the same way. Both scale MOVEMENT by --move, so
+   under reduced motion the fade still plays and the travel does not (WD25). */
+
+@keyframes toast-in {
+    from { opacity: 0; transform: translateY(calc(var(--move) * 8px)) scale(calc(1 - var(--move) * 0.02)); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes toast-out {
+    from { opacity: 1; transform: translateY(0); }
+    to { opacity: 0; transform: translateY(calc(var(--move) * 6px)); }
+}
+
+/* The character page reveals: travel scaled by --move, opacity always plays, so reduced motion
+   keeps the fade and drops the movement (WD25). */
+
+@keyframes section-rise {
+    from { opacity: 0; transform: translateY(calc(var(--move) * 8px)); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes card-edit-in {
+    from { opacity: 0; transform: translateY(calc(var(--move) * -4px)); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ---- Overlay exits (the reverse of each entry above) + the two new corner-overlay enters.
+   Every travel is scaled by --move so reduced motion keeps the fade and drops the movement, the
+   same contract the enters hold (WD25). ---- */
+
+@keyframes panel-out {
+    from { opacity: 1; transform: translateX(0); }
+    to { opacity: 0; transform: translateX(calc(var(--move) * -12px)); }
+}
+
+@keyframes panel-out-right {
+    from { opacity: 1; transform: translateX(0); }
+    to { opacity: 0; transform: translateX(calc(var(--move) * 12px)); }
+}
+
+@keyframes drawer-out {
+    from { opacity: 1; transform: translateY(0); }
+    to { opacity: 0; transform: translateY(calc(var(--move) * -8px)); }
+}
+
+/* The system card rises from its bottom-left corner on enter and settles back down on leave. */
+
+@keyframes pop-in {
+    from { opacity: 0; transform: translateY(calc(var(--move) * 10px)) scale(calc(1 - var(--move) * 0.02)); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes pop-out {
+    from { opacity: 1; transform: translateY(0) scale(1); }
+    to { opacity: 0; transform: translateY(calc(var(--move) * 10px)) scale(calc(1 - var(--move) * 0.02)); }
+}
+
+/* The command palette zooms a touch as a dialog leaving (close-only, WD24); no matching enter. */
+
+@keyframes palette-out {
+    from { opacity: 1; transform: translateY(0) scale(1); }
+    to { opacity: 0; transform: translateY(calc(var(--move) * -8px)) scale(calc(1 - var(--move) * 0.02)); }
+}
+
+@keyframes fade-out {
+    from { opacity: 1; }
+    to { opacity: 0; }
+}
+
+@keyframes mes-rise {
+    from { opacity: 0; transform: translateY(calc(var(--move) * 8px)); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes mes-name {
+    from { opacity: 0; transform: translateY(calc(var(--move) * 4px)); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes mes-ink {
+    from { opacity: 0; transform: scaleY(calc(1 - var(--move))); }
+    to { opacity: 1; transform: scaleY(1); }
+}
+
+@keyframes home-rise {
+    from { opacity: 0; transform: translateY(calc(var(--move) * 10px)); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes home-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: calc(1 - var(--move) * 0.45); }
+}

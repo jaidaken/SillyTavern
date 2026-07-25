@@ -1,0 +1,20 @@
+/* ---- Fonts (self-hosted, latin subset). Newsreader is a variable face: one file carries weight
+   400-600 plus optical sizing, so names read as display and body as text. */
+@font-face { font-family: "Newsreader"; font-style: normal; font-weight: 400 700; font-display: swap; font-optical-sizing: auto; src: url("./fonts/Newsreader-latin.woff2") format("woff2"); }
+@font-face { font-family: "Newsreader"; font-style: italic; font-weight: 400 700; font-display: swap; font-optical-sizing: auto; src: url("./fonts/Newsreader-latin-italic.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 100 800; font-display: swap; src: url("./fonts/JetBrainsMono-latin.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: italic; font-weight: 100 800; font-display: swap; src: url("./fonts/JetBrainsMono-latin-italic.woff2") format("woff2"); }
+/* The latin subsets carry no Greek: a bare beta would silently fall back to a system face inside the
+   wordmark. This 712-byte cut of JetBrains Mono holds U+03B2 alone, and unicode-range means the
+   browser fetches it only where the compact mark actually renders it (narrow viewports). */
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 100 800; font-display: swap; src: url("./fonts/JetBrainsMono-beta.woff2") format("woff2"); unicode-range: U+03B2; }
+/* Two opt-in reading faces (SIL OFL 1.1, self-hosted latin subset; licence text beside each file).
+   Literata is a variable face like Newsreader (one file per style, weight 400-700 + optical sizing);
+   Atkinson Hyperlegible is static, so its four weights/styles are four files. Both are chosen only in
+   the reading Font control (--reading-font); the app chrome stays on Newsreader + mono. */
+@font-face { font-family: "Literata"; font-style: normal; font-weight: 400 700; font-display: swap; font-optical-sizing: auto; src: url("./fonts/Literata-latin.woff2") format("woff2"); }
+@font-face { font-family: "Literata"; font-style: italic; font-weight: 400 700; font-display: swap; font-optical-sizing: auto; src: url("./fonts/Literata-latin-italic.woff2") format("woff2"); }
+@font-face { font-family: "Atkinson Hyperlegible"; font-style: normal; font-weight: 400; font-display: swap; src: url("./fonts/AtkinsonHyperlegible-latin.woff2") format("woff2"); }
+@font-face { font-family: "Atkinson Hyperlegible"; font-style: italic; font-weight: 400; font-display: swap; src: url("./fonts/AtkinsonHyperlegible-latin-italic.woff2") format("woff2"); }
+@font-face { font-family: "Atkinson Hyperlegible"; font-style: normal; font-weight: 700; font-display: swap; src: url("./fonts/AtkinsonHyperlegible-latin-700.woff2") format("woff2"); }
+@font-face { font-family: "Atkinson Hyperlegible"; font-style: italic; font-weight: 700; font-display: swap; src: url("./fonts/AtkinsonHyperlegible-latin-italic-700.woff2") format("woff2"); }

@@ -1,0 +1,42 @@
+/* ---- The three rules no element can carry ----
+   A selection and a focus ring are drawn on elements we do not author (a link inside a rendered
+   message), and both must pick up the reading theme's accent where they land, so each mix is written
+   in place rather than read from a token resolved at the root. #shell's box vanishes so the topbar
+   and the docks lay out directly in #chat-root's grid; its class attribute is the motion state Zig
+   publishes, so it cannot also carry a utility. */
+::selection {
+    background: color-mix(in oklch, var(--color-accent) 30%, transparent);
+}
+
+:where(a, button, input, select, textarea, summary, [tabindex], [contenteditable]):focus-visible {
+    outline: 2px solid color-mix(in oklch, var(--color-accent) 70%, transparent);
+    outline-offset: 2px;
+}
+
+#shell {
+    display: contents;
+}
+
+/* The file picker's button is Chrome's own, drawn inside the control's shadow tree, so it is exactly
+   the case this file exists for: we author the <input>, but no class of ours can reach the button it
+   paints, and unstyled it is the one piece of foreign chrome in the app. Five inputs across four
+   panels wear .file-picker (panelchrome.zx); the input itself stays real, visible and focusable, so
+   the keyboard, .click() and the gate's setFileInputFiles all keep working. The button matches the
+   house one: mono, control-border, radius-md, surface-2. */
+.file-picker::file-selector-button {
+    margin-inline-end: 0.5rem;
+    padding: 0.2rem 0.6rem;
+    border: 1px solid var(--color-control-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-2);
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    cursor: pointer;
+    transition: color 120ms ease, background 120ms ease;
+}
+
+.file-picker::file-selector-button:hover {
+    background: var(--color-tool-hover);
+    color: var(--color-text);
+}

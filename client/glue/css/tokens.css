@@ -1,0 +1,163 @@
+/* ---- Tokens. THE source: every utility and every rule below reads these, and nothing else defines
+   one. (They used to be defined twice, here and again as a :root block; the drift that invites is
+   why the second copy is gone.) ---- */
+@theme {
+    /* Warm near-black ground, hue ~70 (candlelit amber-grey), small warm chroma on neutrals. */
+    --color-bg: oklch(0.180 0.012 70);
+    --color-surface: oklch(0.215 0.013 70);
+    --color-surface-2: oklch(0.262 0.014 70);
+    --color-border: oklch(0.320 0.014 70);
+    --color-border-soft: oklch(0.268 0.012 70);
+    /* Interactive control edges: >= 3:1 vs bg (3.71) and vs surface (3.46), WCAG 1.4.11. */
+    --color-control-border: oklch(0.540 0.018 72);
+    --color-text: oklch(0.905 0.010 80);
+    --color-muted: oklch(0.780 0.012 74);
+    --color-faint: oklch(0.680 0.012 74);
+    --color-code-bg: oklch(0.150 0.010 70);
+
+    /* One committed accent (candlelight amber, gold not terracotta), for interactive + focus. */
+    --color-accent: oklch(0.770 0.130 72);
+    --color-on-accent: oklch(0.185 0.020 70);
+
+    /* Roleplay text roles: speech in spoken gold, action/scene in warm grey. */
+    --color-st-quote: oklch(0.850 0.088 78);
+    --color-st-em: oklch(0.800 0.014 74);
+
+    /* Status ramp (WD1-WD5). Four SEMANTIC hues, held apart from the amber accent on purpose: the
+       accent means "you can act on this", so a status that borrowed it would say the wrong thing.
+       Hue is the only carrier that changes; L sits in a narrow 0.72-0.82 band so no one level shouts
+       over the others, and chroma stays under the accent's 0.130 except for error, which is the one
+       allowed to. All four are read against --color-surface-2 (L 0.262), the toast and row ground.
+       Warning is pushed to hue 95 rather than the natural amber 72, which the accent already owns. */
+    --color-status-info: oklch(0.760 0.075 240);
+    --color-status-success: oklch(0.780 0.105 150);
+    --color-status-warning: oklch(0.830 0.115 95);
+    --color-status-error: oklch(0.735 0.140 25);
+
+    /* Accent mixes for the CHROME, named once so one amber drives every state surface. Each sits on
+       its own ground rather than as alpha over it, so it reads the same whatever is behind it. The
+       reading surface deliberately does NOT use these: inside #chat a reading theme repoints the
+       accent, and a mix resolved up here would keep the dark theme's amber, so those few mixes are
+       written in place instead. */
+    --color-selected: color-mix(in oklch, var(--color-accent) 18%, var(--color-surface-2));
+    --color-selected-ring: color-mix(in oklch, var(--color-accent) 40%, transparent);
+    --color-tool-hover: color-mix(in oklch, var(--color-accent) 14%, var(--color-surface-2));
+    --color-tool-on: color-mix(in oklch, var(--color-accent) 28%, var(--color-surface-2));
+    --color-tool-ring: color-mix(in oklch, var(--color-accent) 50%, transparent);
+    --color-tag-on: color-mix(in oklch, var(--color-accent) 22%, var(--color-surface-2));
+    --color-danger-hover: color-mix(in oklch, var(--danger, red) 22%, var(--color-surface-2));
+    --color-danger-ring: color-mix(in oklch, var(--danger, red) 50%, transparent);
+    --color-beta-edge: color-mix(in oklch, var(--color-accent) 40%, transparent);
+    --color-resize: color-mix(in oklch, var(--color-accent) 30%, transparent);
+
+    /* Type: 2 self-hosted Latin families (book serif for reading + UI, mono for chrome + code). Any
+       script they don't cover (CJK, Thai, Arabic, Indic, Cyrillic, Greek...) falls through to the
+       OS font: ui-serif/ui-monospace pick the platform UI face, and the trailing generic keyword is
+       the script-aware catch-all the browser resolves per character. Non-Latin renders in the
+       viewer's own system font, never tofu. */
+    --font-serif: "Newsreader", ui-serif, Georgia, Cambria, "Times New Roman", serif;
+    --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+
+    /* The scale is ours: `initial` clears tailwind's, INCLUDING its paired --text-*--line-height
+       values, so a text-* utility sets the size alone and the line-height keeps cascading from the
+       region. Line-height belongs to the reading controls; a font size must not overrule them. */
+    --text-*: initial;
+    --text-xs: 0.75rem;
+    --text-sm: 0.85rem;
+    --text-base: 1rem;
+    --text-md: 1.0625rem;
+    --text-lg: 1.25rem;
+    --text-name: 1.12rem;
+
+    --leading-*: initial;
+    --leading-tight: 1.2;
+    --leading-ui: 1.45;
+    --leading-prose: 1.62;
+
+    /* Radius: tight, a sharp writing-desk edge, not pill-everything. */
+    --radius-sm: 2px;
+    --radius-md: 3px;
+    --radius-lg: 4px;
+    --radius-full: 9999px;
+
+    /* Motion curves: settle for enter, drawer curve for the docks. */
+    --ease-settle: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
+    --animate-panel-in: panel-in 220ms var(--ease-drawer);
+    --animate-panel-in-right: panel-in-right 220ms var(--ease-drawer);
+    --animate-drawer-in: drawer-in 200ms var(--ease-drawer);
+    /* The character page's own reveals: each section rises like a message (mes-rise), staggered by an
+       inline animation-delay per section; a section going into or out of edit mode crossfades its
+       body. `both` holds the from-state before the delay elapses so a staggered section does not flash
+       at full opacity first. */
+    --animate-section-rise: section-rise 300ms var(--ease-settle) both;
+    --animate-card-edit-in: card-edit-in 160ms var(--ease-settle) both;
+
+    /* Overlay EXIT animations. Every toggled overlay stays mounted one beat past its close (a
+       `closing` phase in overlay_exit.zig) so its exit has a node to run on; each is the reverse of
+       that overlay's entry. `forwards` holds the faded-out end frame so the element does not flash
+       back to full opacity in the gap before the timer unmounts it (the toast-out precedent). --move
+       scales the travel only, so reduced motion keeps the fade and drops the movement (WD25). The
+       big/rare surfaces (panels, system card, palette, notify) get a ~200ms slide (WD20 drawer band);
+       the small/frequent menus (dropdown, message actions) close on a fast fade so a dismiss never
+       drags (WD24, WD20 dropdown floor). */
+    --animate-panel-out: panel-out 200ms var(--ease-drawer) forwards;
+    --animate-panel-out-right: panel-out-right 200ms var(--ease-drawer) forwards;
+    --animate-drawer-out: drawer-out 200ms var(--ease-drawer) forwards;
+    --animate-menu-out: drawer-out 150ms var(--ease-drawer) forwards;
+    /* The system card and the command palette had NO open animation at all; give each a matched
+       enter/leave pair. The corner card rises from its edge; the palette zooms a touch, as a dialog. */
+    --animate-pop-in: pop-in 200ms var(--ease-drawer);
+    --animate-pop-out: pop-out 200ms var(--ease-drawer) forwards;
+    /* The command palette is close-only (WD24): keyboard-first and opened often, so it appears
+       instantly and only its LEAVE animates. Its dimming backdrop fades out with the card (opacity
+       only, so --move never touches it). */
+    --animate-palette-out: palette-out 170ms var(--ease-settle) forwards;
+    --animate-fade-out: fade-out 170ms var(--ease-settle) forwards;
+
+    
+
+    
+
+    
+
+    
+
+    
+}
+
+/* No utility reads these, so they are not theme keys: the reading measure the chat column is capped
+   at, the top bar's height (the drawer and the mobile docks position against it), and the motion
+   scale. --move follows the OS preference; the in-app setting overrides it through the class Zig
+   puts on #shell, and :has() lifts that to :root so it reaches all three sibling regions. */
+:root {
+    --measure: 40rem;
+    --topbar-h: 3rem;
+    --move: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :root { --move: 0; }
+}
+
+:root:has(#shell.motion-on) { --move: 1; }
+:root:has(#shell.motion-off) { --move: 0; }
+
+/* The dock CLOSE slides shut by easing --dock-w itself frame by frame (ui.zig closeFrame, driven by
+   requestAnimationFrame): the panel width, the edge tab offset and the auto grid column all read that
+   one custom property, so they narrow together and the page reflows gently. It is done in Zig, not a
+   CSS transition, because the panel node is re-created on the close re-render (a transition needs a
+   stable prior value; a keyframe animates opacity on the fresh node but width cannot), and a custom
+   property is not CSS-transitionable without an @property whose length initial-value the minifier
+   strips. Open and drag write the width instantly (no ease), so only the close animates. */
+
+/* mobile
+   Sub-768px overrides that must reach elements OUTSIDE the top-bar subtree. The compact bar height is
+   a :root token here, not a header-scoped utility: the docks and the top drawer position against
+   var(--topbar-h) from outside the header, so a header-local value would leave them reading the 3rem
+   desktop height and floating a sliver of chat above a bar that is only 2.6rem tall. The breakpoint
+   is width < 768px to match tailwind's max-[768px] variant (the point the docks go full-screen). */
+@media (width < 768px) {
+    :root { --topbar-h: 2.6rem; }
+}
