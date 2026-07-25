@@ -1,4 +1,5 @@
-/* Setup panels: backgrounds. */
+/* Backgrounds panel. The markup is app/pages/system/backgrounds_body.zx, so this sheet lives
+   beside it rather than under setup/, where an earlier pass filed it by zone name. */
 
 /* ===== C-BG: backgrounds (append-only zone) =====
    The chosen image is chrome BEHIND the reading surface (invariant 6): a fixed layer under the
