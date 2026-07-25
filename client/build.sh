@@ -29,7 +29,7 @@ zig build export "-Doptimize=$OPT"
 # esbuild comes from the repo devshell (flake.nix), NOT `npx --yes`: pinned, no build-time fetch.
 # Tested here because a bare "command not found" mid-minify-loop reads as an export bug.
 command -v esbuild >/dev/null 2>&1 || {
-    echo "esbuild not on PATH: run build.sh inside the repo devshell (nix develop /home/jaidaken/desk/projects/SillyTavern -c bash -lc ./build.sh)" >&2
+    echo "esbuild not on PATH: run build.sh inside the repo devshell (nix develop -c bash -lc ./build.sh)" >&2
     exit 1
 }
 
