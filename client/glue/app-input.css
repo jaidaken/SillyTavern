@@ -224,6 +224,14 @@
 :root:has(#shell.motion-on) { --move: 1; }
 :root:has(#shell.motion-off) { --move: 0; }
 
+/* The dock CLOSE slides shut by easing --dock-w itself frame by frame (ui.zig closeFrame, driven by
+   requestAnimationFrame): the panel width, the edge tab offset and the auto grid column all read that
+   one custom property, so they narrow together and the page reflows gently. It is done in Zig, not a
+   CSS transition, because the panel node is re-created on the close re-render (a transition needs a
+   stable prior value; a keyframe animates opacity on the fresh node but width cannot), and a custom
+   property is not CSS-transitionable without an @property whose length initial-value the minifier
+   strips. Open and drag write the width instantly (no ease), so only the close animates. */
+
 /* mobile
    Sub-768px overrides that must reach elements OUTSIDE the top-bar subtree. The compact bar height is
    a :root token here, not a header-scoped utility: the docks and the top drawer position against

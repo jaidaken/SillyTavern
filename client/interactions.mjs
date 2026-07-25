@@ -769,6 +769,23 @@ async function main() {
             `bothOpen=${bothOpen} scrolledTo=${scrolledTo} after=${keptScroll}`);
         await closeSide('left');
 
+        // C-PANEL-EASE: closing a dock EASES its rendered width shut, not a snap. Open the left dock,
+        // read its width, click the tab to close, then measure the panel's width a beat later while it
+        // lingers: it must be mid-transition (0 < w < full), proving the panel and the page slide shut
+        // together rather than the column collapsing at once. Then the panel unmounts. (--dock-w itself
+        // jumps; the panel's own width is what transitions, so this reads the element, not the var.)
+        await page.click(SIDE_TAB.left);
+        await page.waitFor(`document.querySelector('${dockSel('left')}')`, 8000);
+        const dockW = "parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--dock-w-left'))";
+        const dceFull = await page.eval(dockW);
+        await page.click(SIDE_TAB.left);
+        await sleep(40);
+        const dceMid = await page.eval(dockW);
+        const dceGone = await page.waitFor(`${dockW} === 0`, 2000);
+        row('must', dceFull > 100 && dceMid > 5 && dceMid < dceFull - 5 && dceGone,
+            'C-PANEL-EASE the dock width eases shut instead of snapping',
+            `full=${dceFull} mid=${dceMid} gone=${dceGone}`);
+
         // ---- the edge tabs themselves ----
         // Every row above reaches a panel through a tab that ?showtabs pinned, so nothing yet asks
         // whether an UNPINNED tab appears at all. These three load without the flag and drive the
