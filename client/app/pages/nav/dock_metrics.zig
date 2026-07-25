@@ -36,3 +36,17 @@ pub fn publish(side: ui_state.Side, px: f32) void {
     defer style.deinit();
     writeOn(style, side, px);
 }
+
+/// Write one side's animated slide offset (px, may be negative) to its --dock-anim property. The panel
+/// and its edge tab both transform by this, so the rAF slide moves them as ONE, while --dock-w carries
+/// the unanimated width and the tab's resting offset. Zero means fully in place (open) or at the screen
+/// edge (closed); a full-width negative (left) or positive (right) is off the edge.
+pub fn publishAnim(side: ui_state.Side, px: f32) void {
+    if (zx.platform.role != .client) return;
+    const style = rootStyle() orelse return;
+    defer style.deinit();
+    var buf: [24]u8 = undefined;
+    const value = std.fmt.bufPrint(&buf, "{d}px", .{@as(i64, @intFromFloat(@round(px)))}) catch "0px";
+    const name = if (side == .left) "--dock-anim-left" else "--dock-anim-right";
+    style.call(void, "setProperty", .{ js.string(name), js.string(value) }) catch {};
+}

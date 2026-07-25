@@ -406,8 +406,11 @@ pub fn dockWidthStyle(side: Side) []const u8 {
         std.fmt.comptimePrint("width:var(--dock-w-right,{d}px)", .{@as(u32, @intFromFloat(default_width))});
 }
 
-/// The edge tab's offset from its own screen edge: zero while the side is closed, the dock's live
-/// width while it is open, since the tab rides the panel's inner edge.
+/// The inner-edge offset for every element that rides a dock's inner edge: the tab, the notify bell,
+/// and its popover all read this. It is the dock's live width (--dock-w, which the resize drag writes);
+/// the open/close SLIDE is a GPU transform they carry through the shared .dock-slide-<side> class, not
+/// this offset, so the movement composites instead of relaying out. Zero is a closed side, element back
+/// on the screen edge.
 pub fn tabOffsetStyle(side: Side) []const u8 {
     return if (side == .left) "left:var(--dock-w-left,0px)" else "right:var(--dock-w-right,0px)";
 }

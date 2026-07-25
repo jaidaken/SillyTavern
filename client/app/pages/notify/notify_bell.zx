@@ -65,7 +65,7 @@ pub fn NotifyBell(allocator: zx.Allocator) zx.Component {
 // The tab's own vocabulary, one notch down the edge: same size, same left-rounded shape, same fade,
 // so the pair reads as one stack of handles rather than as a tab with a stray chip beneath it.
 // A coarse pointer never hovers, so both stay lit and live there, at the 44px tap minimum.
-const bell_base = "icon fixed top-[calc(var(--topbar-h)+3.2rem)] z-40 grid size-[2.4rem] cursor-pointer place-items-center rounded-l-md border border-r-0 border-border bg-surface-2 transition-opacity duration-200 ease-[ease] hover:text-accent focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(pointer:coarse)]:size-11 [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100";
+const bell_base = "icon dock-slide-right fixed top-[calc(var(--topbar-h)+3.2rem)] z-40 grid size-[2.4rem] cursor-pointer place-items-center rounded-l-md border border-r-0 border-border bg-surface-2 transition-opacity duration-200 ease-[ease] hover:text-accent focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(pointer:coarse)]:size-11 [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100";
 
 // Three literals rather than a computed string: the tailwind scanner reads .zx text, so a utility
 // assembled in Zig is never generated. Open takes the accent because the bell is then the close
@@ -91,7 +91,7 @@ const count_chip = "pointer-events-none absolute -top-1 -left-1 grid h-4 min-w-4
 // utilities appear here as literals to be generated (the bell_open pattern). The card drops in from
 // just above on `drawer-in` (it sits below the bell) and lifts back out on `drawer-out`; while it
 // fades it drops its pointer events so a click reaches the page behind it.
-const popover_base = "fixed top-[calc(var(--topbar-h)+6rem)] z-50 flex max-h-[min(60vh,26rem)] w-[19rem] max-w-[calc(100vw-1.5rem)] flex-col gap-3 rounded-lg border border-border bg-surface p-3";
+const popover_base = "dock-slide-right fixed top-[calc(var(--topbar-h)+6rem)] z-50 flex max-h-[min(60vh,26rem)] w-[19rem] max-w-[calc(100vw-1.5rem)] flex-col gap-3 rounded-lg border border-border bg-surface p-3";
 const popover_in = popover_base ++ " animate-drawer-in";
 const popover_out = popover_base ++ " animate-drawer-out pointer-events-none";
 

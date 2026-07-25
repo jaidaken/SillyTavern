@@ -33,7 +33,7 @@ pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
             {if (dropdown_demo.enabled()) (
                 <DropdownDemo />
             )}
-            <div class="mx-auto grid w-full max-w-[var(--reading-measure,var(--reading-cap))] grid-cols-1 gap-1">
+            <div class="composer-measure mx-auto grid w-full max-w-[var(--reading-measure,var(--reading-cap))] grid-cols-1 gap-1">
                 <div class="flex items-end gap-2">
                     <button
                         type="button"

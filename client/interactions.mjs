@@ -607,6 +607,10 @@ async function main() {
                     throw new Error(`openPanel: the ${side} dock never opened for ${panel}`);
                 }
             }
+            // The dock is a fixed overlay that TRANSLATES in on --dock-anim (constant width), so wait for
+            // the open slide to settle (offset back to 0, panel fully in view) before pressing a section:
+            // a click at coordinates lands beside the control while the dock is still sliding.
+            await page.waitFor(`getComputedStyle(document.documentElement).getPropertyValue('--dock-anim-${side}').trim() === '0px'`, 4000);
             // The tab reopens the side on its REMEMBERED section, which is rarely the one wanted, so
             // the switcher click is unconditional; selecting the section already shown is a no-op the
             // app absorbs. Retried because page.click dispatches at COORDINATES and the dock arrives
@@ -781,22 +785,29 @@ async function main() {
             `bothOpen=${bothOpen} scrolledTo=${scrolledTo} after=${keptScroll}`);
         await closeSide('left');
 
-        // C-PANEL-EASE: closing a dock EASES its rendered width shut, not a snap. Open the left dock,
-        // read its width, click the tab to close, then measure the panel's width a beat later while it
-        // lingers: it must be mid-transition (0 < w < full), proving the panel and the page slide shut
-        // together rather than the column collapsing at once. Then the panel unmounts. (--dock-w itself
-        // jumps; the panel's own width is what transitions, so this reads the element, not the var.)
+        // C-PANEL-EASE: closing a dock EASES it shut on a transform slide, not a snap. The panel is a
+        // fixed overlay at a CONSTANT width and translates out on --dock-anim, so this reads that offset
+        // (not the width, which no longer moves): mid-close it must be partway out (0 < |anim| < full
+        // width), proving the panel slides rather than vanishing in one frame. Then it unmounts.
         await page.click(SIDE_TAB.left);
         await page.waitFor(`document.querySelector('${dockSel('left')}')`, 8000);
-        const dockW = "parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--dock-w-left'))";
-        const dceFull = await page.eval(dockW);
+        const animLeft = "Math.abs(parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--dock-anim-left')) || 0)";
+        const dockWLeft = "parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--dock-w-left'))";
+        await page.waitFor(`getComputedStyle(document.documentElement).getPropertyValue('--dock-anim-left').trim() === '0px'`, 2000);
+        const dceFull = await page.eval(dockWLeft);
         await page.click(SIDE_TAB.left);
         await sleep(40);
-        const dceMid = await page.eval(dockW);
-        const dceGone = await page.waitFor(`${dockW} === 0`, 2000);
+        const dceMid = await page.eval(animLeft);
+        const dceGone = await page.waitFor(`!document.querySelector('${dockSel('left')}')`, 2000);
         row('must', dceFull > 100 && dceMid > 5 && dceMid < dceFull - 5 && dceGone,
-            'C-PANEL-EASE the dock width eases shut instead of snapping',
+            'C-PANEL-EASE the dock slides shut on a transform instead of snapping',
             `full=${dceFull} mid=${dceMid} gone=${dceGone}`);
+
+        // C-BELL-SLIDE: the notify bell must ride the dock slide with the Cast tab. It once jumped
+        // because it was left out of the shared slide; assert it carries the membership class so it can
+        // never silently drop out again (the panel, both tabs and the bell all read one --dock-anim).
+        const bellSlides = await page.eval(`(function(){var b=document.querySelector('#notify-bell');return !!b && b.classList.contains('dock-slide-right');})()`);
+        row('must', bellSlides, 'C-BELL-SLIDE the notify bell is a member of the right dock slide');
 
         // ---- the edge tabs themselves ----
         // Every row above reaches a panel through a tab that ?showtabs pinned, so nothing yet asks

@@ -139,13 +139,15 @@
 
     /* --move scales MOVEMENT (transform) only; the opacity fade always plays, so reduced motion is
        gentler rather than absent (WD25). */
+    /* Opacity only: the SLIDE is a transform driven by --dock-anim (ui.zig), so panel and edge tab
+       travel as one; the fade always plays, so reduced motion still gets a gentle cue (WD25). */
     @keyframes panel-in {
-        from { opacity: 0; transform: translateX(calc(var(--move) * -12px)); }
-        to { opacity: 1; transform: translateX(0); }
+        from { opacity: 0; }
+        to { opacity: 1; }
     }
     @keyframes panel-in-right {
-        from { opacity: 0; transform: translateX(calc(var(--move) * 12px)); }
-        to { opacity: 1; transform: translateX(0); }
+        from { opacity: 0; }
+        to { opacity: 1; }
     }
     @keyframes drawer-in {
         from { opacity: 0; transform: translateY(calc(var(--move) * -10px)); }
@@ -176,12 +178,12 @@
        Every travel is scaled by --move so reduced motion keeps the fade and drops the movement, the
        same contract the enters hold (WD25). ---- */
     @keyframes panel-out {
-        from { opacity: 1; transform: translateX(0); }
-        to { opacity: 0; transform: translateX(calc(var(--move) * -12px)); }
+        from { opacity: 1; }
+        to { opacity: 0; }
     }
     @keyframes panel-out-right {
-        from { opacity: 1; transform: translateX(0); }
-        to { opacity: 0; transform: translateX(calc(var(--move) * 12px)); }
+        from { opacity: 1; }
+        to { opacity: 0; }
     }
     @keyframes drawer-out {
         from { opacity: 1; transform: translateY(0); }
@@ -224,13 +226,36 @@
 :root:has(#shell.motion-on) { --move: 1; }
 :root:has(#shell.motion-off) { --move: 0; }
 
-/* The dock CLOSE slides shut by easing --dock-w itself frame by frame (ui.zig closeFrame, driven by
-   requestAnimationFrame): the panel width, the edge tab offset and the auto grid column all read that
-   one custom property, so they narrow together and the page reflows gently. It is done in Zig, not a
-   CSS transition, because the panel node is re-created on the close re-render (a transition needs a
-   stable prior value; a keyframe animates opacity on the fresh node but width cannot), and a custom
-   property is not CSS-transitionable without an @property whose length initial-value the minifier
-   strips. Open and drag write the width instantly (no ease), so only the close animates. */
+/* The dock slides via a TRANSLATE, not a width change: the fixed-overlay panel keeps its --dock-w width
+   and moves by --dock-anim (a px offset the rAF slide in ui.zig writes each frame). Being a fixed
+   overlay the panel never pushes the page, so nothing behind it reflows and its own content (avatars)
+   does not resize. --dock-anim is zero in place, its off-edge value while hidden.
+
+   .dock-slide-<side> is the ONE membership marker: the panel, the edge tab, the notify bell and its
+   popover all carry it, so every dock-anchored element slides through the same transform and none can
+   drift the way the old hand-kept ID list let the bell. transform (not left/right) keeps the movement
+   on the GPU; will-change promotes each to its own layer, so the slide composites at 60fps instead of
+   relaying out or repainting the avatar list every frame. */
+.dock-slide-left { transform: translateX(var(--dock-anim-left, 0px)); will-change: transform; }
+.dock-slide-right { transform: translateX(var(--dock-anim-right, 0px)); will-change: transform; }
+
+/* An open dock is a fixed OVERLAY over the full-width centre column, so without this the composer's
+   Send button sits UNDER the dock and a click lands on the dock's list instead of Send. The composer
+   text column (.composer-measure) is centred at its reading measure; here each side's margin grows
+   ONLY when a dock actually overlaps that edge, and only by the overlap. natural = the centred margin
+   (100% - measure)/2; the dock term is the dock's LIVE on-screen width, its --dock-w minus how far it
+   has slid off (--dock-anim), so the shrink animates in step with the slide. A dock narrower than the
+   natural margin never reaches the column, so max() leaves that side untouched: the column shrinks on
+   the overlapped side ONLY, the opposite edge never moves, and a dock that clears the column does
+   nothing. The chat above is untouched, so its avatars never reflow. Desktop only: below 768px a dock
+   goes full-screen and covers the composer regardless. */
+@media (width >= 768px) {
+    #composer .composer-measure {
+        width: auto;
+        margin-left: max(calc((100% - var(--reading-measure, var(--reading-cap))) / 2), calc(var(--dock-w-left, 0px) + var(--dock-anim-left, 0px)));
+        margin-right: max(calc((100% - var(--reading-measure, var(--reading-cap))) / 2), calc(var(--dock-w-right, 0px) - var(--dock-anim-right, 0px)));
+    }
+}
 
 /* mobile
    Sub-768px overrides that must reach elements OUTSIDE the top-bar subtree. The compact bar height is

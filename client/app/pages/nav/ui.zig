@@ -50,18 +50,21 @@ const SideExit = struct {
 };
 var side_exit = [_]SideExit{ .{}, .{} };
 
-/// panel-out is 200ms; unmount a hair later so the slide fully plays.
+/// The slide is slide_ms (200ms); unmount a hair later so it fully plays before the panel drops.
 const panel_close_ms: u32 = 220;
 
 fn sideIdx(side: Side) usize {
     return if (side == .left) 0 else 1;
 }
 
-/// Mark a side open, cancelling any in-progress close (the exit phase AND the width slide) so a re-open
-/// before the timer fires flips the phase back to open and the stale timer/frame become no-ops.
+/// Mark a side open and slide it in. Flipping the exit phase to open makes a stale close timer a no-op.
+/// A side that was ALREADY open (a section swap) does not slide again; a closed or still-closing side
+/// slides in from its off-edge to zero.
 fn markSideOpen(side: Side) void {
-    cancelCloseSlide(side);
-    side_exit[sideIdx(side)].exit.open();
+    const se = &side_exit[sideIdx(side)];
+    const slide_in = !se.exit.isOpen();
+    se.exit.open();
+    if (slide_in) startSlide(side, offEdge(side), 0);
 }
 
 /// Begin a side's close: capture the panel it is showing (openOn keeps painting it), flip the phase to
@@ -72,7 +75,7 @@ fn beginSideClose(side: Side) void {
     const open_id = ui.panels.openId(side) orelse return;
     se.panel = open_id;
     if (!se.exit.requestClose()) return;
-    startCloseSlide(side, ui.panels.widthFor(side));
+    startSlide(side, 0, offEdge(side));
     if (zx.platform.role == .client) {
         _ = zx.client.setTimeout(if (side == .left) panelCloseTickLeft else panelCloseTickRight, panel_close_ms);
     }
@@ -93,22 +96,26 @@ fn commitSideClose(side: Side) void {
     const se = &side_exit[sideIdx(side)];
     if (se.exit.timerFired()) {
         se.panel = null;
+        dock_slide[sideIdx(side)].active = false;
+        dock_metrics.publishAnim(side, 0);
         syncDocks();
         regions.bumpShell();
     }
 }
 
-// ---- the close SLIDE: ease --dock-w to zero frame by frame ------------------------------------------
-// The dock cannot ease with a CSS transition: the panel node is re-created on the close re-render, so a
-// transition has no stable prior value (panel-out still fades its opacity on the fresh node, but a width
-// transition never fires), and a custom property is not CSS-transitionable without an @property whose
-// length initial-value the minifier strips to an invalid unitless 0. So the close eases here: each frame
-// publishes a smaller --dock-w, and the panel width, the edge tab offset and the auto grid column all
-// read that one property, narrowing together so the page reflows gently. Open and the resize commit
-// publish the width straight, so only the close animates. Reduced motion drops to zero at once (WD25).
-const CloseSlide = struct { start_ms: f64 = 0, from_w: f32 = 0, active: bool = false };
-var close_slide = [_]CloseSlide{ .{}, .{} };
-const close_slide_ms: f64 = 200;
+// ---- the dock SLIDE: fixed overlays that TRANSLATE in and out --------------------------------------
+// Docks are fixed overlays, so opening one does not reflow the page. The slide is a TRANSLATE, not a
+// width change, so the panel's own content (avatars) does not reflow either: the panel keeps its full
+// --dock-w width the whole time and moves via --dock-anim. The edge tab reads the SAME --dock-anim, so
+// panel and tab travel as ONE (a width-only slide left the tab jumping to its resting offset after the
+// panel had already stopped). Driven per frame in Zig, not a CSS transition, because the panel node is
+// re-created on the open/close re-render (a transition has no stable prior value) and a custom property
+// is not CSS-transitionable without an @property whose length initial-value the minifier breaks. Open
+// runs -width -> 0, close 0 -> -width (mirrored positive on the right). Reduced motion jumps at once;
+// the opacity fade (panel-in/out keyframes) still plays for the gentler reduced-motion cue (WD25).
+const Slide = struct { start_ms: f64 = 0, from: f32 = 0, to: f32 = 0, active: bool = false };
+var dock_slide = [_]Slide{ .{}, .{} };
+const slide_ms: f64 = 200;
 
 fn nowMs() f64 {
     const perf = js.global.get(js.Object, "performance") catch return 0;
@@ -116,8 +123,7 @@ fn nowMs() f64 {
     return perf.call(f64, "now", .{}) catch 0;
 }
 
-// Whether the close should animate: the in-app override wins, else the OS preference, matching the CSS
-// --move gate so the Zig slide and the opacity fades honour one policy.
+// Whether to animate: the in-app override wins, else the OS preference, matching the CSS --move gate.
 fn motionOn() bool {
     return switch (ui.motion) {
         .on => true,
@@ -140,42 +146,49 @@ fn easeOut(t: f64) f64 {
     return 1.0 - u * u * u;
 }
 
-/// Begin easing a closing side's width to zero; straight to zero under reduced motion or a zero width.
-fn startCloseSlide(side: Side, from_w: f32) void {
+// The off-edge translate for a side: a left dock hides to the left (negative its width), a right one
+// to the right (positive). Zero is fully in place.
+fn offEdge(side: Side) f32 {
+    const w = ui.panels.widthFor(side);
+    return if (side == .left) -w else w;
+}
+
+/// Slide a side's --dock-anim from `from` to `to` over slide_ms; straight to the target under reduced
+/// motion. A slide already running for this side has its loop pick up the new endpoints rather than
+/// starting a second rAF chain, so a close-then-reopen interrupt stays one animation.
+fn startSlide(side: Side, from: f32, to: f32) void {
     if (zx.platform.role != .client) return;
-    if (from_w <= 0 or !motionOn()) {
-        dock_metrics.publish(side, 0);
+    const was_active = dock_slide[sideIdx(side)].active;
+    if (!motionOn()) {
+        dock_slide[sideIdx(side)].active = false;
+        dock_metrics.publishAnim(side, to);
         return;
     }
-    close_slide[sideIdx(side)] = .{ .start_ms = nowMs(), .from_w = from_w, .active = true };
-    _ = zx.client.requestAnimationFrame(if (side == .left) closeSlideLeft else closeSlideRight);
+    dock_metrics.publishAnim(side, from);
+    dock_slide[sideIdx(side)] = .{ .start_ms = nowMs(), .from = from, .to = to, .active = true };
+    if (!was_active) _ = zx.client.requestAnimationFrame(if (side == .left) slideLeft else slideRight);
 }
 
-fn closeSlideLeft() void {
-    closeSlideFrame(.left);
+fn slideLeft() void {
+    slideFrame(.left);
 }
-fn closeSlideRight() void {
-    closeSlideFrame(.right);
+fn slideRight() void {
+    slideFrame(.right);
 }
 
-fn closeSlideFrame(side: Side) void {
-    const a = &close_slide[sideIdx(side)];
-    if (!a.active) return; // a re-open cancelled it
+fn slideFrame(side: Side) void {
+    const a = &dock_slide[sideIdx(side)];
+    if (!a.active) return; // an instant publish or a re-open cleared it
     const elapsed = nowMs() - a.start_ms;
-    if (elapsed >= close_slide_ms) {
-        dock_metrics.publish(side, 0);
+    if (elapsed >= slide_ms) {
+        dock_metrics.publishAnim(side, a.to);
         a.active = false;
         return;
     }
-    const t = elapsed / close_slide_ms;
-    const w: f32 = @floatCast(@as(f64, a.from_w) * (1.0 - easeOut(t)));
-    dock_metrics.publish(side, w);
-    _ = zx.client.requestAnimationFrame(if (side == .left) closeSlideLeft else closeSlideRight);
-}
-
-/// A re-open cancels the slide so a stale frame cannot keep shrinking the freshly re-opened dock.
-fn cancelCloseSlide(side: Side) void {
-    close_slide[sideIdx(side)].active = false;
+    const t = elapsed / slide_ms;
+    const v: f32 = @floatCast(@as(f64, a.from) + (@as(f64, a.to) - @as(f64, a.from)) * easeOut(t));
+    dock_metrics.publishAnim(side, v);
+    _ = zx.client.requestAnimationFrame(if (side == .left) slideLeft else slideRight);
 }
 
 /// True while a side's dock is animating out. sidepanel.zx reads this to pick the exit-animation class.
@@ -214,12 +227,11 @@ pub fn motionClass() []const u8 {
 /// closed side publishes zero, so its tab sits back on the screen edge.
 fn syncDocks() void {
     for ([_]Side{ .left, .right }) |side| {
-        // A side mid-close is owned by the rAF slide easing its width to zero; leave it alone. Otherwise
-        // an open side publishes its width and a closed one publishes zero, both straight (no ease) so
-        // open and the resize commit stay instant.
-        if (close_slide[sideIdx(side)].active) continue;
-        const open = ui.panels.openId(side) != null;
-        dock_metrics.publish(side, if (open) ui.panels.widthFor(side) else 0);
+        // Docks are fixed overlays, so the width never pushes the page: publish it straight. A side keeps
+        // its width while open OR closing (the panel-out transform needs a width to slide), and drops to
+        // zero once fully closed so its edge tab returns to the screen edge.
+        const mounted = ui.panels.openId(side) != null or side_exit[sideIdx(side)].exit.isClosing();
+        dock_metrics.publish(side, if (mounted) ui.panels.widthFor(side) else 0);
     }
 }
 
