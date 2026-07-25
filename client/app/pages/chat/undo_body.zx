@@ -18,7 +18,7 @@ pub fn UndoVersions(allocator: zx.Allocator) zx.Component {
             class={if (store.undo.closing) versions_out else versions_in}
         >
             <div class="flex flex-none items-center justify-between gap-2">
-                <h3 class="m-0 font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">Earlier versions</h3>
+                <h3 class="font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">Earlier versions</h3>
                 <button
                     type="button"
                     class="icon grid size-7 flex-none place-items-center rounded-md border-0 bg-transparent text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
@@ -27,13 +27,13 @@ pub fn UndoVersions(allocator: zx.Allocator) zx.Component {
                     aria-label="Close history"
                 ></button>
             </div>
-            <p class="m-0 text-xs leading-ui text-faint">Saved snapshots, last 50. Not every keystroke: two edits within ten seconds can merge into one.</p>
+            <p class="text-xs leading-ui text-faint">Saved snapshots, last 50. Not every keystroke: two edits within ten seconds can merge into one.</p>
             { if (store.undo.busy) (
-                <p class="m-0 text-sm text-muted">Loading history...</p>
+                <p class="text-sm text-muted">Loading history...</p>
             ) else if (store.undo.note.len > 0) (
-                <p class="m-0 text-sm text-muted">{store.undo.note}</p>
+                <p class="text-sm text-muted">{store.undo.note}</p>
             ) else (
-                <ul class="m-0 flex flex-1 list-none flex-col gap-2 overflow-y-auto p-0 [scrollbar-width:thin]">
+                <ul class="flex flex-1 list-none flex-col gap-2 overflow-y-auto p-0 [scrollbar-width:thin]">
                     { for (store.undo.versions.items) |v| (
                         <li class="flex flex-col gap-1 rounded-md border border-border-soft bg-surface-2 p-2">
                             <div class="line-clamp-3 font-serif text-sm text-text">{v.mes}</div>
@@ -70,7 +70,7 @@ pub fn UndoSnapshots(allocator: zx.Allocator) zx.Component {
                 class={if (store.undo.closing) snaps_out else snaps_in}
             >
                 <div class="flex flex-none items-center justify-between gap-2 border-b border-border p-2 pl-4">
-                    <h2 class="m-0 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase">Chat snapshots</h2>
+                    <h2 class="font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase">Chat snapshots</h2>
                     <button
                         type="button"
                         class="icon grid size-[1.9rem] flex-none place-items-center rounded-md border-0 bg-transparent text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent max-[768px]:size-10 max-[768px]:min-h-11 max-[768px]:min-w-11"
@@ -80,13 +80,13 @@ pub fn UndoSnapshots(allocator: zx.Allocator) zx.Component {
                     ></button>
                 </div>
                 <div class="flex-1 overflow-y-auto p-4 [scrollbar-width:thin] max-[640px]:pb-[calc(1rem_+_env(safe-area-inset-bottom,0px))]">
-                    <p class="m-0 mb-3 text-xs leading-ui text-faint">Restore the whole chat to an earlier save. Saved snapshots, last 50, not every keystroke: two edits within ten seconds can merge into one.</p>
+                    <p class="mb-3 text-xs leading-ui text-faint">Restore the whole chat to an earlier save. Saved snapshots, last 50, not every keystroke: two edits within ten seconds can merge into one.</p>
                     { if (store.undo.busy) (
-                        <p class="m-0 text-sm text-muted">Loading snapshots...</p>
+                        <p class="text-sm text-muted">Loading snapshots...</p>
                     ) else if (store.undo.note.len > 0) (
-                        <p class="m-0 text-sm text-muted">{store.undo.note}</p>
+                        <p class="text-sm text-muted">{store.undo.note}</p>
                     ) else (
-                        <ul class="m-0 flex list-none flex-col gap-2 p-0">
+                        <ul class="flex list-none flex-col gap-2 p-0">
                             { for (store.undo.snapshots.items) |s| (
                                 <li class="flex flex-col gap-1.5 rounded-md border border-border-soft bg-surface-2 p-3">
                                     <div class="line-clamp-2 font-serif text-sm text-text">{s.last_mes_preview}</div>

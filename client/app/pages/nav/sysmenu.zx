@@ -100,7 +100,7 @@ const popover_base = "fixed bottom-[3.6rem] z-50 flex max-h-[min(28rem,calc(100d
 const popover_in = popover_base ++ " animate-pop-in";
 const popover_out = popover_base ++ " animate-pop-out pointer-events-none";
 
-const heading = "m-0 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
+const heading = "font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
 
 const close_btn = "icon grid size-[1.6rem] flex-none cursor-pointer place-items-center rounded-md border-0 bg-transparent text-muted hover:bg-surface-2 hover:text-text";
 
@@ -112,7 +112,7 @@ const body = "flex-1 overflow-y-auto px-3 py-3 [scrollbar-width:thin]";
 
 const group_label = "font-mono text-[0.62rem] tracking-[0.12em] text-faint uppercase";
 
-const note = "m-0 flex-none border-t border-border-soft px-3 py-2 font-mono text-[0.62rem] leading-ui text-faint";
+const note = "flex-none border-t border-border-soft px-3 py-2 font-mono text-[0.62rem] leading-ui text-faint";
 
 // The segmented motion control. Its selected look rides aria-pressed, which the button carries for
 // assistive tech anyway, so no class is computed for state.

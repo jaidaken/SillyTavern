@@ -20,7 +20,7 @@ pub fn PersonaList(ctx: *zx.ComponentCtx(void)) zx.Component {
                 <button class={act_btn} type="button" data-persona-action="add" onclick={ctx.bind(onPersonaAction)}>New persona</button>
             </div>
             {if (ps.len == 0) (
-                <p class="panel-empty m-0 text-sm leading-ui text-muted">No personas loaded. Connect to the SillyTavern backend to see your personas.</p>
+                <p class="panel-empty text-sm leading-ui text-muted">No personas loaded. Connect to the SillyTavern backend to see your personas.</p>
             ) else (
                 <div
                     id="persona-list"
@@ -30,7 +30,7 @@ pub fn PersonaList(ctx: *zx.ComponentCtx(void)) zx.Component {
                 >
                     {for (ps, 0..) |p, i| (
                         <div
-                            class={if (isSelected(i)) (char_list.row_class ++ " is-selected") else char_list.row_class}
+                            class={if (isSelected(i)) (char_list.row_class ++ "is-selected") else char_list.row_class}
                             role="option"
                             aria-selected={if (isSelected(i)) "true" else "false"}
                             data-persona-index={i}
@@ -48,7 +48,7 @@ pub fn PersonaList(ctx: *zx.ComponentCtx(void)) zx.Component {
                 </div>
             )}
             {if (persona_store.selectedIndex()) |_| (selectedActions(ctx)) else (
-                <p @allocator={ctx.allocator} class="persona-actions-hint m-0 text-xs text-muted">Select a persona to manage it.</p>
+                <p @allocator={ctx.allocator} class="persona-actions-hint text-xs text-muted">Select a persona to manage it.</p>
             )}
         </div>
     );
@@ -58,7 +58,7 @@ fn selectedActions(ctx: *zx.ComponentCtx(void)) zx.Component {
     const p_opt = persona_store.selected();
     if (p_opt == null) {
         return (
-            <p @allocator={ctx.allocator} class="persona-actions-hint m-0 text-xs text-muted">Select a persona to manage it.</p>
+            <p @allocator={ctx.allocator} class="persona-actions-hint text-xs text-muted">Select a persona to manage it.</p>
         );
     }
     const p = p_opt.?;

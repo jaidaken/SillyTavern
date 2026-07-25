@@ -93,7 +93,7 @@ pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     <button type="button" class={btn_cls} onclick={onConnect}>Connect</button>
                     <span id="conn-status" role="status" aria-live="polite" class="text-sm text-muted empty:hidden"></span>
                 </div>
-                <p class="setting-note col-span-full m-0 text-sm text-muted max-[768px]:text-[0.78rem]">Saved to your SillyTavern settings and shared with the classic client.</p>
+                <p class="setting-note col-span-full text-sm text-muted max-[768px]:text-[0.78rem]">Saved to your SillyTavern settings and shared with the classic client.</p>
             </div>
         </div>
     );

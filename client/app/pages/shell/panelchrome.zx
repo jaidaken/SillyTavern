@@ -15,7 +15,7 @@ pub fn PanelHead(allocator: zx.Allocator, props: HeadProps) zx.Component {
         >
             <h2
                 id="panel-heading"
-                class="m-0 overflow-hidden font-mono text-xs font-medium tracking-[0.1em] text-ellipsis whitespace-nowrap text-muted uppercase max-[640px]:text-[0.7rem]"
+                class="overflow-hidden font-mono text-xs font-medium tracking-[0.1em] text-ellipsis whitespace-nowrap text-muted uppercase max-[640px]:text-[0.7rem]"
             >{props.title}</h2>
             <button
                 class="icon grid size-[1.9rem] flex-none cursor-pointer place-items-center rounded-md border-0 bg-transparent text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-text max-[768px]:size-10 max-[768px]:min-h-11 max-[768px]:min-w-11"
@@ -38,7 +38,7 @@ pub const EmptyProps = struct {
 
 pub fn PanelEmpty(allocator: zx.Allocator, props: EmptyProps) zx.Component {
     return (
-        <p @allocator={allocator} class="panel-empty m-0 text-sm leading-ui text-muted">{props.text}</p>
+        <p @allocator={allocator} class="panel-empty text-sm leading-ui text-muted">{props.text}</p>
     );
 }
 

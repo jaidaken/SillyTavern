@@ -2,6 +2,10 @@
    one. (They used to be defined twice, here and again as a :root block; the drift that invites is
    why the second copy is gone.) ---- */
 @theme {
+    /* The spacing step every gap/padding utility multiplies. Tailwind defaults this to 0.25rem and
+       primitives.css reads it, so it is declared here explicitly rather than inherited. */
+    --spacing: 0.25rem;
+
     /* Warm near-black ground, hue ~70 (candlelit amber-grey), small warm chroma on neutrals. */
     --color-bg: oklch(0.180 0.012 70);
     --color-surface: oklch(0.215 0.013 70);

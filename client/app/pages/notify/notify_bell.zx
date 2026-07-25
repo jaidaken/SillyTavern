@@ -43,7 +43,7 @@ pub fn NotifyBell(allocator: zx.Allocator) zx.Component {
                     <div class="flex flex-none items-center justify-between gap-2">
                         <h2
                             id="notify-heading"
-                            class="m-0 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase"
+                            class="font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase"
                         >Notifications</h2>
                         <button
                             type="button"

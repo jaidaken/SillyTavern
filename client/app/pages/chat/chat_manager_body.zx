@@ -16,7 +16,7 @@ pub fn ChatManagerBody(ctx: *zx.ComponentCtx(void)) zx.Component {
     return (
         <div @allocator={ctx.allocator} class="chatmgr flex flex-col gap-3" @rendering={.client}>
             {if (sel == null) (
-                <p class="panel-empty m-0 text-sm leading-ui text-muted">Select a character to browse its chats.</p>
+                <p class="panel-empty text-sm leading-ui text-muted">Select a character to browse its chats.</p>
             ) else (
                 <div class="flex min-h-0 flex-col gap-3">
                     <input
@@ -32,21 +32,21 @@ pub fn ChatManagerBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         onchange={onSearchChange}
                     />
                     <div class="flex items-center gap-2">
-                        <label class={act_btn ++ " m-0 inline-flex cursor-pointer items-center"} for="chat-import-input">Import</label>
+                        <label class={act_btn ++ "inline-flex cursor-pointer items-center"} for="chat-import-input">Import</label>
                         <input id="chat-import-input" name="chat-import-input" type="file" accept=".jsonl,.json" class={file_input} aria-label="Import a chat file" onchange={onImportPick} />
                     </div>
 
                     {if (st == .loading) (
-                        <p class="m-0 text-sm text-muted" aria-busy="true">Loading chats{"\u{2026}"}</p>
+                        <p class="text-sm text-muted" aria-busy="true">Loading chats{"\u{2026}"}</p>
                     ) else if (st == .err) (
                         <div class="flex flex-col items-start gap-2 rounded-md border border-border-soft p-3" role="alert">
-                            <p class="m-0 text-sm text-muted">Could not load this character's chats.</p>
+                            <p class="text-sm text-muted">Could not load this character's chats.</p>
                             <button type="button" class={act_btn} onclick={onRetry}>Try again</button>
                         </div>
                     ) else if (chat_actions.rowsSlice().len == 0) (
                         <div class="flex flex-col gap-1 rounded-md border border-dashed border-border-soft p-4">
-                            <p class="m-0 font-serif text-sm text-text">{if (chat_actions.queryText().len > 0) "No chats match the search" else "No saved chats yet"}</p>
-                            <p class="m-0 text-xs text-muted">{if (chat_actions.queryText().len > 0) "Clear the search to see every chat." else "Send a message and this list fills in."}</p>
+                            <p class="font-serif text-sm text-text">{if (chat_actions.queryText().len > 0) "No chats match the search" else "No saved chats yet"}</p>
+                            <p class="text-xs text-muted">{if (chat_actions.queryText().len > 0) "Clear the search to see every chat." else "Send a message and this list fills in."}</p>
                         </div>
                     ) else (
                         <div class="chatmgr-list flex flex-col gap-2" role="list" aria-label="This character's chats">
@@ -79,7 +79,7 @@ pub fn ChatManagerBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         </div>
                     )}
 
-                    <p id="chat-mgr-status" class="m-0 min-h-4 text-xs text-muted" aria-live="polite">{chat_actions.statusText()}</p>
+                    <p id="chat-mgr-status" class="min-h-4 text-xs text-muted" aria-live="polite">{chat_actions.statusText()}</p>
                 </div>
             )}
         </div>

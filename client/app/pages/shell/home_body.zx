@@ -25,8 +25,8 @@ pub fn Home(ctx: *zx.ComponentCtx(void)) zx.Component {
             { if (!showing) (
                 <div class="mx-auto flex min-h-0 w-full max-w-[var(--measure)] flex-col gap-6 px-4 pt-[calc(var(--topbar-h)+2rem)] pb-10 max-[640px]:px-3 max-[640px]:pt-[calc(var(--topbar-h)+1.25rem)]">
                     <header class="flex flex-col gap-3">
-                        <p class="m-0 text-xs font-medium tracking-[0.14em] text-faint uppercase">Welcome back</p>
-                        <h1 class="m-0 font-serif text-[1.75rem] leading-[1.15] font-semibold text-text max-[640px]:text-2xl">Pick up where you left off</h1>
+                        <p class="text-xs font-medium tracking-[0.14em] text-faint uppercase">Welcome back</p>
+                        <h1 class="font-serif text-[1.75rem] leading-[1.15] font-semibold text-text max-[640px]:text-2xl">Pick up where you left off</h1>
                         <div class="mt-1 flex flex-wrap items-center gap-x-4 gap-y-2">
                             <button
                                 type="button"
@@ -36,7 +36,7 @@ pub fn Home(ctx: *zx.ComponentCtx(void)) zx.Component {
                                 onclick={ctx.bind(onResume)}
                                 aria-label="Resume the most recent conversation"
                             >Resume last conversation</button>
-                            <p class="m-0 text-sm text-muted">or open a character from the sidebar</p>
+                            <p class="text-sm text-muted">or open a character from the sidebar</p>
                         </div>
                     </header>
 
@@ -54,7 +54,7 @@ pub fn Home(ctx: *zx.ComponentCtx(void)) zx.Component {
                         </div>
                     ) else if (st == .err) (
                         <div class="flex flex-col items-start gap-3 rounded-md border border-border-soft p-4" role="alert">
-                            <p class="m-0 text-sm text-muted">Could not load your recent conversations. The backend may be unreachable.</p>
+                            <p class="text-sm text-muted">Could not load your recent conversations. The backend may be unreachable.</p>
                             <button
                                 type="button"
                                 class="cursor-pointer rounded-md border border-border bg-surface-2 px-3 py-1.5 text-sm text-text transition-colors duration-150 ease-[ease] hover:bg-tool-hover focus-visible:outline-2 focus-visible:outline-tool-ring"
@@ -63,8 +63,8 @@ pub fn Home(ctx: *zx.ComponentCtx(void)) zx.Component {
                         </div>
                     ) else if (home.recentRows().len == 0) (
                         <div class="flex flex-col gap-2 rounded-md border border-dashed border-border-soft p-6">
-                            <p class="m-0 font-serif text-base text-text">No conversations yet</p>
-                            <p class="m-0 text-sm text-muted">Open a character from the sidebar and say hello to start your first one.</p>
+                            <p class="font-serif text-base text-text">No conversations yet</p>
+                            <p class="text-sm text-muted">Open a character from the sidebar and say hello to start your first one.</p>
                         </div>
                     ) else (
                         <div class="home-threads flex flex-col gap-2" role="list" aria-label="Recent conversations">

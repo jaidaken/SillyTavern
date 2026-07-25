@@ -1,0 +1,46 @@
+/* Layout primitives: the ONLY utility-style classes we keep, and layout ONLY. No colour, no
+   typography, no state, no variants -- anything needing a hover, a media query or a data-* state
+   belongs in the sheet that owns the component. That cap is what stops this becoming a private
+   tailwind.
+   The class NAMES are deliberately the ones the markup already uses, and every declaration below was
+   extracted verbatim from tailwind's own generated output, so activating this file changes nothing.
+   Checked by check-primitives-parity.py.
+   NOT imported yet: tailwind still generates these. It activates in the change that drops
+   `@import "tailwindcss"`. */
+.flex { display:flex; }   /* 174 uses */
+.flex-col { flex-direction:column; }   /* 94 uses */
+.gap-2 { gap:calc(var(--spacing) * 2); }   /* 71 uses */
+.items-center { align-items:center; }   /* 70 uses */
+.gap-3 { gap:calc(var(--spacing) * 3); }   /* 58 uses */
+.flex-none { flex:none; }   /* 28 uses */
+.gap-1 { gap:var(--spacing); }   /* 28 uses */
+.flex-wrap { flex-wrap:wrap; }   /* 27 uses */
+.justify-between { justify-content:space-between; }   /* 19 uses */
+.truncate { text-overflow:ellipsis; white-space:nowrap; overflow:hidden; }   /* 18 uses */
+.flex-1 { flex:1; }   /* 17 uses */
+.items-start { align-items:flex-start; }   /* 15 uses */
+.min-w-0 { min-width:0; }   /* 14 uses */
+.grid { display:grid; }   /* 11 uses */
+.min-h-0 { min-height:0; }   /* 7 uses */
+.absolute { position:absolute; }   /* 6 uses */
+.relative { position:relative; }   /* 6 uses */
+.contents { display:contents; }   /* 6 uses */
+.hidden { display:none; }   /* 5 uses */
+.w-full { width:100%; }   /* 5 uses */
+.grid-cols-1 { grid-template-columns:repeat(1,minmax(0,1fr)); }   /* 5 uses */
+.block { display:block; }   /* 5 uses */
+.gap-4 { gap:calc(var(--spacing) * 4); }   /* 4 uses */
+.fixed { position:fixed; }   /* 4 uses */
+.mx-auto { margin-inline:auto; }   /* 3 uses */
+.justify-center { justify-content:center; }   /* 3 uses */
+.h-full { height:100%; }   /* 2 uses */
+.overflow-hidden { overflow:hidden; }   /* 2 uses */
+.items-baseline { align-items:baseline; }   /* 2 uses */
+.inline-flex { display:inline-flex; }   /* 2 uses */
+.items-end { align-items:flex-end; }   /* 2 uses */
+.shrink-0 { flex-shrink:0; }   /* 1 uses */
+.gap-5 { gap:calc(var(--spacing) * 5); }   /* 1 uses */
+.gap-6 { gap:calc(var(--spacing) * 6); }   /* 1 uses */
+.gap-x-4 { column-gap:calc(var(--spacing) * 4); }   /* 1 uses */
+.gap-y-2 { row-gap:calc(var(--spacing) * 2); }   /* 1 uses */
+.self-stretch { align-self:stretch; }   /* 1 uses */

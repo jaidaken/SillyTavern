@@ -17,11 +17,11 @@
 // controls are real buttons with their own bound handlers.
 
 const read_label = "text-sm font-medium text-muted max-[768px]:text-[0.82rem]";
-const read_value = "m-0 whitespace-pre-wrap break-words font-serif text-sm leading-ui text-text";
-const read_empty = "m-0 font-serif text-sm text-faint italic";
-const section_title = "m-0 font-serif text-base font-semibold text-text";
+const read_value = "whitespace-pre-wrap break-words font-serif text-sm leading-ui text-text";
+const read_empty = "font-serif text-sm text-faint italic";
+const section_title = "font-serif text-base font-semibold text-text";
 const field_label = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
-const field_hint = "setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]";
+const field_hint = "setting-note text-sm text-muted max-[768px]:text-[0.78rem]";
 const field_col = "setting-col flex flex-col gap-2";
 const control_base = "w-full rounded-md border border-control-border bg-bg px-3 py-2 font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] placeholder:text-faint focus:border-accent focus:not-focus-visible:outline-none";
 const text_area = "min-h-[7rem] resize-y " ++ control_base;
@@ -73,9 +73,9 @@ pub fn CharacterPageBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                             height="48"
                         />
                         <div class="min-w-0 flex-1">
-                            <h2 id="panel-heading" class="m-0 truncate font-serif text-lg font-semibold text-text">{headerName(ctx.allocator)}</h2>
+                            <h2 id="panel-heading" class="truncate font-serif text-lg font-semibold text-text">{headerName(ctx.allocator)}</h2>
                             {if (card_editor.value(.character_version).len > 0) (
-                                <p class="m-0 truncate font-mono text-xs text-muted">Version {card_editor.value(.character_version)}</p>
+                                <p class="truncate font-mono text-xs text-muted">Version {card_editor.value(.character_version)}</p>
                             ) else (
                                 <></>
                             )}
@@ -85,19 +85,19 @@ pub fn CharacterPageBody(ctx: *zx.ComponentCtx(void)) zx.Component {
             </div>
 
             {if (selected == null) (
-                <p class="m-0 text-sm text-muted">Pick a character in the Cast panel and their page opens here.</p>
+                <p class="text-sm text-muted">Pick a character in the Cast panel and their page opens here.</p>
             ) else if (st == .loading or st == .idle) (
-                <p class="m-0 text-sm text-muted" aria-busy="true">Reading the card...</p>
+                <p class="text-sm text-muted" aria-busy="true">Reading the card...</p>
             ) else if (st == .err) (
                 <div class="flex flex-col items-start gap-2" role="alert">
-                    <p class="m-0 text-sm text-text">That card would not load. It may have been renamed or removed on the server.</p>
+                    <p class="text-sm text-text">That card would not load. It may have been renamed or removed on the server.</p>
                     <button class={action_btn} type="button" onclick={onRetry}>Try again</button>
                 </div>
             ) else (
                 <div class="flex min-h-0 flex-col gap-4">
                     {headerActions(ctx)}
 
-                    <p class="m-0 min-h-[1.25rem] font-mono text-sm text-muted" id="card-editor-notice" role="status" aria-live="polite">{card_editor.noticeText()}</p>
+                    <p class="min-h-[1.25rem] font-mono text-sm text-muted" id="card-editor-notice" role="status" aria-live="polite">{card_editor.noticeText()}</p>
 
                     {for (section_list, 0..) |s, i| (
                         <section

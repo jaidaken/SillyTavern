@@ -100,11 +100,11 @@ const backdrop_out = backdrop ++ " animate-fade-out";
 const card = "relative z-10 flex w-[min(34rem,100%)] flex-col gap-2 rounded-lg border border-border bg-surface p-2";
 const card_out = card ++ " animate-palette-out";
 
-const title = "m-0 px-1 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
+const title = "px-1 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
 
 const box = "w-full rounded-md border border-control-border bg-bg px-[0.7rem] py-[0.5rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
 
-const list = "m-0 flex max-h-[min(22rem,46vh)] list-none flex-col gap-px overflow-y-auto p-0 [scrollbar-width:thin]";
+const list = "flex max-h-[min(22rem,46vh)] list-none flex-col gap-px overflow-y-auto p-0 [scrollbar-width:thin]";
 
 // The highlighted row wears the same tool-on ground the section switcher's current control does, so
 // one look means "this is the one" across the whole app.
@@ -114,9 +114,9 @@ const row_on = row_base ++ " bg-tool-on text-text";
 
 const group_cls = "flex-none font-mono text-[0.62rem] tracking-[0.12em] text-faint uppercase";
 
-const empty = "m-0 px-2 py-3 text-sm text-muted";
+const empty = "px-2 py-3 text-sm text-muted";
 
-const keys = "m-0 px-1 font-mono text-[0.62rem] leading-ui text-faint";
+const keys = "px-1 font-mono text-[0.62rem] leading-ui text-faint";
 
 fn boolStr(b: bool) []const u8 {
     return if (b) "true" else "false";

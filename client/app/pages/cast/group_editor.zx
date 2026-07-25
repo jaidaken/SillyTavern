@@ -23,7 +23,7 @@ pub fn GroupEditor(allocator: zx.Allocator, props: Props) zx.Component {
 
             {if (group_actions.errorText().len > 0) (
                 <div class="flex flex-col items-start gap-2 rounded-md border border-control-border bg-bg p-3" role="alert">
-                    <p class="m-0 text-sm text-text">{group_actions.errorText()}</p>
+                    <p class="text-sm text-text">{group_actions.errorText()}</p>
                 </div>
             )}
 
@@ -49,9 +49,9 @@ pub fn GroupEditor(allocator: zx.Allocator, props: Props) zx.Component {
             </div>
 
             <div class="flex flex-col gap-1">
-                <h3 class="m-0 font-mono text-xs tracking-wide text-muted uppercase">Members</h3>
+                <h3 class="font-mono text-xs tracking-wide text-muted uppercase">Members</h3>
                 {if (g.memberSlice().len == 0) (
-                    <p class="m-0 rounded-md border border-control-border bg-bg p-3 text-sm text-muted">No members yet. Add characters from the list below.</p>
+                    <p class="rounded-md border border-control-border bg-bg p-3 text-sm text-muted">No members yet. Add characters from the list below.</p>
                 ) else (
                     <div class="flex flex-col gap-[2px]" role="list" aria-label="Group members">
                         {for (g.memberSlice(), 0..) |m, pos| (
@@ -74,9 +74,9 @@ pub fn GroupEditor(allocator: zx.Allocator, props: Props) zx.Component {
             </div>
 
             <div class="flex flex-col gap-1">
-                <h3 class="m-0 font-mono text-xs tracking-wide text-muted uppercase">Add members</h3>
+                <h3 class="font-mono text-xs tracking-wide text-muted uppercase">Add members</h3>
                 {if (candidateCount(index) == 0) (
-                    <p class="m-0 text-sm text-muted">Every loaded character is already in this group.</p>
+                    <p class="text-sm text-muted">Every loaded character is already in this group.</p>
                 ) else (
                     <div class="flex max-h-64 flex-col gap-[2px] overflow-y-auto [scrollbar-width:thin]" role="list" aria-label="Characters not in this group">
                         {for (char_store.slice(), 0..) |c, ci| (

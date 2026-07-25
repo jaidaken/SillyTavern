@@ -42,7 +42,7 @@ fn listView(ctx: *zx.ComponentCtx(void)) zx.Component {
             </div>
             {if (group_actions.errorText().len > 0) (
                 <div class="flex flex-col items-start gap-2 rounded-md border border-control-border bg-bg p-3" role="alert">
-                    <p class="m-0 text-sm text-text">{group_actions.errorText()}</p>
+                    <p class="text-sm text-text">{group_actions.errorText()}</p>
                 </div>
             )}
             {if (group_actions.state() == .failed) (
@@ -57,15 +57,15 @@ fn listView(ctx: *zx.ComponentCtx(void)) zx.Component {
                 </div>
             ) else if (groups.len == 0) (
                 <div class="flex flex-col gap-1 rounded-md border border-control-border bg-bg p-4">
-                    <p class="m-0 text-base text-text">No groups yet.</p>
-                    <p class="m-0 text-sm text-muted">A group chat rotates replies between its member characters. Create one and pick members from your character list.</p>
+                    <p class="text-base text-text">No groups yet.</p>
+                    <p class="text-sm text-muted">A group chat rotates replies between its member characters. Create one and pick members from your character list.</p>
                 </div>
             ) else (
                 <div id="group-list" class="char-list group/list flex min-h-[8rem] flex-col gap-[2px]" role="listbox" aria-label="Groups">
                     {for (groups, 0..) |g, i| (
                         <div class="group-row-wrap group/grow relative">
                             <div
-                                class={if (isSelected(i)) (char_list.row_class ++ " is-selected") else char_list.row_class}
+                                class={if (isSelected(i)) (char_list.row_class ++ "is-selected") else char_list.row_class}
                                 role="option"
                                 aria-selected={if (isSelected(i)) "true" else "false"}
                                 data-group-index={i}

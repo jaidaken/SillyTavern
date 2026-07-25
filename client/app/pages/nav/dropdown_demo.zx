@@ -44,7 +44,7 @@ pub fn DropdownDemo(ctx: *zx.ComponentCtx(void)) zx.Component {
             onclick={onDemoClick}
             onkeydown={onDemoKey}
         >
-            <h2 class="m-0 font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">Dropdown demo</h2>
+            <h2 class="font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">Dropdown demo</h2>
             <Dropdown
                 options={&demo_options}
                 value={selected.value}
@@ -52,7 +52,7 @@ pub fn DropdownDemo(ctx: *zx.ComponentCtx(void)) zx.Component {
                 label="Instruct template"
                 onchange={&onPick}
             />
-            <p class="m-0 font-mono text-xs text-faint">selected: <span id="dd-demo-value" class="text-accent">{selected.value}</span></p>
+            <p class="font-mono text-xs text-faint">selected: <span id="dd-demo-value" class="text-accent">{selected.value}</span></p>
         </div>
     );
 }

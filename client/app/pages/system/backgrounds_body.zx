@@ -30,7 +30,7 @@ pub fn BackgroundsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
         <div @allocator={ctx.allocator} id="backgrounds-body" class="backgrounds-body flex flex-col gap-3" @rendering={.client}>
             {if (backgrounds.state() == .failed) (
                 <div class="flex flex-col items-start gap-2 rounded-md border border-control-border bg-bg p-3" role="alert">
-                    <p class="m-0 text-sm text-text">{backgrounds.errorText()}</p>
+                    <p class="text-sm text-text">{backgrounds.errorText()}</p>
                     <button class={retry_btn} type="button" data-bg-retry="1" onclick={onRetry}>Try again</button>
                 </div>
             ) else if (backgrounds.state() == .loading) (
@@ -41,8 +41,8 @@ pub fn BackgroundsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                 </div>
             ) else if (backgrounds.list().len == 0) (
                 <div class="flex flex-col gap-1 rounded-md border border-control-border bg-bg p-4">
-                    <p class="m-0 text-base text-text">No backgrounds yet.</p>
-                    <p class="m-0 text-sm text-muted">Drop image files into the server's backgrounds folder, then reload this panel.</p>
+                    <p class="text-base text-text">No backgrounds yet.</p>
+                    <p class="text-sm text-muted">Drop image files into the server's backgrounds folder, then reload this panel.</p>
                     <button class={retry_btn} type="button" data-bg-retry="1" onclick={onRetry}>Reload</button>
                 </div>
             ) else (
@@ -115,11 +115,11 @@ pub fn BackgroundsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
             </div>
             {if (backgrounds.uploadState() == .failed) (
                 <div class="flex flex-col items-start gap-2 rounded-md border border-control-border bg-bg p-3" role="alert">
-                    <p id="bg-upload-error" class="m-0 text-sm text-text">{backgrounds.uploadErrorText()}</p>
-                    <p class="m-0 text-sm text-muted">Choose the file again to retry.</p>
+                    <p id="bg-upload-error" class="text-sm text-text">{backgrounds.uploadErrorText()}</p>
+                    <p class="text-sm text-muted">Choose the file again to retry.</p>
                 </div>
             )}
-            <p class="setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]">The background sits behind the chat, dimmed so the text stays readable.</p>
+            <p class="setting-note text-sm text-muted max-[768px]:text-[0.78rem]">The background sits behind the chat, dimmed so the text stays readable.</p>
         </div>
     );
 }

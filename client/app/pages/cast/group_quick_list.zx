@@ -16,11 +16,11 @@ pub fn GroupQuickList(ctx: *zx.ComponentCtx(void)) zx.Component {
     }
     return (
         <div @allocator={ctx.allocator} class="group-quick flex flex-col gap-1" @rendering={.client}>
-            <h3 class="m-0 font-mono text-xs tracking-wide text-muted uppercase">Groups</h3>
+            <h3 class="font-mono text-xs tracking-wide text-muted uppercase">Groups</h3>
             <div id="group-quick-list" class="flex flex-col gap-[2px]" role="listbox" aria-label="Group chats">
                 {for (groups, 0..) |g, i| (
                     <div
-                        class={if (isSelected(i)) (char_list.row_class ++ " is-selected") else char_list.row_class}
+                        class={if (isSelected(i)) (char_list.row_class ++ "is-selected") else char_list.row_class}
                         role="option"
                         aria-selected={if (isSelected(i)) "true" else "false"}
                         data-group-open={i}

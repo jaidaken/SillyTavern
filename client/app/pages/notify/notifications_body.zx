@@ -17,7 +17,7 @@ pub fn NotificationsBody(allocator: zx.Allocator) zx.Component {
     return (
         <div @allocator={allocator} id="notifications-body" class="flex flex-col gap-3">
             <div class="flex items-center justify-between gap-2">
-                <p class="m-0 font-mono text-xs tracking-[0.08em] text-muted uppercase">{countText(allocator, list.len)}</p>
+                <p class="font-mono text-xs tracking-[0.08em] text-muted uppercase">{countText(allocator, list.len)}</p>
                 <button
                     id="notif-clear"
                     type="button"
@@ -25,7 +25,7 @@ pub fn NotificationsBody(allocator: zx.Allocator) zx.Component {
                     onclick={onClear}
                 >Clear</button>
             </div>
-            <ul id="notif-list" class="m-0 flex list-none flex-col gap-2 p-0">
+            <ul id="notif-list" class="flex list-none flex-col gap-2 p-0">
                 {for (list) |n| (
                     <li class={notifications.rowClass(n.level)} data-level={notifications.levelName(n.level)}>
                         <span class="notif-text min-w-0 break-words">{n.text}</span>

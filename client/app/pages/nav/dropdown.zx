@@ -71,7 +71,7 @@ const button_cls = "inline-flex min-w-[10rem] max-w-full cursor-pointer items-ce
 // The list drops in on `drawer-in` and, while it fades out, wears `menu-out` (a fast fade, a dropdown
 // closes often so a slow one drags, WD24) and drops its pointer events so the click behind lands. Both
 // literals so the tailwind scanner generates the animate-* utilities.
-const list_base = "dd-list z-40 m-0 flex max-h-[min(16rem,60vh)] list-none flex-col gap-[1px] overflow-y-auto rounded-md border border-border bg-surface p-1 outline-none [scrollbar-width:thin]";
+const list_base = "dd-list z-40 flex max-h-[min(16rem,60vh)] list-none flex-col gap-[1px] overflow-y-auto rounded-md border border-border bg-surface p-1 outline-none [scrollbar-width:thin]";
 const list_in = list_base ++ " animate-drawer-in";
 const list_out = list_base ++ " animate-menu-out pointer-events-none";
 const option_cls = "cursor-pointer rounded-sm px-3 py-[0.35rem] font-mono text-sm text-muted aria-selected:text-accent";

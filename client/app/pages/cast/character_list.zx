@@ -45,7 +45,7 @@ pub fn CharacterList(ctx: *zx.ComponentCtx(void)) zx.Component {
         >
             {for (items) |it| (
                 <div
-                    class={if (isSelected(it.index)) (row_class ++ " is-selected") else row_class}
+                    class={if (isSelected(it.index)) (row_class ++ "is-selected") else row_class}
                     role="option"
                     aria-selected={if (isSelected(it.index)) "true" else "false"}
                     data-char-select={it.index}
@@ -158,7 +158,7 @@ fn actionsLabel(alloc: std.mem.Allocator, name: []const u8) []const u8 {
 /// Before the first compute: the store has never answered, so the backend is the thing to talk about.
 fn notLoadedState(allocator: zx.Allocator) zx.Component {
     return (
-        <p @allocator={allocator} class="panel-empty m-0 text-sm leading-ui text-muted">No characters loaded. Connect to the SillyTavern backend to see your characters.</p>
+        <p @allocator={allocator} class="panel-empty text-sm leading-ui text-muted">No characters loaded. Connect to the SillyTavern backend to see your characters.</p>
     );
 }
 
@@ -168,12 +168,12 @@ fn notLoadedState(allocator: zx.Allocator) zx.Component {
 fn emptyState(ctx: *zx.ComponentCtx(void), view: character_view.View) zx.Component {
     if (!filtersActive(view)) {
         return (
-            <p @allocator={ctx.allocator} class="panel-empty m-0 text-sm leading-ui text-muted">No characters here yet. New writes one from scratch, Import reads a card file you already have.</p>
+            <p @allocator={ctx.allocator} class="panel-empty text-sm leading-ui text-muted">No characters here yet. New writes one from scratch, Import reads a card file you already have.</p>
         );
     }
     return (
         <div @allocator={ctx.allocator} class="panel-empty flex flex-col items-start gap-2">
-            <p class="m-0 text-sm leading-ui text-muted">{noMatchText(ctx.allocator, view)}</p>
+            <p class="text-sm leading-ui text-muted">{noMatchText(ctx.allocator, view)}</p>
             <button
                 id="char-clear-filters"
                 class={clear_btn}

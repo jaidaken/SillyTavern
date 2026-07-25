@@ -20,7 +20,7 @@ const settings_tab = "settings-tab cursor-pointer border-0 border-b-2 border-b-t
 const row = "setting-row flex flex-wrap items-center justify-between gap-x-4 gap-y-2";
 const seg_group = "seg inline-flex flex-wrap rounded-md border border-control-border bg-bg p-[2px]";
 const label_text = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
-const note_text = "setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]";
+const note_text = "setting-note text-sm text-muted max-[768px]:text-[0.78rem]";
 // The numeric reading controls are native range inputs (keyboard-operable, WD37): accent-accent
 // recolours the browser control to the amber, so no track/thumb pseudo-element rule is needed. The
 // value beside it is fixed-width tabular so the number does not shift the row as it changes.

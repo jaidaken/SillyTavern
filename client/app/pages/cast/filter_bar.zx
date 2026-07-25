@@ -100,7 +100,7 @@ const chip_x_class = "char-chip-x inline-grid cursor-pointer place-items-center 
 // a few times a session; this one opens, refilters and closes on EVERY KEYSTROKE, and WD24 puts a
 // surface at that frequency in the no-animation band. It also showed: a captured render caught the
 // list mid-fade, drawing the toolbar row straight through it.
-const list_class = "char-filter-suggest absolute top-full right-0 left-0 z-40 m-0 mt-1 flex max-h-[14rem] list-none flex-col gap-px overflow-y-auto rounded-md border border-border bg-surface p-1 [scrollbar-width:thin]";
+const list_class = "char-filter-suggest absolute top-full right-0 left-0 z-40 mt-1 flex max-h-[14rem] list-none flex-col gap-px overflow-y-auto rounded-md border border-border bg-surface p-1 [scrollbar-width:thin]";
 const option_class = "char-filter-opt cursor-pointer truncate rounded-sm px-2 py-1 font-mono text-xs text-muted";
 const option_on_class = "char-filter-opt cursor-pointer truncate rounded-sm bg-surface-2 px-2 py-1 font-mono text-xs text-text";
 

@@ -15,8 +15,8 @@ const input_cls = "flex-1 rounded-md border border-control-border bg-bg px-[0.7r
 const area_cls = "min-h-[8rem] w-full resize-y rounded-md border border-control-border bg-bg p-[0.7rem] font-mono text-sm leading-ui text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
 const num_cls = "w-24 flex-none rounded-md border border-control-border bg-bg px-[0.7rem] py-[0.45rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
 const label_cls = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
-const hint_cls = "setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]";
-const head_cls = "m-0 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
+const hint_cls = "setting-note text-sm text-muted max-[768px]:text-[0.78rem]";
+const head_cls = "font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
 const tap_cls = " max-[768px]:min-h-11 max-[768px]:px-3 max-[768px]:py-2";
 const ghost_btn = "cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text" ++ tap_cls;
 const retry_btn = "wi-retry " ++ ghost_btn;
@@ -35,7 +35,7 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                 <div class="wi-editor grid grid-cols-1 items-start gap-3 @min-[36rem]:grid-cols-2">
                     <div class="col-span-full flex items-center gap-2">
                         <button class={ghost_btn} type="button" data-wi-toentries="1" onclick={onBackToEntries}>Back</button>
-                        <h3 class="m-0 min-w-0 flex-1 truncate font-mono text-sm text-text">{entryTitle(e)}</h3>
+                        <h3 class="min-w-0 flex-1 truncate font-mono text-sm text-text">{entryTitle(e)}</h3>
                     </div>
 
                     <div class="setting-row flex flex-col gap-1">
@@ -137,7 +137,7 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                 <div class="wi-entries flex flex-col gap-3">
                     <div class="flex items-center gap-2">
                         <button class={ghost_btn} type="button" data-wi-back="1" onclick={onCloseBook}>Back</button>
-                        <h3 class="m-0 min-w-0 flex-1 truncate font-mono text-sm text-text">{openTitle()}</h3>
+                        <h3 class="min-w-0 flex-1 truncate font-mono text-sm text-text">{openTitle()}</h3>
                         {if (!readOnly()) (
                             <button class={row_action} type="button" data-icon="pencil" data-wi-rename="1" aria-label="Rename this lorebook" onclick={onRenameBook}><span class="icon"></span></button>
                         )}
@@ -153,7 +153,7 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     )}
                     {if (actions.bookState() == .failed) (
                         <div class="flex flex-col items-start gap-2 rounded-md border border-control-border bg-bg p-3" role="alert">
-                            <p class="m-0 text-sm text-text">The book did not load.</p>
+                            <p class="text-sm text-text">The book did not load.</p>
                             <button class={retry_btn} type="button" data-wi-reopen="1" onclick={onReopenBook}>Try again</button>
                         </div>
                     ) else if (actions.bookState() == .loading) (
@@ -165,7 +165,7 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     ) else if (entrySlice().len == 0) (
                         <p class={hint_cls}>No entries yet. An entry is a piece of lore plus the keywords that pull it into the prompt.</p>
                     ) else (
-                        <ul class="m-0 flex list-none flex-col gap-1 p-0" aria-label="Entries">
+                        <ul class="flex list-none flex-col gap-1 p-0" aria-label="Entries">
                             {for (entrySlice()) |row| (
                                 <li class="flex items-center gap-2">
                                     <button class={row_btn} type="button" data-wi-entry={row.uid_key} onclick={onSelectEntry}>
@@ -214,7 +214,7 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     <h3 class={head_cls}>Lorebooks</h3>
                     {if (actions.listState() == .failed) (
                         <div class="flex flex-col items-start gap-2 rounded-md border border-control-border bg-bg p-3" role="alert">
-                            <p class="m-0 text-sm text-text">The lorebook list did not load.</p>
+                            <p class="text-sm text-text">The lorebook list did not load.</p>
                             <button class={retry_btn} type="button" data-wi-retry="1" onclick={onRetryList}>Try again</button>
                         </div>
                     ) else if (actions.listState() != .ready) (
@@ -226,7 +226,7 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     ) else if (wi.global.list().len == 0) (
                         <p class={hint_cls}>No lorebooks yet. Create one, or import a SillyTavern world-info JSON.</p>
                     ) else (
-                        <ul class="m-0 flex list-none flex-col gap-1 p-0" aria-label="Lorebooks">
+                        <ul class="flex list-none flex-col gap-1 p-0" aria-label="Lorebooks">
                             {for (wi.global.list()) |m| (
                                 <li class="flex items-center gap-2">
                                     <input type="checkbox" name="wi-global-toggle" class={check_cls}

@@ -16,7 +16,7 @@ const head_cls = "flex items-center justify-between gap-3";
 const label_cls = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
 const num_cls = "sampler-num w-[5.5rem] rounded-md border border-control-border bg-bg px-2 py-[0.25rem] text-right font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
 const range_cls = "sampler-range w-full accent-accent";
-const hint_cls = "setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]";
+const hint_cls = "setting-note text-sm text-muted max-[768px]:text-[0.78rem]";
 // The unreadable-files line is RENDERED ALWAYS and empty until there is something to say, because a
 // live region only announces a change to a region the reader already had: inserted whole, with its
 // text, it says nothing (WD39). `empty:hidden` is what keeps the silent case out of the layout, and
@@ -117,7 +117,7 @@ pub fn AiConfigBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                 <span class={label_cls}>Reset samplers</span>
                 <button type="button" class={reset_cls} onclick={onReset}>Reset</button>
             </div>
-            <p class={hint_cls ++ " col-span-full"}>Saved to your SillyTavern settings and shared with the classic client.</p>
+            <p class={hint_cls ++ "col-span-full"}>Saved to your SillyTavern settings and shared with the classic client.</p>
         </div>
     );
 }

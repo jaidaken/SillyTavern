@@ -22,8 +22,8 @@
 const input_cls = "min-w-[9rem] flex-1 rounded-md border border-control-border bg-bg px-[0.7rem] py-[0.45rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
 const area_cls = "min-h-[6rem] w-full resize-y rounded-md border border-control-border bg-bg p-[0.7rem] font-mono text-sm leading-ui text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
 const label_cls = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
-const hint_cls = "setting-note m-0 text-sm text-muted max-[768px]:text-[0.78rem]";
-const head_cls = "m-0 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
+const hint_cls = "setting-note text-sm text-muted max-[768px]:text-[0.78rem]";
+const head_cls = "font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
 // Every button here clears the 44px touch target at phone width, the way the repo's own action
 // buttons do (character_list.zx:170 carries these on an otherwise identical class string).
 const tap_cls = " max-[768px]:min-h-11 max-[768px]:px-3 max-[768px]:py-2";
