@@ -29,4 +29,12 @@
 @import "./css/motion.css";
 @import "./css/elements.css";
 @import "./css/reading.css";
-@import "./css/chrome.css";
+@import "../app/pages/chat/chat.css";
+@import "../app/pages/notify/notify.css";
+@import "./css/status.css";
+@import "../app/pages/system/system.css";
+@import "./css/parked.css";
+@import "../app/pages/shell/shell.css";
+@import "./css/shared.css";
+@import "../app/pages/setup/setup.css";
+@import "../app/pages/cast/cast.css";

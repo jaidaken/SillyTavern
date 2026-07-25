@@ -1,0 +1,24 @@
+/* Chrome shared across panels: no single page owns these. */
+
+/* ===================================================================================
+   C-DROP: the styled dropdown (dropdown.zx). The caret glyph is a data-icon mask like
+   the rest of the chrome (the `icon` utility paints it), sized down from the 1.1rem
+   default so it sits beside text-sm; it flips when the button reports its menu open.
+   The listbox itself is utilities in the markup, elevation is border + bg-surface, no
+   shadow (WD16). Append-only zone.
+   =================================================================================== */
+[data-icon="chevron-down"] { --i: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>'); }
+
+.dd-caret::before {
+    width: 0.85rem;
+    height: 0.85rem;
+    /* --move scales the transition TIME, not the end state: reduced motion flips instantly (0ms) and
+       still shows the open state, rather than losing it (WD25). */
+    transition: transform calc(var(--move) * 150ms) var(--ease-settle);
+}
+
+/* The open state lives on the button (aria-expanded), so the caret reads it from its own control
+   rather than a class Zig would have to compute. */
+button[aria-expanded="true"] .dd-caret::before {
+    transform: rotate(180deg);
+}

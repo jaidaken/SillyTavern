@@ -1,0 +1,49 @@
+/* System panel: settings tabs, panel switching, appearance controls. */
+
+/* ===================================================================================
+   GENERATED-STATE RULES. Deliberately UNLAYERED, so they beat any utility: the element
+   they light up is not the element whose state decides it. Which reading control is lit
+   is a property of #chat-root's data-reading-*, which the Shell region does not
+   re-render, so the highlight survives a re-render and no button carries an active
+   class. The avatar popup is built by the glue at runtime, so it has no markup of ours
+   to carry utilities either.
+   =================================================================================== */
+#chat-root[data-reading-measure="narrow"] .seg-btn[data-reading-set="measure"][data-reading-val="narrow"],
+#chat-root[data-reading-measure="normal"] .seg-btn[data-reading-set="measure"][data-reading-val="normal"],
+#chat-root[data-reading-measure="wide"] .seg-btn[data-reading-set="measure"][data-reading-val="wide"],
+#chat-root[data-reading-justify="on"] .seg-btn[data-reading-set="justify"][data-reading-val="on"],
+#chat-root[data-reading-justify="off"] .seg-btn[data-reading-set="justify"][data-reading-val="off"],
+#chat-root[data-reading-indent="novel"] .seg-btn[data-reading-set="indent"][data-reading-val="novel"],
+#chat-root[data-reading-indent="chat"] .seg-btn[data-reading-set="indent"][data-reading-val="chat"],
+#chat-root[data-reading-indent="blockquote"] .seg-btn[data-reading-set="indent"][data-reading-val="blockquote"],
+#chat-root[data-reading-indent="stage"] .seg-btn[data-reading-set="indent"][data-reading-val="stage"],
+#chat-root[data-reading-indent="vn"] .seg-btn[data-reading-set="indent"][data-reading-val="vn"],
+#chat-root[data-reading-font="newsreader"] .seg-btn[data-reading-set="font"][data-reading-val="newsreader"],
+#chat-root[data-reading-font="atkinson"] .seg-btn[data-reading-set="font"][data-reading-val="atkinson"],
+#chat-root[data-reading-font="literata"] .seg-btn[data-reading-set="font"][data-reading-val="literata"],
+#chat-root[data-reading-theme="dark"] .seg-btn[data-reading-set="theme"][data-reading-val="dark"],
+#chat-root[data-reading-theme="sepia"] .seg-btn[data-reading-set="theme"][data-reading-val="sepia"],
+#chat-root[data-reading-theme="paper"] .seg-btn[data-reading-set="theme"][data-reading-val="paper"],
+#chat-root[data-reading-avatars="on"] .seg-btn[data-reading-set="avatars"][data-reading-val="on"],
+#chat-root[data-reading-avatars="off"] .seg-btn[data-reading-set="avatars"][data-reading-val="off"],
+#chat-root[data-reading-focus="on"] .seg-btn[data-reading-set="focus"][data-reading-val="on"],
+#chat-root[data-reading-focus="off"] .seg-btn[data-reading-set="focus"][data-reading-val="off"] {
+    background: var(--color-surface-2);
+    color: var(--color-accent);
+}
+
+#chat-root[data-reading-tab="reading"] .settings-tab[data-reading-val="reading"],
+#chat-root[data-reading-tab="appearance"] .settings-tab[data-reading-val="appearance"] {
+    color: var(--color-accent);
+    border-bottom-color: var(--color-accent);
+}
+
+.settings-panel { display: none; }
+.settings-panel[data-tab="reading"] { display: block; }
+#chat-root[data-reading-tab="appearance"] .settings-panel[data-tab="reading"] { display: none; }
+#chat-root[data-reading-tab="appearance"] .settings-panel[data-tab="appearance"] { display: block; }
+
+/* Appearance colour pickers: strip the native inset so the swatch fills the rounded control. */
+.theme-color::-webkit-color-swatch-wrapper { padding: 0; }
+.theme-color::-webkit-color-swatch { border: none; border-radius: 4px; }
+.theme-color::-moz-color-swatch { border: none; border-radius: 4px; }

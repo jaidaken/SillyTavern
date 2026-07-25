@@ -1,0 +1,41 @@
+/* Setup panels: backgrounds. */
+
+/* ===== C-BG: backgrounds (append-only zone) =====
+   The chosen image is chrome BEHIND the reading surface (invariant 6): a fixed layer under the
+   content, never a rule that can reach .mes_text. body carries `bg-bg` and <html> carries no
+   background, so body's colour propagates to the canvas and this pseudo-element paints above it and
+   below every in-flow child.
+   The url rides a custom property because a url cannot live in an attribute selector; the
+   data-background attribute gates the whole layer, so an unset background costs no scrim.
+   The scrim is a flat wash of the app's own ground mixed over the photo: without it, message text
+   sits straight on a picture and drops under the WD4 contrast floor. It is mixed from --color-bg so
+   it follows a recoloured chrome rather than pinning a second copy of the dark ground. */
+:root { --chat-bg-image: none; }
+
+html[data-background="on"] body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background-image:
+        linear-gradient(
+            color-mix(in oklch, var(--color-bg) 62%, transparent),
+            color-mix(in oklch, var(--color-bg) 62%, transparent)
+        ),
+        var(--chat-bg-image);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+/* The per-tile file actions are quiet until the tile is hovered or something inside it takes focus.
+   Keyboard reveal is universal (a Tab into the tile shows them); pointer-hover reveal is gated to
+   hover-capable pointers (WD25), and touch keeps them shown because the gate never matches there. */
+@media (hover: hover) and (pointer: fine) {
+    .bg-tile-actions { opacity: 0; transition: opacity 120ms ease; }
+    .bg-tile-wrap:hover .bg-tile-actions,
+    .bg-tile-wrap:focus-within .bg-tile-actions { opacity: 1; }
+}
+
+/* The [data-icon] glyph set below is SHARED: the backgrounds tiles and the character-row
+   actions both name pencil and trash. One definition each, in the C-CHAR block. */

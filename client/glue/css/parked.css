@@ -1,0 +1,31 @@
+/* Rules kept for a feature that is not built yet. Each entry names what it waits for, so
+   the next reader does not re-derive that it looks dead. */
+
+/* Avatar popup: full-size preview to the left of the chat area. Parked: the feature is not
+   built yet (operator 2026-07-25: planned, keep + convert). */
+
+#avatar-popup {
+    display: none;
+    position: fixed;
+    z-index: 100;
+    inset: 0;
+    background: oklch(0 0 0 / 0.4);
+    cursor: zoom-out;
+}
+
+#avatar-popup.is-open {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 2rem;
+}
+
+#avatar-popup img {
+    max-width: min(40vw, 480px);
+    max-height: 80vh;
+    border-radius: var(--radius-lg);
+    box-shadow: 0 8px 32px oklch(0 0 0 / 0.5);
+    object-fit: contain;
+    background: var(--color-bg);
+    cursor: default;
+}
