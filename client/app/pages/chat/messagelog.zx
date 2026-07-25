@@ -30,7 +30,7 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
             onanimationend={reveal.onMesRise}
         >
             <div
-                class="chat-inner relative mx-auto max-w-[var(--reading-measure,var(--measure))] px-4 pt-6 pb-8 group-aria-busy/chat:opacity-55 max-[640px]:px-2 max-[640px]:pt-3 max-[640px]:pb-4"
+                class="chat-inner relative mx-auto max-w-[var(--reading-measure,var(--reading-cap))] px-4 pt-6 pb-8 group-aria-busy/chat:opacity-55 max-[640px]:px-2 max-[640px]:pt-3 max-[640px]:pb-4"
             >
                 <div class="chat-top" aria-hidden="true"></div>
                 <div class="chat-history">

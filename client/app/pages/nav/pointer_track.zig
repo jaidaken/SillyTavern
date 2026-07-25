@@ -16,6 +16,7 @@ const js = zx.client.js;
 const reveal_zone = @import("./reveal_zone.zig");
 const ui_state = @import("./ui_state.zig");
 const regions = @import("../shell/regions.zig");
+const focus_mode = @import("../chat/focus_mode.zig");
 
 var left_in: bool = false;
 var right_in: bool = false;
@@ -50,6 +51,9 @@ fn zoneNow(w: f64, h: f64) reveal_zone.Zone {
 pub export fn __st_pointer_move(x: f64, y: f64, w: f64, h: f64) callconv(.c) void {
     if (zx.platform.role != .client) return;
     if (w <= 0 or h <= 0) return;
+    // Any pointer movement is reading activity for focus mode, whether or not it crosses a flank band,
+    // so this fires before the crossing early-return below.
+    focus_mode.noteActivity();
     const z = zoneNow(w, h);
     const l = z.contains(.left, x, y);
     const r = z.contains(.right, x, y);

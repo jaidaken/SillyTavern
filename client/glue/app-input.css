@@ -298,6 +298,16 @@
    wordmark. This 712-byte cut of JetBrains Mono holds U+03B2 alone, and unicode-range means the
    browser fetches it only where the compact mark actually renders it (narrow viewports). */
 @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 100 800; font-display: swap; src: url("./fonts/JetBrainsMono-beta.woff2") format("woff2"); unicode-range: U+03B2; }
+/* Two opt-in reading faces (SIL OFL 1.1, self-hosted latin subset; licence text beside each file).
+   Literata is a variable face like Newsreader (one file per style, weight 400-700 + optical sizing);
+   Atkinson Hyperlegible is static, so its four weights/styles are four files. Both are chosen only in
+   the reading Font control (--reading-font); the app chrome stays on Newsreader + mono. */
+@font-face { font-family: "Literata"; font-style: normal; font-weight: 400 700; font-display: swap; font-optical-sizing: auto; src: url("./fonts/Literata-latin.woff2") format("woff2"); }
+@font-face { font-family: "Literata"; font-style: italic; font-weight: 400 700; font-display: swap; font-optical-sizing: auto; src: url("./fonts/Literata-latin-italic.woff2") format("woff2"); }
+@font-face { font-family: "Atkinson Hyperlegible"; font-style: normal; font-weight: 400; font-display: swap; src: url("./fonts/AtkinsonHyperlegible-latin.woff2") format("woff2"); }
+@font-face { font-family: "Atkinson Hyperlegible"; font-style: italic; font-weight: 400; font-display: swap; src: url("./fonts/AtkinsonHyperlegible-latin-italic.woff2") format("woff2"); }
+@font-face { font-family: "Atkinson Hyperlegible"; font-style: normal; font-weight: 700; font-display: swap; src: url("./fonts/AtkinsonHyperlegible-latin-700.woff2") format("woff2"); }
+@font-face { font-family: "Atkinson Hyperlegible"; font-style: italic; font-weight: 700; font-display: swap; src: url("./fonts/AtkinsonHyperlegible-latin-italic-700.woff2") format("woff2"); }
 
 /* ---- The three rules no element can carry ----
    A selection and a focus ring are drawn on elements we do not author (a link inside a rendered
@@ -391,9 +401,15 @@
     margin-block-end: 0.5rem;
 }
 
+/* The rendered-message body. Every child rule below is a descendant of sanitizer-generated markup
+   that can carry no class of ours, so they are nested under this one container prefix rather than
+   repeated on 20 flat selectors (native CSS nesting, passed through by Tailwind v4's Lightning CSS;
+   pure readability, identical rendering). */
 .mes_text {
     grid-column: 2;
-    font-family: var(--font-serif);
+    /* The reading Font control points --reading-font at the chosen family; unset falls back to the
+       Newsreader serif base. */
+    font-family: var(--reading-font, var(--font-serif));
     /* Size and line-height are reading-control vars (the settings panel sets them per user); they
        default to the base tokens. */
     font-size: var(--reading-size, var(--text-md));
@@ -411,134 +427,117 @@
     font-variant-numeric: oldstyle-figures proportional-nums;
     /* Trim the font leading so text sits optically centred; progressive, ignored where unsupported. */
     text-box: trim-both cap alphabetic;
-}
 
-.mes_text > *:first-child { margin-top: 0; }
-.mes_text > *:last-child { margin-bottom: 0; }
+    & > *:first-child { margin-top: 0; }
+    & > *:last-child { margin-bottom: 0; }
 
-.mes_text p {
-    margin: 0 0 0.7em;
-}
+    p { margin: 0 0 0.7em; }
 
-/* Speech in warm amber, action/scene text in muted italic: the RP reading convention. */
-.mes_text q {
-    color: var(--color-st-quote);
-    quotes: none;
-}
+    /* Speech in warm amber, action/scene text in muted italic: the RP reading convention. */
+    q {
+        color: var(--color-st-quote);
+        quotes: none;
+    }
+    q i,
+    q em { color: inherit; }
 
-.mes_text q i,
-.mes_text q em {
-    color: inherit;
-}
+    em,
+    i { color: var(--color-st-em); }
 
-.mes_text em,
-.mes_text i {
-    color: var(--color-st-em);
-}
+    a {
+        color: var(--color-accent);
+        text-decoration: underline;
+        text-decoration-thickness: 1px;
+        text-underline-offset: 0.15em;
+    }
+    a:hover { color: var(--color-st-quote); }
 
-.mes_text a {
-    color: var(--color-accent);
-    text-decoration: underline;
-    text-decoration-thickness: 1px;
-    text-underline-offset: 0.15em;
-}
+    h1,
+    h2 {
+        font-size: var(--text-lg);
+        font-weight: 600;
+        line-height: var(--leading-tight);
+        margin: 0.7em 0 0.3em;
+    }
 
-.mes_text a:hover {
-    color: var(--color-st-quote);
-}
+    h3,
+    h4,
+    h5,
+    h6 {
+        font-size: var(--text-md);
+        font-weight: 600;
+        line-height: var(--leading-tight);
+        margin: 0.7em 0 0.3em;
+    }
 
-.mes_text h1,
-.mes_text h2 {
-    font-size: var(--text-lg);
-    font-weight: 600;
-    line-height: var(--leading-tight);
-    margin: 0.7em 0 0.3em;
-}
+    blockquote {
+        margin: 0.6em 0;
+        padding-left: 0.75rem;
+        border-left: 2px solid color-mix(in oklch, var(--color-accent) 55%, transparent);
+        color: var(--color-muted);
+        font-style: italic;
+    }
 
-.mes_text h3,
-.mes_text h4,
-.mes_text h5,
-.mes_text h6 {
-    font-size: var(--text-md);
-    font-weight: 600;
-    line-height: var(--leading-tight);
-    margin: 0.7em 0 0.3em;
-}
+    table {
+        display: block;
+        max-width: 100%;
+        overflow-x: auto;
+        border-collapse: collapse;
+        margin: 0.5em 0;
+        font-family: var(--font-serif);
+        font-size: var(--text-sm);
+    }
 
-.mes_text blockquote {
-    margin: 0.6em 0;
-    padding-left: 0.75rem;
-    border-left: 2px solid color-mix(in oklch, var(--color-accent) 55%, transparent);
-    color: var(--color-muted);
-    font-style: italic;
-}
+    th,
+    td {
+        border: 1px solid var(--color-border);
+        padding: 0.25rem 0.6rem;
+        text-align: left;
+    }
 
-.mes_text table {
-    display: block;
-    max-width: 100%;
-    overflow-x: auto;
-    border-collapse: collapse;
-    margin: 0.5em 0;
-    font-family: var(--font-serif);
-    font-size: var(--text-sm);
-}
+    pre {
+        background: var(--color-code-bg);
+        border: 1px solid var(--color-border-soft);
+        border-radius: var(--radius-md);
+        padding: 0.75rem 1rem;
+        overflow-x: auto;
+        font-family: var(--font-mono);
+        font-size: var(--text-sm);
+        line-height: 1.5;
+    }
 
-.mes_text th,
-.mes_text td {
-    border: 1px solid var(--color-border);
-    padding: 0.25rem 0.6rem;
-    text-align: left;
-}
+    /* hljs paints its own cool bg + 1em padding on code.hljs; strip both so only the warm pre shows. */
+    pre code.hljs {
+        background: transparent;
+        padding: 0;
+    }
 
-.mes_text pre {
-    background: var(--color-code-bg);
-    border: 1px solid var(--color-border-soft);
-    border-radius: var(--radius-md);
-    padding: 0.75rem 1rem;
-    overflow-x: auto;
-    font-family: var(--font-mono);
-    font-size: var(--text-sm);
-    line-height: 1.5;
-}
+    :not(pre) > code {
+        background: var(--color-surface-2);
+        border-radius: var(--radius-sm);
+        padding: 0.1rem 0.3rem;
+        font-family: var(--font-mono);
+        font-size: 0.85em;
+    }
 
-/* hljs paints its own cool bg + 1em padding on code.hljs; strip both so only the warm pre shows. */
-.mes_text pre code.hljs {
-    background: transparent;
-    padding: 0;
-}
+    hr {
+        border: 0;
+        border-top: 1px solid var(--color-border);
+        margin: 1em 0;
+    }
 
-.mes_text :not(pre) > code {
-    background: var(--color-surface-2);
-    border-radius: var(--radius-sm);
-    padding: 0.1rem 0.3rem;
-    font-family: var(--font-mono);
-    font-size: 0.85em;
-}
+    img {
+        max-width: 100%;
+        height: auto;
+        vertical-align: middle;
+    }
 
-.mes_text hr {
-    border: 0;
-    border-top: 1px solid var(--color-border);
-    margin: 1em 0;
-}
+    ul,
+    ol { padding-inline-start: 1.5rem; }
 
-.mes_text img {
-    max-width: 100%;
-    height: auto;
-    vertical-align: middle;
-}
-
-.mes_text ul,
-.mes_text ol {
-    padding-inline-start: 1.5rem;
-}
-
-/* Match the bullet-list indent (no negative pull): checklist and bullet items align in one column. */
-.mes_text li.task-list-item {
-    list-style: none;
-}
-
-.mes_text li.task-list-item input {
-    margin-inline-end: 0.4rem;
+    /* Match the bullet-list indent (no negative pull): checklist and bullet items align in one column. */
+    li.task-list-item { list-style: none; }
+    li.task-list-item input { margin-inline-end: 0.4rem; }
 }
 
 /* Inline message editor: a live-markdown contenteditable in place of the rendered body. It keeps
@@ -551,6 +550,8 @@
     gap: 0.45rem;
 }
 
+/* Inline-editor markdown tokens: the highlighter tags spans (.md-*) inside the contenteditable, so
+   like .mes_text above they carry no class of ours to hook and nest under the one container prefix. */
 .mes_edit_field {
     white-space: pre-wrap;
     overflow-wrap: break-word;
@@ -562,65 +563,61 @@
     caret-color: var(--color-accent);
     font-variant-numeric: normal;
     text-box: normal;
-}
 
-.mes_edit_field:focus-visible {
-    border-color: var(--color-accent);
-}
+    &:focus-visible { border-color: var(--color-accent); }
 
-.mes_edit_field .md-mark {
-    color: var(--color-faint);
-    opacity: 0.65;
-}
+    .md-mark {
+        color: var(--color-faint);
+        opacity: 0.65;
+    }
 
-.mes_edit_field .md-bold {
-    font-weight: 700;
-    color: var(--color-text);
-}
+    .md-bold {
+        font-weight: 700;
+        color: var(--color-text);
+    }
 
-.mes_edit_field .md-italic {
-    font-style: italic;
-    color: var(--color-st-em);
-}
+    .md-italic {
+        font-style: italic;
+        color: var(--color-st-em);
+    }
 
-.mes_edit_field .md-strike {
-    text-decoration: line-through;
-    color: var(--color-muted);
-}
+    .md-strike {
+        text-decoration: line-through;
+        color: var(--color-muted);
+    }
 
-.mes_edit_field .md-code,
-.mes_edit_field .md-fence {
-    font-family: var(--font-mono);
-    color: var(--color-st-quote);
-}
+    .md-code,
+    .md-fence {
+        font-family: var(--font-mono);
+        color: var(--color-st-quote);
+    }
 
-.mes_edit_field .md-link {
-    color: var(--color-accent);
-    text-decoration: underline;
-}
+    .md-link {
+        color: var(--color-accent);
+        text-decoration: underline;
+    }
 
-.mes_edit_field .md-url {
-    color: var(--color-faint);
-}
+    .md-url { color: var(--color-faint); }
 
-.mes_edit_field .md-h1,
-.mes_edit_field .md-h2 {
-    font-weight: 600;
-    font-size: var(--text-lg);
-    color: color-mix(in oklch, var(--color-accent) 30%, var(--color-text));
-}
+    .md-h1,
+    .md-h2 {
+        font-weight: 600;
+        font-size: var(--text-lg);
+        color: color-mix(in oklch, var(--color-accent) 30%, var(--color-text));
+    }
 
-.mes_edit_field .md-h3,
-.mes_edit_field .md-h4,
-.mes_edit_field .md-h5,
-.mes_edit_field .md-h6 {
-    font-weight: 600;
-    color: color-mix(in oklch, var(--color-accent) 20%, var(--color-text));
-}
+    .md-h3,
+    .md-h4,
+    .md-h5,
+    .md-h6 {
+        font-weight: 600;
+        color: color-mix(in oklch, var(--color-accent) 20%, var(--color-text));
+    }
 
-.mes_edit_field .md-bq {
-    color: var(--color-muted);
-    font-style: italic;
+    .md-bq {
+        color: var(--color-muted);
+        font-style: italic;
+    }
 }
 
 .mes_edit_actions {
@@ -671,16 +668,17 @@
    The client sets data-reading-* on #chat-root, which does NOT re-render with the Shell region, so
    the values (and the control highlights keyed off them) survive a settings re-render. Every rule is
    scoped to the message reading area, never the app chrome. */
-#chat-root[data-reading-size="s"] { --reading-size: 0.95rem; }
-#chat-root[data-reading-size="m"] { --reading-size: var(--text-md); }
-#chat-root[data-reading-size="l"] { --reading-size: 1.2rem; }
 #chat-root[data-reading-measure="narrow"] { --reading-measure: 34rem; }
-#chat-root[data-reading-measure="normal"] { --reading-measure: var(--measure); }
+#chat-root[data-reading-measure="normal"] { --reading-measure: min(var(--measure), var(--reading-cap)); }
 #chat-root[data-reading-measure="wide"] { --reading-measure: 48rem; }
-#chat-root[data-reading-lh="tight"] { --reading-lh: 1.45; }
-#chat-root[data-reading-lh="normal"] { --reading-lh: var(--leading-prose); }
-#chat-root[data-reading-lh="loose"] { --reading-lh: 1.85; }
 #chat-root[data-reading-avatars="off"] .mes_avatar { display: none; }
+
+/* The comfort ceiling on line length. A fixed px measure yields MORE characters per line as the text
+   shrinks (40rem is ~75ch at the default size but ~84ch a size down), past the 45-75ch reading band.
+   The cap scales with --reading-size so it holds a near-constant ~74ch at every size: 1ch is about
+   0.5em for the reading faces, so 37em is ~74ch. The column reads min(measure, cap) below, so the
+   preset/drag width wins until it would run wider than 74ch, and the cap wins from there. */
+#chat-root { --reading-cap: calc(var(--reading-size, var(--text-md)) * 37); }
 
 /* Justify defaults on; only long messages carry mes-justify (message.zx). Hyphenation is what stops
    native justification opening whitespace rivers. The pref turns it off. */
@@ -696,15 +694,17 @@
     -webkit-hyphens: none;
 }
 
-/* Paragraph styles differ only in the first-line indent. The gap between paragraphs is the base
-   margin, left untouched, so switching style never shifts the vertical rhythm that line-height owns.
-   chat is flush; novel indents every paragraph, including the first, so the indent shows even on a
-   single-paragraph message. */
+/* Paragraph styles differ in the first-line indent AND, for novel, the gap. Indent and gap are
+   exclusive separators (Butterick): a first-line indent carries the paragraph break on its own, so
+   pairing it with a blank-line gap is the belts-and-braces mistake. chat is flush and keeps the base
+   0.7em gap; novel indents every paragraph (including the first, so the indent shows on a single-
+   paragraph message) and drops the gap to zero so the indent is the only separator. */
 #chat-root[data-reading-indent="chat"] .mes_text p {
     text-indent: 0;
 }
 #chat-root[data-reading-indent="novel"] .mes_text p {
     text-indent: 2em;
+    margin-bottom: 0;
 }
 
 /* Speech on its own line: blockquote / stage / vn share the mechanism. quotes.zig tags a quote that
@@ -780,13 +780,21 @@
     color: var(--color-text);
 }
 
-/* Reading font: an axis of its own, orthogonal to the paragraph style. Default serif is the base. */
-#chat-root[data-reading-font="serif"] .mes_text {
-    font-family: var(--font-serif);
-}
-#chat-root[data-reading-font="sans"] .mes_text {
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-}
+/* Reading font: an axis of its own, orthogonal to the paragraph style. Each value points
+   --reading-font at a family (the .mes_text rule above reads it, falling back to the Newsreader
+   default). Newsreader is the editorial serif base; Literata is the book serif built for on-screen
+   reading; Atkinson Hyperlegible is the legibility face with disambiguated letterforms. The speaker
+   name stays on --font-serif regardless, so the character's voice reads consistently. */
+#chat-root[data-reading-font="newsreader"] { --reading-font: var(--font-serif); }
+#chat-root[data-reading-font="literata"] { --reading-font: "Literata", ui-serif, Georgia, Cambria, "Times New Roman", serif; }
+#chat-root[data-reading-font="atkinson"] { --reading-font: "Atkinson Hyperlegible", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+
+/* Dark reading body: the app text token is L 0.905 for chrome, which halates over sustained reading
+   on the dark ground (pure-bright text glows, worst for astigmatism). The message area drops to
+   L 0.870 so the prose reads softer than the UI around it. Scoped to #chat so only the reading body
+   and the name (a mix off this token) soften, never the app chrome; the sepia/paper rules below are
+   more specific (#chat-root[...] #chat) and repoint the token for their light grounds. */
+#chat { --color-text: oklch(0.870 0.010 80); }
 
 /* Reading themes recolour the message area only (scoped to #chat); the accent darkens so links and
    names stay legible on the light grounds. The default (dark) needs no override. */
@@ -808,6 +816,25 @@
     --color-st-quote: oklch(0.420 0.125 55);
     --color-st-em: oklch(0.360 0.015 60);
     background: var(--color-bg);
+}
+
+/* ---- Focus mode (immersive reading) ----
+   While focus mode is on, the two edge tabs and the composer fade out so the reading column stands
+   alone; a pointer move or a keypress adds focus-awake (focus_mode.zig) and they return, then fade
+   again after an idle beat. The message log is never a target. The fade is opacity only, no movement
+   (WD25); the DURATION is --move-gated, so a reduced-motion reader gets an instant hide/show rather
+   than a fade. pointer-events drop with the opacity so a faded composer never intercepts a click, but
+   a keypress on the already-focused input still wakes it (keyboard is unaffected by pointer-events). */
+#chat-root[data-reading-focus="on"] #tab-setup,
+#chat-root[data-reading-focus="on"] #tab-cast,
+#chat-root[data-reading-focus="on"] #composer {
+    transition: opacity calc(var(--move) * 220ms) ease;
+}
+#chat-root[data-reading-focus="on"]:not(.focus-awake) #tab-setup,
+#chat-root[data-reading-focus="on"]:not(.focus-awake) #tab-cast,
+#chat-root[data-reading-focus="on"]:not(.focus-awake) #composer {
+    opacity: 0;
+    pointer-events: none;
 }
 
 @media (max-width: 640px) {
@@ -1026,15 +1053,9 @@
    class. The avatar popup is built by the glue at runtime, so it has no markup of ours
    to carry utilities either.
    =================================================================================== */
-#chat-root[data-reading-size="s"] .seg-btn[data-reading-set="size"][data-reading-val="s"],
-#chat-root[data-reading-size="m"] .seg-btn[data-reading-set="size"][data-reading-val="m"],
-#chat-root[data-reading-size="l"] .seg-btn[data-reading-set="size"][data-reading-val="l"],
 #chat-root[data-reading-measure="narrow"] .seg-btn[data-reading-set="measure"][data-reading-val="narrow"],
 #chat-root[data-reading-measure="normal"] .seg-btn[data-reading-set="measure"][data-reading-val="normal"],
 #chat-root[data-reading-measure="wide"] .seg-btn[data-reading-set="measure"][data-reading-val="wide"],
-#chat-root[data-reading-lh="tight"] .seg-btn[data-reading-set="lh"][data-reading-val="tight"],
-#chat-root[data-reading-lh="normal"] .seg-btn[data-reading-set="lh"][data-reading-val="normal"],
-#chat-root[data-reading-lh="loose"] .seg-btn[data-reading-set="lh"][data-reading-val="loose"],
 #chat-root[data-reading-justify="on"] .seg-btn[data-reading-set="justify"][data-reading-val="on"],
 #chat-root[data-reading-justify="off"] .seg-btn[data-reading-set="justify"][data-reading-val="off"],
 #chat-root[data-reading-indent="novel"] .seg-btn[data-reading-set="indent"][data-reading-val="novel"],
@@ -1042,13 +1063,16 @@
 #chat-root[data-reading-indent="blockquote"] .seg-btn[data-reading-set="indent"][data-reading-val="blockquote"],
 #chat-root[data-reading-indent="stage"] .seg-btn[data-reading-set="indent"][data-reading-val="stage"],
 #chat-root[data-reading-indent="vn"] .seg-btn[data-reading-set="indent"][data-reading-val="vn"],
-#chat-root[data-reading-font="serif"] .seg-btn[data-reading-set="font"][data-reading-val="serif"],
-#chat-root[data-reading-font="sans"] .seg-btn[data-reading-set="font"][data-reading-val="sans"],
+#chat-root[data-reading-font="newsreader"] .seg-btn[data-reading-set="font"][data-reading-val="newsreader"],
+#chat-root[data-reading-font="atkinson"] .seg-btn[data-reading-set="font"][data-reading-val="atkinson"],
+#chat-root[data-reading-font="literata"] .seg-btn[data-reading-set="font"][data-reading-val="literata"],
 #chat-root[data-reading-theme="dark"] .seg-btn[data-reading-set="theme"][data-reading-val="dark"],
 #chat-root[data-reading-theme="sepia"] .seg-btn[data-reading-set="theme"][data-reading-val="sepia"],
 #chat-root[data-reading-theme="paper"] .seg-btn[data-reading-set="theme"][data-reading-val="paper"],
 #chat-root[data-reading-avatars="on"] .seg-btn[data-reading-set="avatars"][data-reading-val="on"],
-#chat-root[data-reading-avatars="off"] .seg-btn[data-reading-set="avatars"][data-reading-val="off"] {
+#chat-root[data-reading-avatars="off"] .seg-btn[data-reading-set="avatars"][data-reading-val="off"],
+#chat-root[data-reading-focus="on"] .seg-btn[data-reading-set="focus"][data-reading-val="on"],
+#chat-root[data-reading-focus="off"] .seg-btn[data-reading-set="focus"][data-reading-val="off"] {
     background: var(--color-surface-2);
     color: var(--color-accent);
 }

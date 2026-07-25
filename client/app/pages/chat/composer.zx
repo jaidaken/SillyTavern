@@ -33,7 +33,7 @@ pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
             {if (dropdown_demo.enabled()) (
                 <DropdownDemo />
             )}
-            <div class="mx-auto grid w-full max-w-[var(--reading-measure,var(--measure))] grid-cols-1 gap-1">
+            <div class="mx-auto grid w-full max-w-[var(--reading-measure,var(--reading-cap))] grid-cols-1 gap-1">
                 <div class="flex items-end gap-2">
                     <button
                         type="button"
@@ -106,6 +106,9 @@ fn onStop(_: zx.client.Event) void {
 
 fn onComposerKeydown(ev: zx.client.Event) void {
     if (zx.platform.role != .client) return;
+    // Typing is reading activity: a keypress on the already-focused composer wakes the focus-mode
+    // chrome even when a faded composer has dropped its pointer events.
+    focus_mode.noteActivity();
     const key = ev.key() orelse return;
     defer zx.allocator.free(key);
     if (!std.mem.eql(u8, key, "Enter")) return;
@@ -122,6 +125,7 @@ const undo = @import("./undo.zig");
 const instrument = @import("../platform/instrument.zig");
 const dom_event = @import("../platform/dom_event.zig");
 const char_api = @import("../cast/char_api.zig");
+const focus_mode = @import("./focus_mode.zig");
 const std = @import("std");
 const dropdown_demo = @import("../nav/dropdown_demo.zx");
 const DropdownDemo = dropdown_demo.DropdownDemo;

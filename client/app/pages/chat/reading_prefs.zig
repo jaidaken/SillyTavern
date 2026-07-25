@@ -23,6 +23,7 @@ const appearance = @import("../system/appearance.zig");
 const backgrounds = @import("../system/backgrounds.zig");
 const character_prefs = @import("../cast/character_prefs.zig");
 const config_state = @import("../system/config_state.zig");
+const focus_mode = @import("./focus_mode.zig");
 const persona_actions = @import("../cast/persona_actions.zig");
 const wi_actions = @import("../setup/world_info_actions.zig"); // w3-wi
 const tag_store = @import("../cast/tag_store.zig"); // w3-reason 3d tags
@@ -31,8 +32,10 @@ const alloc = char_store.page_gpa;
 const log = std.log.scoped(.panels);
 
 /// The controls carry these as data-reading-set. "tab" is one of them: the settings tabs are
-/// reading state too (which sub-panel shows), keyed by CSS off the same attribute.
-pub const keys = [_][]const u8{ "size", "measure", "lh", "justify", "indent", "font", "theme", "tab", "avatars" };
+/// reading state too (which sub-panel shows), keyed by CSS off the same attribute. Size and line
+/// height are NOT here: they are continuous numeric values (a slider each), so they ride their own
+/// keys like the measure drag does, not a preset attribute.
+pub const keys = [_][]const u8{ "measure", "justify", "indent", "font", "theme", "tab", "avatars", "focus" };
 
 /// The pixel width the reading-width drag persists (the drag gesture lives in this module, driven by
 /// the pointer events the door delegates via patch-door D5). A measure PRESET click drops it, inline
@@ -44,17 +47,30 @@ const measure_px_key = "st-reading-measurepx";
 /// keyboard nudges both clamp here, and a stored width below it is ignored at boot.
 const measure_min_w: f64 = 320;
 
+/// Text size and line height are continuous now (a slider each), not s/m/l or tight/normal/loose
+/// presets. Each writes an inline custom property on #chat-root (which beats the .mes_text fallback
+/// var) and persists its number under its own key, exactly as the measure drag does. The ranges are
+/// the slider bounds; the defaults are the base tokens (--text-md, --leading-prose) so an unset value
+/// reads the same as before this control existed.
+const size_val_key = "st-reading-sizeval";
+const lh_val_key = "st-reading-lhval";
+const size_min: f64 = 0.85;
+const size_max: f64 = 1.4;
+const size_default: f64 = 1.0625;
+const lh_min: f64 = 1.3;
+const lh_max: f64 = 1.9;
+const lh_default: f64 = 1.62;
+
 fn defaultFor(comptime key: []const u8) []const u8 {
-    if (std.mem.eql(u8, key, "size")) return "m";
     if (std.mem.eql(u8, key, "measure")) return "normal";
-    if (std.mem.eql(u8, key, "lh")) return "normal";
     if (std.mem.eql(u8, key, "justify")) return "on";
     if (std.mem.eql(u8, key, "indent")) return "chat";
-    if (std.mem.eql(u8, key, "font")) return "serif";
+    if (std.mem.eql(u8, key, "font")) return "newsreader";
     if (std.mem.eql(u8, key, "theme")) return "dark";
     if (std.mem.eql(u8, key, "tab")) return "reading";
     if (std.mem.eql(u8, key, "avatars")) return "on";
-    return "m";
+    if (std.mem.eql(u8, key, "focus")) return "off";
+    return "";
 }
 
 // ---- localStorage (jsz, two-step per T2: window things come off js.global) ------------------
@@ -130,6 +146,23 @@ pub fn applyAll() void {
         const n = std.fmt.parseInt(i64, px, 10) catch 0;
         if (@as(f64, @floatFromInt(n)) >= measure_min_w) setMeasure(@floatFromInt(n), false);
     }
+    // The numeric size/line-height ride their own keys (like the measure px); an unset value leaves
+    // the inline property off so .mes_text reads its token fallback.
+    if (getItem(alloc, size_val_key)) |s| {
+        defer alloc.free(s);
+        if (std.fmt.parseFloat(f64, s)) |rem| setSizeRem(rem, false) else |_| {}
+    }
+    if (getItem(alloc, lh_val_key)) |s| {
+        defer alloc.free(s);
+        if (std.fmt.parseFloat(f64, s)) |lh| setLineHeight(lh, false) else |_| {}
+    }
+    // Focus mode owns runtime activity state, so its boot value is pushed into focus_mode rather than
+    // read from the attribute the loop set above.
+    {
+        const f = getItem(alloc, "st-reading-focus");
+        defer if (f) |s| alloc.free(s);
+        focus_mode.setEnabled(if (f) |s| std.mem.eql(u8, s, "on") else false);
+    }
     log.debug("reading prefs applied", .{});
 }
 
@@ -183,6 +216,7 @@ pub fn handleClick(key: []const u8, val: []const u8) void {
     root.setAttribute(attr, val);
 
     if (std.mem.eql(u8, key, "measure")) clearMeasureOverride(root);
+    if (std.mem.eql(u8, key, "focus")) focus_mode.setEnabled(std.mem.eql(u8, val, "on"));
 
     syncAria();
     scheduleSave();
@@ -324,6 +358,106 @@ pub fn onMeasureDblclick(_: zx.client.Event) void {
     clearMeasure();
 }
 
+// ---- the numeric size + line-height sliders (client-only) -------------------------------------
+
+/// Set the inline --reading-size override on #chat-root (rem), clamped to the slider range. `persist`
+/// writes the number to its own localStorage key; a burst of slider input is debounced to one POST by
+/// scheduleSave, called from the input handler.
+fn setSizeRem(rem: f64, persist: bool) void {
+    if (zx.platform.role != .client) return;
+    const root = chatRoot() orelse return;
+    defer root.deinit();
+    const v = std.math.clamp(rem, size_min, size_max);
+    const style = root.ref.get(js.Object, "style") catch return;
+    defer style.deinit();
+    var buf: [24]u8 = undefined;
+    const val = std.fmt.bufPrint(&buf, "{d}rem", .{v}) catch return;
+    style.call(void, "setProperty", .{ js.string("--reading-size"), js.string(val) }) catch {};
+    if (persist) {
+        var kb: [24]u8 = undefined;
+        const ks = std.fmt.bufPrint(&kb, "{d}", .{v}) catch return;
+        setItem(size_val_key, ks);
+    }
+}
+
+/// Set the inline --reading-lh override on #chat-root (unitless), clamped to the slider range.
+fn setLineHeight(lh: f64, persist: bool) void {
+    if (zx.platform.role != .client) return;
+    const root = chatRoot() orelse return;
+    defer root.deinit();
+    const v = std.math.clamp(lh, lh_min, lh_max);
+    const style = root.ref.get(js.Object, "style") catch return;
+    defer style.deinit();
+    var buf: [24]u8 = undefined;
+    const val = std.fmt.bufPrint(&buf, "{d}", .{v}) catch return;
+    style.call(void, "setProperty", .{ js.string("--reading-lh"), js.string(val) }) catch {};
+    if (persist) setItem(lh_val_key, val);
+}
+
+/// The live value shown beside a slider. Set from the input handler so the number tracks the drag.
+fn setLabel(id: []const u8, text: []const u8) void {
+    const el = dom_event.elementById(alloc, id) orelse return;
+    defer el.deinit();
+    el.ref.set("textContent", js.string(text)) catch {};
+}
+
+/// The range input reports its value as a string; parse, apply, persist, update the shown value, and
+/// queue the debounced save. Public so settings_body.zx binds straight to them.
+pub fn onSizeInput(value: []const u8) void {
+    if (zx.platform.role != .client) return;
+    const rem = std.fmt.parseFloat(f64, value) catch return;
+    setSizeRem(rem, true);
+    var buf: [24]u8 = undefined;
+    const label = std.fmt.bufPrint(&buf, "{d:.2}rem", .{std.math.clamp(rem, size_min, size_max)}) catch return;
+    setLabel("reading-size-value", label);
+    scheduleSave();
+}
+
+pub fn onLhInput(value: []const u8) void {
+    if (zx.platform.role != .client) return;
+    const lh = std.fmt.parseFloat(f64, value) catch return;
+    setLineHeight(lh, true);
+    var buf: [24]u8 = undefined;
+    const label = std.fmt.bufPrint(&buf, "{d:.2}", .{std.math.clamp(lh, lh_min, lh_max)}) catch return;
+    setLabel("reading-lh-value", label);
+    scheduleSave();
+}
+
+/// The current size/line-height numbers (stored or default), for the settings render. Each returns
+/// two shapes: `*Slider` is the raw number for the range input's value attribute, `*Label` is the
+/// human "1.06rem" / "1.62" shown beside it. The allocator is the component's, freed with the render.
+fn currentSize() f64 {
+    // The .zx render calls this on the server too (the label/slider expressions), where js is stubbed
+    // to void; the comptime role check dead-eliminates the localStorage read off the SSR path.
+    if (zx.platform.role != .client) return size_default;
+    const stored = getItem(alloc, size_val_key) orelse return size_default;
+    defer alloc.free(stored);
+    return std.math.clamp(std.fmt.parseFloat(f64, stored) catch size_default, size_min, size_max);
+}
+
+fn currentLh() f64 {
+    if (zx.platform.role != .client) return lh_default;
+    const stored = getItem(alloc, lh_val_key) orelse return lh_default;
+    defer alloc.free(stored);
+    return std.math.clamp(std.fmt.parseFloat(f64, stored) catch lh_default, lh_min, lh_max);
+}
+
+pub fn sizeSlider(a: std.mem.Allocator) []const u8 {
+    return std.fmt.allocPrint(a, "{d}", .{currentSize()}) catch "";
+}
+
+pub fn sizeLabel(a: std.mem.Allocator) []const u8 {
+    return std.fmt.allocPrint(a, "{d:.2}rem", .{currentSize()}) catch "";
+}
+
+pub fn lhSlider(a: std.mem.Allocator) []const u8 {
+    return std.fmt.allocPrint(a, "{d}", .{currentLh()}) catch "";
+}
+
+pub fn lhLabel(a: std.mem.Allocator) []const u8 {
+    return std.fmt.allocPrint(a, "{d:.2}", .{currentLh()}) catch "";
+}
+
 // ---- the debounced server save ----------------------------------------------------------------
 
 const save_delay_ms = 3000;
@@ -409,6 +543,8 @@ fn mergedSettings(settings_str: []const u8) ![]u8 {
         try prefs.put(a, key, .{ .string = stored orelse defaultFor(key) });
     }
     if (getItem(a, measure_px_key)) |px| try prefs.put(a, "measurepx", .{ .string = px });
+    if (getItem(a, size_val_key)) |v| try prefs.put(a, "sizeval", .{ .string = v });
+    if (getItem(a, lh_val_key)) |v| try prefs.put(a, "lhval", .{ .string = v });
 
     try root.object.put(a, "clientReadingPrefs", .{ .object = prefs });
 

@@ -701,14 +701,26 @@ async function main() {
             'A1b every wasm export the glue calls exists in the built module',
             `checked=${calledExports.length} missing=${missingExports.length ? missingExports.join(',') : 'none'}`);
 
+        // A reading slider (numeric size / line height) reports its value as a string; set it and
+        // fire the delegated input event the way a drag would, so reading_prefs writes the inline var.
+        const setSlider = (label, v) => page.eval(`(function(){`
+            + `const s=document.querySelector('.reading-slider[aria-labelledby=${JSON.stringify(label)}]');`
+            + `if(!s)return false;s.value=${JSON.stringify(v)};`
+            + `s.dispatchEvent(new Event('input',{bubbles:true}));return true;})()`);
+
         await needsPanel('settings', 'A2-A5b the user-settings panel rows', async () => {
             await openPanel('settings');
             row('must', await page.waitFor("document.querySelector('.settings-body')"),
                 'A2 drawer opens the settings panel (plain zx handler)');
 
-            await page.click('.seg-btn[data-reading-set="size"][data-reading-val="s"]');
-            row('must', await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-size')==='s'", 2500),
-                'A3 reading Small sets data-reading-size on #chat-root');
+            // The s/m/l presets are gone: text size is a numeric slider that writes the inline
+            // --reading-size (which beats the .mes_text fallback var). Line height is the same shape.
+            await setSlider('reading-size-label', '1.30');
+            row('must', await page.waitFor("document.getElementById('chat-root').style.getPropertyValue('--reading-size')==='1.3rem'", 2500),
+                'A3 numeric text-size slider writes the inline --reading-size on #chat-root');
+            await setSlider('reading-lh-label', '1.80');
+            row('must', await page.waitFor("document.getElementById('chat-root').style.getPropertyValue('--reading-lh')==='1.8'", 2500),
+                'A3b numeric line-height slider writes the inline --reading-lh on #chat-root');
 
             await page.click('.settings-tab[data-reading-val="appearance"]');
             row('must', await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-tab')==='appearance'", 2500),
@@ -842,6 +854,68 @@ async function main() {
         row('must', dockUp && swapped && stillOpen && headingMoved === 'World Info' && onlyOneCurrent === 1,
             'A12 a section click swaps the drawer body without closing it, and marks only itself current',
             `opened=${dockUp} swapped=${swapped} stillOpen=${stillOpen} heading=${JSON.stringify(headingMoved)} current=${onlyOneCurrent}`);
+
+        // ---- reading surface: fonts, numeric persistence, focus mode ----
+        // A fresh demo page with real messages, so the reading faces land on a rendered .mes_text and
+        // the focus fade has a composer + tabs to hide.
+        console.log('== reading surface: fonts, numeric persistence, focus mode ==');
+        await page.navigate(`${args.base}/?demo=1`);
+        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
+
+        await openPanel('settings');
+        // A4 above left the settings tab on Appearance (it persists), so switch back to Reading before
+        // reaching for the reading controls, which are display:none on the Appearance tab.
+        await page.click('.settings-tab[data-reading-val="reading"]');
+        await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-tab')==='reading'", 2500);
+        // The Font control repoints --reading-font; the chosen family must reach the .mes_text computed
+        // font-family (not just the attribute), which is what proves the CSS var actually wired through.
+        const fontApplied = async (val, needle) => {
+            await page.click(`.seg-btn[data-reading-set="font"][data-reading-val="${val}"]`);
+            return page.waitFor(`document.getElementById('chat-root').getAttribute('data-reading-font')===${JSON.stringify(val)}`
+                + ` && getComputedStyle(document.querySelector('#chat .mes_text')).fontFamily.includes(${JSON.stringify(needle)})`, 2500);
+        };
+        const fAtk = await fontApplied('atkinson', 'Atkinson Hyperlegible');
+        const fLit = await fontApplied('literata', 'Literata');
+        const fNws = await fontApplied('newsreader', 'Newsreader');
+        row('must', fAtk && fLit && fNws,
+            'A13 the reading Font control changes the .mes_text computed family (Atkinson/Literata/Newsreader)',
+            `atkinson=${fAtk} literata=${fLit} newsreader=${fNws}`);
+
+        // Numeric size persists through a reload: the slider writes localStorage, and applyAll re-applies
+        // the inline --reading-size at boot before the first paint.
+        await setSlider('reading-size-label', '1.15');
+        await page.waitFor("document.getElementById('chat-root').style.getPropertyValue('--reading-size')==='1.15rem'", 2500);
+        await page.navigate(`${args.base}/?demo=1`);
+        const sizePersisted = await page.waitFor(`${hydrated} && document.getElementById('chat-root').style.getPropertyValue('--reading-size')==='1.15rem'`, 15000);
+        row('must', sizePersisted,
+            'A14 numeric text size persists across a reload (localStorage -> inline --reading-size at boot)',
+            `persisted=${sizePersisted}`);
+
+        // Focus mode: enabling adds data-reading-focus + focus-awake (chrome visible); after a pointer
+        // move arms the idle timer and it lapses, the composer fades while the message log stays; a
+        // further pointer move restores it. idle_ms is 2500 in focus_mode.zig, so the fade wait is 4s.
+        await openPanel('settings');
+        await page.click('.settings-tab[data-reading-val="reading"]');
+        await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-tab')==='reading'", 2500);
+        await page.click('.seg-btn[data-reading-set="focus"][data-reading-val="on"]');
+        const focusOn = await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-focus')==='on'"
+            + " && document.getElementById('chat-root').classList.contains('focus-awake')", 2500);
+        await closePanel('settings');
+        await movePointer(400, 400);
+        const composerFaded = await page.waitFor("Number(getComputedStyle(document.getElementById('composer')).opacity) < 0.1", 4000);
+        const logIntact = await page.eval("Number(getComputedStyle(document.getElementById('chat')).opacity) >= 0.9");
+        row('must', focusOn && composerFaded && logIntact,
+            'A15 focus mode fades the composer on idle while the message log stays visible',
+            `on=${focusOn} faded=${composerFaded} logIntact=${logIntact}`);
+
+        await movePointer(430, 360);
+        const composerBack = await page.waitFor("document.getElementById('chat-root').classList.contains('focus-awake')"
+            + " && Number(getComputedStyle(document.getElementById('composer')).opacity) > 0.9", 4000);
+        row('must', composerBack,
+            'A16 a pointer move reveals the faded chrome again (reveal-on-activity)',
+            `revealed=${composerBack}`);
+        // Reset so focus mode does not fade the Cast tab during Session B's dock navigation.
+        await page.eval("localStorage.removeItem('st-reading-focus')");
 
         // ---- Session B: mock backend, real boot path ----
         console.log('== session B: mock backend (no demo) ==');
@@ -1105,11 +1179,14 @@ async function main() {
         row('must', await page.waitFor("document.querySelector('#persona-list .char-item[data-persona-index=\\'1\\']').classList.contains('is-selected')", 2500),
             'B9 persona row-child click selects the persona');
 
-        await page.eval("localStorage.setItem('st-reading-size','s')");
+        // Size is numeric now (A14 covers its persistence); theme is still a preset attribute, so it
+        // is the representative preset pref for the boot re-apply path here.
+        await page.eval("localStorage.setItem('st-reading-theme','sepia')");
         await page.navigate(`${args.base}/?demo=1`);
         await page.waitFor(hydrated, 15000);
-        row('must', await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-size')==='s'", 2500),
+        row('must', await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-theme')==='sepia'", 2500),
             'B10 persisted reading prefs re-apply at boot');
+        await page.eval("localStorage.removeItem('st-reading-theme')");
 
         // --- send-loop ---
         // Fresh boot loads the mock textgen connection and opens Rita Recent; the mock reply SSE runs
@@ -2044,7 +2121,10 @@ async function main() {
         row('must', padBottom >= 11.5, 'C-COMP composer bottom-pad nonzero on desktop', `${padBottom}px`);
 
         // Width: the composer inner tracks .chat-inner's reading column. At a bound measure both
-        // border-boxes equal the measure, so their rendered widths match within a pixel.
+        // border-boxes equal the measure, so their rendered widths match within a pixel. The ~74ch
+        // reading cap (min(measure, --reading-cap)) would clamp the 800px case below the measure, so it
+        // is lifted here: this row is about the composer tracking the column, not about the cap.
+        await page.eval("document.getElementById('chat-root').style.setProperty('--reading-cap','9999px')");
         let widthOk = true;
         const widthDetail = [];
         for (const w of [400, 600, 800]) {
@@ -2059,6 +2139,7 @@ async function main() {
             widthDetail.push(`${w}:c${m.c.toFixed(0)}/i${m.i.toFixed(0)}`);
         }
         await page.eval("document.getElementById('chat-root').style.removeProperty('--reading-measure')");
+        await page.eval("document.getElementById('chat-root').style.removeProperty('--reading-cap')");
         row('must', widthOk, 'C-COMP composer tracks .chat-inner at 3 widths', widthDetail.join(' '));
 
         // Invariant 6: a custom rule targeting a chrome id AND the message body. The @scope wrap makes
