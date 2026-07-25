@@ -42,11 +42,6 @@ pub fn Shell(ctx: *zx.ComponentCtx(void)) zx.Component {
                     <SidePanel panel={p} />
                 )}
             </div>
-            // SysMenu renders LAST on purpose. It and SidePanel both sit at z-50, so paint order is
-            // DOM order, and below 768px a dock goes full-screen: rendered before the docks the
-            // system card was painted over by one, which is exactly when you need it (it is the
-            // control that changes the app's look, so it must stay visible over whatever is open).
-            <SysMenu key="sysmenu" />
         </div>
     );
 }
@@ -58,4 +53,3 @@ const instrument = @import("../platform/instrument.zig");
 const TopBar = @import("./topbar.zx").TopBar;
 const SidePanel = @import("../nav/sidepanel.zx").SidePanel;
 const EdgeTabs = @import("../nav/edgetabs.zx").EdgeTabs;
-const SysMenu = @import("../nav/sysmenu.zx").SysMenu;

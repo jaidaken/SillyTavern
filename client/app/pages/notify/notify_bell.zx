@@ -1,16 +1,10 @@
-// The notification bell that rides the Cast edge tab, and the small card it opens.
+// The notification bell that sits in the top bar, one button left of the system gear, and the small
+// card it opens.
 //
-// The bell left the 13-icon topbar with the rest of that row (rework section 3). It arrives WITH
-// the Cast tab, on the same proximity reveal and the same fade: reaching for the right edge is
-// already the gesture that summons navigation, so the history costs nothing at rest and is always
-// reachable, where a bell that appeared only with unread items could never show you what you had
-// already read. The unread COUNT is the part that comes and goes.
-//
-// Like the tab, a hidden bell drops its pointer events as well as its opacity, so the square it
-// occupies stays clickable through to the page underneath until it is actually showing.
-//
-// Bell and card both offset off --dock-w-right, the same custom property the Cast tab reads, so an
-// open right dock pushes all three inward together and a resize drag moves them at pointer rate.
+// The bell is a normal top-bar button: always visible, in-flow beside the gear, no edge reveal and
+// no dock offset. Only the unread COUNT comes and goes, as a chip on the button's corner. The card
+// it opens drops from below the top-bar right, the same place the gear's card drops from, so the two
+// controls read as a pair of top-bar menus rather than one bar button and one edge handle.
 pub fn NotifyBell(allocator: zx.Allocator) zx.Component {
     return (
         <div @allocator={allocator} class="contents">
@@ -18,7 +12,6 @@ pub fn NotifyBell(allocator: zx.Allocator) zx.Component {
                 id="notify-bell"
                 type="button"
                 class={bellClass()}
-                style={ui.tabOffsetStyle(.right)}
                 data-icon={if (state.isOpen()) "close" else "bell"}
                 aria-label={state.buttonLabel(allocator)}
                 aria-haspopup="dialog"
@@ -35,7 +28,6 @@ pub fn NotifyBell(allocator: zx.Allocator) zx.Component {
                 <div
                     id="notify-popover"
                     class={if (state.isClosing()) popover_out else popover_in}
-                    style={ui.tabOffsetStyle(.right)}
                     role="dialog"
                     aria-labelledby="notify-heading"
                     onkeydown={state.onKey}
@@ -65,14 +57,14 @@ pub fn NotifyBell(allocator: zx.Allocator) zx.Component {
 // The tab's own vocabulary, one notch down the edge: same size, same left-rounded shape, same fade,
 // so the pair reads as one stack of handles rather than as a tab with a stray chip beneath it.
 // A coarse pointer never hovers, so both stay lit and live there, at the 44px tap minimum.
-const bell_base = "icon dock-slide-right fixed top-[calc(var(--topbar-h)+3.2rem)] z-40 grid size-[2.4rem] cursor-pointer place-items-center rounded-l-md border border-r-0 border-border bg-surface-2 transition-opacity duration-200 ease-[ease] hover:text-accent focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(pointer:coarse)]:size-11 [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100";
+const bell_base = "icon grid size-[2.2rem] flex-none cursor-pointer place-items-center rounded-md border border-control-border bg-surface text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-accent";
 
 // Three literals rather than a computed string: the tailwind scanner reads .zx text, so a utility
 // assembled in Zig is never generated. Open takes the accent because the bell is then the close
 // affordance, exactly as an open side's tab does.
-const bell_open = bell_base ++ " pointer-events-auto text-accent opacity-100";
-const bell_shown = bell_base ++ " pointer-events-auto text-muted opacity-100";
-const bell_hidden = bell_base ++ " pointer-events-none text-muted opacity-0";
+const bell_open = bell_base ++ " text-accent";
+const bell_shown = bell_base;
+const bell_hidden = bell_base ++ " pointer-events-none opacity-0";
 
 fn bellClass() []const u8 {
     if (state.isOpen()) return bell_open;
@@ -91,7 +83,7 @@ const count_chip = "pointer-events-none absolute -top-1 -left-1 grid h-4 min-w-4
 // utilities appear here as literals to be generated (the bell_open pattern). The card drops in from
 // just above on `drawer-in` (it sits below the bell) and lifts back out on `drawer-out`; while it
 // fades it drops its pointer events so a click reaches the page behind it.
-const popover_base = "dock-slide-right fixed top-[calc(var(--topbar-h)+6rem)] z-50 flex max-h-[min(60vh,26rem)] w-[19rem] max-w-[calc(100vw-1.5rem)] flex-col gap-3 rounded-lg border border-border bg-surface p-3";
+const popover_base = "fixed top-[calc(var(--topbar-h)+0.3rem)] right-2 z-[60] flex max-h-[min(28rem,calc(100dvh_-_var(--topbar-h)_-_1rem))] w-[min(19rem,calc(100vw-1.5rem))] flex-col gap-3 overflow-hidden rounded-lg border border-border bg-surface p-3";
 const popover_in = popover_base ++ " animate-drawer-in";
 const popover_out = popover_base ++ " animate-drawer-out pointer-events-none";
 

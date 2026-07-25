@@ -16,7 +16,6 @@ pub fn SysMenu(allocator: zx.Allocator) zx.Component {
                 id="sys-gear"
                 type="button"
                 class={gear}
-                style={state.gearOffset(allocator)}
                 data-icon="cog"
                 aria-label="System"
                 aria-haspopup="dialog"
@@ -28,7 +27,6 @@ pub fn SysMenu(allocator: zx.Allocator) zx.Component {
                 <div
                     id="sys-popover"
                     class={if (state.isClosing()) popover_out else popover_in}
-                    style={state.gearOffset(allocator)}
                     role="dialog"
                     aria-labelledby="sys-heading"
                     tabindex="-1"
@@ -85,7 +83,7 @@ pub fn SysMenu(allocator: zx.Allocator) zx.Component {
 
 // The gear sits in the corner the two panel tabs do not own, and clears the composer's own controls,
 // which stay centred on the reading measure.
-const gear = "icon fixed bottom-3 z-50 grid size-[2.2rem] cursor-pointer place-items-center rounded-md border border-control-border bg-surface text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-accent";
+const gear = "icon grid size-[2.2rem] flex-none cursor-pointer place-items-center rounded-md border border-control-border bg-surface text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-accent";
 
 // 336px wide and 28rem tall at most, floating clear of the gear: wide enough for the real forms once
 // they wrap, narrow enough that the conversation is still readable beside it. The height cap yields
@@ -96,7 +94,7 @@ const gear = "icon fixed bottom-3 z-50 grid size-[2.2rem] cursor-pointer place-i
 // animate-* utilities have to appear here as literals to be generated (the bell_open pattern). The
 // card rises on `pop-in`, settles back on `pop-out`; while it fades out it drops its pointer events
 // so a click passes through to the page behind it.
-const popover_base = "fixed bottom-[3.6rem] z-50 flex max-h-[min(28rem,calc(100dvh_-_7rem))] w-[21rem] max-w-[calc(100vw_-_1.5rem)] flex-col overflow-hidden rounded-lg border border-border bg-surface";
+const popover_base = "fixed top-[calc(var(--topbar-h)+0.3rem)] right-2 z-[60] flex max-h-[min(28rem,calc(100dvh_-_var(--topbar-h)_-_1rem))] w-[min(21rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border border-border bg-surface";
 const popover_in = popover_base ++ " animate-pop-in";
 const popover_out = popover_base ++ " animate-pop-out pointer-events-none";
 

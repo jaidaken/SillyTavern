@@ -218,7 +218,6 @@ fn readPollInterval() void {
 /// stream_drive at the seal: the failure is the connection's to hold, not the streamer's to paint.
 pub fn onStreamUnreachable() void {
     setState(.asleep);
-    notifications.push(.warning, "Backend asleep - unlock at silly", notifications.error_ttl_ms);
 }
 
 /// Mutate the live connection in place, for the config panel's samplers. Handed a pointer rather
@@ -325,18 +324,12 @@ fn checkStatus() void {
     net.request("/api/backends/text-completions/status", body, 0, onBootStatusDone, .{});
 }
 
-// The boot pre-flight's answer. Notifications fire only on the states the user can DO something
-// about; a healthy boot says nothing, because a toast on every load is noise nobody reads.
+// The boot pre-flight's answer. State changes drive the topbar status indicator; no toasts.
 fn onBootStatusDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     _ = tag;
     if (conn == null) return;
-    // Only a CHANGE is worth saying: this is the repeating poll's callback too, so an unchanged
-    // answer that still toasted would warn about the same dead backend every cadence, forever.
-    const was = state;
-    const was_code = state_code;
     if (status == 0 or status == 502 or status == 504) {
         setState(.asleep);
-        if (was != .asleep) notifications.push(.warning, "Backend asleep - unlock at silly", notifications.error_ttl_ms);
         return;
     }
     if (status >= 200 and status < 300) {
@@ -352,14 +345,12 @@ fn onBootStatusDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         }
         if (offline) {
             setState(.offline);
-            if (was != .offline) notifications.push(.warning, "Backend offline - unlock at silly", notifications.error_ttl_ms);
             return;
         }
         setState(.connected);
         return;
     }
     setStateErr(status);
-    if (was != .err or was_code != status) notifications.pushFmt(.err, notifications.error_ttl_ms, "Backend error {d}", .{status});
 }
 
 // ---- interactive connect (the connections panel) --------------------------------------------
@@ -391,13 +382,11 @@ fn onProbeDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     if (status == 0 or status == 502 or status == 504) {
         setConnStatus("Backend asleep - unlock at silly");
         setState(.asleep);
-        notifications.push(.warning, "Backend asleep - unlock at silly", notifications.error_ttl_ms);
         return;
     }
     if (status < 200 or status >= 300) {
         setConnStatusFmt("Connect failed: {d}", .{status});
         setStateErr(status);
-        notifications.pushFmt(.err, notifications.error_ttl_ms, "Connect failed: {d}", .{status});
         return;
     }
     var model_buf: [96]u8 = undefined;
@@ -415,7 +404,6 @@ fn onProbeDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     if (offline) {
         setConnStatus("Backend offline - unlock at silly");
         setState(.offline);
-        notifications.push(.warning, "Backend offline - unlock at silly", notifications.error_ttl_ms);
         return;
     }
     // Stash the model, then persist. "Connected" shows only once the save lands (onPersistDone), so a
@@ -439,7 +427,6 @@ fn onPersistDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     if (status < 200 or status >= 300) {
         setConnStatusFmt("Save failed: {d}", .{status});
         setStateErr(status);
-        notifications.pushFmt(.err, notifications.error_ttl_ms, "Connection save failed: {d}", .{status});
         return;
     }
     // Adopt the persisted connection so send works immediately; the full samplers reload on next boot.
@@ -461,7 +448,6 @@ fn onPersistDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     setState(.connected);
     // "Connected" is the post-save signal: the connection is now adopted and send will use it.
     if (pending_model_len > 0) setConnStatusFmt("Connected: {s}", .{pending_model_buf[0..pending_model_len]}) else setConnStatus("Connected");
-    notifications.pushFmt(.success, notifications.default_ttl_ms, "Connected: {s}", .{statusModel()});
 }
 
 /// Build an active connection from a type and URL with backend-neutral sampler defaults. The full

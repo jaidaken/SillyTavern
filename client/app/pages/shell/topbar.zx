@@ -25,8 +25,19 @@ pub fn TopBar(allocator: zx.Allocator) zx.Component {
                     <span class="hidden normal-case tracking-normal max-[480px]:inline">β</span>
                 </span>
             </h1>
+            // The two app-wide affordances live at the bar's right edge: notifications, then the system
+            // gear. Both render their trigger button in this flex (so they align in the bar) and their
+            // own popover as a fixed overlay that drops from below the bar (notify_bell.zx / sysmenu.zx).
+            <div class="flex flex-none items-center gap-1">
+                <StatusIndicator />
+                <NotifyBell />
+                <SysMenu />
+            </div>
         </header>
     );
 }
 
+const StatusIndicator = @import("../setup/status_indicator.zx").StatusIndicator;
+const NotifyBell = @import("../notify/notify_bell.zx").NotifyBell;
+const SysMenu = @import("../nav/sysmenu.zx").SysMenu;
 const zx = @import("zx");
