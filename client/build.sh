@@ -47,6 +47,10 @@ b=$(wc -c < dist/glue/custom.js)
 esbuild dist/glue/custom.js --minify --allow-overwrite --outfile=dist/glue/custom.js
 echo "minify dist/glue/custom.js: $b -> $(wc -c < dist/glue/custom.js) bytes"
 
+# The reset we will swap in when tailwind goes must cover every selector/property pair tailwind's
+# preflight provides; the reference fixture is the denominator, so a regression fails here not by eye.
+python3 check-reset-coverage.py
+
 # Tailwind now compiles inside `zig build` (ziex's plugin, patch 10) and lands in zig-out/static;
 # the export step copies it to dist. Nothing to run here.
 echo "tailwind -> dist/glue/app.css: $(wc -c < dist/glue/app.css) bytes (built by zig)"
