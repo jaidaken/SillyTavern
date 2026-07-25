@@ -26,18 +26,25 @@ zig build export "-Doptimize=$OPT"
 # unpruned ziex npm tree export copied in. verify.sh then runs against the pruned artifact.
 ./patch-door.sh
 
+# esbuild comes from the repo devshell (flake.nix), NOT `npx --yes`: pinned, no build-time fetch.
+# Tested here because a bare "command not found" mid-minify-loop reads as an export bug.
+command -v esbuild >/dev/null 2>&1 || {
+    echo "esbuild not on PATH: run build.sh inside the repo devshell (nix develop /home/jaidaken/desk/projects/SillyTavern -c bash -lc ./build.sh)" >&2
+    exit 1
+}
+
 # Minify the browser-fetched dist assets (sources stay readable). ESM keeps --format=esm so the
 # dynamic-import() shape survives; --allow-overwrite writes each file over itself. The ziex door is
 # minified here, AFTER patch-door: verify.sh asserts the patch by minify-stable signals, not source.
 for f in dist/glue/vendor/purify.es.mjs dist/glue/vendor/hljs.mjs dist/vendor/ziex/wasm/index.js; do
     b=$(wc -c < "$f")
-    npx --yes esbuild "$f" --minify --format=esm --allow-overwrite --outfile="$f"
+    esbuild "$f" --minify --format=esm --allow-overwrite --outfile="$f"
     echo "minify $f: $b -> $(wc -c < "$f") bytes"
 done
 # custom.js (classic-script IIFE, deps via dynamic import()) takes plain --minify: no
 # --format=esm, so the non-module script contract survives. esbuild picks the loader by extension.
 b=$(wc -c < dist/glue/custom.js)
-npx --yes esbuild dist/glue/custom.js --minify --allow-overwrite --outfile=dist/glue/custom.js
+esbuild dist/glue/custom.js --minify --allow-overwrite --outfile=dist/glue/custom.js
 echo "minify dist/glue/custom.js: $b -> $(wc -c < dist/glue/custom.js) bytes"
 
 # Tailwind now compiles inside `zig build` (ziex's plugin, patch 10) and lands in zig-out/static;
