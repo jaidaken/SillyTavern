@@ -45,13 +45,18 @@ pub fn onLogClick(ev: zx.client.Event) void {
         return;
     }
 
-    // The trigger toggles the popped action list, anchored under it.
+    // The trigger toggles the popped action list, anchored under it: a fresh open (snap the anchor,
+    // enter animation) or, if this message's menu is already open, a fade-out.
     if (dom_event.datasetUp(target, "msgMenu")) |idx_str| {
         defer zx.allocator.free(idx_str);
         const abs = std.fmt.parseInt(usize, idx_str, 10) catch return;
-        captureAnchor(target);
-        store.menu.toggle(abs);
-        regions.bumpMessageLog();
+        if (store.menu.isOpenFor(abs)) {
+            beginMenuClose();
+        } else {
+            captureAnchor(target);
+            store.menu.open(abs);
+            regions.bumpMessageLog();
+        }
         return;
     }
 
@@ -77,10 +82,25 @@ pub fn onLogClick(ev: zx.client.Event) void {
     }
 
     if (store.menu.open_index != null and !dom_event.hasAncestorId(target, "msg-menu")) {
-        store.menu.close();
-        regions.bumpMessageLog();
+        beginMenuClose();
     }
     undo.onLogClick(ev);
+}
+
+/// menu-out is 150ms; unmount a hair later so the fade fully plays.
+const menu_close_ms: u32 = 170;
+
+/// Begin the action menu's exit fade: keep it mounted with its `menu-out` class and arm the unmount
+/// timer. A re-open before it fires flips the state back to open, so the timer becomes a no-op (store).
+fn beginMenuClose() void {
+    if (!store.menu.beginClose()) return;
+    regions.bumpMessageLog();
+    if (zx.platform.role == .client) _ = zx.client.setTimeout(menuCloseTick, menu_close_ms);
+}
+
+/// The exit timer fired: unmount the menu iff it is still closing.
+fn menuCloseTick() void {
+    if (store.menu.commitClose()) regions.bumpMessageLog();
 }
 
 /// The region's keydown delegate: Escape closes an open action menu first, then undo.onLogKey runs.
@@ -113,8 +133,7 @@ pub fn onLogKey(ev: zx.client.Event) void {
         };
         defer zx.allocator.free(key);
         if (std.mem.eql(u8, key, "Escape")) {
-            store.menu.close();
-            regions.bumpMessageLog();
+            beginMenuClose();
             return;
         }
     }

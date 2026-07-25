@@ -69,8 +69,7 @@ fn currentIdent() ?Ident {
 pub fn openVersionsFor(abs: usize) void {
     if (zx.platform.role != .client) return;
     if (store.undo.isVersionsOpenFor(abs)) {
-        store.undo.close();
-        regions.bumpMessageLog();
+        beginUndoClose();
         return;
     }
     store.undo.openVersions(abs);
@@ -140,9 +139,8 @@ fn restoreVersion(backup_ts: []const u8) void {
 /// Open (or toggle shut) the whole-chat snapshot overlay and fetch the save points.
 pub fn onOpenSnapshots(_: zx.client.Event) void {
     if (zx.platform.role != .client) return;
-    if (store.undo.mode == .snapshots) {
-        store.undo.close();
-        regions.bumpMessageLog();
+    if (store.undo.mode == .snapshots and !store.undo.closing) {
+        beginUndoClose();
         return;
     }
     store.undo.openSnapshots();
@@ -316,17 +314,31 @@ pub fn onLogClick(ev: zx.client.Event) void {
     }
     if (dom_event.datasetUp(target, "undoClose")) |flag| {
         zx.allocator.free(flag);
-        store.undo.close();
-        regions.bumpMessageLog();
+        beginUndoClose();
         return;
     }
 
     // A click outside an open surface (and not on a control above) dismisses it.
-    if (store.undo.mode != .closed and !dom_event.hasAncestorId(target, "undo-surface")) {
-        store.undo.close();
-        regions.bumpMessageLog();
+    if (store.undo.mode != .closed and !store.undo.closing and !dom_event.hasAncestorId(target, "undo-surface")) {
+        beginUndoClose();
     }
     ui.onPageClick(ev);
+}
+
+/// drawer-out is 200ms; unmount a hair later so the fade fully plays.
+const undo_close_ms: u32 = 220;
+
+/// Begin the undo surface's exit fade: keep it mounted (mode retained) with its exit class and arm
+/// the unmount timer. A re-open before it fires clears the closing flag, so the timer becomes a no-op.
+fn beginUndoClose() void {
+    if (!store.undo.beginClose()) return;
+    regions.bumpMessageLog();
+    if (zx.platform.role == .client) _ = zx.client.setTimeout(undoCloseTick, undo_close_ms);
+}
+
+/// The exit timer fired: tear the surface down iff it is still closing.
+fn undoCloseTick() void {
+    if (store.undo.commitClose()) regions.bumpMessageLog();
 }
 
 /// The MessageLog region's keydown handler: Escape closes an open undo surface first, then the panel
@@ -340,8 +352,7 @@ pub fn onLogKey(ev: zx.client.Event) void {
         };
         defer zx.allocator.free(key);
         if (std.mem.eql(u8, key, "Escape")) {
-            store.undo.close();
-            regions.bumpMessageLog();
+            beginUndoClose();
             return;
         }
     }

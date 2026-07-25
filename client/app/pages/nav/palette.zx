@@ -12,8 +12,11 @@
 // ui.zig), palette_state.zig holds the region handle and the focus moves, palette_targets.zig holds
 // the catalogue and the filter as pure, natively tested Zig (ZX5).
 //
-// NO ENTRANCE ANIMATION, deliberately: the palette is keyboard-initiated and opened often, which is
-// exactly the case where motion is friction rather than polish (WD24).
+// NO ENTRANCE ANIMATION, deliberately: the palette is keyboard-initiated (Ctrl-K) and opened often,
+// which is exactly the case where motion is friction rather than polish (WD24). The CLOSE is animated
+// (close-only): the exit fade fires AFTER the action, with pointer-events off, so it never delays a
+// keystroke, and a re-open forces the phase back to open (overlay_exit.zig) so re-invocation still
+// snaps. So the overlay appears instantly and leaves on a fade.
 pub fn Palette(ctx: *zx.ComponentCtx(void)) zx.Component {
     state.region = ctx.state(u32, 0);
     const allocator = ctx.allocator;
@@ -23,12 +26,12 @@ pub fn Palette(ctx: *zx.ComponentCtx(void)) zx.Component {
         // a real <input> and role=option rows driven by aria-activedescendant (WD37, WD38).
         // allow-div-onclick: region-level delegation root; keyboard parity via onkeydown here
         <div @allocator={allocator} id="palette" class="contents" onclick={onClick} onkeydown={onKey}>
-            {if (state.isOpen()) (
-                <div class={frame}>
-                    <div class="absolute inset-0 bg-bg/70" data-palette-dismiss="1" aria-hidden="true"></div>
+            {if (state.isMounted()) (
+                <div class={if (state.isClosing()) frame_out else frame}>
+                    <div class={if (state.isClosing()) backdrop_out else backdrop} data-palette-dismiss="1" aria-hidden="true"></div>
                     <div
                         id="palette-card"
-                        class={card}
+                        class={if (state.isClosing()) card_out else card}
                         role="dialog"
                         aria-modal="true"
                         aria-labelledby="palette-title"
@@ -83,9 +86,19 @@ pub fn Palette(ctx: *zx.ComponentCtx(void)) zx.Component {
 // Docked above centre rather than mid-screen: the list grows downward, and a centred card would
 // shift under the query as rows drop out. Modest and centred, never full-bleed.
 const frame = "fixed inset-0 z-50 flex items-start justify-center px-4 pt-[12vh] max-[640px]:px-2 max-[640px]:pt-[6vh]";
+// While the card fades out the frame drops its pointer events so a click reaches the page behind it.
+const frame_out = frame ++ " pointer-events-none";
 
-// Depth on borders, no shadow: the house convention for this dark theme (WD16).
+// Close-only (WD24, see the component doc): the palette appears instantly, so backdrop and card carry
+// NO enter animation; they gain the exit utilities only while closing (literals so the scanner emits
+// them). The dimming backdrop fades out with the card.
+const backdrop = "absolute inset-0 bg-bg/70";
+const backdrop_out = backdrop ++ " animate-fade-out";
+
+// Depth on borders, no shadow: the house convention for this dark theme (WD16). The card zooms out a
+// touch on `palette-out` as a dialog leaving; no matching enter, per WD24.
 const card = "relative z-10 flex w-[min(34rem,100%)] flex-col gap-2 rounded-lg border border-border bg-surface p-2";
+const card_out = card ++ " animate-palette-out";
 
 const title = "m-0 px-1 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
 

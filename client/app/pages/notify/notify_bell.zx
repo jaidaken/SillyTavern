@@ -31,10 +31,10 @@ pub fn NotifyBell(allocator: zx.Allocator) zx.Component {
                     <span id="notify-count" class={count_chip} aria-hidden="true">{state.countText(allocator)}</span>
                 )}
             </button>
-            {if (state.isOpen()) (
+            {if (state.isMounted()) (
                 <div
                     id="notify-popover"
-                    class={popover}
+                    class={if (state.isClosing()) popover_out else popover_in}
                     style={ui.tabOffsetStyle(.right)}
                     role="dialog"
                     aria-labelledby="notify-heading"
@@ -87,7 +87,13 @@ const count_chip = "pointer-events-none absolute -top-1 -left-1 grid h-4 min-w-4
 
 // Capped height with its own scroll, so fifty notifications cannot grow a card taller than the
 // window. No shadow: depth in this theme is carried on borders (WD16).
-const popover = "fixed top-[calc(var(--topbar-h)+6rem)] z-50 flex max-h-[min(60vh,26rem)] w-[19rem] max-w-[calc(100vw-1.5rem)] flex-col gap-3 rounded-lg border border-border bg-surface p-3";
+// Two literals rather than a computed string: the tailwind scanner reads .zx TEXT, so the animate-*
+// utilities appear here as literals to be generated (the bell_open pattern). The card drops in from
+// just above on `drawer-in` (it sits below the bell) and lifts back out on `drawer-out`; while it
+// fades it drops its pointer events so a click reaches the page behind it.
+const popover_base = "fixed top-[calc(var(--topbar-h)+6rem)] z-50 flex max-h-[min(60vh,26rem)] w-[19rem] max-w-[calc(100vw-1.5rem)] flex-col gap-3 rounded-lg border border-border bg-surface p-3";
+const popover_in = popover_base ++ " animate-drawer-in";
+const popover_out = popover_base ++ " animate-drawer-out pointer-events-none";
 
 const zx = @import("zx");
 const ui = @import("../nav/ui.zig");

@@ -21,13 +21,13 @@ pub fn SysMenu(allocator: zx.Allocator) zx.Component {
                 aria-label="System"
                 aria-haspopup="dialog"
                 aria-expanded={if (state.isOpen()) "true" else "false"}
-                aria-controls={if (state.isOpen()) "sys-popover" else ""}
+                aria-controls={if (state.isMounted()) "sys-popover" else ""}
                 onclick={state.onGear}
             ></button>
-            {if (state.isOpen()) (
+            {if (state.isMounted()) (
                 <div
                     id="sys-popover"
-                    class={popover}
+                    class={if (state.isClosing()) popover_out else popover_in}
                     style={state.gearOffset(allocator)}
                     role="dialog"
                     aria-labelledby="sys-heading"
@@ -92,7 +92,13 @@ const gear = "icon fixed bottom-3 z-50 grid size-[2.2rem] cursor-pointer place-i
 // to the viewport on a short window so the card can never run off the top. No shadow: this theme
 // carries depth on borders (WD16). Padding lives on the head, body and footer, not here, so the
 // body's scrollbar rides the card edge instead of floating inside a gutter.
-const popover = "fixed bottom-[3.6rem] z-50 flex max-h-[min(28rem,calc(100dvh_-_7rem))] w-[21rem] max-w-[calc(100vw_-_1.5rem)] flex-col overflow-hidden rounded-lg border border-border bg-surface";
+// Three literals rather than a computed string: the tailwind scanner reads .zx TEXT, so the
+// animate-* utilities have to appear here as literals to be generated (the bell_open pattern). The
+// card rises on `pop-in`, settles back on `pop-out`; while it fades out it drops its pointer events
+// so a click passes through to the page behind it.
+const popover_base = "fixed bottom-[3.6rem] z-50 flex max-h-[min(28rem,calc(100dvh_-_7rem))] w-[21rem] max-w-[calc(100vw_-_1.5rem)] flex-col overflow-hidden rounded-lg border border-border bg-surface";
+const popover_in = popover_base ++ " animate-pop-in";
+const popover_out = popover_base ++ " animate-pop-out pointer-events-none";
 
 const heading = "m-0 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
 

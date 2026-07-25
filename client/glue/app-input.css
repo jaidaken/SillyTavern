@@ -115,6 +115,28 @@
     --animate-section-rise: section-rise 300ms var(--ease-settle) both;
     --animate-card-edit-in: card-edit-in 160ms var(--ease-settle) both;
 
+    /* Overlay EXIT animations. Every toggled overlay stays mounted one beat past its close (a
+       `closing` phase in overlay_exit.zig) so its exit has a node to run on; each is the reverse of
+       that overlay's entry. `forwards` holds the faded-out end frame so the element does not flash
+       back to full opacity in the gap before the timer unmounts it (the toast-out precedent). --move
+       scales the travel only, so reduced motion keeps the fade and drops the movement (WD25). The
+       big/rare surfaces (panels, system card, palette, notify) get a ~200ms slide (WD20 drawer band);
+       the small/frequent menus (dropdown, message actions) close on a fast fade so a dismiss never
+       drags (WD24, WD20 dropdown floor). */
+    --animate-panel-out: panel-out 200ms var(--ease-drawer) forwards;
+    --animate-panel-out-right: panel-out-right 200ms var(--ease-drawer) forwards;
+    --animate-drawer-out: drawer-out 200ms var(--ease-drawer) forwards;
+    --animate-menu-out: drawer-out 150ms var(--ease-drawer) forwards;
+    /* The system card and the command palette had NO open animation at all; give each a matched
+       enter/leave pair. The corner card rises from its edge; the palette zooms a touch, as a dialog. */
+    --animate-pop-in: pop-in 200ms var(--ease-drawer);
+    --animate-pop-out: pop-out 200ms var(--ease-drawer) forwards;
+    /* The command palette is close-only (WD24): keyboard-first and opened often, so it appears
+       instantly and only its LEAVE animates. Its dimming backdrop fades out with the card (opacity
+       only, so --move never touches it). */
+    --animate-palette-out: palette-out 170ms var(--ease-settle) forwards;
+    --animate-fade-out: fade-out 170ms var(--ease-settle) forwards;
+
     /* --move scales MOVEMENT (transform) only; the opacity fade always plays, so reduced motion is
        gentler rather than absent (WD25). */
     @keyframes panel-in {
@@ -148,6 +170,40 @@
     @keyframes card-edit-in {
         from { opacity: 0; transform: translateY(calc(var(--move) * -4px)); }
         to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ---- Overlay exits (the reverse of each entry above) + the two new corner-overlay enters.
+       Every travel is scaled by --move so reduced motion keeps the fade and drops the movement, the
+       same contract the enters hold (WD25). ---- */
+    @keyframes panel-out {
+        from { opacity: 1; transform: translateX(0); }
+        to { opacity: 0; transform: translateX(calc(var(--move) * -12px)); }
+    }
+    @keyframes panel-out-right {
+        from { opacity: 1; transform: translateX(0); }
+        to { opacity: 0; transform: translateX(calc(var(--move) * 12px)); }
+    }
+    @keyframes drawer-out {
+        from { opacity: 1; transform: translateY(0); }
+        to { opacity: 0; transform: translateY(calc(var(--move) * -8px)); }
+    }
+    /* The system card rises from its bottom-left corner on enter and settles back down on leave. */
+    @keyframes pop-in {
+        from { opacity: 0; transform: translateY(calc(var(--move) * 10px)) scale(calc(1 - var(--move) * 0.02)); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes pop-out {
+        from { opacity: 1; transform: translateY(0) scale(1); }
+        to { opacity: 0; transform: translateY(calc(var(--move) * 10px)) scale(calc(1 - var(--move) * 0.02)); }
+    }
+    /* The command palette zooms a touch as a dialog leaving (close-only, WD24); no matching enter. */
+    @keyframes palette-out {
+        from { opacity: 1; transform: translateY(0) scale(1); }
+        to { opacity: 0; transform: translateY(calc(var(--move) * -8px)) scale(calc(1 - var(--move) * 0.02)); }
+    }
+    @keyframes fade-out {
+        from { opacity: 1; }
+        to { opacity: 0; }
     }
 }
 

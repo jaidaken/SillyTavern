@@ -68,7 +68,12 @@ var anchor_width: f32 = 0;
 var registry: std.StringHashMapUnmanaged(Entry) = .empty;
 
 const button_cls = "inline-flex min-w-[10rem] max-w-full cursor-pointer items-center justify-between gap-2 rounded-md border border-control-border bg-surface px-3 py-[0.4rem] font-mono text-sm text-text transition-colors duration-120 ease-[ease] hover:border-border aria-expanded:border-accent";
-const list_cls = "dd-list z-40 m-0 flex max-h-[min(16rem,60vh)] list-none flex-col gap-[1px] overflow-y-auto rounded-md border border-border bg-surface p-1 outline-none [scrollbar-width:thin] animate-drawer-in";
+// The list drops in on `drawer-in` and, while it fades out, wears `menu-out` (a fast fade, a dropdown
+// closes often so a slow one drags, WD24) and drops its pointer events so the click behind lands. Both
+// literals so the tailwind scanner generates the animate-* utilities.
+const list_base = "dd-list z-40 m-0 flex max-h-[min(16rem,60vh)] list-none flex-col gap-[1px] overflow-y-auto rounded-md border border-border bg-surface p-1 outline-none [scrollbar-width:thin]";
+const list_in = list_base ++ " animate-drawer-in";
+const list_out = list_base ++ " animate-menu-out pointer-events-none";
 const option_cls = "cursor-pointer rounded-sm px-3 py-[0.35rem] font-mono text-sm text-muted aria-selected:text-accent";
 const option_active_cls = "cursor-pointer rounded-sm bg-surface-2 px-3 py-[0.35rem] font-mono text-sm text-text aria-selected:text-accent";
 
@@ -81,6 +86,10 @@ pub fn Dropdown(allocator: zx.Allocator, props: Props) zx.Component {
         }) catch {};
     }
     const open = nav.isOpen(props.name);
+    // Mounted covers open AND the closing fade, so the list has a node for its `menu-out` animation;
+    // the backdrop and aria-expanded stay on `open` so they clear the instant the fade begins.
+    const mounted = nav.isMounted(props.name);
+    const closing = nav.isClosing(props.name);
     const face = nav.selectedLabel(props.options, props.value, "Select...");
     const btn_id = std.fmt.allocPrint(allocator, "dd-btn-{s}", .{props.name}) catch "dd-btn";
     const list_id = std.fmt.allocPrint(allocator, "dd-list-{s}", .{props.name}) catch "dd-list";
@@ -105,14 +114,14 @@ pub fn Dropdown(allocator: zx.Allocator, props: Props) zx.Component {
             {if (open) (
                 <div data-dd-dismiss={props.name} aria-hidden="true" class="fixed inset-0 z-30"></div>
             )}
-            {if (open) (
+            {if (mounted) (
                 <ul
                     id={list_id}
                     role="listbox"
                     tabindex="-1"
                     aria-label={props.label}
                     style={anchorStyle(allocator)}
-                    class={list_cls}
+                    class={if (closing) list_out else list_in}
                 >
                     {for (props.options, 0..) |opt, i| (
                         <li
@@ -150,8 +159,7 @@ pub fn onClick(target: js.Object) bool {
     }
     if (dom_event.datasetUp(target, "ddDismiss")) |name| {
         zx.allocator.free(name);
-        nav.closeMenu();
-        zx.client.rerender();
+        closeAnimated();
         return true;
     }
     return false;
@@ -245,16 +253,30 @@ fn openFor(name: []const u8) void {
 }
 
 fn closeAndRefocus(name: []const u8) void {
-    nav.closeMenu();
-    zx.client.rerender();
+    closeAnimated();
     focusButton(name);
 }
 
 fn commit(name: []const u8, val: []const u8) void {
     if (registry.get(name)) |e| e.onchange(val);
-    nav.closeMenu();
-    zx.client.rerender();
+    closeAnimated();
     focusButton(name);
+}
+
+/// menu-out is 150ms; unmount a hair later so the fade fully plays.
+const dd_close_ms: u32 = 170;
+
+/// Begin the exit fade (keep the list mounted with its `menu-out` class) and arm the unmount timer. A
+/// re-open before it fires flips the phase back to open, so the timer becomes a no-op (dropdown_nav).
+fn closeAnimated() void {
+    if (!nav.beginClose()) return;
+    zx.client.rerender();
+    if (zx.platform.role == .client) _ = zx.client.setTimeout(closeTick, dd_close_ms);
+}
+
+/// The exit timer fired: unmount the list iff it is still closing.
+fn closeTick() void {
+    if (nav.commitClose()) zx.client.rerender();
 }
 
 /// Read the keyboard-active option's value straight from the DOM and commit it, so no options slice

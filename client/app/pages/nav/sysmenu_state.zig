@@ -16,12 +16,18 @@ const ui_state = @import("./ui_state.zig");
 const model = @import("./sysmenu_model.zig");
 const regions = @import("../shell/regions.zig");
 const dom_event = @import("../platform/dom_event.zig");
+const overlay_exit = @import("../platform/overlay_exit.zig");
 
 const log = std.log.scoped(.panels);
 
 pub const SysSection = model.SysSection;
 
-var open: bool = false;
+/// The card's open/exit phase. `closing` keeps the card mounted through its `pop-out` fade; the
+/// timer below unmounts it. See overlay_exit.zig for the re-open guard.
+var exit: overlay_exit.Exit = .{};
+
+/// pop-out is 200ms; unmount a hair later so the fade fully plays before the node leaves.
+const close_ms: u32 = 220;
 
 /// Null until the first read, which is what pulls the remembered section out of storage. Reading it
 /// lazily keeps the restore out of the boot sequence: the card is a corner control most sessions
@@ -29,7 +35,17 @@ var open: bool = false;
 var current: ?SysSection = null;
 
 pub fn isOpen() bool {
-    return open;
+    return exit.isOpen();
+}
+
+/// Rendered while open OR fading out, so the `pop-out` exit has a node to run on.
+pub fn isMounted() bool {
+    return exit.isMounted();
+}
+
+/// The card is on its way out: the markup swaps to the exit-animation class and drops its pointer events.
+pub fn isClosing() bool {
+    return exit.isClosing();
 }
 
 /// The group showing, restoring the remembered one on the first read. A missing or junk stored value
@@ -47,9 +63,10 @@ pub fn currentStr(id: SysSection) []const u8 {
     return if (section() == id) "true" else "false";
 }
 
-/// Boot-time open, with no rerender: the ?sysopen flag runs before the first paint.
+/// Boot-time open, with no rerender: the ?sysopen flag runs before the first paint. Also the
+/// palette's open path (it opens the card then focuses the gear). Instant, no exit animation.
 pub fn setOpen(v: bool) void {
-    open = v;
+    if (v) exit.open() else exit.closeInstant();
 }
 
 /// The card's width and its margin from the screen edge, mirroring the `w-[21rem]` in sysmenu.zx.
@@ -76,11 +93,15 @@ pub fn gearOffset(alloc: std.mem.Allocator) []const u8 {
 }
 
 pub fn onGear(_: zx.client.Event) void {
-    open = !open;
+    if (exit.isOpen()) {
+        closeCard();
+        return;
+    }
+    exit.open();
     regions.bumpShell();
     // The bump rendered synchronously, so the target exists. Focus enters the card so Escape reaches
-    // its handler, and returns to the gear on close so the keyboard is not dropped (WD39).
-    focusId(if (open) "sys-popover" else "sys-gear");
+    // its handler (WD39).
+    focusId("sys-popover");
 }
 
 pub fn onClose(_: zx.client.Event) void {
@@ -89,10 +110,11 @@ pub fn onClose(_: zx.client.Event) void {
 
 /// Escape closes the card, matching the drawers' own dismissal. Bound on the card, which holds focus
 /// while it is open; ziex dispatches from the event target upward, so a key pressed anywhere inside
-/// the card reaches this.
+/// the card reaches this. Guarded on `isOpen` so a key during the fade-out is ignored (the card is
+/// already leaving).
 pub fn onKey(ev: zx.client.Event) void {
     if (zx.platform.role != .client) return;
-    if (!open) return;
+    if (!exit.isOpen()) return;
     const key = ev.key() orelse return;
     defer zx.allocator.free(key);
     if (!std.mem.eql(u8, key, "Escape")) return;
@@ -100,10 +122,19 @@ pub fn onKey(ev: zx.client.Event) void {
     closeCard();
 }
 
+/// Start the exit animation: keep the card mounted with its `pop-out` class, move focus back to the
+/// gear NOW (the closing card must not hold focus, WD39), and arm the unmount timer. A re-open before
+/// it fires flips the phase back to open, so the timer becomes a no-op (overlay_exit.zig).
 fn closeCard() void {
-    open = false;
+    if (!exit.requestClose()) return;
     regions.bumpShell();
     focusId("sys-gear");
+    if (zx.platform.role == .client) _ = zx.client.setTimeout(closeTick, close_ms);
+}
+
+/// The exit timer fired: unmount the card iff it is still closing.
+fn closeTick() void {
+    if (exit.timerFired()) regions.bumpShell();
 }
 
 /// A switcher click: show that group and remember it. The card does not close, so the swap reads as

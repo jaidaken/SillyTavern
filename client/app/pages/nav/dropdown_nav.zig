@@ -7,6 +7,7 @@
 //! sources do not exist), so state parked in the .zx is unreachable to the page-level Escape guard.
 
 const std = @import("std");
+const overlay_exit = @import("../platform/overlay_exit.zig");
 
 pub const Option = struct {
     value: []const u8,
@@ -35,39 +36,78 @@ pub fn selectedLabel(options: []const Option, value: []const u8, placeholder: []
 var open_buf: [96]u8 = undefined;
 var open_len: usize = 0;
 
+/// The open menu's exit phase. `open_len` names the ACTIVE menu (open OR fading out); this says which.
+/// The name is held through the `menu-out` fade so the render can still find the list to animate; the
+/// timer then clears it. See overlay_exit.zig for the re-open guard.
+var exit: overlay_exit.Exit = .{};
+
 /// The longest dropdown name the open state can hold. A name is a baked per-dropdown constant, so
 /// this bound is a build-time fact, not a runtime limit users can reach.
 pub const max_name_len = open_buf.len;
 
-/// The open dropdown's name, or null when every menu is closed. Borrowed from the state buffer;
-/// it stays valid until the next setOpen/closeMenu.
+/// The fully-open dropdown's name, or null when none is (a closing one does not count: its keys are
+/// done). Borrowed from the state buffer; valid until the next setOpen/closeMenu/commitClose.
 pub fn openName() ?[]const u8 {
-    return if (open_len == 0) null else open_buf[0..open_len];
+    return if (exit.isOpen() and open_len > 0) open_buf[0..open_len] else null;
 }
 
-/// True when this specific dropdown's menu is open.
+/// True when this specific dropdown's menu is FULLY open (not fading out).
 pub fn isOpen(name: []const u8) bool {
-    return open_len > 0 and std.mem.eql(u8, open_buf[0..open_len], name);
+    return exit.isOpen() and open_len > 0 and std.mem.eql(u8, open_buf[0..open_len], name);
 }
 
-/// True when ANY dropdown's menu is open. The page-level Escape guard (ui.onPageKey) reads this to
-/// stand down while a menu owns the key, which is why the state cannot live in the .zx.
+/// True when this dropdown's list is on screen: open, or lingering through its exit fade. The render
+/// mounts the list off this so the `menu-out` animation has a node to run on.
+pub fn isMounted(name: []const u8) bool {
+    return exit.isMounted() and open_len > 0 and std.mem.eql(u8, open_buf[0..open_len], name);
+}
+
+/// True when this dropdown's list is fading out, so the render gives it the exit-animation class.
+pub fn isClosing(name: []const u8) bool {
+    return exit.isClosing() and open_len > 0 and std.mem.eql(u8, open_buf[0..open_len], name);
+}
+
+/// True when ANY dropdown's menu is FULLY open. The page-level Escape guard (ui.onPageKey) reads this
+/// to stand down while a menu owns the key; a closing menu no longer owns it, so this reads false the
+/// moment the fade starts and Escape falls through to the panel below (which is why the state cannot
+/// live in the .zx).
 pub fn isOpenAny() bool {
-    return open_len > 0;
+    return exit.isOpen();
 }
 
 /// Record `name` as the open menu, copying it into the state buffer. Returns false and leaves the
 /// state untouched when the name does not fit: a truncated copy would never compare equal in isOpen,
-/// so the menu would read as closed while isOpenAny stayed true and swallowed every page Escape.
+/// so the menu would read as closed while isOpenAny stayed true and swallowed every page Escape. Also
+/// flips the phase to open, cancelling any in-progress close so a re-open makes the stale timer a no-op.
 pub fn setOpen(name: []const u8) bool {
     if (name.len == 0 or name.len > open_buf.len) return false;
     @memcpy(open_buf[0..name.len], name);
     open_len = name.len;
+    exit.open();
     return true;
 }
 
+/// Begin the exit fade, keeping the name so the render can still find the list. Returns true when a
+/// fade actually started (the menu was open), which the driver reads as "arm the unmount timer".
+pub fn beginClose() bool {
+    return exit.requestClose();
+}
+
+/// The exit timer fired: drop the name iff still closing. Returns true when it committed (re-render to
+/// unmount); a re-open since the timer was armed leaves the phase open and this is a no-op.
+pub fn commitClose() bool {
+    if (exit.timerFired()) {
+        open_len = 0;
+        return true;
+    }
+    return false;
+}
+
+/// Instant close, no fade: the Tab-out path and any hard reset. Clears the name and the phase, so a
+/// pending timer becomes a no-op.
 pub fn closeMenu() void {
     open_len = 0;
+    exit.closeInstant();
 }
 
 pub const Nav = enum { down, up, home, end };
@@ -208,4 +248,42 @@ test "setOpen rejects an empty name and leaves an open menu untouched" {
     try t.expect(!setOpen(""));
     try t.expect(isOpen("char-sort"));
     closeMenu();
+}
+
+test "a menu keeps its name through the closing fade and clears it on commit" {
+    closeMenu();
+    try t.expect(setOpen("char-sort"));
+    try t.expect(beginClose());
+    // Closing: no longer FULLY open (Escape falls through), but still mounted + named for the fade.
+    try t.expect(!isOpen("char-sort"));
+    try t.expect(!isOpenAny());
+    try t.expect(isMounted("char-sort"));
+    try t.expect(isClosing("char-sort"));
+    try t.expectEqual(@as(?[]const u8, null), openName());
+    // The timer fires: the name and the mount clear.
+    try t.expect(commitClose());
+    try t.expect(!isMounted("char-sort"));
+    try t.expect(!isClosing("char-sort"));
+}
+
+test "re-opening during the fade cancels the close and the stale timer is a no-op" {
+    closeMenu();
+    try t.expect(setOpen("char-sort"));
+    try t.expect(beginClose());
+    // Re-open (the same or another dropdown) before the timer fires.
+    try t.expect(setOpen("char-sort"));
+    try t.expect(isOpen("char-sort"));
+    try t.expect(isOpenAny());
+    try t.expect(!isClosing("char-sort"));
+    // The stale timer now fires: it must not unmount the re-opened menu.
+    try t.expect(!commitClose());
+    try t.expect(isOpen("char-sort"));
+    closeMenu();
+}
+
+test "beginClose on an already-closed menu starts no fade" {
+    closeMenu();
+    try t.expect(!beginClose());
+    try t.expect(!isOpenAny());
+    try t.expect(!commitClose());
 }

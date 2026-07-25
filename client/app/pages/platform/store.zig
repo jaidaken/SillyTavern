@@ -433,6 +433,9 @@ pub const UndoState = struct {
     /// A one-line status shown in the surface (a stale-retry note, or an empty-state line).
     note: []u8 = &.{},
     busy: bool = false,
+    /// Lingering through the exit fade: `mode` still names which surface (so the render keeps it
+    /// mounted with its exit class), until commitClose drops it.
+    closing: bool = false,
     /// Bumped on every mutation so `signalFor` re-renders the open target message; see signalFor.
     epoch: u64 = 0,
     /// Viewport anchor for the version popover (px): its top edge and its gap from the viewport right.
@@ -478,6 +481,7 @@ pub const UndoState = struct {
         self.freeSnapshots();
         self.setNoteRaw("");
         self.mode = .versions;
+        self.closing = false;
         self.target_index = abs;
         self.busy = true;
         self.touch();
@@ -489,12 +493,31 @@ pub const UndoState = struct {
         self.freeSnapshots();
         self.setNoteRaw("");
         self.mode = .snapshots;
+        self.closing = false;
         self.busy = true;
         self.touch();
     }
 
+    /// Begin the exit fade: keep `mode` (so the surface stays mounted with its exit class), just flag
+    /// closing. Returns true when a fade started (a surface was open), so the driver arms the timer.
+    pub fn beginClose(self: *UndoState) bool {
+        if (self.mode == .closed) return false;
+        self.closing = true;
+        self.touch();
+        return true;
+    }
+
+    /// The exit timer fired: tear the surface down iff still closing (a re-open clears the flag first,
+    /// so this is a no-op then). Returns true when it committed.
+    pub fn commitClose(self: *UndoState) bool {
+        if (!self.closing) return false;
+        self.close();
+        return true;
+    }
+
     pub fn close(self: *UndoState) void {
         self.mode = .closed;
+        self.closing = false;
         self.busy = false;
         self.freeVersions();
         self.freeSnapshots();
@@ -566,7 +589,7 @@ pub const UndoState = struct {
     }
 
     pub fn isVersionsOpenFor(self: *const UndoState, abs: usize) bool {
-        return self.mode == .versions and self.target_index == abs;
+        return !self.closing and self.mode == .versions and self.target_index == abs;
     }
 };
 
@@ -577,8 +600,11 @@ pub var undo: UndoState = .{ .allocator = page_gpa };
 // Pure Zig, no owned memory. `message_actions.zig` drives it; `message.zx`/`message_menu.zx` read it.
 
 pub const MenuState = struct {
-    /// Absolute index of the message whose action menu is open, or null when none is.
+    /// Absolute index of the message whose action menu is FULLY open, or null when none is.
     open_index: ?usize = null,
+    /// Absolute index of the menu lingering through its exit fade (mode-retained so the popover has a
+    /// node to animate). Null except during a close animation.
+    closing_index: ?usize = null,
     /// Viewport anchor for the popped list (px): its offset edge and its gap from the viewport right.
     /// When `anchor_up` is false the offset is the list's top; when true it is its gap from the bottom
     /// (the list opens upward from the trigger, so a message near the viewport bottom stays reachable).
@@ -588,7 +614,8 @@ pub const MenuState = struct {
     /// Bumped on every open/close so `signalFor` re-renders the open message's trigger; see signalFor.
     epoch: u64 = 0,
 
-    /// Open the menu for the message at absolute index `abs`, or close it if that one is already open.
+    /// Open the menu for the message at absolute index `abs`, or close it (instant) if that one is
+    /// already open. Kept for the pure state tests; the driver uses open/beginClose for the animated path.
     pub fn toggle(self: *MenuState, abs: usize) void {
         if (self.open_index) |cur| {
             if (cur == abs) {
@@ -596,12 +623,38 @@ pub const MenuState = struct {
                 return;
             }
         }
+        self.open(abs);
+    }
+
+    /// Open on `abs`, cancelling any in-progress close so a re-open makes a pending timer a no-op.
+    pub fn open(self: *MenuState, abs: usize) void {
         self.open_index = abs;
+        self.closing_index = null;
         self.epoch +%= 1;
     }
 
+    /// Begin the exit fade: move the open target to `closing_index` so it keeps rendering. Returns
+    /// true when a fade started (a menu was open), which the driver reads as "arm the unmount timer".
+    pub fn beginClose(self: *MenuState) bool {
+        if (self.open_index == null) return false;
+        self.closing_index = self.open_index;
+        self.open_index = null;
+        self.epoch +%= 1;
+        return true;
+    }
+
+    /// The exit timer fired: drop the lingering menu iff still closing. Returns true when it committed.
+    pub fn commitClose(self: *MenuState) bool {
+        if (self.closing_index == null) return false;
+        self.closing_index = null;
+        self.epoch +%= 1;
+        return true;
+    }
+
+    /// Instant close, no fade: an action taking over, or a hard reset. Clears both slots.
     pub fn close(self: *MenuState) void {
         self.open_index = null;
+        self.closing_index = null;
         self.epoch +%= 1;
     }
 
@@ -613,6 +666,32 @@ pub const MenuState = struct {
 
     pub fn isOpenFor(self: *const MenuState, abs: usize) bool {
         return self.open_index != null and self.open_index.? == abs;
+    }
+
+    /// Rendered for `abs`: the menu is open on it OR fading out on it.
+    pub fn isMountedFor(self: *const MenuState, abs: usize) bool {
+        if (self.open_index) |i| {
+            if (i == abs) return true;
+        }
+        if (self.closing_index) |i| {
+            if (i == abs) return true;
+        }
+        return false;
+    }
+
+    /// True while any menu is fading out, so the popover render picks the exit-animation class.
+    pub fn isClosing(self: *const MenuState) bool {
+        return self.closing_index != null;
+    }
+
+    /// A menu is on screen (open or fading). The mount gate reads this.
+    pub fn anyMounted(self: *const MenuState) bool {
+        return self.open_index != null or self.closing_index != null;
+    }
+
+    /// The absolute index of the mounted menu (open or closing), for the popover render.
+    pub fn mountedIndex(self: *const MenuState) usize {
+        return self.open_index orelse self.closing_index orelse 0;
     }
 };
 
@@ -1121,6 +1200,40 @@ test "undo_opens_versions_for_a_target_then_closes" {
     try testing.expect(!u.isVersionsOpenFor(7));
 }
 
+test "undo_close_animation_keeps_the_surface_mounted_until_the_timer_commits" {
+    var u = UndoState{ .allocator = testing.allocator };
+    defer u.deinit();
+    u.openVersions(4);
+    u.addVersion("older text", "20260101-000000", false);
+    // beginClose keeps the mode (so the surface stays mounted) but flags closing, so a re-click on the
+    // same message reopens rather than reading as still-open.
+    try testing.expect(u.beginClose());
+    try testing.expectEqual(UndoMode.versions, u.mode);
+    try testing.expect(u.closing);
+    try testing.expect(!u.isVersionsOpenFor(4));
+    try testing.expectEqual(@as(usize, 1), u.versions.items.len);
+    // The timer fires: the surface tears down and its rows free.
+    try testing.expect(u.commitClose());
+    try testing.expectEqual(UndoMode.closed, u.mode);
+    try testing.expect(!u.closing);
+    try testing.expectEqual(@as(usize, 0), u.versions.items.len);
+}
+
+test "undo_reopen_during_the_fade_cancels_it_and_the_stale_timer_is_a_noop" {
+    var u = UndoState{ .allocator = testing.allocator };
+    defer u.deinit();
+    u.openSnapshots();
+    try testing.expect(u.beginClose());
+    try testing.expect(u.closing);
+    // Re-open before the timer fires.
+    u.openVersions(9);
+    try testing.expect(!u.closing);
+    try testing.expect(u.isVersionsOpenFor(9));
+    // The stale timer fires: it must not tear down the freshly opened surface.
+    try testing.expect(!u.commitClose());
+    try testing.expectEqual(UndoMode.versions, u.mode);
+}
+
 test "undo_add_version_copies_bytes_and_survives_the_source_freeing" {
     var u = UndoState{ .allocator = testing.allocator };
     defer u.deinit();
@@ -1358,6 +1471,43 @@ test "menu_epoch_advances_on_open_and_close" {
     const e1 = m.epoch;
     m.close();
     try testing.expect(m.epoch != e1);
+}
+
+test "menu_close_animation_lingers_the_target_then_commit_clears_it" {
+    var m = MenuState{};
+    m.open(2);
+    try testing.expect(m.isOpenFor(2));
+    try testing.expect(m.anyMounted());
+    // beginClose: no longer FULLY open, but still mounted + rendered for the fade.
+    try testing.expect(m.beginClose());
+    try testing.expect(!m.isOpenFor(2));
+    try testing.expect(m.isClosing());
+    try testing.expect(m.isMountedFor(2));
+    try testing.expectEqual(@as(usize, 2), m.mountedIndex());
+    // The timer fires: the lingering menu clears.
+    try testing.expect(m.commitClose());
+    try testing.expect(!m.anyMounted());
+    try testing.expect(!m.isClosing());
+}
+
+test "menu_reopen_during_the_fade_cancels_it_and_the_stale_timer_is_a_noop" {
+    var m = MenuState{};
+    m.open(2);
+    try testing.expect(m.beginClose());
+    // Re-open before the timer fires (same or another message).
+    m.open(5);
+    try testing.expect(m.isOpenFor(5));
+    try testing.expect(!m.isClosing());
+    // The stale timer fires: it must not tear down the freshly opened menu.
+    try testing.expect(!m.commitClose());
+    try testing.expect(m.isOpenFor(5));
+}
+
+test "menu_beginClose_on_a_closed_menu_starts_no_fade" {
+    var m = MenuState{};
+    try testing.expect(!m.beginClose());
+    try testing.expect(!m.isClosing());
+    try testing.expect(!m.commitClose());
 }
 
 test "signalFor perturbs only the message whose action menu is open" {

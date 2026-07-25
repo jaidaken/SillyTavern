@@ -63,7 +63,7 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
             ) else if (store.undo.mode == .snapshots) (
                 <UndoSnapshots />
             )}
-            { if (store.menu.open_index != null) (
+            { if (store.menu.anyMounted()) (
                 <MessageMenu />
             )}
         </main>

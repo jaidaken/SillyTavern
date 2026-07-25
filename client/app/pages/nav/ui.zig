@@ -11,6 +11,7 @@ const ui_state = @import("./ui_state.zig");
 const regions = @import("../shell/regions.zig");
 const dom_event = @import("../platform/dom_event.zig");
 const dropdown_nav = @import("./dropdown_nav.zig");
+const overlay_exit = @import("../platform/overlay_exit.zig");
 // The palette's browser half. It deliberately does NOT import this file back (palette.zx carries
 // anything needing ui.zig), so the pair is a one-way edge, not a cycle.
 const palette_state = @import("./palette_state.zig");
@@ -35,6 +36,71 @@ const Ui = struct {
 };
 var ui: Ui = .{};
 
+// ---- side-panel exit animation (layered over the pure PanelState above) ------------------------
+// A dock is conditionally rendered off openOn(side); when it closes, the pure state drops to null
+// and the aside would leave the vdom the same frame, snapping shut. To slide it out, each side keeps
+// an exit phase and the panel id it was showing, so openOn keeps returning that panel (and syncDocks
+// keeps holding the dock width) through the `panel-out` fade. The timer then unmounts it. The pure
+// PanelState is untouched: its 30-plus native tests stay the source of truth for "logically open",
+// and this layer only governs how the close is painted. See overlay_exit.zig for the re-open guard.
+const SideExit = struct {
+    exit: overlay_exit.Exit = .{},
+    /// The panel lingering through the exit animation (valid while `exit.isClosing()`).
+    panel: ?PanelId = null,
+};
+var side_exit = [_]SideExit{ .{}, .{} };
+
+/// panel-out is 200ms; unmount a hair later so the slide fully plays.
+const panel_close_ms: u32 = 220;
+
+fn sideIdx(side: Side) usize {
+    return if (side == .left) 0 else 1;
+}
+
+/// Mark a side open, cancelling any in-progress close so a re-open before the timer fires flips the
+/// phase back to open and the stale timer becomes a no-op. Called on every open/swap path.
+fn markSideOpen(side: Side) void {
+    side_exit[sideIdx(side)].exit.open();
+}
+
+/// Begin a side's close animation: capture the panel it is showing (openOn keeps painting it), flip
+/// the phase to closing, and arm the unmount timer. Call BEFORE the pure state nulls the side. A
+/// no-op when nothing is open on that side.
+fn beginSideClose(side: Side) void {
+    const se = &side_exit[sideIdx(side)];
+    const open_id = ui.panels.openId(side) orelse return;
+    se.panel = open_id;
+    if (!se.exit.requestClose()) return;
+    if (zx.platform.role == .client) {
+        _ = zx.client.setTimeout(if (side == .left) panelCloseTickLeft else panelCloseTickRight, panel_close_ms);
+    }
+}
+
+// One timer fn per side so a fire only unmounts its OWN side: a shared tick would commit any side
+// that happened to be closing, clipping the other's animation when the two close moments overlap.
+fn panelCloseTickLeft() void {
+    commitSideClose(.left);
+}
+fn panelCloseTickRight() void {
+    commitSideClose(.right);
+}
+
+/// The exit timer fired: drop the lingering panel and republish the dock width (now 0) iff the side
+/// is still closing. A re-open since the timer was armed leaves the phase open, so this is a no-op.
+fn commitSideClose(side: Side) void {
+    const se = &side_exit[sideIdx(side)];
+    if (se.exit.timerFired()) {
+        se.panel = null;
+        syncDocks();
+        regions.bumpShell();
+    }
+}
+
+/// True while a side's dock is animating out. sidepanel.zx reads this to pick the exit-animation class.
+pub fn sideClosing(side: Side) bool {
+    return side_exit[sideIdx(side)].exit.isClosing();
+}
+
 // Read-only views the components use during render; no rerender, so they are safe to call anywhere.
 pub fn isActive(id: PanelId) bool {
     return ui.panels.isActive(id);
@@ -43,7 +109,14 @@ pub fn activePanel() ?Panel {
     return ui.panels.activePanel();
 }
 pub fn openOn(side: Side) ?Panel {
-    return ui.panels.openOn(side);
+    if (ui.panels.openOn(side)) |p| return p;
+    // Logically closed but still fading out: keep painting the panel it was showing so panel-out has
+    // a node to run on, until commitSideClose unmounts it.
+    const se = &side_exit[sideIdx(side)];
+    if (se.exit.isClosing()) {
+        if (se.panel) |id| return ui_state.panelFor(id);
+    }
+    return null;
 }
 pub fn activeDrawer() ?Panel {
     return ui.panels.activeDrawer();
@@ -59,13 +132,25 @@ pub fn motionClass() []const u8 {
 /// closed side publishes zero, so its tab sits back on the screen edge.
 fn syncDocks() void {
     for ([_]Side{ .left, .right }) |side| {
-        dock_metrics.publish(side, if (ui.panels.openId(side) == null) 0 else ui.panels.widthFor(side));
+        // A closing side still holds its dock width so the panel keeps its size and slides out,
+        // rather than collapsing to a zero-width strip the instant the pure state drops to null.
+        const mounted = ui.panels.openId(side) != null or side_exit[sideIdx(side)].exit.isClosing();
+        dock_metrics.publish(side, if (!mounted) 0 else ui.panels.widthFor(side));
     }
 }
 
 // Mutations re-render only the Shell region so it reflects the new state.
 pub fn toggle(id: PanelId) void {
+    const side = if (ui_state.panelFor(id)) |p| p.side else {
+        ui.panels.toggle(id);
+        return;
+    };
+    // Same id already open on its side -> this toggle closes it; animate it out. Otherwise it opens
+    // (or swaps the side to a new panel), so mark the side open to cancel any in-progress close.
+    const will_close = if (ui.panels.openId(side)) |cur| cur == id else false;
+    if (will_close) beginSideClose(side);
     ui.panels.toggle(id);
+    if (!will_close) markSideOpen(side);
     // Opening the notifications drawer IS the read receipt, so the badge clears as the list is shown.
     // Closing it must not, or a toast arriving while the drawer is open would be marked read unseen.
     if (id == .notifications and ui.panels.isActive(.notifications)) notifications.markAllRead();
@@ -73,11 +158,14 @@ pub fn toggle(id: PanelId) void {
     regions.bumpShell();
 }
 pub fn close() void {
+    beginSideClose(.left);
+    beginSideClose(.right);
     ui.panels.close();
     syncDocks();
     regions.bumpShell();
 }
 pub fn closeSide(side: Side) void {
+    beginSideClose(side);
     ui.panels.closeSide(side);
     syncDocks();
     regions.bumpShell();
@@ -105,7 +193,10 @@ pub fn sectionNavLabel(side: Side) []const u8 {
 
 /// A tab click: open the side on its remembered section, or close it if it is already open.
 pub fn toggleSide(side: Side) void {
+    const will_close = ui.panels.openId(side) != null;
+    if (will_close) beginSideClose(side);
     ui.panels.toggleSide(side);
+    if (!will_close) markSideOpen(side);
     syncDocks();
     regions.bumpShell();
 }
@@ -114,6 +205,8 @@ pub fn toggleSide(side: Side) void {
 /// drawer does not close, so the swap reads as navigation inside one surface.
 pub fn selectSection(side: Side, id: PanelId) void {
     ui.panels.setSection(side, id);
+    // A switcher swap keeps the dock open; keep the phase open so a stale close never fires under it.
+    if (ui.panels.openId(side) != null) markSideOpen(side);
     storeSection(side, id);
     syncDocks();
     regions.bumpShell();
@@ -123,6 +216,7 @@ pub fn selectSection(side: Side, id: PanelId) void {
 /// flags, which run before the first paint).
 pub fn openSideQuiet(side: Side) void {
     if (ui.panels.openId(side) == null) ui.panels.openSide(side);
+    markSideOpen(side);
     syncDocks();
 }
 pub fn anyOpen() bool {
@@ -132,6 +226,9 @@ pub fn anyOpen() bool {
 /// first paint, so the state has to be in place rather than bumped into place afterwards.
 pub fn openQuiet(id: PanelId) void {
     ui.panels.toggle(id);
+    if (ui_state.panelFor(id)) |p| {
+        if (ui.panels.openId(p.side) != null) markSideOpen(p.side);
+    }
     syncDocks();
 }
 pub fn setWidth(side: Side, w: f32) void {
@@ -231,8 +328,12 @@ pub fn onPageKey(ev: zx.client.Event) void {
     if (!std.mem.eql(u8, key, "Escape")) return;
     if (dropdown_nav.isOpenAny()) return;
     if (palette_state.isOpen()) return;
-    // Escape takes the side that opened most recently, not both at once.
+    // Escape takes the side that opened most recently, not both at once. Animate that side out: work
+    // out which side closeLast will take (its own rule), start its exit, then run the pure close.
+    const side = ui.panels.last orelse (if (ui.panels.left != null) Side.left else Side.right);
+    beginSideClose(side);
     ui.panels.closeLast();
+    syncDocks();
     regions.bumpShell();
 }
 

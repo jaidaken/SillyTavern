@@ -17,6 +17,8 @@ comptime {
     _ = @import("libc_shim");
     _ = @import("./platform/markdown.zig");
     _ = @import("./platform/store.zig");
+    // The shared exit-animation phase machine embedded by every toggled overlay.
+    _ = @import("./platform/overlay_exit.zig");
     _ = @import("./platform/utf8.zig");
     _ = @import("./platform/stream.zig");
     _ = @import("./platform/html.zig");
@@ -123,7 +125,7 @@ const witness_mint_files = [_][]const u8{ "html.zig", "unit_test.zig" };
 /// The true counts of `.zig` sources under app/pages across all 8 domain folders: every `.zig` for
 /// the aggregator-import scan, and that minus the two witness-mint files for the forgery scan. A
 /// recursive walk that missed a folder scans fewer and reads clean; pinning the totals fails it.
-const total_zig_sources = 92;
+const total_zig_sources = 93;
 const total_forgeable_zig = total_zig_sources - witness_mint_files.len;
 
 fn isExcluded(name: []const u8, exclude: []const []const u8) bool {

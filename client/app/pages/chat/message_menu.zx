@@ -27,7 +27,7 @@ pub fn MessageMenuTrigger(allocator: zx.Allocator, props: MenuTriggerProps) zx.C
 
 /// The popped action list: fixed under the trigger via the captured anchor, at the region root.
 pub fn MessageMenu(allocator: zx.Allocator) zx.Component {
-    const abs = store.menu.open_index orelse 0;
+    const abs = store.menu.mountedIndex();
     const wo = store.windowOffset();
     const in_window = abs >= wo and (abs - wo) < store.slice().len;
     const hidden = in_window and store.slice()[abs - wo].is_system;
@@ -39,7 +39,7 @@ pub fn MessageMenu(allocator: zx.Allocator) zx.Component {
             role="menu"
             aria-label="Message actions"
             style={actions.anchorStyle(allocator, store.menu.anchor_top, store.menu.anchor_right, store.menu.anchor_up)}
-            class="z-40 flex min-w-[10rem] animate-drawer-in flex-col gap-0.5 rounded-lg border border-border bg-surface p-1 outline-none"
+            class={if (store.menu.isClosing()) menu_out else menu_in}
         >
             <button type="button" role="menuitem" class={item} data-msg-action="edit" data-msg-index={abs}>Edit</button>
             <button type="button" role="menuitem" class={item} data-msg-action="copy" data-msg-index={abs}>Copy text</button>
@@ -51,6 +51,13 @@ pub fn MessageMenu(allocator: zx.Allocator) zx.Component {
         </div>
     );
 }
+
+// The popped list drops in on `drawer-in` and closes on `menu-out` (a fast fade: the action menu is
+// opened often, so a slow dismiss drags, WD24), dropping its pointer events while it leaves. Literals
+// so the tailwind scanner generates the animate-* utilities.
+const menu_common = "z-40 flex min-w-[10rem] flex-col gap-0.5 rounded-lg border border-border bg-surface p-1 outline-none";
+const menu_in = menu_common ++ " animate-drawer-in";
+const menu_out = menu_common ++ " animate-menu-out pointer-events-none";
 
 const zx = @import("zx");
 const store = @import("../platform/store.zig");

@@ -12,11 +12,28 @@ const zx = @import("zx");
 const notifications = @import("./notifications.zig");
 const regions = @import("../shell/regions.zig");
 const edgetabs_state = @import("../nav/edgetabs_state.zig");
+const overlay_exit = @import("../platform/overlay_exit.zig");
+const dom_event = @import("../platform/dom_event.zig");
 
-var open = false;
+/// The popover's open/exit phase. `closing` keeps the card mounted through its `drawer-out` fade so
+/// the exit has a node to run on; the timer below unmounts it. See overlay_exit.zig for the guard.
+var exit: overlay_exit.Exit = .{};
+
+/// drawer-out is 200ms; unmount a hair later so the fade fully plays.
+const close_ms: u32 = 220;
 
 pub fn isOpen() bool {
-    return open;
+    return exit.isOpen();
+}
+
+/// Rendered while open OR fading out, so the exit animation has a node.
+pub fn isMounted() bool {
+    return exit.isMounted();
+}
+
+/// The card is leaving: the markup swaps to the exit class and drops pointer events.
+pub fn isClosing() bool {
+    return exit.isClosing();
 }
 
 /// The bell rides the CAST TAB'S REVEAL: it is there whenever that tab is, and gone whenever it is.
@@ -30,7 +47,7 @@ pub fn isOpen() bool {
 /// It also stays while its own popover is up, whatever the pointer is doing: the button that opened
 /// the card is the button that closes it, and it cannot fade out from under that job.
 pub fn bellShown() bool {
-    return open or edgetabs_state.tabShown(.right);
+    return exit.isMounted() or edgetabs_state.tabShown(.right);
 }
 
 /// The COUNT is the part that keys on unread, so a quiet app shows a bell with nothing on it. Empty
@@ -41,7 +58,7 @@ pub fn bellShown() bool {
 /// the text until the vdom is patched, which is long after this frame returns. The first cut passed
 /// a stack array in and the count rendered as one blank character.
 pub fn countText(arena: std.mem.Allocator) []const u8 {
-    if (open) return "";
+    if (exit.isOpen()) return "";
     var buf: [4]u8 = undefined;
     const text = notifications.badgeText(&buf);
     if (text.len == 0) return "";
@@ -49,13 +66,13 @@ pub fn countText(arena: std.mem.Allocator) []const u8 {
 }
 
 pub fn hasCount() bool {
-    return !open and notifications.unreadCount() > 0;
+    return !exit.isOpen() and notifications.unreadCount() > 0;
 }
 
 /// A bell glyph with a "3" on it names nothing, so the button says what it holds and what the click
 /// will do (WD38). Reads as the plain thing when there is nothing new.
 pub fn buttonLabel(arena: std.mem.Allocator) []const u8 {
-    if (open) return "Close notifications";
+    if (exit.isOpen()) return "Close notifications";
     const n = notifications.unreadCount();
     if (n == 0) return "Notifications";
     if (n == 1) return "Notifications, 1 unread";
@@ -63,15 +80,21 @@ pub fn buttonLabel(arena: std.mem.Allocator) []const u8 {
 }
 
 pub fn expandedStr() []const u8 {
-    return if (open) "true" else "false";
+    return if (exit.isOpen()) "true" else "false";
 }
 
 pub fn onToggle(_: zx.client.Event) void {
-    setOpen(!open);
+    if (exit.isOpen()) {
+        closePopover();
+        return;
+    }
+    exit.open();
+    notifications.markAllRead();
+    regions.bumpShell();
 }
 
 pub fn onClose(_: zx.client.Event) void {
-    setOpen(false);
+    closePopover();
 }
 
 /// Escape dismisses the popover, the keyboard twin of its close button (WD37). Bound on the badge
@@ -86,19 +109,36 @@ pub fn onClose(_: zx.client.Event) void {
 /// for the walk to continue through.
 pub fn onKey(ev: zx.client.Event) void {
     if (zx.platform.role != .client) return;
-    if (!open) return;
+    if (!exit.isOpen()) return;
     const key = ev.key() orelse return;
     defer zx.allocator.free(key);
     if (!std.mem.eql(u8, key, "Escape")) return;
     ev.stopPropagation();
-    setOpen(false);
+    closePopover();
 }
 
-/// Opening IS the read receipt (the behaviour the drawer had), so the count clears as the list is
-/// shown rather than needing a second gesture. Closing never marks: a toast that arrived while the
-/// card was up would otherwise be read before anyone saw it.
-fn setOpen(next: bool) void {
-    open = next;
-    if (next) notifications.markAllRead();
+/// Start the exit animation: keep the card mounted with its `drawer-out` class, hand focus back to
+/// the bell NOW so the closing card never holds it (WD39), and arm the unmount timer. A re-open
+/// before it fires flips the phase back to open, so the timer becomes a no-op (overlay_exit.zig).
+///
+/// Closing never marks read: a toast that arrived while the card was up would otherwise be read
+/// before anyone saw it. Opening IS the read receipt (markAllRead in onToggle), the behaviour the
+/// drawer had, so the count clears as the list is shown rather than needing a second gesture.
+fn closePopover() void {
+    if (!exit.requestClose()) return;
     regions.bumpShell();
+    focusId("notify-bell");
+    if (zx.platform.role == .client) _ = zx.client.setTimeout(closeTick, close_ms);
+}
+
+/// The exit timer fired: unmount the card iff it is still closing.
+fn closeTick() void {
+    if (exit.timerFired()) regions.bumpShell();
+}
+
+fn focusId(id: []const u8) void {
+    if (zx.platform.role != .client) return;
+    const el = dom_event.elementById(zx.allocator, id) orelse return;
+    defer el.deinit();
+    el.ref.call(void, "focus", .{}) catch {};
 }

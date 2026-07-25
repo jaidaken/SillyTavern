@@ -20,6 +20,16 @@ pub const PanelProps = struct {
 
 const panel_base = "relative row-start-2 row-end-4 flex min-w-0 flex-col overflow-hidden border-border bg-surface max-[768px]:fixed max-[768px]:inset-x-0 max-[768px]:top-[var(--topbar-h)] max-[768px]:bottom-0 max-[768px]:z-50 max-[768px]:w-full! max-[768px]:max-w-none max-[768px]:rounded-none max-[768px]:border-0 max-[768px]:border-t";
 
+// Enter/leave class per side, held as literals so the tailwind scanner generates the animate-*
+// utilities (it reads .zx text). A left dock slides in from and out to the left edge, a right dock
+// the right; while it fades out it drops its pointer events so a click reaches the page behind it.
+// ui.sideClosing (ui.zig's exit layer) decides which pair a mounted dock wears; openOn keeps the
+// panel mounted through the leave.
+const panel_left_in = "panel-left col-start-1 border-r animate-panel-in " ++ panel_base;
+const panel_left_out = "panel-left col-start-1 border-r animate-panel-out pointer-events-none " ++ panel_base;
+const panel_right_in = "panel-right col-start-3 border-l animate-panel-in-right " ++ panel_base;
+const panel_right_out = "panel-right col-start-3 border-l animate-panel-out-right pointer-events-none " ++ panel_base;
+
 pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
     const p = props.panel;
     return (
@@ -27,7 +37,7 @@ pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
             @allocator={allocator}
             id="panel-view"
             aria-labelledby="panel-heading"
-            class={if (p.side == .left) ("panel-left col-start-1 border-r animate-panel-in " ++ panel_base) else ("panel-right col-start-3 border-l animate-panel-in-right " ++ panel_base)}
+            class={if (p.side == .left) (if (ui.sideClosing(.left)) panel_left_out else panel_left_in) else (if (ui.sideClosing(.right)) panel_right_out else panel_right_in)}
             style={ui.dockWidthStyle(p.side)}
         >
             <PanelHead title={p.title} side={ui.sideStr(p.side)} />

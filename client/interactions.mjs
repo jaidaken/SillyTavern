@@ -972,6 +972,49 @@ async function main() {
         const panelDismissed = await page.waitFor("!document.querySelector('#panel-view')", 2500);
         row('must', panelBeforeEsc && panelDismissed,
             'C13 Escape with no menu open still dismisses the panel', `wasOpen=${panelBeforeEsc} dismissed=${panelDismissed}`);
+
+        // ===== C-ANIM overlay exit animations (append-only) =====
+        // Every toggled overlay stays MOUNTED through its exit animation (a closing state, pointer
+        // events off) then unmounts on a timer, instead of snapping; a re-open during that window
+        // forces it back open with no orphan left behind. Synthetic .click() (not page.click's
+        // coordinates) so the rapid re-open sequence is never measured mid-slide.
+        console.log('== overlay exit animations ==');
+        const jsClick = (sel) => page.eval(`(function(){var e=document.querySelector(${JSON.stringify(sel)});if(e){e.click();return true}return false})()`);
+
+        await jsClick('#tab-setup');
+        await page.waitFor("document.querySelector('#panel-view.panel-left')", 6000);
+        await sleep(300);
+        await jsClick('#tab-setup'); // close
+        const panelClosing = await page.eval("(function(){var e=document.querySelector('#panel-view.panel-left');if(!e)return{present:false};return{present:true,pe:getComputedStyle(e).pointerEvents}})()");
+        const panelGoneAnim = await page.waitFor("!document.querySelector('#panel-view.panel-left')", 2000);
+        row('must', panelClosing.present && panelClosing.pe === 'none' && panelGoneAnim,
+            'C-ANIM-1 the side panel lingers in its closing state (pointer-events off) then unmounts',
+            `present=${panelClosing.present} pe=${panelClosing.pe} gone=${panelGoneAnim}`);
+
+        await jsClick('#tab-setup'); // open
+        await page.waitFor("document.querySelector('#panel-view.panel-left')", 6000);
+        await sleep(300);
+        await jsClick('#tab-setup'); // begin close
+        await sleep(60);             // mid exit window
+        await jsClick('#tab-setup'); // re-open before the timer fires
+        await sleep(400);            // let the stale timer fire and settle
+        const panelZombie = await page.eval("(function(){var els=document.querySelectorAll('#panel-view.panel-left');if(els.length!==1)return{count:els.length};var s=getComputedStyle(els[0]);return{count:1,opacity:Number(s.opacity),pe:s.pointerEvents}})()");
+        row('must', panelZombie.count === 1 && panelZombie.opacity === 1 && panelZombie.pe !== 'none',
+            'C-ANIM-2 re-open during the panel close leaves exactly one interactive dock (no zombie)',
+            `count=${panelZombie.count} opacity=${panelZombie.opacity} pe=${panelZombie.pe}`);
+        await jsClick('#tab-setup'); // tidy
+        await page.waitFor("!document.querySelector('#panel-view.panel-left')", 2000);
+
+        await jsClick('#sys-gear');
+        await page.waitFor("document.querySelector('#sys-popover')", 4000);
+        await jsClick('#sys-gear'); // close
+        const sysClosing = await page.eval("(function(){var e=document.querySelector('#sys-popover');if(!e)return{present:false};return{present:true,pe:getComputedStyle(e).pointerEvents}})()");
+        const sysGoneAnim = await page.waitFor("!document.querySelector('#sys-popover')", 2000);
+        row('must', sysClosing.present && sysClosing.pe === 'none' && sysGoneAnim,
+            'C-ANIM-3 the system card lingers in its closing state then unmounts on the timer',
+            `present=${sysClosing.present} pe=${sysClosing.pe} gone=${sysGoneAnim}`);
+        await sleep(100);
+
         await openPanel('characters');
         await page.waitFor("document.querySelectorAll('#chat-root .char-item').length >= 60", 5000);
 
@@ -1928,11 +1971,25 @@ async function main() {
         await press('ArrowDown', 'ArrowDown', 40);
         await press('Enter', 'Enter', 13);
         const ddPicked = await page.waitFor("document.getElementById('dd-demo-value').textContent === 'mistral'", 4000);
-        const ddClosed = await page.eval("document.getElementById('dd-list-demo') === null");
+        // The menu now fades out (menu-out) before it unmounts, so wait for the node to leave rather
+        // than reading absence the same frame; refocus is synchronous at commit, so it is read live.
         const ddRefocus = await page.eval("document.activeElement === document.getElementById('dd-btn-demo')");
+        const ddClosed = await page.waitFor("document.getElementById('dd-list-demo') === null", 2000);
         row('must', ddPicked && ddClosed && ddRefocus,
             'C-DROP-4 keyboard select fires onchange, closes the menu, refocuses the button',
             `picked=${ddPicked} closed=${ddClosed} refocus=${ddRefocus}`);
+
+        // C-DROP-ANIM: the close is animated, not a snap. Re-open, trigger a close, and read the list
+        // the SAME moment: it must still be mounted (the closing state) and inert (pointer-events off
+        // via the exit class), then unmount once the timer fires. Proves the linger the exit needs.
+        await page.click('#dd-btn-demo');
+        await page.waitFor("document.querySelector('#dd-list-demo')", 4000);
+        await press('Escape', 'Escape', 27);
+        const ddLinger = await page.eval("(function(){var e=document.querySelector('#dd-list-demo');if(!e)return{present:false};return{present:true,pe:getComputedStyle(e).pointerEvents}})()");
+        const ddAnimGone = await page.waitFor("document.querySelector('#dd-list-demo') === null", 2000);
+        row('must', ddLinger.present && ddLinger.pe === 'none' && ddAnimGone,
+            'C-DROP-ANIM the menu lingers in its closing state then unmounts on the timer',
+            `present=${ddLinger.present} pe=${ddLinger.pe} gone=${ddAnimGone}`);
 
         // C-UI: the demo root is the ONE consumer that discards onKey's result (`_ = dropdown.onKey`),
         // the exact shape that shipped the dock-eating bug, so it is the only place the component's

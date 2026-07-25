@@ -17,8 +17,18 @@ const js = zx.client.js;
 
 const targets = @import("./palette_targets.zig");
 const dom_event = @import("../platform/dom_event.zig");
+const overlay_exit = @import("../platform/overlay_exit.zig");
 
 const log = std.log.scoped(.panels);
+
+/// The overlay's exit phase, layered over `targets` (which owns the logical open + the query). While
+/// `closing`, the card stays mounted for its `palette-out` fade but `targets.isOpen()` already reads
+/// false, so the key/click/input handlers stand down. The timer below unmounts it; a re-open flips
+/// the phase back to open so the stale timer is a no-op (overlay_exit.zig).
+var exit: overlay_exit.Exit = .{};
+
+/// palette-out is 170ms (the backdrop fade matches); unmount a hair later so both fully play.
+const close_ms: u32 = 200;
 
 /// The search box's element id, shared by the markup, the focus move and the input read.
 pub const input_id = "palette-input";
@@ -38,6 +48,18 @@ var restore: ?js.Object = null;
 
 pub fn isOpen() bool {
     return targets.isOpen();
+}
+
+/// Rendered while open OR fading out, so the exit animation has a node. The `{if}` in palette.zx
+/// reads this; the input handlers keep reading `isOpen` (fully open only).
+pub fn isMounted() bool {
+    return exit.isMounted();
+}
+
+/// The card is leaving: the markup swaps to the exit-animation classes and the frame drops its
+/// pointer events so a click passes through to the page behind it.
+pub fn isClosing() bool {
+    return exit.isClosing();
 }
 
 /// Ctrl-K / Cmd-K, and nothing near it. Alt or Shift held means the user asked for a different
@@ -102,6 +124,9 @@ pub export fn __st_page_key(code: u32, mods: u32) callconv(.c) u32 {
 pub fn open() void {
     if (targets.isOpen()) return;
     targets.open();
+    // Re-open cancels an in-progress close: the phase goes back to open, so a close timer still armed
+    // from the previous dismiss finds it no longer closing and does nothing (overlay_exit.zig).
+    exit.open();
     // Capture before the sweep: making the background inert blurs whatever holds focus.
     captureFocus();
     setBackgroundInert(true);
@@ -110,26 +135,40 @@ pub fn open() void {
     log.debug("palette open: {d} targets", .{targets.visibleCount()});
 }
 
-/// Escape or a click on the backdrop: close and hand focus back to whatever had it.
+/// Escape or a click on the backdrop: begin the exit fade and hand focus back to whatever had it. The
+/// card stays mounted through `palette-out`; the timer unmounts it.
 pub fn dismiss() void {
     if (!targets.isOpen()) return;
     targets.close();
     // Before the focus move, always: an inert element refuses focus silently, which would leave the
     // user on <body> with no way to tell where they are.
     setBackgroundInert(false);
+    if (exit.requestClose()) scheduleClose();
     bump();
     restoreFocus();
 }
 
 /// Close after activating a target, moving focus to the control that owns the destination instead of
 /// back to where the user came from. A jump is a change of place: leaving focus behind would strand
-/// a keyboard user on a screen they no longer have.
+/// a keyboard user on a screen they no longer have. The card fades out (palette-out) while focus is
+/// already on the destination.
 pub fn closeOnto(id: []const u8) void {
     targets.close();
     setBackgroundInert(false);
+    if (exit.requestClose()) scheduleClose();
     bump();
     dropRestore();
     focusById(id);
+}
+
+fn scheduleClose() void {
+    if (zx.platform.role != .client) return;
+    _ = zx.client.setTimeout(closeTick, close_ms);
+}
+
+/// The exit timer fired: unmount the card iff it is still closing (a re-open makes this a no-op).
+fn closeTick() void {
+    if (exit.timerFired()) bump();
 }
 
 /// Make everything behind the palette genuinely unavailable while it is up. `aria-modal="true"` is

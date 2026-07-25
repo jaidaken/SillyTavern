@@ -15,7 +15,7 @@ pub fn UndoVersions(allocator: zx.Allocator) zx.Component {
             role="dialog"
             aria-label="Message history"
             style={undo.anchorStyle(allocator, store.undo.anchor_top, store.undo.anchor_right)}
-            class="z-40 flex max-h-[min(24rem,60vh)] w-[min(20rem,calc(100vw_-_1rem))] animate-drawer-in flex-col gap-2 rounded-lg border border-border bg-surface p-3 outline-none"
+            class={if (store.undo.closing) versions_out else versions_in}
         >
             <div class="flex flex-none items-center justify-between gap-2">
                 <h3 class="m-0 font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">Earlier versions</h3>
@@ -67,7 +67,7 @@ pub fn UndoSnapshots(allocator: zx.Allocator) zx.Component {
                 tabindex="-1"
                 role="dialog"
                 aria-label="Chat snapshots"
-                class="flex max-h-[70vh] w-[min(34rem,100%)] animate-drawer-in flex-col overflow-hidden rounded-lg border border-border bg-surface outline-none max-[640px]:max-h-[85vh] max-[640px]:rounded-none max-[640px]:rounded-t-lg"
+                class={if (store.undo.closing) snaps_out else snaps_in}
             >
                 <div class="flex flex-none items-center justify-between gap-2 border-b border-border p-2 pl-4">
                     <h2 class="m-0 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase">Chat snapshots</h2>
@@ -119,6 +119,16 @@ pub fn UndoSnapshots(allocator: zx.Allocator) zx.Component {
         </div>
     );
 }
+
+// Both undo surfaces drop in on `drawer-in` and fade out on `drawer-out`, dropping pointer events
+// while they leave. Literals so the tailwind scanner generates the animate-* utilities; store.undo
+// keeps `mode` through the fade so the mount survives until the timer commits.
+const versions_common = "z-40 flex max-h-[min(24rem,60vh)] w-[min(20rem,calc(100vw_-_1rem))] flex-col gap-2 rounded-lg border border-border bg-surface p-3 outline-none";
+const versions_in = versions_common ++ " animate-drawer-in";
+const versions_out = versions_common ++ " animate-drawer-out pointer-events-none";
+const snaps_common = "flex max-h-[70vh] w-[min(34rem,100%)] flex-col overflow-hidden rounded-lg border border-border bg-surface outline-none max-[640px]:max-h-[85vh] max-[640px]:rounded-none max-[640px]:rounded-t-lg";
+const snaps_in = snaps_common ++ " animate-drawer-in";
+const snaps_out = snaps_common ++ " animate-drawer-out pointer-events-none";
 
 const zx = @import("zx");
 const store = @import("../platform/store.zig");
