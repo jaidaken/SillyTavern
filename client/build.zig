@@ -1,6 +1,5 @@
 const std = @import("std");
 const ziex = @import("ziex");
-const tailwindcss = @import("tailwindcss");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
@@ -45,13 +44,22 @@ pub fn build(b: *std.Build) !void {
     b.getInstallStep().dependOn(&install_glue.step);
     app_exe.step.dependOn(&install_glue.step);
 
-    // Source globs live in app-input.css: `sources` is left empty because the plugin readFileSyncs
-    // each entry and swallows a directory as EISDIR.
-    const css = tailwindcss.addBuild(b, .{
-        .name = "app",
-        .config = .{ .input = b.path("glue/app-input.css"), .minify = true },
+    // --external:*.woff2 stops esbuild resolving the @font-face urls and relocating the fonts.
+    // --log-level=warning is silent on success, so any CSS warning hits stderr and fails the step.
+    const css_run = b.addSystemCommand(&.{
+        "esbuild",
+        "--bundle",
+        "--target=chrome130",
+        "--external:*.woff2",
+        "--minify",
+        "--log-level=warning",
     });
-    const install_css = b.addInstallFile(css.file, "static/glue/app.css");
+    css_run.addFileArg(b.path("glue/app-input.css"));
+    const css_file = css_run.addPrefixedOutputFileArg("--outfile=", "app.css");
+    // Every part is an input, so editing one rebuilds the sheet. Discovered at configure time
+    // because the manifest's import list is data, not something build.zig should duplicate.
+    addCssInputs(b, css_run, &.{ "glue/css", "app/pages" });
+    const install_css = b.addInstallFile(css_file, "static/glue/app.css");
     b.getInstallStep().dependOn(&install_css.step);
     app_exe.step.dependOn(&install_css.step);
 
@@ -146,4 +154,20 @@ fn addMd4c(b: *std.Build, mod: *std.Build.Module, optimize: std.builtin.Optimize
     mod.addImport("libc_shim", b.createModule(.{
         .root_source_file = b.path("app/pages/platform/libc_shim.zig"),
     }));
+}
+
+/// Declare every .css under `roots` as an input of `run`, so touching one invalidates the step.
+fn addCssInputs(b: *std.Build, run: *std.Build.Step.Run, roots: []const []const u8) void {
+    const io = b.graph.io;
+    for (roots) |root| {
+        var dir = b.build_root.handle.openDir(io, root, .{ .iterate = true }) catch continue;
+        defer dir.close(io);
+        var walker = dir.walk(b.allocator) catch continue;
+        defer walker.deinit();
+        while (walker.next(io) catch null) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.endsWith(u8, entry.basename, ".css")) continue;
+            run.addFileInput(b.path(b.pathJoin(&.{ root, entry.path })));
+        }
+    }
 }

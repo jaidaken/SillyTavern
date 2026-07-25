@@ -30,7 +30,7 @@ pub fn PersonaList(ctx: *zx.ComponentCtx(void)) zx.Component {
                 >
                     {for (ps, 0..) |p, i| (
                         <div
-                            class={if (isSelected(i)) (char_list.row_class ++ "is-selected") else char_list.row_class}
+                            class={if (isSelected(i)) (char_list.row_class ++ " is-selected") else char_list.row_class}
                             role="option"
                             aria-selected={if (isSelected(i)) "true" else "false"}
                             data-persona-index={i}

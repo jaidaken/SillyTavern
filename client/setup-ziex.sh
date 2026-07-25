@@ -48,7 +48,7 @@ fi
 # onanimationend on #chat, in lockstep with the door's D9 block.
 # 24 makes the client-component hydration id folder-independent (hashes the .zx basename not the
 # cwd-relative path, so SSR/wasm agree + a component can move folders) + a build-time id-collision guard.
-for p in "$PATCHES"/01-*.patch "$PATCHES"/02-*.patch "$PATCHES"/04-*.patch "$PATCHES"/05-*.patch "$PATCHES"/06-*.patch "$PATCHES"/10-*.patch "$PATCHES"/11-*.patch "$PATCHES"/12-*.patch "$PATCHES"/13-*.patch "$PATCHES"/14-*.patch "$PATCHES"/15-*.patch "$PATCHES"/16-*.patch "$PATCHES"/17-*.patch "$PATCHES"/18-*.patch "$PATCHES"/19-*.patch "$PATCHES"/20-*.patch "$PATCHES"/21-*.patch "$PATCHES"/22-*.patch "$PATCHES"/23-*.patch "$PATCHES"/24-*.patch; do
+for p in "$PATCHES"/01-*.patch "$PATCHES"/02-*.patch "$PATCHES"/04-*.patch "$PATCHES"/05-*.patch "$PATCHES"/06-*.patch "$PATCHES"/12-*.patch "$PATCHES"/13-*.patch "$PATCHES"/14-*.patch "$PATCHES"/15-*.patch "$PATCHES"/16-*.patch "$PATCHES"/17-*.patch "$PATCHES"/18-*.patch "$PATCHES"/19-*.patch "$PATCHES"/20-*.patch "$PATCHES"/21-*.patch "$PATCHES"/22-*.patch "$PATCHES"/23-*.patch "$PATCHES"/24-*.patch; do
     git -C "$ZIEX_DIR" apply "../$p"
     echo "setup-ziex: applied $(basename "$p")"
 done

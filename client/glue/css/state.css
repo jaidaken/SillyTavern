@@ -5,5 +5,6 @@
    carries the state (aria-expanded on a drawer button, aria-pressed on a toggle, aria-checked on a
    motion radio), the markup styles off tailwind's built-in aria-* variants instead of inventing a
    hook. */
-@custom-variant selected (&:is([data-selected="true"], .is-selected));
-@custom-variant dragging (&.is-dragging);
+
+/* The two variants this file used to declare (selected, dragging) are compiled into their
+   concrete selectors in utilities.css. The CONVENTION above still governs new work. */

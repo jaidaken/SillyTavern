@@ -32,7 +32,7 @@ pub fn ChatManagerBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         onchange={onSearchChange}
                     />
                     <div class="flex items-center gap-2">
-                        <label class={act_btn ++ "inline-flex cursor-pointer items-center"} for="chat-import-input">Import</label>
+                        <label class={act_btn ++ " inline-flex cursor-pointer items-center"} for="chat-import-input">Import</label>
                         <input id="chat-import-input" name="chat-import-input" type="file" accept=".jsonl,.json" class={file_input} aria-label="Import a chat file" onchange={onImportPick} />
                     </div>
 
@@ -162,7 +162,7 @@ fn onRowKey(ev: zx.client.Event) void {
     const e = ev.getEvent();
     const key = e.ref.getAlloc(js.String, zx.allocator, "key") catch return;
     defer zx.allocator.free(key);
-    if (!std.mem.eql(u8, key, "Enter") and !std.mem.eql(u8, key, " ")) return;
+    if (!std.mem.eql(u8, key, "Enter") and !std.mem.eql(u8, key, "  ")) return;
     onRowOpen(ev);
 }
 

@@ -160,3 +160,10 @@ input:where([type="button"], [type="reset"], [type="submit"]),
 [hidden]:where(:not([hidden="until-found"])) {
     display: none !important;
 }
+
+/* modern-normalize gives search inputs outline-offset:-2px; tailwind's preflight did not, and the
+   chat search field draws its focus ring from app CSS, so keeping normalize's value would pull that
+   ring 2px inside the border. Held at the preflight behaviour so the handover is visually inert. */
+[type="search"] {
+    outline-offset: 0;
+}

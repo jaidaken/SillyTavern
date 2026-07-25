@@ -184,7 +184,7 @@ pub fn onKey(ev: zx.client.Event) bool {
             zx.client.rerender();
             return false;
         }
-        if (eqlKey(key, "Enter") or eqlKey(key, " ")) {
+        if (eqlKey(key, "Enter") or eqlKey(key, "  ")) {
             consume(ev);
             commitActive(name);
             return true;
@@ -202,7 +202,7 @@ pub fn onKey(ev: zx.client.Event) bool {
     const target = dom_event.plainTarget(ev) orelse return false;
     if (dom_event.datasetUp(target, "ddToggle")) |name| {
         defer zx.allocator.free(name);
-        if (eqlKey(key, "Enter") or eqlKey(key, " ") or eqlKey(key, "ArrowDown") or eqlKey(key, "ArrowUp")) {
+        if (eqlKey(key, "Enter") or eqlKey(key, "  ") or eqlKey(key, "ArrowDown") or eqlKey(key, "ArrowUp")) {
             consume(ev);
             openFor(name);
             return true;

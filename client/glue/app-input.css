@@ -1,7 +1,7 @@
 /* ===================================================================================
    SillyTavern beta client, the whole stylesheet.
 
-   ONE RULE decides what lives here and what lives in the markup: if we author the
+   ONE RULE decides where a style lives: if we author the
    element, its style is a utility on that element in its .zx file. If the HTML is
    generated at runtime (a message body: markdown -> md4c -> DOMPurify), no class of
    ours can reach it, so its style lives here. What is left therefore has one job each:
@@ -12,16 +12,25 @@
    chrome ticks along in mono, and one committed candlelight amber marks the single
    active/focus signal.
    =================================================================================== */
-@import "tailwindcss";
 
-/* Markup only. Scanning *.zig fed 2174 candidates (vs 619 from .zx) of ordinary Zig identifiers and
-   generated ~3KB of CSS nothing used. Zig publishes state as attributes and never computes a class
-   name, so no name it emits has to be safelisted here. */
-@source "../app/**/*.zx";
+/* ---- Parts, in cascade order. There are no cascade layers: this list IS the order, and the
+   authored rules sit last so they win over the utility definitions, exactly as they did when they
+   were unlayered against tailwind's @layer utilities. ---- */
 
-/* ---- Parts, in cascade order. This file is a MANIFEST: it declares WHAT loads and in WHICH order,
-   and nothing else. Tailwind still assembles the bundle (it inlines these imports); the esbuild
-   handover happens only once no markup utility remains. See notes/css-system-post-tailwind. ---- */
+/* Registrations + tokens the utility definitions read. */
+@import "./css/properties.css";
+@import "./css/theme.css";
+
+/* Reset: vendored normalize plus the opinionated half tailwind's preflight used to add. */
+@import "./css/vendor/modern-normalize.css";
+@import "./css/reset-addendum.css";
+
+/* Utility definitions. primitives.css is the permanent layout set; utilities.css is the extracted
+   remainder that the per-page conversions drain. */
+@import "./css/primitives.css";
+@import "./css/utilities.css";
+
+/* Everything we author, in its established order. */
 @import "./css/tokens.css";
 @import "./css/state.css";
 @import "./css/icons.css";

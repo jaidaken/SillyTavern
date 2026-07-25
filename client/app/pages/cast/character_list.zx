@@ -45,7 +45,7 @@ pub fn CharacterList(ctx: *zx.ComponentCtx(void)) zx.Component {
         >
             {for (items) |it| (
                 <div
-                    class={if (isSelected(it.index)) (row_class ++ "is-selected") else row_class}
+                    class={if (isSelected(it.index)) (row_class ++ " is-selected") else row_class}
                     role="option"
                     aria-selected={if (isSelected(it.index)) "true" else "false"}
                     data-char-select={it.index}

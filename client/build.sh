@@ -51,6 +51,7 @@ echo "minify dist/glue/custom.js: $b -> $(wc -c < dist/glue/custom.js) bytes"
 # preflight provides; the reference fixture is the denominator, so a regression fails here not by eye.
 python3 check-reset-coverage.py
 python3 check-primitives-parity.py
+python3 check-classes.py
 
 # Tailwind now compiles inside `zig build` (ziex's plugin, patch 10) and lands in zig-out/static;
 # the export step copies it to dist. Nothing to run here.
