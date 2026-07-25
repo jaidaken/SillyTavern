@@ -11,7 +11,11 @@
 // A tile is the same row turned on its side: the picture takes the width, the name becomes its
 // caption, and the gap closes up so the faces sit near enough to scan as a set rather than as rows
 // that happen to wrap.
-pub const row_class = "char-item group/row relative flex cursor-pointer items-center gap-3 rounded-md p-2 select-none hover:bg-surface-2 selected:bg-selected selected:outline-1 selected:outline-selected-ring group-data-[view=grid]/list:flex-col group-data-[view=grid]/list:items-stretch group-data-[view=grid]/list:gap-1.5 group-data-[view=grid]/list:p-1.5 group-data-[view=grid]/list:text-center max-[640px]:min-h-[52px] max-[640px]:px-2 max-[640px]:py-[10px]";
+
+// content-visibility skips layout+paint for off-screen rows (the .mes list pattern), so a dock full
+// of characters no longer builds and paints every avatar on open. The intrinsic sizes reserve scroll
+// height before a row renders: a list row, then a taller grid tile. Shared by every cast list.
+pub const row_class = "char-item group/row relative flex cursor-pointer items-center gap-3 rounded-md p-2 select-none hover:bg-surface-2 selected:bg-selected selected:outline-1 selected:outline-selected-ring group-data-[view=grid]/list:flex-col group-data-[view=grid]/list:items-stretch group-data-[view=grid]/list:gap-1.5 group-data-[view=grid]/list:p-1.5 group-data-[view=grid]/list:text-center max-[640px]:min-h-[52px] max-[640px]:px-2 max-[640px]:py-[10px] [content-visibility:auto] [contain-intrinsic-size:auto_3.5rem] group-data-[view=grid]/list:[contain-intrinsic-size:auto_9.5rem]";
 pub const avatar_class = "char-avatar size-[2.4rem] flex-none rounded-md bg-bg object-cover group-data-[view=grid]/list:aspect-square group-data-[view=grid]/list:h-auto group-data-[view=grid]/list:w-full max-[640px]:size-10";
 pub const info_class = "min-w-0 flex-1";
 pub const name_class = "char-name truncate font-serif text-sm font-semibold text-text";
@@ -54,7 +58,7 @@ pub fn CharacterList(ctx: *zx.ComponentCtx(void)) zx.Component {
                     onclick={ctx.bind(onCharSelect)}
                     onkeydown={ctx.bind(onCharKey)}
                 >
-                    <img class={avatar_class} src={avatarUrl(ctx.allocator, it.char.avatar)} alt={it.char.name} loading="lazy" />
+                    <img class={avatar_class} src={avatarUrl(ctx.allocator, it.char.avatar)} alt={it.char.name} loading="lazy" decoding="async" />
                     <div class={info_class}>
                         <div class={name_class}>{it.char.name}</div>
                         <div class={meta_class}>

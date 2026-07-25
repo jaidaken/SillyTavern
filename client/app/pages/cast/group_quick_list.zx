@@ -28,7 +28,7 @@ pub fn GroupQuickList(ctx: *zx.ComponentCtx(void)) zx.Component {
                         onclick={ctx.bind(onOpen)}
                         onkeydown={ctx.bind(onKey)}
                     >
-                        <img class={char_list.avatar_class} src={quickAvatar(ctx.allocator, &g)} alt={g.name} loading="lazy" />
+                        <img class={char_list.avatar_class} src={quickAvatar(ctx.allocator, &g)} alt={g.name} loading="lazy" decoding="async" />
                         <div class={char_list.info_class}>
                             <div class={char_list.name_class}>{g.name}</div>
                             <div class={char_list.desc_class}>{quickMeta(ctx.allocator, &g)}</div>

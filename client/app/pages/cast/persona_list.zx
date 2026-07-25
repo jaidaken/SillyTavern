@@ -38,7 +38,7 @@ pub fn PersonaList(ctx: *zx.ComponentCtx(void)) zx.Component {
                             onclick={ctx.bind(onPersonaSelect)}
                             onkeydown={ctx.bind(onPersonaKey)}
                         >
-                            <img class={char_list.avatar_class} src={personaAvatarUrl(ctx.allocator, p.avatar)} alt={p.name} loading="lazy" />
+                            <img class={char_list.avatar_class} src={personaAvatarUrl(ctx.allocator, p.avatar)} alt={p.name} loading="lazy" decoding="async" />
                             <div class={char_list.info_class}>
                                 <div class={char_list.name_class}>{p.name}</div>
                                 <div class={char_list.desc_class}>{p.description}</div>
