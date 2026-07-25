@@ -108,6 +108,12 @@
     --animate-panel-in: panel-in 220ms var(--ease-drawer);
     --animate-panel-in-right: panel-in-right 220ms var(--ease-drawer);
     --animate-drawer-in: drawer-in 200ms var(--ease-drawer);
+    /* The character page's own reveals: each section rises like a message (mes-rise), staggered by an
+       inline animation-delay per section; a section going into or out of edit mode crossfades its
+       body. `both` holds the from-state before the delay elapses so a staggered section does not flash
+       at full opacity first. */
+    --animate-section-rise: section-rise 300ms var(--ease-settle) both;
+    --animate-card-edit-in: card-edit-in 160ms var(--ease-settle) both;
 
     /* --move scales MOVEMENT (transform) only; the opacity fade always plays, so reduced motion is
        gentler rather than absent (WD25). */
@@ -132,6 +138,16 @@
     @keyframes toast-out {
         from { opacity: 1; transform: translateY(0); }
         to { opacity: 0; transform: translateY(calc(var(--move) * 6px)); }
+    }
+    /* The character page reveals: travel scaled by --move, opacity always plays, so reduced motion
+       keeps the fade and drops the movement (WD25). */
+    @keyframes section-rise {
+        from { opacity: 0; transform: translateY(calc(var(--move) * 8px)); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes card-edit-in {
+        from { opacity: 0; transform: translateY(calc(var(--move) * -4px)); }
+        to { opacity: 1; transform: translateY(0); }
     }
 }
 

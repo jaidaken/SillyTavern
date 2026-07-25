@@ -442,8 +442,9 @@ async function main() {
                 // Pinned by avatar, not position: the first tile is whatever the sort puts there, so an
                 // unpinned subject opens a different card and the deep-fetch row fails for the wrong reason.
                 subject: '#char-list .char-item[data-char-avatar="char41.png"]',
-                control: '.char-row-act[data-char-action="edit"]',
-                selected: '#char-actions-edit',
+                // Selecting a character now opens its detail page directly: a click on the name is the
+                // whole open, no separate Edit control.
+                control: '.char-name',
                 root: '#card-editor',
                 back: '#card-editor-back',
             },
@@ -564,20 +565,18 @@ async function main() {
         // The card editor is an action ON a character, not a destination, so the Cast panel and a
         // selected character both come first: an editor opened with nothing selected has no card.
         const openCardEditor = async () => {
-            const { subject, selected } = requireLauncher('card_editor');
+            const { subject, root } = requireLauncher('card_editor');
             await openPanel('characters');
             await page.waitFor("document.querySelectorAll('#chat-root .char-item').length > 0", 8000);
             // Drive the PINNED character: only it carries deep card fields, so an unpinned pick fails the
-            // fetch row for having no data. Via the selected control, which needs no hover.
+            // fetch row for having no data. Clicking its name both selects it and opens the page.
             if (!(await page.waitFor(`document.querySelector('${subject}')`, 8000))) {
                 throw new NoLauncher(`no character tile matching ${subject} for the card editor`);
             }
             await page.click(`${subject} .char-name`);
-            await page.waitFor(`document.querySelector('${subject}').classList.contains('is-selected')`, 8000);
-            if (!(await page.waitFor(`document.querySelector('${selected}')`, 4000))) {
-                throw new NoLauncher(`no ${selected} control for the card editor`);
+            if (!(await page.waitFor(`document.querySelector('${root}')`, 8000))) {
+                throw new NoLauncher(`the character page ${root} never opened after selecting ${subject}`);
             }
-            await page.click(selected);
         };
         const openNotifications = async () => {
             const { control } = requireLauncher('notifications');
@@ -627,6 +626,36 @@ async function main() {
             if (l.gear && await page.eval(`!!document.querySelector('${l.gear}')`)) return page.click(l.gear);
             return closeSide(PANEL_HOME_SIDE[panel]);
         };
+        // ---- the character page's sections ----
+        // The card is grouped into read-first sections (character_page.zig), each read-only until its
+        // Edit is clicked. These drive that: open a section for editing (its field controls mount then),
+        // save it, cancel it, or read its read-only text. A field control (#card-<field>) exists ONLY
+        // while its section is being edited, so a row reads or writes a field by first opening its
+        // section. `field -> section` is the one mapping a row needs; it mirrors the table in
+        // character_page.zig.
+        const secSel = (id) => `[data-section-block="${id}"]`;
+        const editSection = async (id, mountSel, ms = 8000) => {
+            await page.click(`${secSel(id)} [data-section-action="edit"]`);
+            if (mountSel && !(await page.waitFor(`document.querySelector('${mountSel}')`, ms))) {
+                throw new Error(`editSection(${id}): control ${mountSel} never mounted`);
+            }
+        };
+        const saveSection = async (id) => page.click(`${secSel(id)} [data-section-action="save"]`);
+        const cancelSection = async (id) => page.click(`${secSel(id)} [data-section-action="cancel"]`);
+        const sectionText = (id) => `((document.querySelector('${secSel(id)}')||{}).textContent||'')`;
+        // Selecting a character now opens her page over the Cast dock (the whole rework), so a row that
+        // opens a chat by clicking a list row and then keeps browsing the list has to come back to it
+        // first. Back is a no-op when the page is not open, so this is safe to call unconditionally.
+        const returnToList = async () => {
+            if (await page.eval("!!document.querySelector('#card-editor-back')")) {
+                await page.click('#card-editor-back');
+                await page.waitFor("!!document.querySelector('#char-list')", 5000);
+            }
+        };
+        // Set a text control's value and fire the input event the app listens for, in one eval.
+        const setControl = (id, value) => page.eval(
+            `(function(){var t=document.getElementById('${id}');t.value=${JSON.stringify(value)};`
+            + `t.dispatchEvent(new Event('input',{bubbles:true}));})()`);
         // What the boot probe decided. It used to be readable at any moment off the topbar's
         // connections button (data-conn-state); that button is deleted and the standing line lives
         // inside the panel, so a readiness check opens the panel, reads it, and leaves the page the
@@ -823,6 +852,8 @@ async function main() {
             return false;
         })();
         row('must', sawOpen5, 'B3 row-child click opens the chat (9d12349a3 regression row)');
+        // The row click also opened Char 05's page over the list; come back to browse it further.
+        await returnToList();
 
         await page.click('.char-fav-star[data-char-index="6"]');
         row('must', await page.waitFor("document.querySelector('.char-fav-star[data-char-index=\\'6\\']') && document.querySelector('.char-fav-star[data-char-index=\\'6\\']').textContent.trim()==='\\u2605'", 6000),
@@ -864,6 +895,8 @@ async function main() {
             return false;
         })();
         row('must', sawKeyOpen, 'B8a Enter on a focused character row opens the chat');
+        // Enter opened Rita's page too; return to the list for the C-CHAR rows below.
+        await returnToList();
 
         // ===== C-CHAR rows (character management 1c + a11y 1b) =====
         // The list is still filtered to "rita" here, so clear the search before asserting on order.
@@ -1183,56 +1216,17 @@ async function main() {
         }
         row('must', cancelOk, 'R5-cancel discards the edit and restores the body (no mutation)', `cancelled=${cancelOk}`);
 
-        // --- tags (w3-reason 3d): ASSIGNMENT lives in the character card editor now, so T1/T2/T4
-        // drive the card that is open (openPanel('card_editor') pins char41.png = Rita Recent, the
-        // same character the blob rows assert on). FILTERING lives in the character toolbar's one
-        // filter bar: T5-T8 type a fragment, take the tag off the autocomplete, and read the list.
+        // --- tags (w3-reason 3d): the account-tag ASSIGNMENT UI (create a tag, put it on a character)
+        // is RETIRED with the character page rework. The one tag concept the page keeps is the card's
+        // own `tags` field, edited in its own section (covered by C-CARD-1 reading "keeper, coastal")
+        // and the filter bar below reads. The account-tag data model (tag_store) stays, unused by UI.
+        // What survives here: the toolbar must carry NO tag-assignment control, and the filter bar
+        // (T5-T8) narrows the list off the card tags.
         console.log('== tags (w3-reason 3d) ==');
-        await openPanel('card_editor');
-        await page.waitFor("document.querySelector('.card-tags')", 6000);
-        // The card is a long form, so the section has to be brought into view before it can be read
-        // (by a person or by a screenshot).
-        await page.eval("document.querySelector('.card-tags').scrollIntoView({block:'center'})");
-        await shot('d-card-editor-tags');
-        await page.focus('#tag-create-name');
-        await page.insertText('gatetag');
-        await page.click('.card-tags [data-tag-create]');
-        row('must', await page.waitFor("Array.from(document.querySelectorAll('.card-tags .tag-row-name')).some(function(n){return n.textContent==='gatetag'})", 3000),
-            'T1 tag create adds a row in the card editor');
-        // Assignment is NOT reachable from the list toolbar any more: the Tags toggle and the
-        // toolbar-hosted manager are gone, and a row that only asserted the editor works would
-        // still pass with both of them left behind.
-        row('must', await page.eval("!document.querySelector('.char-toolbar button[aria-label=\"Manage tags\"]') && !document.querySelector('.char-toolbar .tag-manager')"),
-            'T1b the character toolbar carries no tag-assignment control');
-        // Enter in the name field is the other way in, and the one a typist reaches for first.
-        await page.focus('#tag-create-name');
-        await page.insertText('keytag');
-        await page.cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }, page.sessionId);
-        await page.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }, page.sessionId);
-        const keyRow = await page.waitFor("Array.from(document.querySelectorAll('.card-tags .tag-row-name')).some(function(n){return n.textContent==='keytag'})", 3000);
-        const panelAliveAfterEnter = await page.eval("!!document.querySelector('.card-tags')");
-        row('must', keyRow && panelAliveAfterEnter,
-            'T1c Enter in the tag name field creates the tag without taking the panel with it',
-            `row=${keyRow} panel=${panelAliveAfterEnter}`);
-        await page.click('.card-tags [data-tag-assign="t-gatetag"]');
-        row('must', await page.waitFor("(function(){var b=document.querySelector('.card-tags [data-tag-assign=\\'t-gatetag\\']');return !!b && b.getAttribute('aria-pressed')==='true'})()", 3000),
-            'T2 assign toggles pressed for the character whose card is open');
-        await page.eval("document.querySelector('.card-tags').scrollIntoView({block:'center'})");
-        await shot('d2-card-editor-assigned');
-        let tagSaved = false;
-        for (let i = 0; i < 20 && !tagSaved; i += 1) {
-            await sleep(500);
-            const st = await (await fetch(`${args.base}/dev/state`)).json();
-            const ps = st.persona_settings || {};
-            tagSaved = Array.isArray(ps.tags) && ps.tags.some((t) => t.name === 'gatetag')
-                && ps.tag_map && Array.isArray(ps.tag_map['char41.png']) && ps.tag_map['char41.png'].includes('t-gatetag');
-        }
-        row('must', tagSaved, 'T3 tags + tag_map land in the settings blob via the one saver');
-        await page.navigate(`${args.base}/`);
-        await openRecentChat();
-        await openPanel('card_editor');
-        row('must', await page.waitFor("(function(){var b=document.querySelector('.card-tags [data-tag-assign=\\'t-gatetag\\']');return !!b && b.getAttribute('aria-pressed')==='true'})()", 8000),
-            'T4 created tag and assignment survive a reload (mined from the blob)');
+        await openPanel('characters');
+        await page.waitFor("document.querySelectorAll('#char-list .char-item').length > 0", 8000);
+        row('must', await page.eval("!document.querySelector('.card-tags') && !document.querySelector('.char-toolbar button[aria-label=\"Manage tags\"]') && !document.querySelector('.char-toolbar .tag-manager')"),
+            'T1b no account-tag assignment UI remains (retired with the character page)');
 
         // The filter bar. "night" is a CARD tag six fixture characters carry, so it is what the
         // suggestions and the narrowing are read against.
@@ -2506,21 +2500,23 @@ async function main() {
             `servedRaw=${servedRaw} masked=${maskedShown} leaked=${leaked}`);
         /* C-CARD */
         {
-            console.log('== card editor: full-card fetch + save round-trip (3e) ==');
-            await needsPanel('card_editor', 'C-CARD-1 to C-CARD-15 the character card editor rows', async () => {
+            console.log('== character page: full-card fetch + sectioned per-section edit (3e) ==');
+            await needsPanel('card_editor', 'C-CARD-1 to C-CARD-15 the character page rows', async () => {
                 await openPanel('card_editor');
-                // The form only mounts once the deep card lands, so its presence IS the fetch assertion.
+                // The sections only render once the deep card lands, so a section block carrying the deep
+                // text IS the fetch assertion. The read-only text is what a user sees before any Edit.
                 const cardLoaded = await page.waitFor(
-                    "!!document.querySelector('#card-description') && document.querySelector('#card-description').value.indexOf('lighthouse keeper') >= 0", 8000);
+                    `${sectionText('description')}.indexOf('lighthouse keeper') >= 0`, 8000);
                 const deepFields = await page.eval(
-                    "(function(){var g=function(id){var e=document.getElementById(id);return e?e.value:null;};return JSON.stringify({pers:g('card-personality'),ver:g('card-character_version'),tags:g('card-tags'),depth:g('card-depth_prompt_depth')});})()");
+                    `JSON.stringify({pers:${sectionText('personality')},about:${sectionText('about')},`
+                    + `tags:${sectionText('tags')},note:${sectionText('note')},first:${sectionText('first_message')}})`);
                 const deep = JSON.parse(deepFields || '{}');
                 // The shallow /characters/all form carries none of these; only the deep /get fetch can fill them.
-                const deepOk = deep.pers === 'curious and warm' && deep.ver === '1.2' && deep.tags === 'keeper, coastal' && deep.depth === '4';
-                row('must', cardLoaded && deepOk, 'C-CARD-1 opening the panel fetches the FULL card into the form', `loaded=${cardLoaded} ${deepFields}`);
+                const deepOk = deep.pers.indexOf('curious and warm') >= 0 && deep.about.indexOf('1.2') >= 0
+                    && deep.tags.indexOf('keeper, coastal') >= 0 && deep.note.indexOf('System') >= 0
+                    && deep.first.indexOf('The lamp is lit') >= 0;
+                row('must', cardLoaded && deepOk, 'C-CARD-1 opening a character fetches the FULL card and every section reads it', `loaded=${cardLoaded} ${deepFields}`);
 
-                await page.eval("(function(){var t=document.getElementById('card-description'); t.value='a keeper who reads the weather and the tide'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
-                await page.click('#card-save');
                 const pollCard = async (pred) => {
                     const deadline = Date.now() + 8000;
                     while (Date.now() < deadline) {
@@ -2530,8 +2526,18 @@ async function main() {
                     }
                     return null;
                 };
+
+                // A per-section edit: open Description, type, Save. The control mounts only while the
+                // section is being edited, so editSection waits for it before the type.
+                await editSection('description', '#card-description');
+                await setControl('card-description', 'a keeper who reads the weather and the tide');
+                await saveSection('description');
                 const saved = await pollCard((c) => c.description === 'a keeper who reads the weather and the tide');
-                row('must', !!saved, 'C-CARD-2 an edit saves through /characters/edit', `saved=${!!saved}`);
+                row('must', !!saved, 'C-CARD-2 a per-section edit saves through /characters/edit', `saved=${!!saved}`);
+                // The section collapses back to read mode showing the saved text, not the editor.
+                const collapsed = await page.waitFor(
+                    `!document.querySelector('#card-description') && ${sectionText('description')}.indexOf('reads the weather and the tide') >= 0`, 5000);
+                row('must', collapsed, 'C-CARD-2b Save collapses the section to read mode showing the new text', `collapsed=${collapsed}`);
 
                 // THE CONTRACT TRAPS. charaFormatData _.sets every field it knows unconditionally, so a key
                 // the body omits is written back as its default: the card silently loses it. fav is worse -
@@ -2547,32 +2553,33 @@ async function main() {
                     'C-CARD-3 the save echoes every field charaFormatData would default away',
                     `fav=${card.fav} book=${bookOk} talk=${card.talkativeness} greets=${greetOk} meta=${metaOk} depth=${card.depth_prompt_depth}/${card.depth_prompt_role}`);
 
-                // A full page load, not a Revert click: this gate TYPED into the textarea, which sets its
-                // dirty-value flag, so the browser keeps showing that text whatever the VDOM patches into
-                // the text child. Only a fresh mount proves the text came back from the server.
+                // A full page load: the read section text must come back from the server, not from a
+                // buffer the browser is holding.
                 await page.navigate(`${args.base}/`);
                 await openRecentChat();
                 await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
                 await openPanel('card_editor');
                 const persisted = await page.waitFor(
-                    "!!document.querySelector('#card-description') && document.querySelector('#card-description').value === 'a keeper who reads the weather and the tide'", 8000);
+                    `${sectionText('description')}.indexOf('a keeper who reads the weather and the tide') >= 0`, 8000);
                 row('must', persisted, 'C-CARD-4 the saved text comes back on a fresh load', `persisted=${persisted}`);
 
-                // The one enumerated field rides the shared dropdown, delegated from the panel root (ZX11).
+                // The one enumerated field rides the shared dropdown, delegated from the page root (ZX11).
+                // It lives in the Character note section, so that section is opened first.
+                await editSection('note', '#dd-btn-depth_prompt_role');
                 await page.click('#dd-btn-depth_prompt_role');
                 const menuOpen = await page.waitFor("!!document.querySelector('[role=\"listbox\"]')", 3000);
                 await page.click('[role="option"][data-dd-value="user"]');
                 const rolePicked = await page.waitFor(
                     "document.querySelector('#dd-btn-depth_prompt_role').textContent.indexOf('User') >= 0", 3000);
-                // Non-vacuous: this click also proves the panel SURVIVES it. The menu closing re-renders
+                // Non-vacuous: this click also proves the page SURVIVES it. The menu closing re-renders
                 // synchronously and orphans the clicked option, which the page-click dismiss used to read
-                // as a click outside the panel and close the whole drawer (fixed in ui.onPageClick).
+                // as a click outside the page and close the whole dock (fixed in ui.onPageClick).
                 const panelAlive = await page.eval("!!document.querySelector('#card-editor')");
                 row('must', menuOpen && rolePicked && panelAlive, 'C-CARD-5 the note-role dropdown opens and stores the pick', `open=${menuOpen} picked=${rolePicked} panelAlive=${panelAlive}`);
 
-                // Escape rides the same delegated keydown to ui.onPageKey, which closes the active panel
+                // Escape rides the same delegated keydown to ui.onPageKey, which closes the active dock
                 // without reading the target: a handler that does not CONSUME the key it handled loses the
-                // whole drawer to a menu dismiss. Non-vacuous only if it asserts the panel survived.
+                // whole dock to a menu dismiss. Non-vacuous only if it asserts the page survived.
                 const escape = async () => {
                     const k = { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, modifiers: 0 };
                     await page.cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...k }, page.sessionId);
@@ -2583,20 +2590,26 @@ async function main() {
                 await escape();
                 const escClosedMenu = await page.waitFor("!document.querySelector('[role=\"listbox\"]')", 3000);
                 const escKeptPanel = await page.eval("!!document.querySelector('#card-editor')");
-                row('must', escClosedMenu && escKeptPanel, 'C-CARD-6 Escape closes the menu and the panel survives it', `menuClosed=${escClosedMenu} panelAlive=${escKeptPanel}`);
+                row('must', escClosedMenu && escKeptPanel, 'C-CARD-6 Escape closes the menu and the page survives it', `menuClosed=${escClosedMenu} panelAlive=${escKeptPanel}`);
+                // Leave the note section so the one-at-a-time guard does not block the greetings edit below.
+                await cancelSection('note');
+                await page.waitFor("!document.querySelector('#dd-btn-depth_prompt_role')", 3000);
 
-                // The same Escape with no menu open still dismisses the panel: consuming the key must not
-                // cost the drawer its own Escape.
+                // The same Escape with no menu open still dismisses the dock: consuming the key must not
+                // cost it its own Escape. Focus a control inside the page first: cancelling the note
+                // section removed the element that had focus, and a keydown whose target is <body> never
+                // reaches the delegated handlers (they sit on the region roots below body).
+                await page.focus('#card-editor-back');
                 await escape();
                 const escClosedPanel = await page.waitFor("!document.querySelector('#card-editor')", 3000);
-                row('must', escClosedPanel, 'C-CARD-7 Escape with no menu open still closes the panel', `closed=${escClosedPanel}`);
+                row('must', escClosedPanel, 'C-CARD-7 Escape with no menu open still closes the page', `closed=${escClosedPanel}`);
 
-                // C-CARD2: the greetings the save was already echoing are now editable. Structural, so
-                // it drives the buttons rather than the buffers: a removal shifts row 1 up into a node
-                // the user typed in, and a textarea the user has typed in ignores its text child ever
-                // after, so the panel has to write the survivor's text into it explicitly.
+                // The greetings section: the openings the save already echoes are editable here.
+                // Structural, so it drives the buttons: a removal shifts row 1 up into a node the user
+                // typed in, and a textarea the user has typed in ignores its text child ever after, so
+                // the page has to write the survivor's text into it explicitly.
                 await openPanel('card_editor');
-                await page.waitFor("!!document.querySelector('#card-greeting-0')", 8000);
+                await editSection('greetings', '#card-greeting-0');
                 const greetLoaded = await page.eval(
                     "(function(){var g=function(i){var e=document.getElementById('card-greeting-'+i);return e?e.value:null;};" +
                     "return JSON.stringify({n:document.querySelectorAll('[data-card-greeting]').length,a:g(0),b:g(1)});})()");
@@ -2604,22 +2617,19 @@ async function main() {
                 row('must', gl.n === 2 && gl.a === 'The fog is in.' && gl.b === 'Mind the step.',
                     'C-CARD-8 the card\'s alternate greetings load into their own editors', greetLoaded);
 
-                // ISOLATION IS THE WHOLE ROW: Revert re-reads the card, so the footer is empty and the
-                // edit below is the ONLY thing that happens before the read. The inputs deliberately do
-                // not re-render (that would cost the caret), so nothing renders here at all: a notice
-                // computed only at render time reads "". An earlier draft typed after a button click and
-                // passed on that click's render, proving nothing.
-                await page.click('#card-revert');
-                await page.waitFor("!!document.getElementById('card-editor-notice')" +
-                    " && document.getElementById('card-editor-notice').textContent === ''" +
-                    " && !!document.getElementById('card-personality')", 8000);
+                // The notice keeps up with an edit with no render to carry it: setGreeting/setField do not
+                // re-render (that would cost the caret), so reflectNotice writes the footer node directly.
+                // A notice computed only at render time would read "" here.
                 const noticeBefore = await page.eval("document.getElementById('card-editor-notice').textContent");
-                await page.eval("(function(){var t=document.getElementById('card-personality'); t.value='changed by the gate'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
+                await page.focus('#card-greeting-0');
+                await setControl('card-greeting-0', 'The fog is out.');
                 const noticeAfterEdit = await page.waitFor(
                     "document.getElementById('card-editor-notice').textContent.indexOf('Unsaved changes') >= 0", 3000);
-                row('must', noticeBefore === '' && noticeAfterEdit,
+                row('must', !noticeBefore.includes('Unsaved') && noticeAfterEdit,
                     'C-CARD-10 an edit says so in the footer with no render to carry it',
                     `before="${noticeBefore}" after="${await page.eval("document.getElementById('card-editor-notice').textContent")}"`);
+                // Put row 0 back before the structural test reads it.
+                await setControl('card-greeting-0', 'The fog is in.');
 
                 await page.click('#card-greeting-add');
                 await page.waitFor("!!document.querySelector('#card-greeting-2')", 3000);
@@ -2634,39 +2644,30 @@ async function main() {
                 row('must', shifted, 'C-CARD-9 adding, typing and removing a greeting leaves every row showing its own text',
                     `shifted=${shifted} ${await page.eval("(function(){var v=[];document.querySelectorAll('[data-card-greeting]').forEach(function(e){v.push(e.value);});return JSON.stringify(v);})()")}`);
 
-                await page.click('#card-save');
-                const savedGreets = await pollCard((c) => Array.isArray(c.alternate_greetings) && c.alternate_greetings.length === 2);
+                await saveSection('greetings');
+                const savedGreets = await pollCard((c) => Array.isArray(c.alternate_greetings) && c.alternate_greetings.length === 2 && c.alternate_greetings[1] === 'The lamp is out.');
                 const greetBody = savedGreets && savedGreets.alternate_greetings;
                 row('must', !!savedGreets && greetBody[0] === 'Mind the step.' && greetBody[1] === 'The lamp is out.',
                     'C-CARD-11 the edited greetings are what the save sends', JSON.stringify(greetBody));
 
-                // THE EDIT ABOVE IS THE TRAP, so it has to stay above: reflectNotice writes the footer with
-                // no render, and writing it through textContent REPLACED the text node ziex holds by vnode
-                // id, so every later render patched a detached node and the save reported into thin air.
-                // A row that saves a pristine form proves nothing here (C-CARD-15 passed throughout for
-                // exactly that reason: it never edits first).
-                const aliveAfterSave = await page.eval("!!document.querySelector('#card-editor-notice')");
-                const noticeSaved = aliveAfterSave && await page.waitFor(
-                    "document.getElementById('card-editor-notice').textContent.indexOf('Saved') >= 0", 4000);
-                row('must', !!noticeSaved, 'C-CARD-14 a save keeps the character selected and says it saved',
-                    `formAlive=${aliveAfterSave} selection=${await page.eval("!document.querySelector('#card-editor p')||document.querySelector('#card-editor p').textContent")}`);
+                // A save says so in the footer, and keeps the character on screen: the same detached-node
+                // defect once silenced every notice, so a save reported into thin air. The greetings edit
+                // above is the trap (an edit ran before this), so the row is non-vacuous.
+                const noticeSaved = await page.waitFor(
+                    "!!document.getElementById('card-editor-notice') && document.getElementById('card-editor-notice').textContent.indexOf('Saved') >= 0", 4000);
+                row('must', !!noticeSaved, 'C-CARD-14 a save keeps the character on screen and says it saved',
+                    `notice="${await page.eval("(document.getElementById('card-editor-notice')||{}).textContent")}"`);
 
-                // THE REFUSAL PATH, and the one that costs the user most: the same detached-node defect
-                // silenced every notice, and a save that is REFUSED in silence reads as a save that worked.
-                // Clearing the name is the only refusal reachable without the server playing along, and it
-                // runs through an edit, so it re-enters the trap C-CARD-14 guards from the other side.
-                const nameBefore = await page.eval("document.getElementById('card-name').value");
-                await page.eval("(function(){var t=document.getElementById('card-name'); t.value=''; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
-                await page.click('#card-save');
-                const refusal = await page.waitFor(
-                    "document.getElementById('card-editor-notice').textContent.indexOf('needs a name') >= 0", 4000);
-                // The guard refuses BEFORE the request, so the server must still hold the last good name.
-                // The body names it ch_name, which is the key the server 400s on (characters.js:1197).
-                await sleep(400);
-                const serverName = (await (await fetch(`${args.base}/dev/state`)).json()).card_edit.ch_name;
-                row('must', refusal && serverName === nameBefore && nameBefore.length > 0,
-                    'C-CARD-16 a save refused for a missing name says so instead of failing silently',
-                    `notice="${await page.eval("document.getElementById('card-editor-notice').textContent")}" serverName=${JSON.stringify(serverName)} nameBefore=${JSON.stringify(nameBefore)}`);
+                // Cancel reverts the section's own edits and leaves the card untouched: open Scenario,
+                // change it, Cancel, and the read text is the loaded value again with no save posted.
+                const scenarioBefore = await page.eval(sectionText('scenario'));
+                await editSection('scenario', '#card-scenario');
+                await setControl('card-scenario', 'a change the gate will throw away');
+                await cancelSection('scenario');
+                const reverted = await page.waitFor(
+                    `!document.querySelector('#card-scenario') && ${sectionText('scenario')}.indexOf('a change the gate will throw away') < 0`, 4000);
+                row('must', reverted && scenarioBefore.indexOf('a change the gate will throw away') < 0,
+                    'C-CARD-17 Cancel reverts the section and posts no save', `reverted=${reverted}`);
 
                 // Every row above is served a card shaped the way we BELIEVE the server shapes them, so
                 // they prove our reading of the contract and nothing else. The server coerces none of a
@@ -2676,43 +2677,35 @@ async function main() {
                 await openRecentChat();
                 await page.waitFor(`${hydrated} && document.querySelectorAll('#chat .mes').length>=3`, 15000);
                 await openPanel('card_editor');
-                // The form mounting at all IS the assertion: the error screen has no fields.
-                const hostileMounted = await page.waitFor("!!document.querySelector('#card-creator')", 8000);
+                // A section rendering at all IS the mount assertion: the error screen has no sections.
+                const hostileMounted = await page.waitFor(`document.querySelector('${secSel('about')}')`, 8000);
                 const hostileFields = await page.eval(
-                    "(function(){var g=function(id){var e=document.getElementById(id);return e?e.value:null;};" +
-                    "return JSON.stringify({name:g('card-name'),desc:g('card-description'),pers:g('card-personality')," +
-                    "scen:g('card-scenario'),first:g('card-first_mes'),creator:g('card-creator'),ver:g('card-character_version')," +
-                    "tags:g('card-tags'),depth:g('card-depth_prompt_depth'),world:g('card-world')," +
-                    "role:(document.querySelector('#dd-btn-depth_prompt_role')||{}).textContent," +
-                    "greets:document.querySelectorAll('[data-card-greeting]').length," +
-                    "g0:g('card-greeting-0'),err:!!document.querySelector('#card-editor [role=alert]')});})()");
+                    `JSON.stringify({about:${sectionText('about')},tags:${sectionText('tags')},note:${sectionText('note')},`
+                    + `desc:${sectionText('description')},pers:${sectionText('personality')},scen:${sectionText('scenario')},`
+                    + `first:${sectionText('first_message')},world:${sectionText('world')},greet:${sectionText('greetings')},`
+                    + `err:!!document.querySelector('#card-editor [role=alert]')})`);
                 const h = JSON.parse(hostileFields || '{}');
-                // Each unreadable shape costs its OWN field and nothing else.
-                const hostileCosts = h.name === '' && h.desc === '' && h.pers === '' && h.scen === '' && h.first === '' && h.world === '';
-                // The readable fields beside them are untouched, which is the whole point of the row.
-                const hostileKeeps = h.creator === 'someone' && h.tags === 'solo, mystery' && h.depth === '3';
-                // A role of 5 matches no option: it falls back to the server's own default rather than
-                // rendering a dropdown with a blank face.
-                const hostileRole = (h.role || '').indexOf('System') >= 0;
+                // Each unreadable shape costs its OWN field: the odd ones read "Not set", the neighbours
+                // beside them keep their value. (name is the header's, not a section, and stays the store name.)
+                const hostileCosts = h.desc.indexOf('Not set') >= 0 && h.pers.indexOf('Not set') >= 0
+                    && h.scen.indexOf('Not set') >= 0 && h.first.indexOf('Not set') >= 0 && h.world.indexOf('Not set') >= 0;
+                const hostileKeeps = h.about.indexOf('someone') >= 0 && h.tags.indexOf('solo, mystery') >= 0 && h.note.indexOf('3') >= 0;
+                // A role of 5 matches no option: it falls back to the server's own default, System.
+                const hostileRole = h.note.indexOf('System') >= 0;
                 // Three greetings in, three out: the two unreadable ones are empty rows the user can see.
-                const hostileGreets = h.greets === 3 && h.g0 === 'real one';
+                const hostileGreets = h.greet.indexOf('real one') >= 0;
                 row('must', hostileMounted && !h.err && hostileCosts && hostileKeeps && hostileRole && hostileGreets,
                     'C-CARD-12 a card another tool wrote still opens, and each odd field costs only itself',
                     `mounted=${hostileMounted} ${hostileFields}`);
 
                 // The image replace, driven through the real <input type=file> with a real file: a
                 // FormData cannot cross the wasm boundary, so the POST hops to a JS helper, and the
-                // helper is the only thing that knows the field must be named 'avatar'.
+                // helper is the only thing that knows the field must be named 'avatar'. The upload input
+                // lives in the header, present whether or not a section is being edited.
                 const pngPath = join(mkdtempSync(join(tmpdir(), 'st-card-')), 'new-face.png');
                 writeFileSync(pngPath, Buffer.from(
                     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
                     'base64'));
-                // Edit BEFORE the pick, deliberately. An edit is what used to detach the footer's text
-                // node, so an upload onto a pristine form reported fine while the same upload after a
-                // keystroke reported into a node no user could see. This row passed throughout the defect
-                // for exactly that reason; now it enters the trap the way a user does.
-                await page.focus('#card-personality');
-                await page.insertText('!');
                 const doc = await page.cdp.send('DOM.getDocument', { depth: 1 }, page.sessionId);
                 const nodeId = (await page.cdp.send('DOM.querySelector',
                     { nodeId: doc.root.nodeId, selector: '#card-avatar-input' }, page.sessionId)).nodeId;
@@ -2734,8 +2727,13 @@ async function main() {
 
                 const avatarNotice = await page.waitFor(
                     "!!document.getElementById('card-editor-notice') && document.getElementById('card-editor-notice').textContent.indexOf('New image saved') >= 0", 4000);
-                row('must', avatarNotice, 'C-CARD-15 the panel reports the new image in its own footer',
+                row('must', avatarNotice, 'C-CARD-15 the page reports the new image in its footer',
                     `notice=${avatarNotice}`);
+
+                // Back hands the dock back to the character list it was opened from.
+                await page.click('#card-editor-back');
+                const backOk = await page.waitFor("!document.querySelector('#card-editor') && !!document.querySelector('#char-list')", 5000);
+                row('must', backOk, 'C-CARD-18 Back returns to the character list', `back=${backOk}`);
             });
         }
 
@@ -3761,7 +3759,7 @@ async function main() {
                 await page.navigate(`${args.base}/`);
                 await openRecentChat();
                 await openPanel('card_editor');
-                const cardLoaded = await page.waitFor("document.getElementById('card-name')", 5000);
+                const cardLoaded = await page.waitFor(`document.querySelector('${secSel('description')}')`, 5000);
 
                 // Duplicate refetches /characters/all, which is the rebuild path, with no navigation and
                 // no reselect after it.
@@ -3788,11 +3786,11 @@ async function main() {
                     'C-CFG-SEL-1 a refetch keeps the same character selected',
                     `dupSeen=${dupSeen} before=${JSON.stringify(selBefore)} after=${JSON.stringify(selAfter)}`);
 
-                // The blast radius: the card editor reads the same selected(), so a deselect empties it.
+                // The blast radius: the character page reads the same selected(), so a deselect empties it.
                 await openPanel('card_editor');
-                const cardStillOpen = await page.waitFor("document.getElementById('card-name')", 4000);
+                const cardStillOpen = await page.waitFor(`document.querySelector('${secSel('description')}')`, 4000);
                 row('must', cardStillOpen,
-                    'C-CFG-SEL-2 the card editor still has its character after a refetch',
+                    'C-CFG-SEL-2 the character page still has its character after a refetch',
                     `cardOpen=${cardStillOpen}`);
             });
         }
@@ -4012,33 +4010,35 @@ async function main() {
         // which re-enters render for a component whose diff is in flight.
         // Measured at 7e180f05b, 3 loads per cell: this route 3/3 anomalies + orphanCount 9; the warm
         // route 3/3 clean; drawer-closed-first 3/3 clean. With patch 13, 12/12 cells clean, orphans 0.
-        console.log('== C-SWAP the straight swap into a cold card editor ==');
+        console.log('== C-SWAP the straight swap into a cold character page ==');
         {
-            await needsPanel('card_editor', 'C-SWAP-1 to C-SWAP-2 the cold card-editor swap rows', async () => {
+            await needsPanel('card_editor', 'C-SWAP-1 to C-SWAP-2 the cold character-page swap rows', async () => {
                 // Cold is half the trigger, so the route navigates every time: a page that already
-                // opened the card editor takes the warm path, where every assertion below is vacuous.
-                const swapRoute = async (clickSelect) => {
+                // opened the character page takes the warm path, where every assertion below is vacuous.
+                // Opening the page is now one move (a click on the tile), which IS the cold swap.
+                const swapRoute = async (viaEditIcon) => {
                     await page.navigate(`${args.base}/`);
                     await openRecentChat();
                     await openPanel('characters');
                     const listed = await page.waitFor("document.querySelectorAll('#chat-root .char-item').length > 0", 8000);
-                    if (clickSelect) {
-                        await page.click('#chat-root .char-item .char-name');
-                        await page.waitFor("!!document.querySelector('#chat-root .char-item.is-selected')", 8000);
-                    }
-                    const selected = await page.eval("!!document.querySelector('#chat-root .char-item.is-selected')");
-                    const cold = await page.eval("!document.querySelector('#card-name')");
+                    const cold = await page.eval("!document.querySelector('#card-editor')");
                     const from = zxAnomalies.length;
-                    // Straight in, drawer still open. Closing it first is the route that never drifts.
-                    await openPanel('card_editor');
-                    // The form mounting is the swap's own completion signal (W6-7: never a wall clock).
-                    const mounted = await page.waitFor("!!document.querySelector('#card-name')", 8000);
+                    // Two entries into the cold page: the row's Edit icon on the already-selected
+                    // character, and a plain click on a tile's name. Both open the page straight from
+                    // the list with the diff in flight.
+                    if (viaEditIcon) {
+                        await page.click("#chat-root .char-item.is-selected .char-row-act[data-char-action='edit']");
+                    } else {
+                        await page.click('#chat-root .char-item .char-name');
+                    }
+                    // A section rendering is the swap's own completion signal (W6-7: never a wall clock).
+                    const mounted = await page.waitFor("!!document.querySelector('#card-editor') && !!document.querySelector('[data-section-block=\"description\"]')", 8000);
                     // An anomaly has no completion signal to wait on, so one bounded settle gives a late
                     // one the same room C-DBG-6 gives an absent trace.
                     await sleep(1000);
                     return {
-                        drove: listed && selected && cold && mounted,
-                        listed, selected, cold, mounted,
+                        drove: listed && cold && mounted,
+                        listed, cold, mounted,
                         anomalies: zxAnomalies.slice(from).filter((e) => !e.text.includes(ZX_PROBE)),
                         shellAlive: await page.eval("document.getElementById('shell') !== null"),
                         // -1, never a skip: an audit that is gone cannot prove zero orphans.
@@ -4046,7 +4046,7 @@ async function main() {
                             "(typeof globalThis.__zx_audit === 'function') ? globalThis.__zx_audit().orphanCount : -1"),
                     };
                 };
-                const say = (r) => `drove=${r.drove} (listed=${r.listed} selected=${r.selected}`
+                const say = (r) => `drove=${r.drove} (listed=${r.listed}`
                     + ` coldBefore=${r.cold} mounted=${r.mounted}) anomalies=${r.anomalies.length}`
                     + ` shellAlive=${r.shellAlive} orphanCount=${r.orphans}`
                     + (r.anomalies.length ? ` first=${JSON.stringify(r.anomalies[0].text.slice(0, 150))}` : '');
@@ -4058,17 +4058,16 @@ async function main() {
                 // child BOTH #0, and id 0 is Shell's root. The drove= terms are IN the conjunction: a swap
                 // that silently fails to drive reports no anomaly, a live #shell and no orphan, and that
                 // is this row's green (F12).
-                const fresh = await swapRoute(true);
+                const fresh = await swapRoute(false);
                 row('must', fresh.drove && fresh.anomalies.length === 0 && fresh.shellAlive && fresh.orphans === 0,
-                    'C-SWAP-1 picking a character then opening its card from the panel drifts nothing',
+                    'C-SWAP-1 clicking a character opens its page cold and drifts nothing',
                     say(fresh));
 
-                // The same swap with a SETTLED selection (resume-last, no click in the list): red 3/3 at
-                // 7e180f05b as well, so the click is not the trigger and this is a second real entry, the
-                // user who resumes a chat, opens the panel to browse, then opens the card.
-                const settled = await swapRoute(false);
+                // The same swap through the row's Edit icon on the settled selection (resume-last, no
+                // name click): a second real entry into the cold page.
+                const settled = await swapRoute(true);
                 row('must', settled.drove && settled.anomalies.length === 0 && settled.shellAlive && settled.orphans === 0,
-                    'C-SWAP-2 the same swap with a settled selection drifts nothing either',
+                    'C-SWAP-2 opening the page through the row Edit icon drifts nothing either',
                     say(settled));
             });
         }
@@ -5538,31 +5537,30 @@ async function main() {
                     `target=${JSON.stringify(renTarget)} ${JSON.stringify(bgRenFailed)}`);
             });
 
-            // The card editor. Opening it fetches the deep card, so the form's presence is the signal
-            // that the panel is ready to save from.
-            // The editor only has a card to show once one is selected, which resuming a chat does. A
-            // bare navigate leaves it empty, and the form never mounts.
+            // The character page. Opening it fetches the deep card; a section rendering is the signal
+            // that the page is ready to save from. It only has a card once one is selected, which
+            // resuming a chat does; a bare navigate leaves it empty and no section mounts.
             await needsPanel('card_editor', 'C-PUSH-18 to C-PUSH-19 the card-save and card-avatar push rows', async () => {
-                const openCardEditor = async () => {
+                const openCardPage = async () => {
                     await page.navigate(`${args.base}/`);
                     await openRecentChat();
                     await openPanel('card_editor');
-                    if (!await page.waitFor("!!document.querySelector('#card-description')", 10000)) {
-                        throw new Error('C-PUSH: the card editor form never mounted');
+                    if (!await page.waitFor(`document.querySelector('${secSel('description')}')`, 10000)) {
+                        throw new Error('C-PUSH: the character page never mounted its sections');
                     }
                     await sleep(200);
                 };
 
-                await openCardEditor();
-                await page.eval("(function(){var t=document.getElementById('card-description');"
-                    + "t.value='push probe edit'; t.dispatchEvent(new Event('input',{bubbles:true}));})()");
+                await openCardPage();
+                await editSection('description', '#card-description');
+                await setControl('card-description', 'push probe edit');
                 await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/characters/edit')}&code=500`);
-                await page.click('#card-save');
+                await saveSection('description');
                 const cardSaveFailed = await settled(8000);
                 row('must', cardSaveFailed.some((t) => t.level === 'err' && t.text === 'Character save failed: 500'),
                     'C-PUSH-18 a rejected card save says so, with the code', JSON.stringify(cardSaveFailed));
 
-                await openCardEditor();
+                await openCardPage();
                 await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/characters/edit-avatar')}&code=500`);
                 await pickFile('card-avatar-input', 'card push.png');
                 const cardAvatarFailed = await settled(8000);

@@ -248,7 +248,10 @@ fn onCharSelect(e: *zx.client.Event.Stateful) void {
         defer zx.allocator.free(index_str);
         const index = std.fmt.parseInt(u32, index_str, 10) catch return;
         chars_log.debug("char select: index {d}", .{index});
+        // Selecting a character both loads its chat in the centre and opens its detail page: the page
+        // IS the character now, not a strip of buttons under the list.
         loadCharacterChat(index);
+        openCard(index);
         return;
     }
     chars_log.warn("char select: click target has no data-char-select ancestor", .{});
@@ -266,12 +269,16 @@ fn loadCharacterChat(index: u32) void {
     char_api.loadCharacterChat(index);
 }
 
-/// Open the card editor on this character. Selects FIRST: the store's selection is normally set by a
-/// completed chat load (char_api.onChatDone), and the editor fetches the deep card for whoever is
-/// selected, so editing a card without first opening its chat has to say who it means.
+/// Open the character detail page on this character. Selects FIRST: the store's selection is normally
+/// set by a completed chat load (char_api.onChatDone, which is async), and the page fetches the deep
+/// card for whoever is selected, so opening it has to say who it means before the chat lands.
+///
+/// Idempotent open, not a toggle: a second character click while the page is already up must not close
+/// it. It only opens when the Cast dock is not already showing the page.
 fn openCard(index: u32) void {
     char_store.select(index);
-    ui.toggle(.card_editor);
+    const cur = ui.openIdOn(.right);
+    if (cur == null or cur.? != .card_editor) ui.toggle(.card_editor);
 }
 
 fn onItemAction(e: *zx.client.Event.Stateful) void {

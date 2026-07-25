@@ -215,6 +215,26 @@ pub const Form = struct {
         slot.* = copy;
     }
 
+    /// Drop one field's edits back to the baseline it was loaded with. The page's per-section Cancel
+    /// reverts only the fields that section owns, so this is field-scoped rather than the whole form.
+    pub fn revert(self: *Form, f: Field) !void {
+        const copy = try self.gpa.dupe(u8, self.baseline[@intFromEnum(f)]);
+        const slot = &self.values[@intFromEnum(f)];
+        self.gpa.free(slot.*);
+        slot.* = copy;
+    }
+
+    /// Drop the whole greetings list back to its loaded baseline: adds, removes and edits alike. The
+    /// greetings section is the one whose Cancel has a SHAPE to undo, not just text, so a per-field
+    /// revert cannot cover it.
+    pub fn revertGreetings(self: *Form) !void {
+        try self.cloneInto(&self.greetings, self.greetingsBaselineSlice());
+    }
+
+    fn greetingsBaselineSlice(self: *const Form) []const []const u8 {
+        return @ptrCast(self.greetings_baseline.items);
+    }
+
     /// Re-baseline every field to its current text, after a save lands.
     pub fn markClean(self: *Form) !void {
         for (&self.values, &self.baseline) |v, *b| {
@@ -854,6 +874,74 @@ test "the form tracks dirty against the loaded baseline and re-baselines on save
     // Setting the same text back is not a change.
     try form.set(.description, "A hedge witch who keeps bees.");
     try testing.expect(!form.dirty());
+}
+
+test "reverting a field restores its loaded baseline and leaves its neighbours alone" {
+    var form = Form.init(testing.allocator);
+    defer form.deinit();
+    try form.load(.name, "Aria");
+    try form.load(.description, "A hedge witch.");
+    try form.load(.scenario, "A misty coast.");
+
+    try form.set(.description, "changed by the gate");
+    try form.set(.scenario, "also changed");
+    try testing.expect(form.dirty());
+
+    // Reverting one field undoes only its own edit; the other field the section did not own stays dirty.
+    try form.revert(.description);
+    try testing.expectEqualStrings("A hedge witch.", form.get(.description));
+    try testing.expectEqualStrings("also changed", form.get(.scenario));
+    try testing.expect(form.dirty());
+
+    try form.revert(.scenario);
+    try testing.expectEqualStrings("A misty coast.", form.get(.scenario));
+    try testing.expect(!form.dirty());
+
+    // Reverting a pristine field is a no-op, never a change.
+    try form.revert(.name);
+    try testing.expectEqualStrings("Aria", form.get(.name));
+    try testing.expect(!form.dirty());
+}
+
+test "reverting greetings undoes adds, removes and edits back to the loaded list" {
+    var form = Form.init(testing.allocator);
+    defer form.deinit();
+    try form.load(.name, "Aria");
+    const loaded = [_][]const u8{ "The fog is in.", "Mind the step." };
+    try form.loadGreetings(&loaded);
+    try testing.expect(!form.dirty());
+
+    try form.setGreeting(0, "The fog is out.");
+    try form.addGreeting();
+    try form.setGreeting(2, "A third opening.");
+    form.removeGreeting(1);
+    try testing.expect(form.dirty());
+
+    try form.revertGreetings();
+    try testing.expectEqual(@as(usize, 2), form.greetingCount());
+    try testing.expectEqualStrings("The fog is in.", form.greeting(0));
+    try testing.expectEqualStrings("Mind the step.", form.greeting(1));
+    try testing.expect(!form.dirty());
+
+    // Revert re-baselines nothing: a second revert with no edits between is still a no-op.
+    try form.revertGreetings();
+    try testing.expect(!form.dirty());
+}
+
+fn revertRoundTrip(gpa: std.mem.Allocator) !void {
+    var form = Form.init(gpa);
+    defer form.deinit();
+    try form.load(.description, "A hedge witch.");
+    const loaded = [_][]const u8{ "The fog is in.", "Mind the step." };
+    try form.loadGreetings(&loaded);
+    try form.set(.description, "changed");
+    try form.addGreeting();
+    try form.revert(.description);
+    try form.revertGreetings();
+}
+
+test "reverting a field and the greetings cleans up on every allocation failure" {
+    try testing.checkAllAllocationFailures(testing.allocator, revertRoundTrip, .{});
 }
 
 test "a note role the dropdown cannot show falls back rather than rendering a blank face" {

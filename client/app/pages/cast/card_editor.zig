@@ -1,5 +1,5 @@
 //! The card editor's logic: the full-card fetch, its state machine, the edit buffers and the save.
-//! Zig owns the data and the state; card_editor_body.zx reads it and renders. The pure half (the
+//! Zig owns the data and the state; character_page_body.zx reads it and renders. The pure half (the
 //! field set, the buffers and the request body) lives in card_form.zig so `zig build test` proves it
 //! (ZX5); everything here touches zx and is proven in the browser gate instead.
 //!
@@ -96,8 +96,8 @@ pub fn editingName() []const u8 {
 }
 
 /// The avatar filename of the character this editor is holding, which is the identity the server
-/// and the tag map both key on. Empty before a card has landed. card_tags.zx assigns against this
-/// rather than the store's selection, so a tag can only land on the card actually on screen.
+/// and the tag map both key on. Empty before a card has landed. The character page reads this rather
+/// than the store's selection, so an edit can only land on the card actually on screen.
 pub fn editingAvatar() []const u8 {
     return owned_avatar;
 }
@@ -320,6 +320,31 @@ pub fn setGreeting(i: usize, text: []const u8) void {
     };
     notice = .none;
     reflectNotice();
+}
+
+/// Drop one field's edits back to the card as loaded, and re-render so the read-only view shows the
+/// baseline text. The character page's per-section Cancel calls this once per field the section owns;
+/// unlike setField it DOES re-render, because a cancel is exactly the moment the editable control
+/// comes down and the read view goes back up.
+pub fn revertField(f: Field) void {
+    if (!form_init) return;
+    form.revert(f) catch {
+        log.warn("revert dropped: out of memory", .{});
+        return;
+    };
+    notice = .none;
+    regions.bumpShell();
+}
+
+/// Drop the whole greetings list back to its loaded shape, for the greetings section's Cancel.
+pub fn revertGreetings() void {
+    if (!form_init) return;
+    form.revertGreetings() catch {
+        log.warn("greeting revert dropped: out of memory", .{});
+        return;
+    };
+    notice = .none;
+    regions.bumpShell();
 }
 
 pub fn addGreeting() void {
