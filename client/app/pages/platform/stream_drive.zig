@@ -175,6 +175,7 @@ pub export fn __st_stream_chunk(ptr: usize, len: usize) callconv(.c) void {
         return;
     };
     s.chunks += 1;
+    flushPending();
     schedule();
 }
 
@@ -201,7 +202,13 @@ pub export fn __st_stream_closed(status: u32) callconv(.c) void {
     resetSession();
 
     switch (kind) {
-        .send => if (status >= 200 and status < 300) char_api.persistNewTurns() else group_send.onStreamFailed(),
+        .send => {
+            // Always persist whatever arrived: on 2xx the full reply is saved; on a dropped
+            // connection (status 0) or server error, partial tokens are still worth keeping.
+            // The server's change_token gate handles the case where it already saved something.
+            char_api.persistNewTurns();
+            if (status < 200 or status >= 300) group_send.onStreamFailed();
+        },
         .dev => runNextDev(),
     }
 }
