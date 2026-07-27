@@ -96,7 +96,7 @@ pub fn statusWords(buf: *[96]u8) []const u8 {
             if (c.api_server.len == 0) break :blk "Backend not connected";
             break :blk std.fmt.bufPrint(buf, "Backend: {s}", .{c.api_type}) catch "Backend configured";
         },
-        .connected => std.fmt.bufPrint(buf, "Connected: {s}", .{statusModel()}) catch "Connected",
+        .connected => "Online",
         .asleep => "Backend asleep - unlock at silly",
         .offline => "Backend offline - unlock at silly",
         .err => std.fmt.bufPrint(buf, "Backend error {d}", .{state_code}) catch "Backend error",

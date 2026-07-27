@@ -11,7 +11,6 @@ const zx = @import("zx");
 
 const notifications = @import("./notifications.zig");
 const regions = @import("../shell/regions.zig");
-const edgetabs_state = @import("../nav/edgetabs_state.zig");
 const overlay_exit = @import("../platform/overlay_exit.zig");
 const dom_event = @import("../platform/dom_event.zig");
 
@@ -36,18 +35,10 @@ pub fn isClosing() bool {
     return exit.isClosing();
 }
 
-/// The bell rides the CAST TAB'S REVEAL: it is there whenever that tab is, and gone whenever it is.
-///
-/// The alternative shapes both fail. A bell that keys on the unread count alone can only be reached
-/// by being lucky enough to have unread items, and nothing you have already read is ever reviewable
-/// again. A permanently-visible bell costs resting chrome, which is the thing this whole rework is
-/// removing. Reaching for the right edge is already the gesture that summons navigation, so arriving
-/// with the tab costs nothing at rest and keeps the history always reachable.
-///
-/// It also stays while its own popover is up, whatever the pointer is doing: the button that opened
-/// the card is the button that closes it, and it cannot fade out from under that job.
+/// The bell is a permanent topbar item: always visible, in-flow beside the gear. No edge-reveal
+/// gate — the bell sits in the topbar flex row regardless of which edge tab is hovered.
 pub fn bellShown() bool {
-    return exit.isMounted() or edgetabs_state.tabShown(.right);
+    return true;
 }
 
 /// The COUNT is the part that keys on unread, so a quiet app shows a bell with nothing on it. Empty

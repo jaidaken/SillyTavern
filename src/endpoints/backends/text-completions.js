@@ -17,6 +17,7 @@ import { forwardFetchResponse, trimV1, getConfigValue } from '../../util.js';
 import { setAdditionalHeaders } from '../../additional-headers.js';
 import { createHash } from 'node:crypto';
 import { log } from '../../log.js';
+import { StreamingSession, getSession } from '../../streaming-session.js';
 
 export const router = express.Router();
 
@@ -27,7 +28,7 @@ export const router = express.Router();
  * @param {import('express').Response} response Express response
  * @returns {Promise<any>} Nothing valuable
  */
-async function parseOllamaStream(jsonStream, request, response) {
+async function parseOllamaStream(jsonStream, request, response, session) {
     try {
         if (!jsonStream.body) {
             throw new Error('No body in the response');
@@ -46,21 +47,36 @@ async function parseOllamaStream(jsonStream, request, response) {
                 }
                 const text = json.response || '';
                 const thinking = json.thinking || '';
-                const chunk = { choices: [{ text, thinking }] };
-                response.write(`data: ${JSON.stringify(chunk)}\n\n`);
+                const sseChunk = { choices: [{ text, thinking }] };
+                response.write(`data: ${JSON.stringify(sseChunk)}\n\n`);
+                if (session) session.feedChoice({ text, thinking });
                 partialData = '';
             }
         });
 
-        request.socket.on('close', function () {
+        const onSocketClose = function () {
             if (jsonStream.body instanceof Readable) jsonStream.body.destroy();
             response.end();
-        });
+            if (session) session.disconnect();
+        };
+
+        if (session) {
+            // For persistent streams, don't destroy the upstream on client disconnect.
+            // Just mark the session so it persists when the AI finishes.
+            request.socket.on('close', function () {
+                session.disconnect();
+                // Still end the HTTP response since the client is gone.
+                if (!response.writableEnded) response.end();
+            });
+        } else {
+            request.socket.on('close', onSocketClose);
+        }
 
         jsonStream.body.on('end', () => {
             log.net.info('Streaming request finished');
             response.write('data: [DONE]\n\n');
             response.end();
+            if (session) session.seal();
         });
     } catch (error) {
         log.net.error('Error forwarding streaming response:', error);
@@ -70,6 +86,118 @@ async function parseOllamaStream(jsonStream, request, response) {
             return response.end();
         }
     }
+}
+
+/**
+ * Streams the upstream SSE response to the client while buffering the accumulated text and thinking
+ * in a StreamingSession. Used when the request carries chat_file + avatar_url so the backend can
+ * persist the response on completion even if the client disconnects.
+ *
+ * For non-Ollama backends: the upstream already sends `data: {"choices":[{"text":...}]}\n\n`.
+ * We read the body manually (not pipe) to intercept each frame for buffering.
+ *
+ * @param {import('node-fetch').Response} from Upstream fetch response.
+ * @param {import('express').Response} to Express response.
+ * @param {StreamingSession} session
+ */
+async function streamWithBuffer(from, to, session) {
+    let statusCode = from.status;
+    let statusText = from.statusText;
+
+    if (statusCode === 401) statusCode = 403;
+
+    to.statusCode = statusCode;
+    to.statusMessage = statusText;
+
+    if (!from.ok) {
+        try {
+            const rawErrorText = await from.text();
+            log.net.warn(`Streaming request failed with status ${from.status} ${statusText}: ${rawErrorText || 'Unknown error'}`);
+            to.end(rawErrorText || '', 'utf-8');
+        } catch {
+            to.end();
+        }
+        return;
+    }
+
+    if (!from.body || !to.socket) {
+        to.end();
+        return;
+    }
+
+    let settled = false;
+    const finish = () => {
+        if (settled) return;
+        settled = true;
+        if (from.body instanceof Readable && !from.body.destroyed) from.body.destroy();
+        if (!to.writableEnded) to.end();
+    };
+
+    let sseBuffer = '';
+
+    from.body.on('data', (chunk) => {
+        const str = chunk.toString();
+        sseBuffer += str;
+
+        // Forward raw bytes to the client if still connected.
+        if (session.clientConnected && !to.writableEnded) {
+            to.write(str);
+        }
+
+        // Parse SSE data: lines starting with "data: " separated by \n.
+        let nlIdx;
+        while ((nlIdx = sseBuffer.indexOf('\n')) !== -1) {
+            const line = sseBuffer.slice(0, nlIdx).replace(/\r$/, '');
+            sseBuffer = sseBuffer.slice(nlIdx + 1);
+
+            if (line.startsWith('data: ')) {
+                const payload = line.slice(6).trim();
+                if (payload === '[DONE]') continue;
+                try {
+                    const parsed = JSON.parse(payload);
+                    const choice = parsed.choices && parsed.choices[0];
+                    if (choice) {
+                        session.feedChoice(choice);
+                    }
+                } catch { /* not JSON, skip */ }
+            }
+        }
+    });
+
+    from.body.on('error', (error) => {
+        log.net.error('Streaming request failed mid-stream:', error);
+        if (!to.writableEnded) {
+            to.write(`data: ${JSON.stringify({ error: { type: 'upstream_error', message: 'Upstream connection failed during streaming.', retryable: true } })}\n\n`);
+        }
+        finish();
+    });
+
+    from.body.on('end', () => {
+        // Flush any leftover bytes in the SSE buffer that weren't terminated by a newline.
+        if (sseBuffer.trim()) {
+            const trailing = sseBuffer.trim();
+            if (trailing.startsWith('data: ')) {
+                const payload = trailing.slice(6).trim();
+                if (payload !== '[DONE]') {
+                    try {
+                        const parsed = JSON.parse(payload);
+                        const choice = parsed.choices && parsed.choices[0];
+                        if (choice) session.feedChoice(choice);
+                    } catch { /* not JSON, skip */ }
+                }
+            }
+            sseBuffer = '';
+        }
+        log.net.info('Streaming request finished');
+        finish();
+        session.seal();
+    });
+
+    // On client disconnect: do NOT destroy the upstream body. Just mark the session so it
+    // persists on seal. The upstream will naturally end when the AI finishes generating.
+    to.socket.on('close', () => {
+        session.disconnect();
+    });
 }
 
 /**
@@ -292,6 +420,22 @@ router.post('/generate', async function (request, response) {
         const baseUrl = request.body.api_server;
         log.net.debug(request.body);
 
+        // If the frontend sent chat metadata, create a persistent streaming session so the
+        // backend can persist the response even if the client disconnects mid-generation.
+        const chatFile = request.body.chat_file;
+        const avatarUrl = request.body.avatar_url;
+        const characterName = request.body.character_name || '';
+        let session = null;
+        if (chatFile && avatarUrl) {
+            session = new StreamingSession(chatFile, avatarUrl, characterName);
+            getSession(chatFile, session);
+        }
+
+        // Strip SillyTavern-specific fields before forwarding to the AI backend.
+        delete request.body.chat_file;
+        delete request.body.avatar_url;
+        delete request.body.character_name;
+
         const controller = new AbortController();
         request.socket.removeAllListeners('close');
         request.socket.on('close', async function () {
@@ -299,7 +443,10 @@ router.post('/generate', async function (request, response) {
                 await abortKoboldCppRequest(request, trimV1(baseUrl));
             }
 
-            controller.abort();
+            // For persistent streams, don't abort the upstream — let the AI finish.
+            if (!session) {
+                controller.abort();
+            }
         });
 
         let url = trimV1(baseUrl);
@@ -411,11 +558,14 @@ router.post('/generate', async function (request, response) {
 
         if (request.body.api_type === TEXTGEN_TYPES.OLLAMA && request.body.stream) {
             const stream = await fetch(url, args);
-            parseOllamaStream(stream, request, response);
+            parseOllamaStream(stream, request, response, session);
         } else if (request.body.stream) {
             const completionsStream = await fetch(url, args);
-            // Pipe remote SSE stream to Express response
-            await forwardFetchResponse(completionsStream, response);
+            if (session) {
+                await streamWithBuffer(completionsStream, response, session);
+            } else {
+                await forwardFetchResponse(completionsStream, response);
+            }
         } else {
             const completionsReply = await fetch(url, args);
 

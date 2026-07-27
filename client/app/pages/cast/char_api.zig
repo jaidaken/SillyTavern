@@ -1377,15 +1377,17 @@ pub fn sendMessage() void {
         net_log.warn("send: no character selected", .{});
         return;
     };
-    // A prior send is still assembling its prompt window; drop this one rather than race two builds
-    // through the single pending slot. The window is one fetch RTT.
-    if (pend_active) {
-        net_log.warn("send: previous send still assembling its prompt", .{});
-        return;
-    }
-    const text = readComposer() orelse return;
-    defer alloc.free(text);
-    clearComposer();
+    // A prior send is still in flight (prompt assembly or streaming): drop silently, matching
+    // the old frontend's is_send_press guard.
+    if (pend_active or stream_drive.live.state != .idle) return;
+    // Empty composer triggers a generation without a user turn: the AI responds as the character
+    // to whatever is already in the chat.
+    const text_opt = readComposer();
+    const is_empty = text_opt == null;
+    const text = text_opt orelse "";
+    defer if (text_opt) |t| alloc.free(t);
+
+    if (!is_empty) clearComposer();
 
     const persona = activePersona();
     const user_name = if (persona) |p| p.name else "You";
@@ -1397,22 +1399,22 @@ pub fn sendMessage() void {
     const char_avatar: ?[]u8 = if (c.avatar.len > 0) data.thumbUrl(alloc, "avatar", c.avatar) catch null else null;
     defer if (char_avatar) |u| alloc.free(u);
 
-    store.global.appendCopy(user_name, text, persona_avatar orelse "") catch |err| {
-        chars_log.err("send: append user turn failed: {s}", .{@errorName(err)});
-        return;
-    };
-    regions.bumpMessageLog();
-    pinChatToBottom();
+    if (!is_empty) {
+        store.global.appendCopy(user_name, text, persona_avatar orelse "") catch |err| {
+            chars_log.err("send: append user turn failed: {s}", .{@errorName(err)});
+            return;
+        };
+        regions.bumpMessageLog();
+        pinChatToBottom();
+    }
 
-    // Capture the append context, then persist the user turn now so a failed generation still keeps
-    // it. The assistant turn persists on stream seal (persistNewTurns via the __st_persist_turns hook).
     setOwned(&send_avatar, c.avatar);
     if (chatFileName(c)) |fname| {
         setOwned(&send_file, fname);
         alloc.free(fname);
     }
     send_seq = chat_load_seq;
-    appendTurn(user_name, text, true, "");
+    if (!is_empty) appendTurn(user_name, text, true, "");
 
     if (!stashSend(conn, c, persona, user_name, text, char_avatar orelse "")) {
         chars_log.err("send: could not stash the send context", .{});
@@ -1616,13 +1618,11 @@ fn endSend() void {
 fn finishSend(prompt: []const u8) void {
     defer endSend();
     const conn = pend_conn orelse return;
-    const body = generate.buildRequestBody(alloc, conn, prompt, tok_job.stop) catch {
+    const body = generate.buildRequestBodyWithChat(alloc, conn, prompt, tok_job.stop, send_file, send_avatar, pend_char_name) catch {
         net_log.warn("send: request-body build failed", .{});
         return;
     };
     defer alloc.free(body);
-    // stream_drive owns the SSE lifecycle now (opens the door pump, batches, seals). It copies what it
-    // keeps, so freeing body/pending after this returns is safe. persistNewTurns runs on seal.
     stream_drive.send("/api/backends/text-completions/generate", pend_char_name, pend_char_avatar, body);
 }
 

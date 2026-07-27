@@ -1987,6 +1987,18 @@ router.post('/append', async function (request, response) {
     }
 });
 
+router.get('/pending', async function (request, response) {
+    try {
+        const { listPending } = await import('../../streaming-session.js');
+        const chatFile = request.query.chat_file;
+        const pending = listPending(typeof chatFile === 'string' ? chatFile : undefined);
+        return response.send({ pending });
+    } catch (error) {
+        log.chat.error(error);
+        return response.sendStatus(500);
+    }
+});
+
 /**
  * Shared read-modify-write body for the windowed mutation family. Resolves the solo/group ref,
  * takes the per-file lock, gates on the FULL token with the restore-message double-read recheck,

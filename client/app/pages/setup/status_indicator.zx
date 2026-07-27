@@ -1,9 +1,7 @@
 // A compact status chip that lives in the top bar, left of the notification bell. Shows a coloured
 // dot driven by the same data-conn-state attribute the connections panel uses (app-input.css), plus
-// the model name or a short status line. Clicking opens the system gear to the connections panel.
+// a short status word. Clicking opens the system gear to the connections panel.
 pub fn StatusIndicator(allocator: zx.Allocator) zx.Component {
-    const model = connection.statusModel();
-    const label = if (model.len > 0) model else connection.statusWords(&word_buf);
     return (
         <div
             @allocator={allocator}
@@ -11,7 +9,7 @@ pub fn StatusIndicator(allocator: zx.Allocator) zx.Component {
             data-conn-state={connection.stateName()}
         >
             <span class="conn-dot flex-none" aria-hidden="true"></span>
-            <span class="max-w-[7rem] truncate font-mono text-[0.62rem] leading-ui text-muted">{label}</span>
+            <span class="text-sm text-text">{connection.statusWords(&word_buf)}</span>
         </div>
     );
 }
