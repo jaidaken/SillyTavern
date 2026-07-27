@@ -157,6 +157,7 @@ fn stashRequest(url: []const u8, body: []const u8) bool {
 /// not stranded in .streaming, and clear the session.
 fn abortOpen() void {
     live.end();
+    live.state = .idle;
     reader.streamEnd();
     resetSession();
 }
@@ -186,6 +187,7 @@ pub export fn __st_stream_closed(status: u32) callconv(.c) void {
     // Whatever the rAF cadence left unfed must still reach the message before it seals.
     flushPending();
     live.end();
+    live.state = .idle;
     reader.streamEnd();
     regions.bumpMessageLog();
 
