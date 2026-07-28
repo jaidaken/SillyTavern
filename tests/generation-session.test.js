@@ -54,10 +54,13 @@ describe('generation watchdog', () => {
 
         jest.advanceTimersByTime(IDLE_TIMEOUT_MS - 1000);
         expect(session.status).toBe(Status.running);
+        expect(session.controller.signal.aborted).toBe(false);
 
         jest.advanceTimersByTime(1000);
         expect(session.status).toBe(Status.error);
         expect(session.errorMessage).toMatch(/no upstream frame for 180s/);
+        // Reaping the session without releasing the socket would trade a wedged chat for a leak.
+        expect(session.controller.signal.aborted).toBe(true);
     });
 
     test('the chat unwedges once the idle bound has expired', () => {
@@ -115,9 +118,11 @@ describe('generation watchdog', () => {
         expect(reasons.length).toBe(1);
         expect(reasons[0]).toMatch(/no upstream frame/);
 
-        // The hook owns the ending, so nothing has sealed the session behind its back; the route's
-        // finishGeneration is what persists the partial turn and releases the upstream socket.
+        // The hook owns the ending, so nothing sealed the session behind its back; the route's
+        // finishGeneration is what claims the status and persists the partial turn.
         expect(session.status).toBe(Status.running);
+        // The socket is released either way: it does not depend on the hook being wired correctly.
+        expect(session.controller.signal.aborted).toBe(true);
 
         jest.advanceTimersByTime(WALL_CLOCK_TIMEOUT_MS);
         expect(reasons.length).toBe(1);
@@ -134,6 +139,9 @@ describe('generation watchdog', () => {
         expect(session.errorMessage).toBe('');
         expect(session.idleTimer).toBeNull();
         expect(session.wallTimer).toBeNull();
+        // A generation that ended on its own closed its own socket; a stale deadline must not fire a
+        // second abort at a stream that is already gone.
+        expect(session.controller.signal.aborted).toBe(false);
     });
 
     test('the active count is scoped per handle rather than globally', () => {
