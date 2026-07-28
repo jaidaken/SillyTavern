@@ -17,7 +17,6 @@ import { forwardFetchResponse, trimV1, getConfigValue } from '../../util.js';
 import { setAdditionalHeaders } from '../../additional-headers.js';
 import { createHash } from 'node:crypto';
 import { log } from '../../log.js';
-import { StreamingSession, getSession } from '../../streaming-session.js';
 
 export const router = express.Router();
 
@@ -28,7 +27,7 @@ export const router = express.Router();
  * @param {import('express').Response} response Express response
  * @returns {Promise<any>} Nothing valuable
  */
-async function parseOllamaStream(jsonStream, request, response, session) {
+async function parseOllamaStream(jsonStream, request, response) {
     try {
         if (!jsonStream.body) {
             throw new Error('No body in the response');
@@ -49,7 +48,6 @@ async function parseOllamaStream(jsonStream, request, response, session) {
                 const thinking = json.thinking || '';
                 const sseChunk = { choices: [{ text, thinking }] };
                 response.write(`data: ${JSON.stringify(sseChunk)}\n\n`);
-                if (session) session.feedChoice({ text, thinking });
                 partialData = '';
             }
         });
@@ -57,26 +55,14 @@ async function parseOllamaStream(jsonStream, request, response, session) {
         const onSocketClose = function () {
             if (jsonStream.body instanceof Readable) jsonStream.body.destroy();
             response.end();
-            if (session) session.disconnect();
         };
 
-        if (session) {
-            // For persistent streams, don't destroy the upstream on client disconnect.
-            // Just mark the session so it persists when the AI finishes.
-            request.socket.on('close', function () {
-                session.disconnect();
-                // Still end the HTTP response since the client is gone.
-                if (!response.writableEnded) response.end();
-            });
-        } else {
-            request.socket.on('close', onSocketClose);
-        }
+        request.socket.on('close', onSocketClose);
 
         jsonStream.body.on('end', () => {
             log.net.info('Streaming request finished');
             response.write('data: [DONE]\n\n');
             response.end();
-            if (session) session.seal();
         });
     } catch (error) {
         log.net.error('Error forwarding streaming response:', error);
@@ -86,118 +72,6 @@ async function parseOllamaStream(jsonStream, request, response, session) {
             return response.end();
         }
     }
-}
-
-/**
- * Streams the upstream SSE response to the client while buffering the accumulated text and thinking
- * in a StreamingSession. Used when the request carries chat_file + avatar_url so the backend can
- * persist the response on completion even if the client disconnects.
- *
- * For non-Ollama backends: the upstream already sends `data: {"choices":[{"text":...}]}\n\n`.
- * We read the body manually (not pipe) to intercept each frame for buffering.
- *
- * @param {import('node-fetch').Response} from Upstream fetch response.
- * @param {import('express').Response} to Express response.
- * @param {StreamingSession} session
- */
-async function streamWithBuffer(from, to, session) {
-    let statusCode = from.status;
-    let statusText = from.statusText;
-
-    if (statusCode === 401) statusCode = 403;
-
-    to.statusCode = statusCode;
-    to.statusMessage = statusText;
-
-    if (!from.ok) {
-        try {
-            const rawErrorText = await from.text();
-            log.net.warn(`Streaming request failed with status ${from.status} ${statusText}: ${rawErrorText || 'Unknown error'}`);
-            to.end(rawErrorText || '', 'utf-8');
-        } catch {
-            to.end();
-        }
-        return;
-    }
-
-    if (!from.body || !to.socket) {
-        to.end();
-        return;
-    }
-
-    let settled = false;
-    const finish = () => {
-        if (settled) return;
-        settled = true;
-        if (from.body instanceof Readable && !from.body.destroyed) from.body.destroy();
-        if (!to.writableEnded) to.end();
-    };
-
-    let sseBuffer = '';
-
-    from.body.on('data', (chunk) => {
-        const str = chunk.toString();
-        sseBuffer += str;
-
-        // Forward raw bytes to the client if still connected.
-        if (session.clientConnected && !to.writableEnded) {
-            to.write(str);
-        }
-
-        // Parse SSE data: lines starting with "data: " separated by \n.
-        let nlIdx;
-        while ((nlIdx = sseBuffer.indexOf('\n')) !== -1) {
-            const line = sseBuffer.slice(0, nlIdx).replace(/\r$/, '');
-            sseBuffer = sseBuffer.slice(nlIdx + 1);
-
-            if (line.startsWith('data: ')) {
-                const payload = line.slice(6).trim();
-                if (payload === '[DONE]') continue;
-                try {
-                    const parsed = JSON.parse(payload);
-                    const choice = parsed.choices && parsed.choices[0];
-                    if (choice) {
-                        session.feedChoice(choice);
-                    }
-                } catch { /* not JSON, skip */ }
-            }
-        }
-    });
-
-    from.body.on('error', (error) => {
-        log.net.error('Streaming request failed mid-stream:', error);
-        if (!to.writableEnded) {
-            to.write(`data: ${JSON.stringify({ error: { type: 'upstream_error', message: 'Upstream connection failed during streaming.', retryable: true } })}\n\n`);
-        }
-        finish();
-    });
-
-    from.body.on('end', () => {
-        // Flush any leftover bytes in the SSE buffer that weren't terminated by a newline.
-        if (sseBuffer.trim()) {
-            const trailing = sseBuffer.trim();
-            if (trailing.startsWith('data: ')) {
-                const payload = trailing.slice(6).trim();
-                if (payload !== '[DONE]') {
-                    try {
-                        const parsed = JSON.parse(payload);
-                        const choice = parsed.choices && parsed.choices[0];
-                        if (choice) session.feedChoice(choice);
-                    } catch { /* not JSON, skip */ }
-                }
-            }
-            sseBuffer = '';
-        }
-        log.net.info('Streaming request finished');
-        finish();
-        session.seal();
-    });
-
-    // On client disconnect: do NOT destroy the upstream body. Just mark the session so it
-    // persists on seal. The upstream will naturally end when the AI finishes generating.
-    to.socket.on('close', () => {
-        session.disconnect();
-    });
 }
 
 /**
@@ -408,6 +282,144 @@ router.post('/props', async function (request, response) {
     }
 });
 
+/**
+ * Builds the upstream completion request for one backend type. Shared by the /generate route and the
+ * server-owned generation start route, so the two can never drift into different upstream bodies.
+ *
+ * Mutates `params` in place the way the route always has (the per-backend key filters), so callers
+ * pass a body they own.
+ * @param {import('express').Request} request Express request, used only for the additional-headers lookup.
+ * @param {any} params The generation parameters.
+ * @param {AbortSignal} signal Abort signal for the upstream fetch.
+ * @returns {Promise<{url: string, args: any, apiType: string, baseUrl: string}>}
+ */
+export async function buildUpstreamRequest(request, params, signal) {
+    if (typeof params.api_server === 'string' && params.api_server.indexOf('localhost') !== -1) {
+        params.api_server = params.api_server.replace('localhost', '127.0.0.1');
+    }
+
+    const apiType = params.api_type;
+    const baseUrl = params.api_server;
+    let url = trimV1(baseUrl);
+
+    switch (apiType) {
+        case TEXTGEN_TYPES.GENERIC:
+        case TEXTGEN_TYPES.VLLM:
+        case TEXTGEN_TYPES.FEATHERLESS:
+        case TEXTGEN_TYPES.APHRODITE:
+        case TEXTGEN_TYPES.OOBA:
+        case TEXTGEN_TYPES.TABBY:
+        case TEXTGEN_TYPES.KOBOLDCPP:
+        case TEXTGEN_TYPES.TOGETHERAI:
+        case TEXTGEN_TYPES.INFERMATICAI:
+        case TEXTGEN_TYPES.HUGGINGFACE:
+            url += '/v1/completions';
+            break;
+        case TEXTGEN_TYPES.DREAMGEN:
+            url += '/api/openai/v1/completions';
+            break;
+        case TEXTGEN_TYPES.MANCER:
+            url += '/oai/v1/completions';
+            break;
+        case TEXTGEN_TYPES.LLAMACPP:
+            url += '/completion';
+            break;
+        case TEXTGEN_TYPES.OLLAMA:
+            url += '/api/generate';
+            break;
+        case TEXTGEN_TYPES.OPENROUTER:
+            url += '/v1/chat/completions';
+            break;
+    }
+
+    const args = {
+        method: 'POST',
+        body: JSON.stringify(params),
+        headers: { 'Content-Type': 'application/json' },
+        signal,
+        timeout: 0,
+    };
+
+    await setAdditionalHeaders(request, args, baseUrl);
+
+    if (apiType === TEXTGEN_TYPES.TOGETHERAI) {
+        params = _.pickBy(params, (_v, key) => TOGETHERAI_KEYS.includes(key));
+        args.body = JSON.stringify(params);
+    }
+
+    if (apiType === TEXTGEN_TYPES.INFERMATICAI) {
+        params = _.pickBy(params, (_v, key) => INFERMATICAI_KEYS.includes(key));
+        args.body = JSON.stringify(params);
+    }
+
+    if (apiType === TEXTGEN_TYPES.FEATHERLESS) {
+        params = _.pickBy(params, (_v, key) => FEATHERLESS_KEYS.includes(key));
+        args.body = JSON.stringify(params);
+    }
+
+    if (apiType === TEXTGEN_TYPES.DREAMGEN) {
+        args.body = JSON.stringify(params);
+    }
+
+    if (apiType === TEXTGEN_TYPES.GENERIC) {
+        params = _.pickBy(params, (_v, key) => OPENAI_KEYS.includes(key));
+        if (Array.isArray(params.stop)) { params.stop = params.stop.slice(0, 4); }
+        args.body = JSON.stringify(params);
+    }
+
+    if (apiType === TEXTGEN_TYPES.OPENROUTER) {
+        if (Array.isArray(params.provider) && params.provider.length > 0) {
+            params.provider = {
+                allow_fallbacks: params.allow_fallbacks ?? true,
+                order: params.provider,
+            };
+        } else {
+            delete params.provider;
+        }
+
+        if (Array.isArray(params.quantizations) && params.quantizations.length > 0) {
+            params.provider ??= {};
+            params.provider.quantizations = params.quantizations;
+        }
+
+        params = _.pickBy(params, (_v, key) => OPENROUTER_KEYS.includes(key));
+        args.body = JSON.stringify(params);
+    }
+
+    if (apiType === TEXTGEN_TYPES.VLLM) {
+        params = _.pickBy(params, (_v, key) => VLLM_KEYS.includes(key));
+        args.body = JSON.stringify(params);
+    }
+
+    if (apiType === TEXTGEN_TYPES.OLLAMA) {
+        const keepAlive = Number(getConfigValue('ollama.keepAlive', -1, 'number'));
+        const numBatch = Number(getConfigValue('ollama.batchSize', -1, 'number'));
+        if (numBatch > 0) {
+            params.num_batch = numBatch;
+        }
+        args.body = JSON.stringify({
+            model: params.model,
+            prompt: params.prompt,
+            stream: params.stream ?? false,
+            keep_alive: keepAlive,
+            raw: true,
+            options: _.pickBy(params, (_v, key) => OLLAMA_KEYS.includes(key)),
+        });
+    }
+
+    return { url, args, apiType, baseUrl, params };
+}
+
+/**
+ * Aborts a KoboldCpp generation on client disconnect, matching the behaviour the route has always had.
+ * @param {import('express').Request} request Express request.
+ * @param {string} baseUrl The backend base url.
+ * @returns {Promise<void>}
+ */
+export async function abortKoboldCppIfNeeded(request, baseUrl) {
+    await abortKoboldCppRequest(request, trimV1(baseUrl));
+}
+
 router.post('/generate', async function (request, response) {
     if (!request.body) return response.sendStatus(400);
 
@@ -420,22 +432,6 @@ router.post('/generate', async function (request, response) {
         const baseUrl = request.body.api_server;
         log.net.debug(request.body);
 
-        // If the frontend sent chat metadata, create a persistent streaming session so the
-        // backend can persist the response even if the client disconnects mid-generation.
-        const chatFile = request.body.chat_file;
-        const avatarUrl = request.body.avatar_url;
-        const characterName = request.body.character_name || '';
-        let session = null;
-        if (chatFile && avatarUrl) {
-            session = new StreamingSession(chatFile, avatarUrl, characterName);
-            getSession(chatFile, session);
-        }
-
-        // Strip SillyTavern-specific fields before forwarding to the AI backend.
-        delete request.body.chat_file;
-        delete request.body.avatar_url;
-        delete request.body.character_name;
-
         const controller = new AbortController();
         request.socket.removeAllListeners('close');
         request.socket.on('close', async function () {
@@ -443,129 +439,18 @@ router.post('/generate', async function (request, response) {
                 await abortKoboldCppRequest(request, trimV1(baseUrl));
             }
 
-            // For persistent streams, don't abort the upstream — let the AI finish.
-            if (!session) {
-                controller.abort();
-            }
+            controller.abort();
         });
 
-        let url = trimV1(baseUrl);
-
-        switch (request.body.api_type) {
-            case TEXTGEN_TYPES.GENERIC:
-            case TEXTGEN_TYPES.VLLM:
-            case TEXTGEN_TYPES.FEATHERLESS:
-            case TEXTGEN_TYPES.APHRODITE:
-            case TEXTGEN_TYPES.OOBA:
-            case TEXTGEN_TYPES.TABBY:
-            case TEXTGEN_TYPES.KOBOLDCPP:
-            case TEXTGEN_TYPES.TOGETHERAI:
-            case TEXTGEN_TYPES.INFERMATICAI:
-            case TEXTGEN_TYPES.HUGGINGFACE:
-                url += '/v1/completions';
-                break;
-            case TEXTGEN_TYPES.DREAMGEN:
-                url += '/api/openai/v1/completions';
-                break;
-            case TEXTGEN_TYPES.MANCER:
-                url += '/oai/v1/completions';
-                break;
-            case TEXTGEN_TYPES.LLAMACPP:
-                url += '/completion';
-                break;
-            case TEXTGEN_TYPES.OLLAMA:
-                url += '/api/generate';
-                break;
-            case TEXTGEN_TYPES.OPENROUTER:
-                url += '/v1/chat/completions';
-                break;
-        }
-
-        const args = {
-            method: 'POST',
-            body: JSON.stringify(request.body),
-            headers: { 'Content-Type': 'application/json' },
-            signal: controller.signal,
-            timeout: 0,
-        };
-
-        await setAdditionalHeaders(request, args, baseUrl);
-
-        if (request.body.api_type === TEXTGEN_TYPES.TOGETHERAI) {
-            request.body = _.pickBy(request.body, (_, key) => TOGETHERAI_KEYS.includes(key));
-            args.body = JSON.stringify(request.body);
-        }
-
-        if (request.body.api_type === TEXTGEN_TYPES.INFERMATICAI) {
-            request.body = _.pickBy(request.body, (_, key) => INFERMATICAI_KEYS.includes(key));
-            args.body = JSON.stringify(request.body);
-        }
-
-        if (request.body.api_type === TEXTGEN_TYPES.FEATHERLESS) {
-            request.body = _.pickBy(request.body, (_, key) => FEATHERLESS_KEYS.includes(key));
-            args.body = JSON.stringify(request.body);
-        }
-
-        if (request.body.api_type === TEXTGEN_TYPES.DREAMGEN) {
-            args.body = JSON.stringify(request.body);
-        }
-
-        if (request.body.api_type === TEXTGEN_TYPES.GENERIC) {
-            request.body = _.pickBy(request.body, (_, key) => OPENAI_KEYS.includes(key));
-            if (Array.isArray(request.body.stop)) { request.body.stop = request.body.stop.slice(0, 4); }
-            args.body = JSON.stringify(request.body);
-        }
-
-        if (request.body.api_type === TEXTGEN_TYPES.OPENROUTER) {
-            if (Array.isArray(request.body.provider) && request.body.provider.length > 0) {
-                request.body.provider = {
-                    allow_fallbacks: request.body.allow_fallbacks ?? true,
-                    order: request.body.provider,
-                };
-            } else {
-                delete request.body.provider;
-            }
-
-            if (Array.isArray(request.body.quantizations) && request.body.quantizations.length > 0) {
-                request.body.provider ??= {};
-                request.body.provider.quantizations = request.body.quantizations;
-            }
-
-            request.body = _.pickBy(request.body, (_, key) => OPENROUTER_KEYS.includes(key));
-            args.body = JSON.stringify(request.body);
-        }
-
-        if (request.body.api_type === TEXTGEN_TYPES.VLLM) {
-            request.body = _.pickBy(request.body, (_, key) => VLLM_KEYS.includes(key));
-            args.body = JSON.stringify(request.body);
-        }
-
-        if (request.body.api_type === TEXTGEN_TYPES.OLLAMA) {
-            const keepAlive = Number(getConfigValue('ollama.keepAlive', -1, 'number'));
-            const numBatch = Number(getConfigValue('ollama.batchSize', -1, 'number'));
-            if (numBatch > 0) {
-                request.body.num_batch = numBatch;
-            }
-            args.body = JSON.stringify({
-                model: request.body.model,
-                prompt: request.body.prompt,
-                stream: request.body.stream ?? false,
-                keep_alive: keepAlive,
-                raw: true,
-                options: _.pickBy(request.body, (_, key) => OLLAMA_KEYS.includes(key)),
-            });
-        }
+        const { url, args, params } = await buildUpstreamRequest(request, request.body, controller.signal);
+        request.body = params;
 
         if (request.body.api_type === TEXTGEN_TYPES.OLLAMA && request.body.stream) {
             const stream = await fetch(url, args);
-            parseOllamaStream(stream, request, response, session);
+            parseOllamaStream(stream, request, response);
         } else if (request.body.stream) {
             const completionsStream = await fetch(url, args);
-            if (session) {
-                await streamWithBuffer(completionsStream, response, session);
-            } else {
-                await forwardFetchResponse(completionsStream, response);
-            }
+            await forwardFetchResponse(completionsStream, response);
         } else {
             const completionsReply = await fetch(url, args);
 

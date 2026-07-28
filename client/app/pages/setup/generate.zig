@@ -1289,10 +1289,6 @@ fn filterJoin(a: Allocator, p1: []const u8, p2: []const u8, sep: []const u8) All
 /// `stopping_strings`. An empty sequence sends an empty array, which every backend treats as "no
 /// custom stops" rather than as a stop on the empty string.
 pub fn buildRequestBody(alloc: Allocator, conn: Connection, prompt: []const u8, stop: []const []const u8) Allocator.Error![]u8 {
-    return buildRequestBodyWithChat(alloc, conn, prompt, stop, &.{}, &.{}, &.{});
-}
-
-pub fn buildRequestBodyWithChat(alloc: Allocator, conn: Connection, prompt: []const u8, stop: []const []const u8, chat_file: []const u8, avatar_url: []const u8, character_name: []const u8) Allocator.Error![]u8 {
     return std.json.Stringify.valueAlloc(alloc, .{
         .prompt = prompt,
         .max_new_tokens = conn.max_tokens,
@@ -1310,9 +1306,6 @@ pub fn buildRequestBodyWithChat(alloc: Allocator, conn: Connection, prompt: []co
         .repetition_penalty = conn.rep_pen,
         .stop = stop,
         .stopping_strings = stop,
-        .chat_file = chat_file,
-        .avatar_url = avatar_url,
-        .character_name = character_name,
     }, .{});
 }
 

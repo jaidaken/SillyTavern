@@ -1248,10 +1248,12 @@ async function main() {
         await page.click('#composer button[aria-label="Send"]');
         await page.waitFor("(function(){var m=document.querySelectorAll('#chat .mes');return m.length && m[m.length-1].textContent.includes('lantern')})()", 8000);
         let chipShown = false;
-        for (let i = 0; i < 14 && !chipShown; i++) {
+        // Read AFTER the settle has had a frame to react to the scroll, not in the same tick as the
+        // write: the pin releases on the frame following the one that moved the scroller.
+        for (let i = 0; i < 30 && !chipShown; i++) {
             await page.eval("document.getElementById('chat').scrollTop = 0");
+            await sleep(120);
             chipShown = await page.eval("!!document.querySelector('.chat-newmsg-chip.is-visible')");
-            await sleep(60);
         }
         const chipExists = await page.eval("!!document.querySelector('.chat-newmsg-chip')");
         await page.eval("(function(){var c=document.getElementById('chat');c.scrollTop = c.scrollHeight;})()");
@@ -1267,6 +1269,75 @@ async function main() {
         await page.click('#composer button[aria-label="Stop"]');
         const stopped = await page.waitFor(`${idle} && (function(){var m=document.querySelectorAll('#chat .mes');var t=m[m.length-1].textContent;return t.includes('w2') && !t.includes('FIN')})()`, 5000);
         row('must', stopped, 'SL-stop seals the reply partial (no FIN) and returns to idle');
+
+        // The generation is the server's now, so a stop that only closes the local reader would leave
+        // the model running. This row reads the server's own view of it.
+        const stopState = await (await fetch(`${args.base}/dev/gen-state`)).json();
+        row('must', stopState.latest && stopState.latest.status === 'stopped' && stopState.running.length === 0,
+            'SL-STOP-SERVER stop ends the generation on the server, not just in the tab',
+            `status=${stopState.latest && stopState.latest.status} running=${stopState.running.length}`);
+
+        // Body text only: the think block streams into its own region, so the message body starts at
+        // the closing tag. Whitespace is normalised because the markdown render owns the spacing.
+        const normalise = (s) => s.replace(/\s+/g, ' ').trim();
+        const bodyOf = (serverText) => normalise(serverText.split('</think>').pop());
+        const lastMessageText = () => page.eval("(function(){var m=document.querySelectorAll('#chat .mes');if(!m.length)return '';var t=m[m.length-1].querySelector('.mes_text');return t?t.textContent:'';})()");
+
+        // SL-REATTACH: cut the viewer's transport mid-reply. The generation keeps running server-side,
+        // the client re-attaches at its cursor, and the finished body must equal what the server holds:
+        // a re-attach that "seemed to work" but dropped or repeated a token fails here.
+        await (await fetch(`${args.base}/dev/gen-drop-after?n=6`)).json();
+        const countBefore = await page.eval("document.querySelectorAll('#chat .mes').length");
+        await page.focus('#send_textarea');
+        await page.insertText('REATTACH PROBE');
+        await page.click('#composer button[aria-label="Send"]');
+        const grew = await page.waitFor(`document.querySelectorAll('#chat .mes').length >= ${countBefore} + 2`, 8000);
+        const reattachDone = grew && await page.waitFor(`document.body.textContent.includes('FIN') && ${idle}`, 25000);
+        const reattachState = await (await fetch(`${args.base}/dev/gen-state`)).json();
+        const reattachText = await lastMessageText();
+        const reattachExpected = reattachState.latest ? bodyOf(reattachState.latest.text) : null;
+        row('must', reattachDone && reattachState.drops >= 1 && normalise(reattachText) === reattachExpected,
+            'SL-REATTACH a dropped transport re-attaches and the reply is byte-identical',
+            `drops=${reattachState.drops} identical=${normalise(reattachText) === reattachExpected}`);
+
+        // SL-RELOAD: reload the page mid-generation. The old client lost every token that had already
+        // streamed; this one asks the server what is running and rebuilds the whole reply from the log.
+        await (await fetch(`${args.base}/dev/gen-pace?ms=220`)).json();
+        await page.focus('#send_textarea');
+        await page.insertText('RELOAD PROBE');
+        await page.click('#composer button[aria-label="Send"]');
+        // The server's own view of the generation, not page text: every earlier reply already put
+        // "lantern" in the document, so a text predicate here would return before this send started.
+        let midFlight = { running: [] };
+        for (let i = 0; i < 60; i++) {
+            midFlight = await (await fetch(`${args.base}/dev/gen-state`)).json();
+            if (midFlight.running.length === 1 && midFlight.latest.frames >= 5) break;
+            await sleep(100);
+        }
+        await page.navigate(`${args.base}/`);
+        await openRecentChat();
+
+        // SL-REATTACH-LIVE: the re-attached reply must present as LIVE, not just render. The busy
+        // marker is what the composer's Send/Stop toggle keys off, so if it is missing the user sees
+        // Send during a running reply, cannot stop it, and a click on it does nothing.
+        const liveMarked = await page.waitFor("!!document.querySelector('#chat .mes[aria-busy=\\'true\\']')", 10000);
+        const stopOffered = await page.eval("(function(){var s=document.querySelector('#composer button[aria-label=\\'Send\\']');var t=document.querySelector('#composer button[aria-label=\\'Stop\\']');return (t&&getComputedStyle(t).display!=='none')&&(s&&getComputedStyle(s).display==='none');})()");
+        row('must', liveMarked && stopOffered,
+            'SL-REATTACH-LIVE a re-attached reply reads as live, so Stop is offered and Send is not',
+            `busy=${liveMarked} stopShown=${stopOffered}`);
+
+        const reloadDone = await page.waitFor(`document.body.textContent.includes('FIN') && ${idle}`, 30000);
+        const reloadState = await (await fetch(`${args.base}/dev/gen-state`)).json();
+        const reloadText = await lastMessageText();
+        const reloadExpected = reloadState.latest ? bodyOf(reloadState.latest.text) : null;
+        row('must', reloadDone && midFlight.running.length === 1 && normalise(reloadText) === reloadExpected,
+            'SL-RELOAD a reload mid-generation resumes instead of truncating',
+            `wasRunning=${midFlight.running.length} identical=${normalise(reloadText) === reloadExpected}`);
+        await (await fetch(`${args.base}/dev/gen-pace?ms=60`)).json();
+        // Focus mode fades the composer after an idle spell, and the reload row spends several
+        // seconds waiting on a slow generation. Wake the chrome so the next row can reach Send.
+        await page.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 400, y: 400, buttons: 0 }, page.sessionId);
+        await page.waitFor("(function(){var b=document.querySelector('#composer button[aria-label=\\'Send\\']');if(!b)return false;var r=b.getBoundingClientRect();return r.width>0 && r.height>0 && getComputedStyle(b).visibility!=='hidden';})()", 5000);
 
         // ENTER: Shift+Enter must NOT send (returns to insert a newline); a bare Enter sends.
         const beforeEnter = await page.eval("document.querySelectorAll('#chat .mes').length");
@@ -1421,7 +1492,57 @@ async function main() {
         const beforePersist = await page.eval("document.querySelectorAll('#chat .mes').length");
         await page.focus('#send_textarea');
         await page.insertText('PERSIST PROBE');
+        const genBeforePersist = (await (await fetch(`${args.base}/dev/gen-state`)).json()).latest?.id ?? null;
         await page.click('#composer button[aria-label="Send"]');
+        // One click, and it must land on the first one: a re-sync that orphaned the live stream used to
+        // leave this send refused with nothing on screen to say so.
+        const persistAccepted = await page.waitFor(`document.querySelectorAll('#chat .mes').length > ${beforePersist}`, 5000);
+        row('must', persistAccepted, 'SL-send is accepted on the first click after a reply settles');
+        await page.waitFor(`${idle}`, 15000);
+
+        // SL-409-ORDER: the server writes the reply, so a user turn rejected on a stale token can no
+        // longer be dropped: the file would hold a reply to a message it does not contain. One 409 is
+        // armed, the turn must be re-issued on the token the server handed back, and the file must end
+        // with the user turn THEN its reply, in that order.
+        // Settle against the SERVER, not the page: a send is not finished when the composer looks idle,
+        // because the gap between the user turn and the reply opening is idle too, and the reply's own
+        // write lands later still. Arming before that write would spend the one-shot 409 on it.
+        const appendedLen = async () => ((await (await fetch(`${args.base}/dev/state`)).json()).appended || []).length;
+        for (let i = 0; i < 160; i++) {
+            const st = await (await fetch(`${args.base}/dev/gen-state`)).json();
+            const started = st.latest && st.latest.id !== genBeforePersist;
+            if (started && st.running.length === 0 && await page.eval(idle)) break;
+            await sleep(150);
+        }
+        let stable = await appendedLen();
+        let steady = 0;
+        for (let i = 0; i < 40 && steady < 3; i++) {
+            await sleep(150);
+            const now = await appendedLen();
+            steady = now === stable ? steady + 1 : 0;
+            stable = now;
+        }
+        await (await fetch(`${args.base}/dev/arm-append-409-once`)).json();
+        const base409 = stable;
+        const count409 = await page.eval("document.querySelectorAll('#chat .mes').length");
+        await page.focus('#send_textarea');
+        await page.insertText('ORDER PROBE');
+        await page.click('#composer button[aria-label="Send"]');
+        // Non-vacuous: prove the send actually happened before judging what reached the file.
+        const sent409 = await page.waitFor(`document.body.textContent.includes('ORDER PROBE') && document.querySelectorAll('#chat .mes').length >= ${count409} + 2`, 10000);
+        await page.waitFor(`document.body.textContent.includes('FIN') && ${idle}`, 20000);
+        let after409 = [];
+        for (let i = 0; i < 60; i++) {
+            after409 = ((await (await fetch(`${args.base}/dev/state`)).json()).appended || []).slice(base409);
+            if (after409.length >= 2) break;
+            await sleep(150);
+        }
+        const orderOk = sent409 && after409.length === 2
+            && after409[0].is_user === true && after409[0].mes === 'ORDER PROBE'
+            && after409[1].is_user === false && after409[1].mes.includes('FIN');
+        row('must', orderOk,
+            'SL-409-ORDER a rejected user turn is re-issued, so the reply never lands without it',
+            JSON.stringify(after409.map(m => ({ u: m.is_user, t: String(m.mes).slice(0, 12) }))));
         await page.waitFor(`${idle} && document.querySelectorAll('#chat .mes').length >= ${beforePersist} + 2`, 8000);
         let appends = { appended: [] };
         for (let i = 0; i < 40; i++) {

@@ -1,0 +1,402 @@
+/**
+ * Server-owned generation routes.
+ *
+ * start begins a generation and returns immediately; stream is the viewer, resumable at a cursor;
+ * stop is the only thing that aborts an upstream, so a client disconnect never kills a generation;
+ * active tells a freshly loaded page whether the chat it just opened is mid-reply.
+ */
+
+import express from 'express';
+import fetch from 'node-fetch';
+import { Readable } from 'node:stream';
+
+import { TEXTGEN_TYPES } from '../constants.js';
+import { log } from '../log.js';
+import { emitToUser } from '../client-events.js';
+import { createSession, getSession, findActiveForChat, Status, DONE_PAYLOAD } from '../generation-session.js';
+import { buildUpstreamRequest } from './backends/text-completions.js';
+import { ChatRef, appendChatMessages } from './chats.js';
+
+export const router = express.Router();
+
+const SSE_HEADERS = {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+};
+
+/**
+ * Resolves the chat a generation targets. Every path component is derived from the server-side user,
+ * and ChatRef rejects anything that escapes the user's chat root, so a crafted body cannot steer the
+ * completion write outside the caller's own directories.
+ * @param {any} user The request user with resolved directories.
+ * @param {any} chat The chat descriptor from the request.
+ * @returns {import('../generation-session.js').GenerationTarget & {ref: ChatRef}|null}
+ */
+function resolveTarget(user, chat) {
+    if (!chat || typeof chat !== 'object') {
+        return null;
+    }
+    const characterName = typeof chat.character_name === 'string' ? chat.character_name : '';
+    if (chat.group_id) {
+        const ref = ChatRef.group(user, chat.group_id);
+        if (!ref) {
+            return null;
+        }
+        return {
+            ref,
+            filePath: ref.filePath,
+            cardName: String(chat.group_id),
+            fileName: null,
+            avatarUrl: null,
+            groupId: String(chat.group_id),
+            characterName,
+        };
+    }
+    if (!chat.avatar_url || !chat.file_name) {
+        return null;
+    }
+    const ref = ChatRef.solo(user, chat.avatar_url, chat.file_name);
+    if (!ref) {
+        return null;
+    }
+    return {
+        ref,
+        filePath: ref.filePath,
+        cardName: String(chat.avatar_url).replace('.png', ''),
+        fileName: String(chat.file_name),
+        avatarUrl: String(chat.avatar_url),
+        groupId: null,
+        characterName,
+    };
+}
+
+/**
+ * Appends the finished assistant turn through the one chat writer. The client no longer persists it,
+ * so this is the only path onto disk and a double append is structurally impossible.
+ * @param {import('../generation-session.js').GenerationSession} session The finished session.
+ * @returns {Promise<void>}
+ */
+async function persistAssistantTurn(session) {
+    if (session.persisted || (!session.text && !session.thinking)) {
+        return;
+    }
+    // Claimed before the await so a stop racing the natural end cannot both reach the writer.
+    session.persisted = true;
+    const message = {
+        name: session.target.characterName,
+        is_user: false,
+        is_system: false,
+        send_date: Date.now(),
+        mes: session.text,
+        extra: { reasoning: session.thinking },
+    };
+    try {
+        const result = await appendChatMessages(session.user, session.target.ref, session.target.cardName, [message]);
+        if (!result.ok) {
+            session.persisted = false;
+            log.chat.error(`Generation ${session.id}: assistant turn not persisted (${result.status} ${result.error})`);
+            return;
+        }
+        // generation_id lets the tab that watched this generation skip the append it already rendered,
+        // while every other tab still gets the turn without refetching the file.
+        emitToUser(session.handle, 'chat-appended', {
+            card: session.target.cardName,
+            file: session.target.fileName,
+            group_id: session.target.groupId,
+            generation_id: session.id,
+            messages: [message],
+            change_token: result.change_token,
+        });
+    } catch (error) {
+        session.persisted = false;
+        log.chat.error(`Generation ${session.id}: assistant turn write failed:`, error);
+    }
+}
+
+/**
+ * @param {import('../generation-session.js').GenerationSession} session The session to end.
+ * @param {string} status Terminal status.
+ * @param {string} [detail] Error detail for the log.
+ * @returns {Promise<void>}
+ */
+async function finishGeneration(session, status, detail = '') {
+    if (session.status !== Status.running) {
+        return;
+    }
+    if (detail) {
+        log.net.warn(`Generation ${session.id} ended as ${status}: ${detail}`);
+    }
+    session.finish(status, detail);
+    // Abort only after the status is claimed: the upstream body errors synchronously when aborted,
+    // and that error path would otherwise re-seal a deliberate stop as a failure.
+    if (status === Status.stopped) {
+        session.abort();
+    }
+    await persistAssistantTurn(session);
+}
+
+/**
+ * Pumps the upstream SSE body into the session's frame log. Nothing here is tied to a client
+ * connection: the pump owns the generation for its whole life.
+ * @param {import('../generation-session.js').GenerationSession} session Target session.
+ * @param {any} upstreamBody The upstream response body stream.
+ * @param {boolean} isOllama Whether the upstream speaks Ollama's bare-JSON stream.
+ * @returns {void}
+ */
+function pumpUpstream(session, upstreamBody, isOllama) {
+    let buffer = '';
+    let ended = false;
+
+    const stop = (status, detail) => {
+        if (ended) {
+            return;
+        }
+        ended = true;
+        if (upstreamBody instanceof Readable && !upstreamBody.destroyed) {
+            upstreamBody.destroy();
+        }
+        finishGeneration(session, status, detail).catch(error => log.net.error('Generation finish failed:', error));
+    };
+
+    upstreamBody.on('data', (chunk) => {
+        buffer += chunk.toString();
+        if (isOllama) {
+            for (;;) {
+                let parsed;
+                try {
+                    parsed = JSON.parse(buffer);
+                } catch {
+                    break;
+                }
+                buffer = '';
+                session.pushFrame(JSON.stringify({ choices: [{ text: parsed.response || '', thinking: parsed.thinking || '' }] }));
+            }
+            return;
+        }
+        let newline;
+        while ((newline = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, newline).replace(/\r$/, '');
+            buffer = buffer.slice(newline + 1);
+            if (!line.startsWith('data:')) {
+                continue;
+            }
+            const payload = line.slice(5).trim();
+            if (payload.length === 0) {
+                continue;
+            }
+            if (payload === DONE_PAYLOAD) {
+                stop(Status.done, '');
+                return;
+            }
+            session.pushFrame(payload);
+        }
+    });
+
+    upstreamBody.on('error', (error) => {
+        stop(Status.error, `upstream stream failed: ${error?.message ?? error}`);
+    });
+
+    upstreamBody.on('end', () => {
+        // A final payload with no trailing newline still carries a token.
+        const trailing = buffer.trim();
+        if (trailing.startsWith('data:')) {
+            const payload = trailing.slice(5).trim();
+            if (payload.length > 0 && payload !== DONE_PAYLOAD) {
+                session.pushFrame(payload);
+            }
+        }
+        stop(Status.done, '');
+    });
+}
+
+/**
+ * @param {import('../generation-session.js').GenerationSession} session Target session.
+ * @param {string} url Upstream url.
+ * @param {any} args Upstream fetch args.
+ * @param {string} apiType The backend type.
+ * @returns {Promise<void>}
+ */
+async function runUpstream(session, url, args, apiType) {
+    let upstream;
+    try {
+        upstream = await fetch(url, args);
+    } catch (error) {
+        await finishGeneration(session, Status.error, `upstream unreachable: ${error?.message ?? error}`);
+        return;
+    }
+    if (!upstream.ok || !upstream.body) {
+        const detail = await upstream.text().catch(() => '');
+        session.pushFrame(JSON.stringify({ error: { status: upstream.status, message: 'The backend refused the generation request.' } }));
+        await finishGeneration(session, Status.error, `upstream status ${upstream.status}: ${detail.slice(0, 500)}`);
+        return;
+    }
+    pumpUpstream(session, upstream.body, apiType === TEXTGEN_TYPES.OLLAMA);
+}
+
+router.post('/start', async function (request, response) {
+    try {
+        const body = request.body;
+        if (!body || typeof body !== 'object') {
+            return response.sendStatus(400);
+        }
+        const target = resolveTarget(request.user, body.chat);
+        if (!target) {
+            return response.status(400).send({ error: 'bad_chat_target' });
+        }
+        const params = body.generate;
+        if (!params || typeof params !== 'object' || Array.isArray(params) || typeof params.api_server !== 'string') {
+            return response.status(400).send({ error: 'bad_generate_params' });
+        }
+
+        const handle = request.user.profile.handle;
+        const running = findActiveForChat(handle, target.filePath);
+        if (running) {
+            return response.status(409).send({
+                error: 'already_running',
+                generation_id: running.id,
+                last_event_id: running.lastEventId,
+            });
+        }
+
+        const session = createSession(handle, target);
+        session.user = request.user;
+        // The whole design is a token stream; a non-streaming upstream would return one blob with no
+        // frames to replay, so the flag is set here rather than trusted from the body.
+        params.stream = true;
+        const { url, args, apiType } = await buildUpstreamRequest(request, { ...params }, session.controller.signal);
+        runUpstream(session, url, args, apiType).catch(error => log.net.error('Generation start failed:', error));
+
+        return response.send({ generation_id: session.id, last_event_id: session.lastEventId });
+    } catch (error) {
+        log.net.error('Generation start error:', error);
+        if (!response.headersSent) {
+            return response.sendStatus(500);
+        }
+    }
+});
+
+/**
+ * The cursor a viewer is resuming from. The query carries it because the door pump builds a fixed
+ * header set and cannot send Last-Event-ID; the header is still honoured when a real EventSource
+ * reconnects on its own.
+ * @param {import('express').Request} request Express request.
+ * @returns {number} Zero for a fresh viewer, otherwise the last frame id it holds.
+ */
+function readCursor(request) {
+    const fromQuery = request.query.since;
+    if (typeof fromQuery === 'string' && fromQuery.length > 0) {
+        const parsed = Number.parseInt(fromQuery, 10);
+        return Number.isFinite(parsed) ? parsed : -1;
+    }
+    const header = request.headers['last-event-id'];
+    if (typeof header === 'string' && header.length > 0) {
+        const parsed = Number.parseInt(header, 10);
+        return Number.isFinite(parsed) ? parsed : -1;
+    }
+    return 0;
+}
+
+router.get('/:id/stream', function (request, response) {
+    const handle = request.user.profile.handle;
+    const session = getSession(handle, request.params.id);
+    if (!session) {
+        return response.status(404).send({ error: 'no_such_generation' });
+    }
+
+    response.writeHead(200, SSE_HEADERS);
+    response.flushHeaders?.();
+
+    const write = (chunk) => {
+        if (response.writableEnded || response.destroyed) {
+            return false;
+        }
+        try {
+            response.write(chunk);
+            if (typeof response.flush === 'function') {
+                response.flush();
+            }
+        } catch (error) {
+            log.net.warn('Generation stream write failed:', error);
+            return false;
+        }
+        return true;
+    };
+
+    const cursor = readCursor(request);
+    const { frames, complete } = session.framesSince(cursor);
+    if (!complete) {
+        // The viewer asked for frames the log can no longer serve. Telling it to resynchronise beats
+        // handing it a stream with a hole in it that it would render as finished text.
+        write('event: resync\ndata: {}\n\n');
+        return response.end();
+    }
+    for (const frame of frames) {
+        write(`id: ${frame.id}\ndata: ${frame.data}\n\n`);
+    }
+    if (!session.active) {
+        return response.end();
+    }
+
+    const unsubscribe = session.subscribe((frame) => {
+        if (frame === null) {
+            response.end();
+            return;
+        }
+        if (!write(`id: ${frame.id}\ndata: ${frame.data}\n\n`)) {
+            unsubscribe();
+        }
+    });
+
+    // A viewer leaving is not a generation ending: unsubscribe only, never abort.
+    request.on('close', unsubscribe);
+    response.on('close', unsubscribe);
+});
+
+router.post('/:id/stop', async function (request, response) {
+    try {
+        const handle = request.user.profile.handle;
+        const session = getSession(handle, request.params.id);
+        if (!session) {
+            return response.status(404).send({ error: 'no_such_generation' });
+        }
+        if (!session.active) {
+            return response.send({ ok: true, status: session.status });
+        }
+        await finishGeneration(session, Status.stopped, '');
+        return response.send({ ok: true, status: session.status });
+    } catch (error) {
+        log.net.error('Generation stop error:', error);
+        if (!response.headersSent) {
+            return response.sendStatus(500);
+        }
+    }
+});
+
+router.get('/active', function (request, response) {
+    try {
+        const handle = request.user.profile.handle;
+        const target = resolveTarget(request.user, {
+            avatar_url: request.query.avatar_url,
+            file_name: request.query.file_name,
+            group_id: request.query.group_id,
+        });
+        if (!target) {
+            return response.status(400).send({ error: 'bad_chat_target' });
+        }
+        const session = findActiveForChat(handle, target.filePath);
+        if (!session) {
+            return response.send({ active: false });
+        }
+        return response.send({
+            active: true,
+            generation_id: session.id,
+            last_event_id: session.lastEventId,
+            character_name: session.target.characterName,
+        });
+    } catch (error) {
+        log.net.error('Generation active lookup error:', error);
+        return response.sendStatus(500);
+    }
+});

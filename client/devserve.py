@@ -673,6 +673,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     group_appended = []
     # Counters the 409 gate reads back as observable state (a returned 409, and the resync's refetch).
     append_409_count = 0
+    # Armed by /dev/arm-append-409-once: rejects one append, then accepts, so a re-issue can be proven.
+    append_409_once = False
     # C-CARD: the last /characters/edit body, and the card /characters/get serves once one is saved.
     saved_edit = None
     saved_card = None
@@ -689,6 +691,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     fail_next = {}
     # P1-E: how many status probes have arrived, so a poll can be counted rather than eyeballed.
     status_probe_count = 0
+    # Server-owned generations. The mock runs the reply on its own thread and keeps the ordered frame
+    # log, exactly like the real route, so a viewer can leave and re-attach at a cursor.
+    gen_lock = threading.Condition()
+    gen_sessions = {}
+    gen_seq = 0
+    # Pace of the mock reply. A gate that has to reload the page mid-generation slows this so the
+    # generation is still running when the new page asks /active.
+    gen_pace_ms = 60
+    # Frames a viewer receives before the mock cuts its transport without ending the generation:
+    # the drop the re-attach row needs, which nothing else can produce on demand.
+    gen_drop_at = 0
+    gen_drops = 0
     # P3-MOCK: the SSE channel. `events_ring` is every event ever emitted (id, type, data), which is
     # what a Last-Event-ID resume replays from; `events_open` is the live streams' queues, so an
     # emit reaches each of them. A lock because ThreadingTCPServer runs one thread per connection.
@@ -914,6 +928,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # nesting it there is why the first attempt answered a generic {} and the browser gave up.
         if self.path.startswith("/api/events") and Handler.mock_api:
             return self.api_events()
+        if self.path.startswith("/api/generation/") and Handler.mock_api:
+            route = urllib.parse.urlparse(self.path).path[len("/api/generation/"):]
+            if route == "active":
+                return self.gen_active()
+            if route.endswith("/stream"):
+                return self.gen_stream(route[: -len("/stream")])
+            return self.mock_status(404, {"error": "not found"})
         # Test endpoints. Off unless --dev: they must never exist in a served build.
         if self.path.startswith("/dev/"):
             if not Handler.dev:
@@ -1062,6 +1083,28 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # C-CFG: drop the recorded generate so a gate can prove the NEXT body is the one its own
             # send produced. Without this a completion predicate can match a previous send's text and
             # the row reads an artifact it never caused.
+            # Generation knobs: pace it slow enough to reload into, cut a viewer's transport without
+            # ending the generation, and read back what the server actually buffered.
+            if self.path.startswith("/dev/arm-append-409-once"):
+                Handler.append_409_once = True
+                return self.mock_json({"ok": True})
+            if self.path.startswith("/dev/gen-pace"):
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                Handler.gen_pace_ms = int((q.get("ms") or ["60"])[0])
+                return self.mock_json({"ok": True, "pace_ms": Handler.gen_pace_ms})
+            if self.path.startswith("/dev/gen-drop-after"):
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                Handler.gen_drop_at = int((q.get("n") or ["0"])[0])
+                return self.mock_json({"ok": True, "drop_at": Handler.gen_drop_at})
+            if self.path.startswith("/dev/gen-state"):
+                with Handler.gen_lock:
+                    running = [gid for gid, s in Handler.gen_sessions.items() if s["status"] == "running"]
+                    latest = None
+                    if Handler.gen_sessions:
+                        gid = sorted(Handler.gen_sessions, key=lambda k: int(k[3:]))[-1]
+                        s = Handler.gen_sessions[gid]
+                        latest = {"id": gid, "status": s["status"], "text": s["text"], "frames": len(s["frames"])}
+                return self.mock_json({"running": running, "latest": latest, "drops": Handler.gen_drops})
             if self.path.startswith("/dev/clear-generate"):
                 Handler.last_generate_body = None
                 Handler.last_generate_prompt = None
@@ -1227,6 +1270,186 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    # ===== server-owned generation mock =====
+    # The same token script the legacy /generate mock streams, so every send-loop row keeps its
+    # meaning: "lantern" is the first body token, "FIN" arrives only on completion.
+    GEN_REPLY = ["<th", "ink>mull the tides", "</th", "ink>", "lantern "] + [f"w{i} " for i in range(22)] + ["FIN"]
+
+    @staticmethod
+    def gen_key(chat):
+        if chat.get("group_id"):
+            return f"group:{chat['group_id']}"
+        return f"solo:{chat.get('avatar_url', '')}:{chat.get('file_name', '')}"
+
+    @staticmethod
+    def gen_push(gid, data):
+        with Handler.gen_lock:
+            s = Handler.gen_sessions.get(gid)
+            if not s or s["status"] != "running":
+                return False
+            s["next_id"] += 1
+            s["frames"].append({"id": s["next_id"], "data": data})
+            Handler.gen_lock.notify_all()
+            return True
+
+    @staticmethod
+    def gen_finish(gid, status):
+        with Handler.gen_lock:
+            s = Handler.gen_sessions.get(gid)
+            if not s or s["status"] != "running":
+                return
+            s["next_id"] += 1
+            s["frames"].append({"id": s["next_id"], "data": "[DONE]"})
+            s["status"] = status
+            Handler.gen_lock.notify_all()
+            chat = s["chat"]
+            text = s["text"]
+        Handler.gen_persist(gid, chat, text)
+
+    @staticmethod
+    def gen_persist(gid, chat, text):
+        """The server is the sole writer of the assistant turn, so the mock writes it too.
+
+        Without this the mock diverges from the real route in the one way every persistence row
+        cares about: the reply would never reach the chat the client reloads."""
+        body, reasoning = text, ""
+        if "</think>" in text:
+            head, _, body = text.partition("</think>")
+            reasoning = head.replace("<think>", "")
+        if not body and not reasoning:
+            return
+        message = {
+            "name": chat.get("character_name", ""),
+            "is_user": False,
+            "is_system": False,
+            "send_date": int(time.time() * 1000),
+            "mes": body,
+            "extra": {"reasoning": reasoning},
+        }
+        if chat.get("group_id"):
+            Handler.group_appended.append(message)
+            token = f"g1.{len(Handler.group_appended)}.mock"
+        elif chat.get("avatar_url") == MGR_AVATAR:
+            # The chat-manager card keeps its own per-file store, the same split /api/chats/append makes.
+            stem = str(chat.get("file_name") or "")
+            Handler.mgr_files().setdefault(stem, []).append(dict(message))
+            token = f"mgr-tail-{stem}-{len(Handler.mgr_files()[stem])}"
+        else:
+            Handler.appended_messages.append(message)
+            Handler.bump_full_token()
+            token = Handler.full_token
+        Handler.emit_event("chat-appended", {
+            "card": str(chat.get("avatar_url", "")).replace(".png", ""),
+            "file": chat.get("file_name"),
+            "group_id": chat.get("group_id") or None,
+            "generation_id": gid,
+            "messages": [message],
+            "change_token": token,
+        })
+
+    @staticmethod
+    def gen_produce(gid):
+        for tok in Handler.GEN_REPLY:
+            time.sleep(Handler.gen_pace_ms / 1000.0)
+            with Handler.gen_lock:
+                s = Handler.gen_sessions.get(gid)
+                if not s or s["status"] != "running":
+                    return
+                s["text"] += tok
+            if not Handler.gen_push(gid, json.dumps({"choices": [{"text": tok}]})):
+                return
+        Handler.gen_finish(gid, "done")
+
+    def gen_start(self, req):
+        chat = req.get("chat") or {}
+        params = req.get("generate") or {}
+        Handler.last_generate_server = params.get("api_server")
+        Handler.last_generate_prompt = params.get("prompt")
+        Handler.last_generate_body = json.dumps(params)
+        key = Handler.gen_key(chat)
+        with Handler.gen_lock:
+            for gid, s in Handler.gen_sessions.items():
+                if s["key"] == key and s["status"] == "running":
+                    return self.mock_status(409, {"error": "already_running", "generation_id": gid, "last_event_id": s["next_id"]})
+            Handler.gen_seq += 1
+            gid = f"gen{Handler.gen_seq}"
+            # The drop is claimed BY THIS GENERATION, not left on a global a stray viewer could
+            # consume: the re-attach row has to know which stream gets cut.
+            Handler.gen_sessions[gid] = {
+                "key": key,
+                "chat": chat,
+                "status": "running",
+                "frames": [],
+                "next_id": 0,
+                "text": "",
+                "drop_at": Handler.gen_drop_at,
+            }
+            Handler.gen_drop_at = 0
+        threading.Thread(target=Handler.gen_produce, args=(gid,), daemon=True).start()
+        return self.mock_json({"generation_id": gid, "last_event_id": 0})
+
+    def gen_stream(self, gid):
+        with Handler.gen_lock:
+            session = Handler.gen_sessions.get(gid)
+        if session is None:
+            return self.mock_status(404, {"error": "no_such_generation"})
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        try:
+            cursor = int((params.get("since") or ["0"])[0])
+        except ValueError:
+            cursor = 0
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        with Handler.gen_lock:
+            drop_after = session.get("drop_at") or 0
+            session["drop_at"] = 0
+        sent = 0
+        try:
+            while True:
+                with Handler.gen_lock:
+                    pending = [f for f in session["frames"] if f["id"] > cursor]
+                    finished = session["status"] != "running"
+                    if not pending:
+                        if finished:
+                            return
+                        Handler.gen_lock.wait(0.2)
+                        continue
+                for frame in pending:
+                    self.wfile.write(f"id: {frame['id']}\ndata: {frame['data']}\n\n".encode())
+                    self.wfile.flush()
+                    cursor = frame["id"]
+                    sent += 1
+                    if frame["data"] == "[DONE]":
+                        return
+                    if drop_after and sent >= drop_after:
+                        Handler.gen_drops += 1
+                        return
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def gen_active(self):
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        key = Handler.gen_key({
+            "avatar_url": (params.get("avatar_url") or [""])[0],
+            "file_name": (params.get("file_name") or [""])[0],
+            "group_id": (params.get("group_id") or [""])[0],
+        })
+        with Handler.gen_lock:
+            for gid, s in Handler.gen_sessions.items():
+                if s["key"] == key and s["status"] == "running":
+                    return self.mock_json({
+                        "active": True,
+                        "generation_id": gid,
+                        "last_event_id": s["next_id"],
+                        "character_name": s["chat"].get("character_name", ""),
+                    })
+        return self.mock_json({"active": False})
 
     # Canned generate SSE for the send-loop gate (OpenAI-completions shape, ST pipes it back unchanged).
     # 24 tokens at a fixed 60ms interval so stop lands mid-stream; "lantern" is first, "FIN" only on completion.
@@ -1756,6 +1979,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if req.get("group_id"):
                 Handler.group_appended.extend(msgs)
                 return self.mock_json({"ok": True, "appended": len(msgs), "change_token": f"g1.{len(Handler.group_appended)}.mock"})
+            # One-shot 409: rejects the NEXT append once, then accepts. The permanent "409:" trigger
+            # below cannot prove a re-issue, because the retry would meet the same rejection forever.
+            if Handler.append_409_once:
+                Handler.append_409_once = False
+                Handler.append_409_count += 1
+                return self.mock_status(409, {"error": "version_mismatch", "change_token": Handler.full_token})
             # Deterministic resync trigger: a message whose text starts with "409:" forces a mismatch.
             if any(str(m.get("mes", "")).startswith("409:") for m in msgs):
                 Handler.append_409_count += 1
@@ -1770,6 +1999,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "change_token": Handler.full_token,
                 "tail_token": Handler.append_token,
             })
+        if path == "/api/generation/start":
+            return self.gen_start(req)
+        if path.startswith("/api/generation/") and path.endswith("/stop"):
+            gid = path[len("/api/generation/"): -len("/stop")]
+            with Handler.gen_lock:
+                known = gid in Handler.gen_sessions
+            if not known:
+                return self.mock_status(404, {"error": "no_such_generation"})
+            Handler.gen_finish(gid, "stopped")
+            return self.mock_json({"ok": True, "status": "stopped"})
         if path == "/api/backends/text-completions/generate":
             Handler.last_generate_server = req.get("api_server")
             Handler.last_generate_prompt = req.get("prompt")  # J1 invariant-2
