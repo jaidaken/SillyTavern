@@ -740,11 +740,24 @@
 #chat-root[data-reading-indent="vn"] .mes_text p {
     text-indent: 0;
 }
+/* Speech sets its OWN air: half a line above and below, whatever surrounds it. `lh` is literally
+   half the body's line box, so it tracks the line-height slider instead of drifting from it.
+   Paragraph margins do not add to this: a child block's margin collapses with its parent's, taking
+   the larger of the two, and half a line is larger than the 0.7em paragraph gap at every setting. */
 #chat-root[data-reading-indent="blockquote"] .mes_text q.custom-q-turn,
 #chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn,
 #chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn {
     display: block;
-    margin-block: 0.2em 0;
+    margin-block: 0.5lh;
+}
+
+/* A RETURN LEFT AGAINST SPEECH, which models emit constantly. It is invisible in the source but it
+   costs a full empty line box AND breaks the `q:last-child` match below, so the gap under one speech
+   turn measured 39px where its neighbours measured 3px: the same layout, spaced 13x apart, decided by
+   whitespace nobody can see. The turn's own margin is the whole rhythm, so these add nothing. */
+.mes_text q.custom-q-turn + br,
+.mes_text br:has(+ q.custom-q-turn) {
+    display: none;
 }
 
 /* Blockquote keeps the quote marks; the speech insets from the flush narration like a set-apart quote. */
@@ -752,12 +765,10 @@
     padding-left: 1.6em;
 }
 
-/* A speech turn that ends its paragraph reads as a new line, not a set-apart block: the paragraph's
-   0.7em trailing margin would otherwise leave a blank-line gap under the speech, so tighten it to the
-   turn's own 0.2em rhythm. Narration-only paragraphs keep their normal spacing. */
-#chat-root[data-reading-indent="blockquote"] .mes_text p:has(> q.custom-q-turn:last-child) {
-    margin-bottom: 0.2em;
-}
+/* (The old rule here tightened a paragraph ending in speech to 0.2em. The turn now carries its own
+   half-line on both sides, which collapsing already resolves against the paragraph margin, and that
+   rule's `q:last-child` match was the half of the bug above: one stray return and it stopped
+   applying.) */
 
 /* Stage: the NAME. and the spoken line sit flush at the left margin; the direction beneath is the
    indented block. This is the inverse of blockquote, which insets the speech and leaves narration
@@ -768,7 +779,7 @@
        the directions above and below. */
     margin-left: -6em;
     text-indent: 0;
-    margin-block: 0.5em;
+    margin-block: 0.5lh;
 }
 #chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn .custom-qd {
     display: none;
