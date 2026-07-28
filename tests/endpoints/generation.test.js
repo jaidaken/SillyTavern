@@ -26,7 +26,11 @@ const SMOKE_CONFIG = Object.freeze({
  * frame instead of at whatever a timer happened to reach.
  */
 class ScriptedUpstream {
-    constructor() {
+    /**
+     * @param {{status: number, body: string}|null} refuseWith Refuse every request with this status
+     * and body instead of streaming, for the backend-error paths.
+     */
+    constructor(refuseWith = null) {
         this.host = '127.0.0.1';
         this.port = 0;
         this.server = null;
@@ -35,6 +39,7 @@ class ScriptedUpstream {
         this.aborted = false;
         this.requests = 0;
         this.sent = [];
+        this.refuseWith = refuseWith;
     }
 
     get baseUrl() {
@@ -45,6 +50,11 @@ class ScriptedUpstream {
         this.port = await allocatePort();
         this.server = http.createServer((req, res) => {
             this.requests += 1;
+            if (this.refuseWith) {
+                res.writeHead(this.refuseWith.status, { 'Content-Type': 'application/json' });
+                res.end(this.refuseWith.body);
+                return;
+            }
             res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
             this.live = res;
             req.on('aborted', () => { this.aborted = true; });
@@ -127,6 +137,7 @@ async function startServer(extraEnv = {}) {
     return {
         baseUrl,
         userDirectory: (handle = DEFAULT_HANDLE) => path.join(dataRoot, handle),
+        logText: () => fs.readFileSync(logPath, 'utf8'),
         stop: async () => {
             if (child && exitCode === null) {
                 const exited = new Promise(resolve => child.once('exit', resolve));
@@ -145,18 +156,20 @@ const CHAT_FILE = 'generation-chat';
 
 /**
  * @param {{userDirectory: (handle?: string) => string}} server The running server.
+ * @param {string} fileName Chat file name without extension.
  * @returns {string} The absolute chat file path.
  */
-function chatPath(server) {
-    return path.join(server.userDirectory(), 'chats', CARD, `${CHAT_FILE}.jsonl`);
+function chatPath(server, fileName = CHAT_FILE) {
+    return path.join(server.userDirectory(), 'chats', CARD, `${fileName}.jsonl`);
 }
 
 /**
  * @param {{userDirectory: (handle?: string) => string}} server The running server.
+ * @param {string} fileName Chat file name without extension.
  * @returns {void}
  */
-function seedChat(server) {
-    const filePath = chatPath(server);
+function seedChat(server, fileName = CHAT_FILE) {
+    const filePath = chatPath(server, fileName);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     const lines = [
         JSON.stringify({ user_name: 'You', character_name: CARD, chat_metadata: {} }),
@@ -189,12 +202,13 @@ async function loggedInClient(server, handle = DEFAULT_HANDLE) {
 /**
  * @param {SillyTavernClient} client A logged-in client.
  * @param {string} upstreamUrl The scripted backend base url.
+ * @param {{fileName?: string, prompt?: string}} options Chat file and prompt overrides.
  * @returns {Promise<{status: number, body: any}>} The start response.
  */
-async function startGeneration(client, upstreamUrl) {
+async function startGeneration(client, upstreamUrl, options = {}) {
     const response = await client.postJson('/api/generation/start', {
-        chat: { avatar_url: `${CARD}.png`, file_name: CHAT_FILE, character_name: CARD },
-        generate: { api_type: 'generic', api_server: upstreamUrl, model: 'mock', prompt: 'hi', max_tokens: 64 },
+        chat: { avatar_url: `${CARD}.png`, file_name: options.fileName ?? CHAT_FILE, character_name: CARD },
+        generate: { api_type: 'generic', api_server: upstreamUrl, model: 'mock', prompt: options.prompt ?? 'hi', max_tokens: 64 },
     });
     return { status: response.status, body: await response.json() };
 }
@@ -500,6 +514,98 @@ describe('server-owned generation', () => {
         expect(anonymous.status).not.toBe(200);
 
         upstream.finish();
+        await upstream.stop();
+    }, CASE_TIMEOUT_MS);
+});
+
+describe('generation resource limits', () => {
+    /** @type {Awaited<ReturnType<typeof startServer>>} */
+    let server;
+
+    // Its own server: the concurrency cap counts running generations per handle, so the count has to
+    // start from a registry no earlier case has left anything in.
+    beforeAll(async () => {
+        server = await startServer();
+    }, BOOT_TIMEOUT_MS);
+
+    afterAll(async () => {
+        await server?.stop();
+    });
+
+    test('a start naming a chat file that does not exist is refused without opening an upstream', async () => {
+        const upstream = new ScriptedUpstream();
+        await upstream.start();
+        const client = await loggedInClient(server);
+
+        const started = await startGeneration(client, upstream.baseUrl, { fileName: 'never-seeded' });
+        expect(started.status).toBe(404);
+        expect(started.body.error).toBe('no_such_chat');
+
+        // No session exists to hold a socket or a frame log, and the chat is not wedged behind one.
+        expect(upstream.requests).toBe(0);
+        const activeResponse = await client.get(`/api/generation/active?avatar_url=${encodeURIComponent(`${CARD}.png`)}&file_name=${encodeURIComponent('never-seeded')}`);
+        expect((await activeResponse.json()).active).toBe(false);
+        expect(fs.existsSync(chatPath(server, 'never-seeded'))).toBe(false);
+
+        await upstream.stop();
+    }, CASE_TIMEOUT_MS);
+
+    test('a fifth concurrent generation for one handle is refused', async () => {
+        const upstream = new ScriptedUpstream();
+        await upstream.start();
+        const client = await loggedInClient(server);
+
+        const names = ['cap-0', 'cap-1', 'cap-2', 'cap-3', 'cap-4'];
+        for (const name of names) {
+            seedChat(server, name);
+        }
+
+        const accepted = [];
+        for (const name of names.slice(0, 4)) {
+            const started = await startGeneration(client, upstream.baseUrl, { fileName: name });
+            expect(started.status).toBe(200);
+            accepted.push(started.body.generation_id);
+        }
+        await until(() => upstream.requests === 4, 'all four upstream requests');
+
+        const fifth = await startGeneration(client, upstream.baseUrl, { fileName: 'cap-4' });
+        expect(fifth.status).toBe(429);
+        expect(fifth.body.error).toBe('too_many_generations');
+        expect(fifth.body.limit).toBe(4);
+        expect(upstream.requests).toBe(4);
+
+        // The cap is a ceiling, not a one-way latch: ending one generation frees exactly one slot.
+        const stopped = await client.postJson(`/api/generation/${accepted[0]}/stop`, {});
+        expect(stopped.status).toBe(200);
+        const sixth = await startGeneration(client, upstream.baseUrl, { fileName: 'cap-4' });
+        expect(sixth.status).toBe(200);
+
+        for (const id of [...accepted.slice(1), sixth.body.generation_id]) {
+            await client.postJson(`/api/generation/${id}/stop`, {});
+        }
+        await upstream.stop();
+    }, CASE_TIMEOUT_MS);
+
+    test('an upstream refusal keeps the prompt out of the server log', async () => {
+        const canary = 'CANARY-PROMPT-a7f3c1';
+        const upstream = new ScriptedUpstream({
+            status: 400,
+            body: JSON.stringify({ error: `bad request for prompt: ${canary}` }),
+        });
+        await upstream.start();
+        const client = await loggedInClient(server);
+        seedChat(server, 'refused-chat');
+
+        const started = await startGeneration(client, upstream.baseUrl, { fileName: 'refused-chat', prompt: canary });
+        expect(started.status).toBe(200);
+
+        await until(() => server.logText().includes('upstream status 400'), 'the refusal to be logged');
+        expect(server.logText()).not.toContain(canary);
+
+        // The client still learns the backend refused, from a fixed message rather than the body.
+        const activeResponse = await client.get(`/api/generation/active?avatar_url=${encodeURIComponent(`${CARD}.png`)}&file_name=${encodeURIComponent('refused-chat')}`);
+        expect((await activeResponse.json()).active).toBe(false);
+
         await upstream.stop();
     }, CASE_TIMEOUT_MS);
 });

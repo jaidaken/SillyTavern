@@ -23,6 +23,15 @@ const COMPLETED_TTL_MS = 10 * 60 * 1000;
 // that streams without ever ending; past it the log stops growing and replay reports itself partial.
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 
+// An upstream that accepts the socket and never answers would hold the session `running` forever,
+// and a chat with a running generation refuses to start another one. Idle is generous: cold first token.
+export const IDLE_TIMEOUT_MS = 180 * 1000;
+export const WALL_CLOCK_TIMEOUT_MS = 30 * 60 * 1000;
+
+// Every running generation holds a live upstream socket and up to MAX_FRAME_BYTES, so the count is
+// capped per handle rather than globally: one busy user cannot starve another.
+export const MAX_ACTIVE_PER_HANDLE = 4;
+
 /** Terminal payload the client framer already recognises as end-of-generation. */
 export const DONE_PAYLOAD = '[DONE]';
 
@@ -72,6 +81,81 @@ export class GenerationSession {
         this.listeners = new Set();
         /** @type {NodeJS.Timeout|null} */
         this.reapTimer = null;
+        this.lastFrameAt = this.startedAt;
+        /** @type {NodeJS.Timeout|null} */
+        this.idleTimer = null;
+        /** @type {NodeJS.Timeout|null} */
+        this.wallTimer = null;
+        /** @type {((reason: string) => void)|null} Set by the route to the same path a real end takes. */
+        this.onExpire = null;
+        this.armWatchdog();
+    }
+
+    /**
+     * Starts both deadlines. A session that never sees another frame ends on the idle bound; one that
+     * trickles forever ends on the wall clock.
+     * @returns {void}
+     */
+    armWatchdog() {
+        this.scheduleIdleCheck(IDLE_TIMEOUT_MS);
+        this.wallTimer = setTimeout(() => {
+            this.expire(`no end after ${Math.round(WALL_CLOCK_TIMEOUT_MS / 1000)}s`);
+        }, WALL_CLOCK_TIMEOUT_MS);
+        this.wallTimer.unref?.();
+    }
+
+    /**
+     * One idle timer for the whole generation. A frame only stamps `lastFrameAt`, so resetting the
+     * bound costs a field write rather than a clearTimeout and setTimeout pair per token.
+     * @param {number} delay Milliseconds until the next idle check.
+     * @returns {void}
+     */
+    scheduleIdleCheck(delay) {
+        this.idleTimer = setTimeout(() => {
+            if (this.status !== Status.running) {
+                return;
+            }
+            const idle = Date.now() - this.lastFrameAt;
+            if (idle < IDLE_TIMEOUT_MS) {
+                this.scheduleIdleCheck(IDLE_TIMEOUT_MS - idle);
+                return;
+            }
+            this.expire(`no upstream frame for ${Math.round(idle / 1000)}s`);
+        }, delay);
+        this.idleTimer.unref?.();
+    }
+
+    /** @returns {void} */
+    clearWatchdog() {
+        if (this.idleTimer) {
+            clearTimeout(this.idleTimer);
+            this.idleTimer = null;
+        }
+        if (this.wallTimer) {
+            clearTimeout(this.wallTimer);
+            this.wallTimer = null;
+        }
+    }
+
+    /**
+     * A deadline passed. The route's hook runs the ordinary completion path so the session reaps and
+     * the chat unwedges; without one the session still ends rather than staying `running` forever.
+     * @param {string} reason Which bound expired, for the log.
+     * @returns {void}
+     */
+    expire(reason) {
+        if (this.status !== Status.running) {
+            return;
+        }
+        this.clearWatchdog();
+        if (this.onExpire) {
+            this.onExpire(reason);
+        } else {
+            this.finish(Status.error, reason);
+        }
+        // Reaping a wedged session while leaving its upstream socket open trades a stuck chat for a
+        // quiet leak. The ending above has already claimed the status, so this cannot re-seal it.
+        this.abort();
     }
 
     get lastEventId() {
@@ -93,6 +177,7 @@ export class GenerationSession {
         if (this.status !== Status.running) {
             return;
         }
+        this.lastFrameAt = Date.now();
         this.accumulate(data);
         this.nextFrameId += 1;
         const frame = { id: this.nextFrameId, data };
@@ -193,6 +278,7 @@ export class GenerationSession {
         this.status = status;
         this.errorMessage = errorMessage;
         this.endedAt = Date.now();
+        this.clearWatchdog();
         this.notify(frame);
         this.notify(null);
         this.armReap();
@@ -282,6 +368,7 @@ export function resetSessions() {
         if (session.reapTimer) {
             clearTimeout(session.reapTimer);
         }
+        session.clearWatchdog();
     }
     sessions.clear();
 }

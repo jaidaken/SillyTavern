@@ -8,12 +8,13 @@
 
 import express from 'express';
 import fetch from 'node-fetch';
+import fs from 'node:fs';
 import { Readable } from 'node:stream';
 
 import { TEXTGEN_TYPES } from '../constants.js';
 import { log } from '../log.js';
 import { emitToUser } from '../client-events.js';
-import { createSession, getSession, findActiveForChat, Status, DONE_PAYLOAD } from '../generation-session.js';
+import { createSession, getSession, findActiveForChat, listActive, MAX_ACTIVE_PER_HANDLE, Status, DONE_PAYLOAD } from '../generation-session.js';
 import { buildUpstreamRequest } from './backends/text-completions.js';
 import { ChatRef, appendChatMessages } from './chats.js';
 
@@ -70,6 +71,17 @@ function resolveTarget(user, chat) {
         groupId: null,
         characterName,
     };
+}
+
+/**
+ * Whether the completion write would find a chat to append to. appendChatMessages rejects a missing
+ * or empty file, so without this check a generation runs to completion and is then discarded.
+ * @param {string} filePath Resolved chat file path.
+ * @returns {Promise<boolean>}
+ */
+async function chatFileWritable(filePath) {
+    const stat = await fs.promises.stat(filePath).catch(() => null);
+    return Boolean(stat && stat.isFile() && stat.size > 0);
 }
 
 /**
@@ -227,9 +239,13 @@ async function runUpstream(session, url, args, apiType) {
         return;
     }
     if (!upstream.ok || !upstream.body) {
-        const detail = await upstream.text().catch(() => '');
+        // Several backends echo the offending request, prompt text included, in a 4xx body. The
+        // status is the diagnostic; the body is dropped unread rather than logged or buffered.
+        if (upstream.body instanceof Readable) {
+            upstream.body.destroy();
+        }
         session.pushFrame(JSON.stringify({ error: { status: upstream.status, message: 'The backend refused the generation request.' } }));
-        await finishGeneration(session, Status.error, `upstream status ${upstream.status}: ${detail.slice(0, 500)}`);
+        await finishGeneration(session, Status.error, `upstream status ${upstream.status}`);
         return;
     }
     pumpUpstream(session, upstream.body, apiType === TEXTGEN_TYPES.OLLAMA);
@@ -250,6 +266,10 @@ router.post('/start', async function (request, response) {
             return response.status(400).send({ error: 'bad_generate_params' });
         }
 
+        if (!await chatFileWritable(target.filePath)) {
+            return response.status(404).send({ error: 'no_such_chat' });
+        }
+
         const handle = request.user.profile.handle;
         const running = findActiveForChat(handle, target.filePath);
         if (running) {
@@ -259,9 +279,17 @@ router.post('/start', async function (request, response) {
                 last_event_id: running.lastEventId,
             });
         }
+        // The 409 above only dedupes one chat file, so a caller varying the chat could otherwise hold
+        // an unbounded number of upstream sockets under one handle.
+        if (listActive(handle).length >= MAX_ACTIVE_PER_HANDLE) {
+            return response.status(429).send({ error: 'too_many_generations', limit: MAX_ACTIVE_PER_HANDLE });
+        }
 
         const session = createSession(handle, target);
         session.user = request.user;
+        session.onExpire = (reason) => {
+            finishGeneration(session, Status.error, reason).catch(error => log.net.error('Generation watchdog finish failed:', error));
+        };
         // The whole design is a token stream; a non-streaming upstream would return one blob with no
         // frames to replay, so the flag is set here rather than trusted from the body.
         params.stream = true;
