@@ -1,6 +1,6 @@
-// The system card: a gear in the bottom-left corner and a compact card floating beside it (rework
-// section 4). It reaches the three app-wide panels the drawers do not carry, Look, Settings and
-// Extensions, through the switcher across its top.
+// The system card: a gear at the top bar's far right and a compact card dropping from under it. It
+// reaches the three app-wide panels the drawers do not carry, Look, Settings and Extensions, through
+// the switcher across its top. Opening it closes the bell's card (topbar_menus.zig).
 //
 // IT IS DELIBERATELY NOT FULL-SCREEN, and that is the whole point of the component. Every control in
 // it changes how the app LOOKS, and a menu that covers the app hides the thing being judged. So the
@@ -11,18 +11,27 @@
 // old top drawer carried, laid out to wrap at this width.
 pub fn SysMenu(allocator: zx.Allocator) zx.Component {
     return (
+        <button
+            @allocator={allocator}
+            id="sys-gear"
+            type="button"
+            class={gear}
+            data-icon="cog"
+            aria-label="System"
+            aria-haspopup="dialog"
+            aria-expanded={if (state.isOpen()) "true" else "false"}
+            aria-controls={if (state.isMounted()) "sys-popover" else ""}
+            onclick={menus.onGear}
+        ></button>
+    );
+}
+
+/// The card. Mounted by shell.zx OUTSIDE the top bar, for the stacking-context reason spelled out in
+/// notify_bell.zx: nested in #topbar (z-20) it would paint under the z-40 docks whatever z it asked
+/// for, and clicks meant for it would land on the dock behind.
+pub fn SysPopover(allocator: zx.Allocator) zx.Component {
+    return (
         <div @allocator={allocator} class="contents">
-            <button
-                id="sys-gear"
-                type="button"
-                class={gear}
-                data-icon="cog"
-                aria-label="System"
-                aria-haspopup="dialog"
-                aria-expanded={if (state.isOpen()) "true" else "false"}
-                aria-controls={if (state.isMounted()) "sys-popover" else ""}
-                onclick={state.onGear}
-            ></button>
             {if (state.isMounted()) (
                 <div
                     id="sys-popover"
@@ -81,22 +90,23 @@ pub fn SysMenu(allocator: zx.Allocator) zx.Component {
     );
 }
 
-// The gear sits in the corner the two panel tabs do not own, and clears the composer's own controls,
-// which stay centred on the reading measure.
-const gear = "icon grid size-[2.2rem] flex-none cursor-pointer place-items-center rounded-md border border-control-border bg-surface text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-accent";
+// The bell's twin, at the bar's far right. It grows to the 44px tap minimum on a coarse pointer,
+// which is what --topbar-h yields 3rem for on mobile: a 2.6rem bar could not hold one (WD35).
+const gear = "icon grid size-[2.2rem] flex-none cursor-pointer place-items-center rounded-md border border-control-border bg-surface text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-accent [@media(pointer:coarse)]:size-11";
 
-// 336px wide and 28rem tall at most, floating clear of the gear: wide enough for the real forms once
-// they wrap, narrow enough that the conversation is still readable beside it. The height cap yields
-// to the viewport on a short window so the card can never run off the top. No shadow: this theme
+// 336px wide and 28rem tall at most, dropped from under the bar's right edge: wide enough for the
+// real forms once they wrap, narrow enough that the conversation is still readable beside it. Both
+// caps yield to the viewport so the card can never run off a small window. No shadow: this theme
 // carries depth on borders (WD16). Padding lives on the head, body and footer, not here, so the
-// body's scrollbar rides the card edge instead of floating inside a gutter.
+// body's scrollbar rides the card edge instead of floating inside a gutter. z-[70] clears both dock
+// layers, which only holds because shell.zx mounts this outside #topbar's stacking context.
 // Three literals rather than a computed string: the tailwind scanner reads .zx TEXT, so the
-// animate-* utilities have to appear here as literals to be generated (the bell_open pattern). The
-// card rises on `pop-in`, settles back on `pop-out`; while it fades out it drops its pointer events
-// so a click passes through to the page behind it.
-const popover_base = "fixed top-[calc(var(--topbar-h)+0.3rem)] right-2 z-[60] flex max-h-[min(28rem,calc(100dvh_-_var(--topbar-h)_-_1rem))] w-[min(21rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border border-border bg-surface";
-const popover_in = popover_base ++ " animate-pop-in";
-const popover_out = popover_base ++ " animate-pop-out pointer-events-none";
+// animate-* utilities have to appear here as literals to be generated. It DROPS on `drawer-in`, the
+// bell card's animation rather than the `pop-in` it used when the gear sat in the bottom corner: a
+// card that rose from below a top-bar button read as coming from the wrong place.
+const popover_base = "fixed top-[calc(var(--topbar-h)+0.3rem)] right-2 z-[70] flex max-h-[min(28rem,calc(100dvh_-_var(--topbar-h)_-_1rem))] w-[min(21rem,calc(100vw-1rem))] flex-col overflow-hidden rounded-lg border border-border bg-surface";
+const popover_in = popover_base ++ " animate-drawer-in";
+const popover_out = popover_base ++ " animate-drawer-out pointer-events-none";
 
 const heading = "m-0 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
 
@@ -128,6 +138,7 @@ const motion_opts_slice: []const MotionOpt = &motion_opts;
 const zx = @import("zx");
 const ui = @import("./ui.zig");
 const state = @import("./sysmenu_state.zig");
+const menus = @import("../shell/topbar_menus.zig");
 const model = @import("./sysmenu_model.zig");
 const SysSections = @import("./sysmenu_sections.zx").SysSections;
 const SettingsBody = @import("../system/settings_body.zx").SettingsBody;

@@ -1,9 +1,12 @@
-// PROTOTYPE: the top bar is now the wordmark alone.
+// The top bar: the wordmark, and three app-wide controls at the right edge.
 //
-// The 13-icon drawer row that used to fill the right of this bar is GONE (rework section 2, CLEAN
-// BASE): thirteen unlabelled monochrome glyphs of equal weight was the thing that read as flattened.
-// Every panel it opened is reached from the two edge tabs (edgetabs.zx) or the system gear
-// (sysmenu.zx) instead, so the base page is the conversation and the composer.
+// The 13-icon drawer row that used to fill this bar is GONE (rework section 2, CLEAN BASE): thirteen
+// unlabelled monochrome glyphs of equal weight was the thing that read as flattened. What is here
+// instead is the irreducible set - backend state, notifications, system - with every PANEL still
+// reached from the two edge tabs (edgetabs.zx) or from the system card's own switcher.
+//
+// These render the trigger BUTTONS only. Both cards mount in shell.zx, outside this header, because
+// the `z-20` below makes the bar a stacking context that would cap them under the docks.
 pub fn TopBar(allocator: zx.Allocator) zx.Component {
     return (
         <header

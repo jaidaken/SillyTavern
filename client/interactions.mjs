@@ -225,6 +225,27 @@ class Page {
     async insertText(text) {
         await this.cdp.send('Input.insertText', { text }, this.sessionId);
     }
+    /// A REAL key press, for the paths that only a keyboard reaches (the command palette's Ctrl-K, an
+    /// Enter on its selected row). insertText fires an input event and never a keydown, so it cannot
+    /// drive a shortcut. `windowsVirtualKeyCode` matters: the door reports document-level keys by
+    /// code, and a dispatch without one arrives as key 0.
+    async key(key, { ctrl = false, code = null, vk = null } = {}) {
+        const KEYS = {
+            Enter: { code: 'Enter', vk: 13, text: '\r' },
+            Escape: { code: 'Escape', vk: 27 },
+            ArrowDown: { code: 'ArrowDown', vk: 40 },
+            ArrowUp: { code: 'ArrowUp', vk: 38 },
+        };
+        const spec = KEYS[key] || { code: code || `Key${key.toUpperCase()}`, vk: vk || key.toUpperCase().charCodeAt(0) };
+        const base = {
+            key, code: spec.code, windowsVirtualKeyCode: spec.vk, nativeVirtualKeyCode: spec.vk,
+            modifiers: ctrl ? 2 : 0,
+        };
+        await this.cdp.send('Input.dispatchKeyEvent',
+            { type: spec.text && !ctrl ? 'keyDown' : 'rawKeyDown', ...base, text: ctrl ? undefined : spec.text },
+            this.sessionId);
+        await this.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base }, this.sessionId);
+    }
     sawConsole(needle) {
         return this.consoleLines.some((l) => l.includes(needle));
     }
@@ -448,14 +469,13 @@ async function main() {
                 root: '#card-editor',
                 back: '#card-editor-back',
             },
-            // #notify-bell is ALWAYS in the DOM and rides the Cast tab's reveal, so presence proves
-            // nothing and the pointer has to reach the right flank before the click lands. The count
-            // chip is a separate child, absent at zero unread; the button's aria-label carries the
-            // number, which is the readable half of the same fact.
+            // #notify-bell is a permanent top-bar button: always in the DOM AND always clickable, so it
+            // needs no `reveal` (it rode the Cast tab's proximity fade before moving into the bar). The
+            // count chip is a separate child, absent at zero unread; the button's aria-label carries
+            // the number, which is the readable half of the same fact.
             notifications: {
                 kind: 'toggle',
                 control: '#notify-bell',
-                reveal: 'right',
                 root: '#notify-popover',
                 close: '#notify-popover button[aria-label="Close notifications"]',
             },
@@ -803,11 +823,72 @@ async function main() {
             'C-PANEL-EASE the dock slides shut on a transform instead of snapping',
             `full=${dceFull} mid=${dceMid} gone=${dceGone}`);
 
-        // C-BELL-SLIDE: the notify bell must ride the dock slide with the Cast tab. It once jumped
-        // because it was left out of the shared slide; assert it carries the membership class so it can
-        // never silently drop out again (the panel, both tabs and the bell all read one --dock-anim).
-        const bellSlides = await page.eval(`(function(){var b=document.querySelector('#notify-bell');return !!b && b.classList.contains('dock-slide-right');})()`);
-        row('must', bellSlides, 'C-BELL-SLIDE the notify bell is a member of the right dock slide');
+        // C-MENU-OVER: a top-bar card must outrank an open dock, and this is a HIT TEST rather than a
+        // z-index read because a z-index read is exactly what missed the bug. The cards once rendered
+        // inside #topbar, whose z-20 makes it a stacking context: the card declared z-[70], the dock
+        // only z-40, and the dock still won, because the whole BAR was competing at 20. Computed style
+        // reported 70 the entire time. Only elementFromPoint at the card's own centre caught it, so
+        // that is what this asserts, plus the structural cause (the card is not inside the bar).
+        // Opened only if it is not already: the right dock survives from A8/A9b above, and an
+        // unconditional tab click would TOGGLE it shut, leaving nothing for the card to sit over.
+        if (!await page.eval(`!!document.querySelector('${dockSel('right')}')`)) {
+            await page.click(SIDE_TAB.right);
+        }
+        const menuDockOpen = await page.waitFor(`document.querySelector('${dockSel('right')}')`, 8000);
+        await page.eval(`(function(){var b=document.querySelector('#notify-bell');if(b)b.click();return true})()`);
+        await page.waitFor("document.querySelector('#notify-popover')", 4000);
+        await sleep(350);
+        const overDock = await page.eval(`(function(){
+            var pop = document.querySelector('#notify-popover');
+            var dock = document.querySelector('${dockSel('right')}');
+            if (!pop || !dock) return { err: 'missing', pop: !!pop, dock: !!dock };
+            var r = pop.getBoundingClientRect();
+            var hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+            return { clickLands: pop.contains(hit), insideBar: !!pop.closest('#topbar'),
+                     popZ: getComputedStyle(pop).zIndex, dockZ: getComputedStyle(dock).zIndex,
+                     hit: hit ? (hit.id || hit.tagName) : null };
+        })()`);
+        row('must', menuDockOpen && overDock.clickLands === true && overDock.insideBar === false,
+            'C-MENU-OVER a top-bar card takes the click over an open dock, not just a higher z-index',
+            `dockOpen=${menuDockOpen} ${JSON.stringify(overDock)}`);
+
+        // C-MENU-EXCL: the two cards drop from the same corner and each is wider than the gap between
+        // their buttons, so both open at once would overlap and the newer would eat the older's clicks.
+        // Opening either closes the other (topbar_menus.zig). Asserted BOTH ways: a one-way close
+        // would still leave the pair overlapping when opened in the other order.
+        await page.eval(`(function(){var g=document.querySelector('#sys-gear');if(g)g.click();return true})()`);
+        await page.waitFor("document.querySelector('#sys-popover')", 4000);
+        await sleep(350);
+        const gearWins = await page.eval("({ notify: !!document.querySelector('#notify-popover'), sys: !!document.querySelector('#sys-popover') })");
+        await page.eval(`(function(){var b=document.querySelector('#notify-bell');if(b)b.click();return true})()`);
+        await page.waitFor("document.querySelector('#notify-popover')", 4000);
+        await sleep(350);
+        const bellWins = await page.eval("({ notify: !!document.querySelector('#notify-popover'), sys: !!document.querySelector('#sys-popover') })");
+        row('must', gearWins.sys && !gearWins.notify && bellWins.notify && !bellWins.sys,
+            'C-MENU-EXCL the two top-bar cards are mutually exclusive, in both orders',
+            `gear=${JSON.stringify(gearWins)} bell=${JSON.stringify(bellWins)}`);
+
+        // C-MENU-EXCL-2: the palette is the system card's SECOND door, and it opened the card without
+        // going through the arbiter, so a bell card left open stayed open underneath it. Exclusivity
+        // asserted per ENTRY POINT, not once: a third door would need its own row here.
+        await page.eval(`(function(){var b=document.querySelector('#notify-bell');if(b&&!document.querySelector('#notify-popover'))b.click();return true})()`);
+        await page.waitFor("document.querySelector('#notify-popover')", 4000);
+        await page.key('k', { ctrl: true });
+        const paletteUp = await page.waitFor("!!document.querySelector('#palette-input')", 4000);
+        await page.insertText('system');
+        await sleep(250);
+        await page.key('Enter');
+        await page.waitFor("document.querySelector('#sys-popover')", 4000);
+        await sleep(400);
+        const paletteExcl = await page.eval("({ notify: !!document.querySelector('#notify-popover'), sys: !!document.querySelector('#sys-popover') })");
+        row('must', paletteUp && paletteExcl.sys === true && paletteExcl.notify === false,
+            'C-MENU-EXCL-2 opening the system card from the palette also closes the bell card',
+            `paletteUp=${paletteUp} ${JSON.stringify(paletteExcl)}`);
+        await page.key('Escape');
+        await sleep(300);
+        await page.eval(`(function(){var b=document.querySelector('#notify-bell');if(b)b.click();return true})()`);
+        await page.click(SIDE_TAB.right);
+        await page.waitFor(`!document.querySelector('${dockSel('right')}')`, 4000);
 
         // ---- the edge tabs themselves ----
         // Every row above reaches a panel through a tab that ?showtabs pinned, so nothing yet asks
@@ -5103,17 +5184,9 @@ async function main() {
                 const badge = document.querySelector('#notify-count');
                 return { toasts: t, badge: badge ? badge.textContent : null };
             })()`);
-            row('must', asleepToast.toasts.length === 1 && asleepToast.toasts[0].level === 'warning'
-                && asleepToast.toasts[0].text === 'Backend asleep - unlock at silly',
-                'C-CONN-DOT-8 an asleep backend also raises a notification',
+            row('must', asleepToast.toasts.length === 0 && asleepToast.badge === null,
+                'C-CONN-DOT-8 an asleep backend raises NO toast: the dot beside it is the whole report',
                 JSON.stringify(asleepToast));
-            // The counting half of the old row, kept as its own claim rather than dropped with the
-            // bell it was written against: the badge rode the topbar's notifications button.
-            // Reads the badge rather than opening anything, so it goes fatal the moment the bell is
-            // in the table, with no edit here.
-            row(LAUNCHERS.notifications ? 'must' : 'pending', asleepToast.badge === '1',
-                'C-CONN-DOT-8b the unread badge counts that notification',
-                `badge=${JSON.stringify(asleepToast.badge)} (LAUNCHERS.notifications ${LAUNCHERS.notifications ? 'set' : 'is null'})`);
 
             const offline = await reloadWith('offline');
             row('must', offline.state === 'offline' && offline.words === 'Backend offline - unlock at silly',
@@ -5561,14 +5634,17 @@ async function main() {
                 return settled();
             };
 
+            // The AMBIENT probe is deliberately silent: the top bar's chip shows standing backend state
+            // permanently, so a toast repeated it on every poll cadence. C-CONN-DOT-2/3/4 prove the
+            // chip actually moves, which is what makes this silence safe rather than a dropped signal.
             const bootOffline = await bootWith('offline');
-            row('must', only(bootOffline, 'warning', 'Backend offline - unlock at silly'),
-                'C-PUSH-1 boot probe offline raises exactly its own warning',
+            row('must', bootOffline.length === 0,
+                'C-PUSH-1 an offline boot probe stays silent: the status chip owns standing state',
                 JSON.stringify(bootOffline));
 
             const bootErr = await bootWith('error');
-            row('must', only(bootErr, 'err', 'Backend error 500'),
-                'C-PUSH-2 boot probe error carries its status code into the toast',
+            row('must', bootErr.length === 0,
+                'C-PUSH-2 an errored boot probe stays silent, for the same reason',
                 JSON.stringify(bootErr));
 
             const bootOk = await bootWith('ok');
@@ -5596,9 +5672,11 @@ async function main() {
                 'C-PUSH-7 a probe that succeeds but a persist that fails says the SAVE failed',
                 JSON.stringify(saveFailed));
 
+            // Success is the one Connect outcome with no toast: "backend up" is exactly what the chip
+            // is for. Its FAILURES (4-7 above) still push, because a button press is owed an outcome.
             const connected = await connectWith('ok', null);
-            row('must', only(connected, 'success', 'Connected: mock-model'),
-                'C-PUSH-8 a Connect that lands names the model it connected to',
+            row('must', connected.length === 0,
+                'C-PUSH-8 a Connect that lands stays silent: the chip is what says it went online',
                 JSON.stringify(connected));
 
             // The key lifecycle. Save then remove, each in both outcomes, from a silent boot.
@@ -5767,9 +5845,12 @@ async function main() {
             await page.focus('#send_textarea');
             await page.insertText('push probe send');
             await page.click('#composer button[aria-label="Send"]');
+            // This one KEEPS its toast where the ambient probe lost one, and names the SEND rather than
+            // the state: the chip can say the backend is asleep, but not that the message just sent got
+            // no reply, and the eye is on the conversation at that moment, not on the top bar.
             const streamAsleep = await settled(15000);
-            row('must', streamAsleep.some((t) => t.level === 'warning' && t.text === 'Backend asleep - unlock at silly'),
-                'C-PUSH-22 a send whose stream 502s at the edge raises the asleep warning',
+            row('must', streamAsleep.some((t) => t.level === 'err' && t.text === 'Send failed - backend asleep, unlock at silly'),
+                'C-PUSH-22 a send whose stream 502s at the edge says the SEND failed',
                 JSON.stringify(streamAsleep));
 
             await fetch(`${args.base}/dev/clear-fail-next`);

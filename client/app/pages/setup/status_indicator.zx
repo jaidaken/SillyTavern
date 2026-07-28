@@ -1,20 +1,28 @@
-// A compact status chip that lives in the top bar, left of the notification bell. Shows a coloured
-// dot driven by the same data-conn-state attribute the connections panel uses (app-input.css), plus
-// a short status word. Clicking opens the system gear to the connections panel.
+// The backend's standing state, as a dot and a word in the top bar. It is the reason the backend
+// up/down TOASTS are gone: a state permanently on screen needs no interruption to announce itself,
+// which leaves notifications for EVENTS (a send that failed, a save that did not land).
+//
+// The dot keys off the same data-conn-state attribute the connections panel uses, so both surfaces
+// paint from one vocabulary (app-input.css). The word is the SHORT form; the panel's standing line
+// is what carries the model name and the remedy.
 pub fn StatusIndicator(allocator: zx.Allocator) zx.Component {
     return (
         <div
             @allocator={allocator}
+            id="conn-chip"
             class="flex flex-none items-center gap-1.5 rounded-md border border-border bg-surface-2 px-2 py-1"
             data-conn-state={connection.stateName()}
+            // A live region announces its TEXT changing, never an aria-label changing, so the word
+            // below is a real text node and carries no aria-hidden. It also stays visible at every
+            // width: asleep and offline paint the same amber, so the word is the only thing that
+            // tells them apart, for a red-green reader as much as a screen-reader one (WD38).
+            role="status"
         >
             <span class="conn-dot flex-none" aria-hidden="true"></span>
-            <span class="text-sm text-text">{connection.statusWords(&word_buf)}</span>
+            <span class="font-mono text-[0.66rem] leading-ui text-muted">{connection.statusWord()}</span>
         </div>
     );
 }
-
-var word_buf: [96]u8 = undefined;
 
 const zx = @import("zx");
 const connection = @import("./connection.zig");

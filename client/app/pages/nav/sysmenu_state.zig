@@ -22,11 +22,11 @@ const log = std.log.scoped(.panels);
 
 pub const SysSection = model.SysSection;
 
-/// The card's open/exit phase. `closing` keeps the card mounted through its `pop-out` fade; the
+/// The card's open/exit phase. `closing` keeps the card mounted through its `drawer-out` fade; the
 /// timer below unmounts it. See overlay_exit.zig for the re-open guard.
 var exit: overlay_exit.Exit = .{};
 
-/// pop-out is 200ms; unmount a hair later so the fade fully plays before the node leaves.
+/// drawer-out is 200ms; unmount a hair later so the fade fully plays before the node leaves.
 const close_ms: u32 = 220;
 
 /// Null until the first read, which is what pulls the remembered section out of storage. Reading it
@@ -38,7 +38,7 @@ pub fn isOpen() bool {
     return exit.isOpen();
 }
 
-/// Rendered while open OR fading out, so the `pop-out` exit has a node to run on.
+/// Rendered while open OR fading out, so the `drawer-out` exit has a node to run on.
 pub fn isMounted() bool {
     return exit.isMounted();
 }
@@ -69,27 +69,11 @@ pub fn setOpen(v: bool) void {
     if (v) exit.open() else exit.closeInstant();
 }
 
-/// The card's width and its margin from the screen edge, mirroring the `w-[21rem]` in sysmenu.zx.
-/// The utility there has to stay a literal for the tailwind scanner to see it, so the two are paired
-/// by this comment rather than by a shared token.
-const card_width = "21rem";
-const edge_gap = "0.75rem";
-
-/// The gear and its card ride the same edge the left tab does, so an open Setup dock does not end up
-/// with a floating button parked on top of its own controls.
-///
-/// CLAMPED, and it has to be: below 768px an open dock goes FULL-SCREEN while widthFor still reports
-/// its desktop width, so the raw offset put the card 298px past the right edge of a 390px phone,
-/// where it was invisible and unreachable. The ceiling is CSS rather than a measured viewport so it
-/// re-evaluates on a window resize with no re-render, and clamp falls back to its floor when the
-/// window is narrower than the card, which pins the card to the left edge instead of off-screen.
-pub fn gearOffset(alloc: std.mem.Allocator) []const u8 {
-    const dock: i64 = if (ui.openIdOn(.left) == null) 0 else @intFromFloat(ui.widthFor(.left));
-    return std.fmt.allocPrint(
-        alloc,
-        "left:clamp({s}, {d}px, calc(100vw - {s} - {s}))",
-        .{ edge_gap, dock + 12, card_width, edge_gap },
-    ) catch "left:12px";
+/// Close on behalf of the other top-bar menu (topbar_menus.zig). A no-op when already shut, so the
+/// arbiter can call it unconditionally. Leaves focus ALONE: the card is being swapped for the bell's,
+/// so pulling focus onto the gear would steal it from the button the user just pressed.
+pub fn closeIfOpen() void {
+    if (exit.isOpen()) closeCardInner(false);
 }
 
 pub fn onGear(_: zx.client.Event) void {
@@ -119,16 +103,24 @@ pub fn onKey(ev: zx.client.Event) void {
     defer zx.allocator.free(key);
     if (!std.mem.eql(u8, key, "Escape")) return;
     ev.preventDefault();
+    // STOPPED once consumed (the bell's rule): otherwise the same Escape reaches ui.onPageKey and
+    // also tears down an open side dock under a card the user only meant to dismiss.
+    ev.stopPropagation();
     closeCard();
 }
 
-/// Start the exit animation: keep the card mounted with its `pop-out` class, move focus back to the
+/// Start the exit animation: keep the card mounted with its `drawer-out` class, move focus back to the
 /// gear NOW (the closing card must not hold focus, WD39), and arm the unmount timer. A re-open before
 /// it fires flips the phase back to open, so the timer becomes a no-op (overlay_exit.zig).
 fn closeCard() void {
+    closeCardInner(true);
+}
+
+/// `restore_focus` is false only for the arbiter's swap path, where another control is taking focus.
+fn closeCardInner(restore_focus: bool) void {
     if (!exit.requestClose()) return;
     regions.bumpShell();
-    focusId("sys-gear");
+    if (restore_focus) focusId("sys-gear");
     if (zx.platform.role == .client) _ = zx.client.setTimeout(closeTick, close_ms);
 }
 

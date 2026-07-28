@@ -33,6 +33,10 @@ const DESKTOP = { width: 1400, height: 900 };
 // gone. Ids match the button element ids edgetabs.zx emits. The remaining panels have no launcher
 // until the information-architecture move homes them, and gain rows when they do.
 const PANEL_IDS = ['tab-setup', 'tab-cast'];
+// The permanent top-bar controls. Separate from PANEL_IDS because they open cards rather than docks,
+// so the panel sweep below does not apply to them, but the TAP-SIZE rule does: they are a phone's
+// only route to notifications and settings. They went unchecked once and shipped at 35px.
+const BAR_BUTTON_IDS = ['notify-bell', 'sys-gear'];
 const TAP_MIN = 44;   // iOS minimum touch target, px
 const WIDTH_MIN = 80; // an open mobile panel must fill at least this % of the viewport width
 // verify.sh serves the static dist through devserve.py, which has no SillyTavern Express backend, so a
@@ -186,6 +190,16 @@ async function main() {
                 if (b.left < -1 || b.right > vp.width + 1 || b.top < -1) fail('topbar-reachable', `${b.id} at [${b.left},${b.top},${b.right}] outside the viewport`);
                 // Hidden behind a hover that a touch device cannot perform would leave no way in at all.
                 if (b.opacity < 1 || b.pointerEvents === 'none') fail('topbar-tap', `${b.id} is not reachable on touch (opacity ${b.opacity}, pointer-events ${b.pointerEvents})`);
+            }
+
+            // The bell and the gear, held to the same tap minimum and the same reachability rule.
+            const barBtns = await evalJS(`(()=>{const ids=${JSON.stringify(BAR_BUTTON_IDS)};const btns=ids.map(id=>document.getElementById(id)).filter(Boolean);return{count:btns.length,buttons:btns.map(b=>{const r=b.getBoundingClientRect();const st=getComputedStyle(b);return{id:b.id,w:Math.round(r.width),h:Math.round(r.height),left:Math.round(r.left),right:Math.round(r.right),top:Math.round(r.top),opacity:Number(st.opacity),pointerEvents:st.pointerEvents};})};})()`);
+            report.barButtons = barBtns;
+            if (barBtns.count !== BAR_BUTTON_IDS.length) fail('barbutton-count', `${barBtns.count} bar buttons, want ${BAR_BUTTON_IDS.length}`);
+            for (const b of barBtns.buttons || []) {
+                if (b.w < TAP_MIN || b.h < TAP_MIN) fail('barbutton-tap', `${b.id} is ${b.w}x${b.h}, want >=${TAP_MIN}`);
+                if (b.left < -1 || b.right > vp.width + 1 || b.top < -1) fail('barbutton-reachable', `${b.id} at [${b.left},${b.top},${b.right}] outside the viewport`);
+                if (b.opacity < 1 || b.pointerEvents === 'none') fail('barbutton-tap', `${b.id} is not reachable on touch (opacity ${b.opacity}, pointer-events ${b.pointerEvents})`);
             }
 
             // Each panel: open it, measure, close it (the drawer button toggles). Reload only if a panel
