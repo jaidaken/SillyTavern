@@ -254,6 +254,70 @@ fn opensTurn(src: []const u8, at: usize) bool {
     return std.mem.endsWith(u8, before, "\u{2026}");
 }
 
+/// `opensTurn` for an action beat, which needs one more step. A beat very often REACTS to the speech
+/// before it (`"Take it." *She turns away.*`), and there the preceding character is the closing quote
+/// mark, not the full stop inside it, so the bare punctuation test rejected it. Skipping the closing
+/// marks first makes the two orders symmetrical; without it, a beat before speech became a block and
+/// the identical beat after speech stayed inline in the same message.
+fn opensBeat(src: []const u8, at: usize) bool {
+    var ls = at;
+    while (ls > 0 and src[ls - 1] != '\n') ls -= 1;
+    var e = at;
+    while (e > ls) {
+        const c = src[e - 1];
+        if (c == ' ' or c == '\t' or c == '"' or c == '\'') {
+            e -= 1;
+            continue;
+        }
+        // The curly closing marks, as UTF-8: right double quote and right single quote.
+        if (e - ls >= 3 and std.mem.eql(u8, src[e - 3 .. e], "\u{201D}")) {
+            e -= 3;
+            continue;
+        }
+        if (e - ls >= 3 and std.mem.eql(u8, src[e - 3 .. e], "\u{2019}")) {
+            e -= 3;
+            continue;
+        }
+        break;
+    }
+    return opensTurn(src, e);
+}
+
+/// The emphasis twin of the speech turn: the span of an `*action beat*` that stands as a beat of its
+/// own rather than emphasising a word mid-sentence. Returns the index of the closing `*`.
+///
+/// TWO tests, and both are needed. `opensTurn` (the caller's check) says it may START a beat: line
+/// start, or after sentence punctuation. This says it also ENDS one: it finishes the line, or it
+/// finishes on sentence punctuation. Without the second test `*Very* good idea, she thought.` at a
+/// line start would break its own sentence onto a line of its own.
+///
+/// `**bold**` is left alone: markdown owns it, and consuming the run here would eat the bold.
+fn emTurnEnd(src: []const u8, at: usize, line_end: usize) ?usize {
+    if (src[at] != '*') return null;
+    const body = at + 1;
+    if (body >= line_end or src[body] == '*') return null;
+    // `* a *` is not emphasis in markdown either: a delimiter run cannot open on whitespace.
+    if (src[body] == ' ' or src[body] == '\t') return null;
+    var k = body;
+    while (k < line_end) : (k += 1) {
+        if (src[k] != '*') continue;
+        if (k + 1 < line_end and src[k + 1] == '*') return null;
+        const content = src[body..k];
+        if (content.len == 0) return null;
+        switch (content[content.len - 1]) {
+            ' ', '\t' => return null,
+            else => {},
+        }
+        const ends_sentence = switch (content[content.len - 1]) {
+            '.', '!', '?', ':', ';' => true,
+            else => std.mem.endsWith(u8, content, "\u{2026}"),
+        };
+        if (!ends_sentence and !isBlank(src[k + 1 .. line_end])) return null;
+        return k;
+    }
+    return null;
+}
+
 /// Scans one line, wrapping its quotes. Returns the next index, which passes `line_end` when a
 /// code span or raw element carried the scan onto a later line.
 fn wrapInline(
@@ -265,8 +329,32 @@ fn wrapInline(
     pc: *ParaCache,
 ) std.mem.Allocator.Error!usize {
     var j = start;
+    // Index of the `*` that closes the action beat currently open, if one is. The beat's content is
+    // scanned by the normal loop, so a quote inside it still gets wrapped.
+    var em_close: ?usize = null;
     outer: while (j < line_end) {
+        if (em_close) |ec| {
+            if (j == ec) {
+                try out.appendSlice(allocator, "</em>");
+                em_close = null;
+                j += 1;
+                continue;
+            }
+        }
         const ch = src[j];
+
+        if (ch == '*' and em_close == null) {
+            if (emTurnEnd(src, j, line_end)) |close| {
+                if (opensBeat(src, j)) {
+                    // The asterisks are consumed, exactly as a turn's quote marks are wrapped for
+                    // hiding: the beat is markup now, not literal text markdown must re-read.
+                    try out.appendSlice(allocator, "<em class=\"em-turn\">");
+                    em_close = close;
+                    j = j + 1;
+                    continue;
+                }
+            }
+        }
 
         if (ch == '<') {
             const end = rawElementEnd(src, j, pc) orelse rawTagEnd(src, j, pc);
@@ -326,6 +414,9 @@ fn wrapInline(
         try out.append(allocator, ch);
         j += 1;
     }
+    // A code span or raw element can carry the scan past the closing `*`, so close the beat rather
+    // than leak an unbalanced <em> into the sanitiser.
+    if (em_close != null) try out.appendSlice(allocator, "</em>");
     return j;
 }
 
@@ -444,12 +535,46 @@ test "wrap_treats_a_quote_after_an_ellipsis_as_a_turn" {
 }
 
 test "wrap_treats_a_quote_after_an_emphasised_action_beat_as_a_turn" {
+    // The beat is now markup of its own (em-turn), and the quote after it still opens a speech turn.
     try expectWrap(
         "*she turns.* \"Leave.\"",
-        "*she turns.* <q class=\"q-turn\"><span class=\"qd\">\"</span>Leave.<span class=\"qd\">\"</span></q>",
+        "<em class=\"em-turn\">she turns.</em> <q class=\"q-turn\"><span class=\"qd\">\"</span>Leave.<span class=\"qd\">\"</span></q>",
     );
     // A lone asterisk that is not closing a sentence must not manufacture a turn.
     try expectWrap("a * \"b\"", "a * <q>\"b\"</q>");
+}
+
+test "wrap_tags_an_action_beat_that_stands_on_its_own" {
+    try expectWrap("*She taps it twice.*", "<em class=\"em-turn\">She taps it twice.</em>");
+    // Ends the line without sentence punctuation: still a beat, nothing follows it to break.
+    try expectWrap("*she turns away*", "<em class=\"em-turn\">she turns away</em>");
+    // A quote INSIDE a beat is still wrapped, because the beat's content runs through the same scan.
+    try expectWrap(
+        "*she whispers \"no\" softly.*",
+        "<em class=\"em-turn\">she whispers <q>\"no\"</q> softly.</em>",
+    );
+}
+
+test "wrap_tags_an_action_beat_that_reacts_to_the_speech_before_it" {
+    // The character before the beat is the closing quote mark, not the full stop inside it.
+    try expectWrap(
+        "\"Three days old.\" *She taps it twice.*",
+        "<q class=\"q-turn\"><span class=\"qd\">\"</span>Three days old.<span class=\"qd\">\"</span></q> <em class=\"em-turn\">She taps it twice.</em>",
+    );
+    // Mid-sentence emphasis after a quoted WORD is still left alone: the word does not end a sentence.
+    try expectWrap("the band \"Hate\" is *very* loud", "the band <q>\"Hate\"</q> is *very* loud");
+}
+
+test "wrap_leaves_mid_sentence_emphasis_alone" {
+    // Opens a turn (line start) but does not close one, so it stays inline markdown: as a beat it
+    // would break its own sentence onto a line of its own.
+    try expectWrap("*Very* good idea, she thought.", "*Very* good idea, she thought.");
+    // Not at a turn boundary at all.
+    try expectWrap("the *very* best", "the *very* best");
+    // Bold belongs to markdown; consuming the run here would eat it.
+    try expectWrap("**Loud.** she said", "**Loud.** she said");
+    // A delimiter run cannot open on whitespace, matching markdown.
+    try expectWrap("* not emphasis *", "* not emphasis *");
 }
 
 test "wrap_skips_quotes_inside_inline_code" {

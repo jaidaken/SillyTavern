@@ -35,7 +35,7 @@ const log = std.log.scoped(.panels);
 /// reading state too (which sub-panel shows), keyed by CSS off the same attribute. Size and line
 /// height are NOT here: they are continuous numeric values (a slider each), so they ride their own
 /// keys like the measure drag does, not a preset attribute.
-pub const keys = [_][]const u8{ "measure", "justify", "indent", "font", "theme", "tab", "avatars", "focus" };
+pub const keys = [_][]const u8{ "measure", "justify", "indent", "paraindent", "font", "theme", "tab", "avatars", "focus" };
 
 /// The pixel width the reading-width drag persists (the drag gesture lives in this module, driven by
 /// the pointer events the door delegates via patch-door D5). A measure PRESET click drops it, inline
@@ -65,6 +65,7 @@ fn defaultFor(comptime key: []const u8) []const u8 {
     if (std.mem.eql(u8, key, "measure")) return "normal";
     if (std.mem.eql(u8, key, "justify")) return "on";
     if (std.mem.eql(u8, key, "indent")) return "chat";
+    if (std.mem.eql(u8, key, "paraindent")) return "on";
     if (std.mem.eql(u8, key, "font")) return "newsreader";
     if (std.mem.eql(u8, key, "theme")) return "dark";
     if (std.mem.eql(u8, key, "tab")) return "reading";
@@ -128,12 +129,24 @@ fn attrName(buf: *[48]u8, key: []const u8) ?[]const u8 {
 
 // ---- boot apply -------------------------------------------------------------------------------
 
+/// `blockquote` was the speech-on-its-own-line layout. It is GONE: that styling is block quotation,
+/// which is what you use when quoting fiction inside another text, and it has no prose-fiction
+/// convention behind it (researched 2026-07-28). Novel now carries the real convention. Anyone holding
+/// the old value would boot into a layout no rule matches, so rewrite it once to `novel`.
+fn migrateNovelLayout() void {
+    const stored = getItem(alloc, "st-reading-indent") orelse return;
+    defer alloc.free(stored);
+    if (!std.mem.eql(u8, stored, "blockquote")) return;
+    setItem("st-reading-indent", "novel");
+}
+
 /// Every preference from localStorage (or its default) onto #chat-root. Called at boot from
 /// bridge.bootInit, so persisted prefs land before the first paint of the chat.
 pub fn applyAll() void {
     if (zx.platform.role != .client) return;
     const root = chatRoot() orelse return;
     defer root.deinit();
+    migrateNovelLayout();
     inline for (keys) |key| {
         const stored = getItem(alloc, "st-reading-" ++ key);
         defer if (stored) |s| alloc.free(s);

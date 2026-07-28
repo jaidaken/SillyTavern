@@ -40,9 +40,12 @@
     --color-accent: oklch(0.770 0.130 72);
     --color-on-accent: oklch(0.185 0.020 70);
 
-    /* Roleplay text roles: speech in spoken gold, action/scene in warm grey. */
+    /* Roleplay text roles: speech in spoken gold, action/scene a step behind it. The two are separated
+       by CHROMA, not lightness: action carries enough colour to read as its own voice rather than as
+       dimmed narration (0.014 was so close to grey it registered as nothing), while sitting well under
+       the speech gold so speech still leads the page. L stays level so neither looks brighter. */
     --color-st-quote: oklch(0.850 0.088 78);
-    --color-st-em: oklch(0.800 0.014 74);
+    --color-st-em: oklch(0.815 0.050 74);
 
     /* Status ramp (WD1-WD5). Four SEMANTIC hues, held apart from the amber accent on purpose: the
        accent means "you can act on this", so a status that borrowed it would say the wrong thing.
@@ -717,62 +720,146 @@
     -webkit-hyphens: none;
 }
 
-/* Paragraph styles differ in the first-line indent AND, for novel, the gap. Indent and gap are
-   exclusive separators (Butterick): a first-line indent carries the paragraph break on its own, so
-   pairing it with a blank-line gap is the belts-and-braces mistake. chat is flush and keeps the base
-   0.7em gap; novel indents every paragraph (including the first, so the indent shows on a single-
-   paragraph message) and drops the gap to zero so the indent is the only separator. */
+/* CHAT imposes NOTHING. No indent, the base paragraph gap as its only separator, speech and action
+   inline exactly as the model wrote them. It is the raw view, not a typographic style: when it has
+   looked like novel prose, that was the model's paragraphing being lucky, not this layout working.
+
+   NOVEL is the prose convention, imposed rather than hoped for. Researched 2026-07-28 (wiki topic
+   fiction-dialogue-typesetting; CMOS ch.13, Touchstone Editing, Zoe McCarthy's guidelines, Book
+   Editing Associates, Grammargeddon). Fiction has exactly ONE hard paragraphing rule and a set of
+   soft ones, and knowing which is which is the whole design:
+   - HARD: a new speaker starts a new paragraph. Nothing else is absolute.
+   - A dialogue tag or a brief action beat by the SAME character stays with that character's speech
+     ("if at all possible, keep the action and dialogue in the same paragraph").
+   - SOFT: a new paragraph is also taken when a new event or idea enters, when the description of one
+     thing ends and another begins, when the camera moves, and when the reader needs a break from a
+     long paragraph.
+   - Paragraphs are marked by a first-line indent with NO blank line between them, indent and gap
+     being exclusive separators (Butterick).
+
+   WHY THE SOFT RULES ARE THE ONES THAT MATTER HERE: a roleplay turn is a SINGLE character, so the
+   hard rule never fires inside one and, by the letter of the convention, the entire wall of text is a
+   legitimate paragraph. What makes it read wrong is the soft rules, and those are judgements about
+   meaning that no text transform can make. So Novel uses the one structural proxy that stands in for
+   them honestly: a speech act plus its attribution is a unit, and narration past that attribution is
+   a new event. Cut there, and nowhere a reader would notice the machine guessing.
+
+   There is no separate speech-on-its-own-line layout. Setting every quote on its own indented line is
+   block quotation, which is what you use when QUOTING fiction inside another text, and it has no
+   prose-fiction convention behind it. The layouts that legitimately isolate speech are the SCRIPT
+   ones below. */
 #chat-root[data-reading-indent="chat"] .mes_text p {
     text-indent: 0;
 }
+
+/* A LINE is the model's paragraph, in every layout: narration.zig wraps each `<br>`-separated line of
+   a paragraph as its own element, so the piece the model meant as a paragraph is addressable. Block
+   in all layouts, which is exactly what the `<br>` it replaced already did. */
+.mes_text span.custom-line {
+    display: block;
+}
+
+/* A SEGMENT is the paragraph the model SHOULD have started and did not. narration.zig cuts a line at
+   each speech turn that does not already open it, and again after that speech's dialogue tag, so the
+   speech and its attribution stay together and the narration past them becomes its own paragraph.
+   Inline by default, so Chat renders the model's own structure untouched; only a layout that means to
+   impose paragraphing promotes them. */
+.mes_text span.custom-seg {
+    display: inline;
+}
+
+/* Novel puts the indent on the LINE, not the paragraph, because that is the unit the model writes.
+   Paragraph text-indent stays 0 so nothing inherits into the line and doubles up. */
 #chat-root[data-reading-indent="novel"] .mes_text p {
-    text-indent: 2em;
+    text-indent: 0;
     margin-bottom: 0;
 }
 
-/* Speech on its own line: blockquote / stage / vn share the mechanism. quotes.zig tags a quote that
-   opens a speech turn (class custom-q-turn; its delimiters wrapped in custom-qd), so each turn becomes
-   a block and the run-together message unpacks onto lines. Section colours match every other mode:
-   speech amber, *action* emphasis grey, plain narration in the text colour; the layout does the
-   distinguishing, not a recolour. A quoted word mid-sentence is not a turn, so it stays inline. */
-#chat-root[data-reading-indent="blockquote"] .mes_text p,
+#chat-root[data-reading-indent="novel"] .mes_text span.custom-line {
+    text-indent: 2em;
+    margin-block: 0.5lh;
+}
+
+/* THE RULE THAT MAKES NOVEL A NOVEL. A model writes a whole turn as one block: speech, tag, narration,
+   speech, tag, narration, no break anywhere. Indenting that block once changes nothing, because the
+   breaks are not in the text and have to be put there. Promoting the segments puts them there, and
+   each then takes the indent like any other paragraph.
+
+   The half-line `margin-block` is operator styling ON TOP of the print convention (print uses indent
+   XOR gap; he wants both, and the screen is not a page). `0.5lh` tracks the line-height slider, and
+   margin COLLAPSING is what keeps it a half line everywhere: seg-inside-line, line-against-line and
+   line-through-p margins all collapse to one 0.5lh, never stack to a full line. */
+#chat-root[data-reading-indent="novel"] .mes_text span.custom-seg {
+    display: block;
+    text-indent: 2em;
+    margin-block: 0.5lh;
+}
+
+/* The Indent toggle lifts NOVEL'S OWN first-line indent and nothing else (operator ask 2026-07-29).
+   Safe where the deleted first toggle was not: that one restyled every layout and made Chat identical
+   to Novel; this attribute appears in no other layout's rules, and with it off Novel's paragraphs are
+   still separated by the half-line gaps, so Novel stays a distinct layout either way. */
+#chat-root[data-reading-indent="novel"][data-reading-paraindent="off"] .mes_text span.custom-line,
+#chat-root[data-reading-indent="novel"][data-reading-paraindent="off"] .mes_text span.custom-seg {
+    text-indent: 0;
+}
+
+/* NO flush-first-paragraph rule, deliberately, and this is the one place the book convention does not
+   transfer. In print, the opening paragraph of a CHAPTER or of a scene after a space break is set
+   full-out. A chat message is neither: it is a continuation of one running scene, with the paragraph
+   before it sitting in the previous message. Treating each message as a section opening also made
+   every SINGLE-paragraph message render with no indent at all, which is most of them, so Novel came
+   out pixel-identical to Chat on the commonest message there is. Every paragraph indents. */
+
+/* SCRIPT LAYOUTS (stage, vn): name, then speech, each turn on its own line, narration as separate
+   direction lines. quotes.zig tags a speech turn (custom-q-turn) and an action beat (custom-em-turn);
+   narration.zig gives every narration run its own element (custom-narr). Promoting those three to
+   blocks is what unpacks a run-together message onto lines. */
 #chat-root[data-reading-indent="stage"] .mes_text p,
 #chat-root[data-reading-indent="vn"] .mes_text p {
     text-indent: 0;
 }
-/* Speech sets its OWN air: half a line above and below, whatever surrounds it. `lh` is literally
-   half the body's line box, so it tracks the line-height slider instead of drifting from it.
-   Paragraph margins do not add to this: a child block's margin collapses with its parent's, taking
-   the larger of the two, and half a line is larger than the 0.7em paragraph gap at every setting. */
-#chat-root[data-reading-indent="blockquote"] .mes_text q.custom-q-turn,
+
+/* In a script layout the indent rides the narration RUN, not the paragraph, and it has to: markdown
+   puts a whole turn in one <p>, and `text-indent` reaches only the first line of the paragraph BOX,
+   so narration following a speech block is an anonymous box no selector reaches and no indent touches
+   (`each-line` does not reach it either, measured). Indenting the paragraph instead moves EVERY line,
+   wrapped ones included, which is a block quote and not a paragraph indent. */
+#chat-root[data-reading-indent="stage"] .mes_text span.custom-narr,
+#chat-root[data-reading-indent="vn"] .mes_text span.custom-narr {
+    display: block;
+}
+
+/* A turn sets its OWN air: half a line above and below, whatever surrounds it. `lh` is literally half
+   the body's line box, so it tracks the line-height slider instead of drifting from it. Paragraph
+   margins do not add to this: a child block's margin collapses with its parent's, taking the larger,
+   and half a line beats the 0.7em paragraph gap at every setting. */
 #chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn,
-#chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn {
+#chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn,
+#chat-root[data-reading-indent="stage"] .mes_text em.custom-em-turn,
+#chat-root[data-reading-indent="vn"] .mes_text em.custom-em-turn {
     display: block;
     margin-block: 0.5lh;
 }
 
-/* A RETURN LEFT AGAINST SPEECH, which models emit constantly. It is invisible in the source but it
-   costs a full empty line box AND breaks the `q:last-child` match below, so the gap under one speech
-   turn measured 39px where its neighbours measured 3px: the same layout, spaced 13x apart, decided by
-   whitespace nobody can see. The turn's own margin is the whole rhythm, so these add nothing. */
-.mes_text q.custom-q-turn + br,
-.mes_text br:has(+ q.custom-q-turn) {
+/* A RETURN LEFT AGAINST A TURN, which models emit constantly. Invisible in the source, but it costs a
+   full empty line box, and one turn measured a 39px gap where its neighbours measured 3px: the same
+   layout spaced 13x apart by whitespace nobody can see. The turn's own margin is the whole rhythm.
+   SCOPED to the script layouts, and it has to be: where a turn is inline (chat, novel) that return is
+   the author's own line break carrying real meaning, and hiding it ran two intended lines together. */
+#chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn + br,
+#chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn + br,
+#chat-root[data-reading-indent="stage"] .mes_text br:has(+ q.custom-q-turn),
+#chat-root[data-reading-indent="vn"] .mes_text br:has(+ q.custom-q-turn),
+#chat-root[data-reading-indent="stage"] .mes_text em.custom-em-turn + br,
+#chat-root[data-reading-indent="vn"] .mes_text em.custom-em-turn + br,
+#chat-root[data-reading-indent="stage"] .mes_text br:has(+ em.custom-em-turn),
+#chat-root[data-reading-indent="vn"] .mes_text br:has(+ em.custom-em-turn) {
     display: none;
 }
 
-/* Blockquote keeps the quote marks; the speech insets from the flush narration like a set-apart quote. */
-#chat-root[data-reading-indent="blockquote"] .mes_text q.custom-q-turn {
-    padding-left: 1.6em;
-}
-
-/* (The old rule here tightened a paragraph ending in speech to 0.2em. The turn now carries its own
-   half-line on both sides, which collapsing already resolves against the paragraph margin, and that
-   rule's `q:last-child` match was the half of the bug above: one stray return and it stopped
-   applying.) */
-
 /* Stage: the NAME. and the spoken line sit flush at the left margin; the direction beneath is the
-   indented block. This is the inverse of blockquote, which insets the speech and leaves narration
-   flush. The name prints inline before the speech (no column), quote marks hidden. */
+   indented block. Directions are the indented block; the speech is what pulls flush. The name prints inline before the speech (no column), quote marks hidden. */
 #chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn {
     /* The turn nests inside the 6em-indented paragraph; pull it back so the spoken line is flush at the
        margin while the surrounding narration stays indented. Block margin sets the dialogue apart from
@@ -804,12 +891,21 @@
 #chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn .custom-qd {
     display: none;
 }
+/* A FIXED 5.5em column, not a 5em minimum, and that is the whole point of this mode. The minimum let
+   any name wider than it push its OWN first line right while the wrapped lines stayed at the hanging
+   indent, so the column this mode exists to create drifted by up to 95px between speakers and by 8px
+   between the two lines of a single turn. Width 5.5em (border-box, so it equals the hanging indent
+   exactly) puts every turn's text on the same column. A long name WRAPS inside its column rather than
+   being truncated: a half-shown character name is worse than an uneven label. */
 #chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn::before {
     content: var(--speaker, "") ":";
     display: inline-block;
-    min-width: 5em;
+    box-sizing: border-box;
+    width: 5.5em;
     padding-right: 0.5em;
     text-indent: 0;
+    white-space: normal;
+    vertical-align: top;
     font-weight: 700;
     color: var(--color-text);
 }
@@ -839,7 +935,7 @@
     --color-border-soft: oklch(0.86 0.02 84);
     /* Speech + emphasis must darken too, or dialogue (the most common styled RP text) sits near-invisible. */
     --color-st-quote: oklch(0.450 0.115 72);
-    --color-st-em: oklch(0.400 0.020 66);
+    --color-st-em: oklch(0.400 0.055 66);
     background: var(--color-bg);
 }
 #chat-root[data-reading-theme="paper"] #chat {
@@ -848,7 +944,7 @@
     --color-accent: oklch(0.470 0.130 45);
     --color-border-soft: oklch(0.90 0.006 90);
     --color-st-quote: oklch(0.420 0.125 55);
-    --color-st-em: oklch(0.360 0.015 60);
+    --color-st-em: oklch(0.360 0.050 60);
     background: var(--color-bg);
 }
 
@@ -1092,9 +1188,10 @@
 #chat-root[data-reading-measure="wide"] .seg-btn[data-reading-set="measure"][data-reading-val="wide"],
 #chat-root[data-reading-justify="on"] .seg-btn[data-reading-set="justify"][data-reading-val="on"],
 #chat-root[data-reading-justify="off"] .seg-btn[data-reading-set="justify"][data-reading-val="off"],
-#chat-root[data-reading-indent="novel"] .seg-btn[data-reading-set="indent"][data-reading-val="novel"],
+#chat-root[data-reading-paraindent="on"] .seg-btn[data-reading-set="paraindent"][data-reading-val="on"],
+#chat-root[data-reading-paraindent="off"] .seg-btn[data-reading-set="paraindent"][data-reading-val="off"],
 #chat-root[data-reading-indent="chat"] .seg-btn[data-reading-set="indent"][data-reading-val="chat"],
-#chat-root[data-reading-indent="blockquote"] .seg-btn[data-reading-set="indent"][data-reading-val="blockquote"],
+#chat-root[data-reading-indent="novel"] .seg-btn[data-reading-set="indent"][data-reading-val="novel"],
 #chat-root[data-reading-indent="stage"] .seg-btn[data-reading-set="indent"][data-reading-val="stage"],
 #chat-root[data-reading-indent="vn"] .seg-btn[data-reading-set="indent"][data-reading-val="vn"],
 #chat-root[data-reading-font="newsreader"] .seg-btn[data-reading-set="font"][data-reading-val="newsreader"],

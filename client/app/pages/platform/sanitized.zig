@@ -9,6 +9,7 @@ const builtin = @import("builtin");
 const markdown = @import("markdown");
 const html = @import("./html.zig");
 const quotes = @import("../chat/quotes.zig");
+const narration = @import("../chat/narration.zig");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
@@ -40,8 +41,18 @@ pub fn renderMessage(allocator: std.mem.Allocator, body: []const u8, cacheable: 
     } else |_| {}
     defer if (rendered_owned) allocator.free(rendered);
 
+    // Narration runs get their own element, which only markdown's paragraphs make possible to do
+    // once per run (narration.zig). Degrades to the unwrapped HTML like every step above it.
+    var runs: []const u8 = rendered;
+    var runs_owned = false;
+    if (narration.wrapRuns(allocator, rendered)) |w| {
+        runs = w;
+        runs_owned = true;
+    } else |_| {}
+    defer if (runs_owned) allocator.free(runs);
+
     // The sanitized bytes outlive this render, so they never come from the per-render allocator.
-    const clean = html.sanitizeHtml(std.heap.wasm_allocator, rendered);
+    const clean = html.sanitizeHtml(std.heap.wasm_allocator, runs);
     if (cacheable) html.cachePut(body, clean) else html.retain(clean);
     return clean;
 }

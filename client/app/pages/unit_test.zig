@@ -14,6 +14,7 @@ const std = @import("std");
 
 comptime {
     _ = @import("./chat/quotes.zig");
+    _ = @import("./chat/narration.zig");
     _ = @import("libc_shim");
     _ = @import("./platform/markdown.zig");
     _ = @import("./platform/store.zig");
