@@ -1,10 +1,10 @@
-//! The notification bell's half of the state: whether its popover is up, the two faces the one
-//! button wears, and the handlers. notify_bell.zx is the markup; notifications.zig owns the store,
-//! the unread count and the read receipt.
+//! The notification bell's half of the state: whether its card is up, the two faces the one button
+//! wears, and the handlers. notify_bell.zx is the markup; notifications.zig owns the store, the
+//! unread count and the read receipt.
 //!
-//! The bell replaces the one that used to sit in the 13-icon topbar. It is not a panel: the history
-//! is a glance, not a place you navigate to, so it opens beside the tab it belongs to instead of
-//! taking a dock and pushing the conversation aside.
+//! The bell is a permanent top-bar button. Its card is not a panel: the history is a glance, not a
+//! place you navigate to, so it drops from the bar instead of taking a dock and pushing the
+//! conversation aside. Opening it closes the system card, arbitrated in topbar_menus.zig.
 
 const std = @import("std");
 const zx = @import("zx");
@@ -35,10 +35,11 @@ pub fn isClosing() bool {
     return exit.isClosing();
 }
 
-/// The bell is a permanent topbar item: always visible, in-flow beside the gear. No edge-reveal
-/// gate — the bell sits in the topbar flex row regardless of which edge tab is hovered.
-pub fn bellShown() bool {
-    return true;
+/// Close on behalf of the other top-bar menu (topbar_menus.zig). A no-op when already shut, so the
+/// arbiter can call it unconditionally. Leaves focus ALONE: the card is being swapped for the system
+/// card, so pulling focus onto the bell would steal it from the button the user just pressed.
+pub fn closeIfOpen() void {
+    if (exit.isOpen()) closePopoverInner(false);
 }
 
 /// The COUNT is the part that keys on unread, so a quiet app shows a bell with nothing on it. Empty
@@ -116,9 +117,14 @@ pub fn onKey(ev: zx.client.Event) void {
 /// before anyone saw it. Opening IS the read receipt (markAllRead in onToggle), the behaviour the
 /// drawer had, so the count clears as the list is shown rather than needing a second gesture.
 fn closePopover() void {
+    closePopoverInner(true);
+}
+
+/// `restore_focus` is false only for the arbiter's swap path, where another control is taking focus.
+fn closePopoverInner(restore_focus: bool) void {
     if (!exit.requestClose()) return;
     regions.bumpShell();
-    focusId("notify-bell");
+    if (restore_focus) focusId("notify-bell");
     if (zx.platform.role == .client) _ = zx.client.setTimeout(closeTick, close_ms);
 }
 

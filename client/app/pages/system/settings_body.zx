@@ -78,8 +78,8 @@ pub fn SettingsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     </div>
                 </div>
                 <div class={row}>
-                    <span class={label_text}>Paragraphs</span>
-                    <div class={seg_group} role="group" aria-label="Paragraph style">
+                    <span class={label_text}>Layout</span>
+                    <div class={seg_group} role="group" aria-label="Message layout">
                         <button class={seg_btn} data-reading-set="indent" data-reading-val="chat" type="button" onclick={onReadingClick}>Chat</button>
                         <button class={seg_btn} data-reading-set="indent" data-reading-val="novel" type="button" onclick={onReadingClick}>Novel</button>
                         <button class={seg_btn} data-reading-set="indent" data-reading-val="blockquote" type="button" onclick={onReadingClick}>Quoted</button>

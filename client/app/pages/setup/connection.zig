@@ -76,10 +76,6 @@ pub const ConnState = enum { none, configured, connected, asleep, offline, err }
 var state: ConnState = .none;
 var state_code: u16 = 0;
 
-pub fn connState() ConnState {
-    return state;
-}
-
 /// The state as a DATA value for the markup to key off (`data-conn-state`). Never a class name: the
 /// tailwind scan reads `.zx` only, so appearance keyed on a Zig-built class would never be generated.
 pub fn stateName() []const u8 {
@@ -88,6 +84,9 @@ pub fn stateName() []const u8 {
 
 /// The state IN WORDS, for the dot's accessible name and the panel's standing line. A dot that
 /// carries its meaning only in colour tells a screen reader, and a red-green reader, nothing (WD38).
+///
+/// This is the LONG form, for the connections panel, where there is room to name the model and to
+/// say what to do about a bad state. The top bar's chip uses `statusWord` instead.
 pub fn statusWords(buf: *[96]u8) []const u8 {
     return switch (state) {
         .none => "No backend configured",
@@ -96,10 +95,25 @@ pub fn statusWords(buf: *[96]u8) []const u8 {
             if (c.api_server.len == 0) break :blk "Backend not connected";
             break :blk std.fmt.bufPrint(buf, "Backend: {s}", .{c.api_type}) catch "Backend configured";
         },
-        .connected => "Online",
+        .connected => std.fmt.bufPrint(buf, "Connected: {s}", .{statusModel()}) catch "Connected",
         .asleep => "Backend asleep - unlock at silly",
         .offline => "Backend offline - unlock at silly",
         .err => std.fmt.bufPrint(buf, "Backend error {d}", .{state_code}) catch "Backend error",
+    };
+}
+
+/// The SHORT form, for the top bar's status chip. The chip is a glance beside a coloured dot, not a
+/// readout, so it says the state in one or two words and leaves the model name and the remedy to the
+/// panel's standing line. This chip is also why the backend up/down TOASTS are gone: a state that is
+/// permanently on screen does not need an interruption to announce it.
+pub fn statusWord() []const u8 {
+    return switch (state) {
+        .none => "No backend",
+        .configured => "Not connected",
+        .connected => "Online",
+        .asleep => "Asleep",
+        .offline => "Offline",
+        .err => "Error",
     };
 }
 
@@ -216,8 +230,14 @@ fn readPollInterval() void {
 
 /// A send stream came back 502/504, so the edge answered before SillyTavern was reached. Reported by
 /// stream_drive at the seal: the failure is the connection's to hold, not the streamer's to paint.
+///
+/// This one DOES toast, where the ambient probe does not. The status chip can say the backend is
+/// asleep, but it cannot say that the message you just sent got no reply, and the eye is on the
+/// conversation at that moment, not on the top bar. So the toast names the SEND that failed rather
+/// than repeating the state the chip is already showing.
 pub fn onStreamUnreachable() void {
     setState(.asleep);
+    notifications.push(.err, "Send failed - backend asleep, unlock at silly", notifications.error_ttl_ms);
 }
 
 /// Mutate the live connection in place, for the config panel's samplers. Handed a pointer rather
@@ -266,7 +286,9 @@ pub fn selectedType() []const u8 {
 
 fn storeSelected(t: []const u8) void {
     const n = @min(t.len, selected_buf.len);
-    @memcpy(selected_buf[0..n], t[0..n]);
+    // copyForwards, not @memcpy: applyConnection reaches here as storeSelected(selectedType()),
+    // whose slice IS selected_buf, and @memcpy forbids overlap (UB, and a panic in a safe build).
+    std.mem.copyForwards(u8, selected_buf[0..n], t[0..n]);
     selected_len = n;
 }
 
@@ -376,17 +398,22 @@ pub fn connect() void {
     net.request("/api/backends/text-completions/status", body, 0, onProbeDone, .{});
 }
 
+/// The INTERACTIVE Connect button's answer, which toasts where the ambient probe stays silent: the
+/// user pressed a button and is owed the outcome, and a failure here is an event, not the standing
+/// state the chip reports. Success stays quiet, being the "backend up" the chip already shows.
 fn onProbeDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     _ = tag;
     connecting = false;
     if (status == 0 or status == 502 or status == 504) {
         setConnStatus("Backend asleep - unlock at silly");
         setState(.asleep);
+        notifications.push(.warning, "Backend asleep - unlock at silly", notifications.error_ttl_ms);
         return;
     }
     if (status < 200 or status >= 300) {
         setConnStatusFmt("Connect failed: {d}", .{status});
         setStateErr(status);
+        notifications.pushFmt(.err, notifications.error_ttl_ms, "Connect failed: {d}", .{status});
         return;
     }
     var model_buf: [96]u8 = undefined;
@@ -404,6 +431,7 @@ fn onProbeDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     if (offline) {
         setConnStatus("Backend offline - unlock at silly");
         setState(.offline);
+        notifications.push(.warning, "Backend offline - unlock at silly", notifications.error_ttl_ms);
         return;
     }
     // Stash the model, then persist. "Connected" shows only once the save lands (onPersistDone), so a
@@ -427,6 +455,9 @@ fn onPersistDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     if (status < 200 or status >= 300) {
         setConnStatusFmt("Save failed: {d}", .{status});
         setStateErr(status);
+        // Reachable but NOT adopted, so the next send still has nothing to talk to: a state the
+        // chip cannot express, which is why this one keeps its toast.
+        notifications.pushFmt(.err, notifications.error_ttl_ms, "Connection save failed: {d}", .{status});
         return;
     }
     // Adopt the persisted connection so send works immediately; the full samplers reload on next boot.

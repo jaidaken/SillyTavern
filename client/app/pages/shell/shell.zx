@@ -42,6 +42,14 @@ pub fn Shell(ctx: *zx.ComponentCtx(void)) zx.Component {
                     <SidePanel panel={p} />
                 )}
             </div>
+            // The two top-bar CARDS, mounted here rather than beside the buttons that own them.
+            // #topbar carries z-20, which makes it a stacking context and caps every descendant
+            // inside it: a card nested there paints under the z-40 docks however high its own
+            // z-index is, and a click aimed at it lands on the dock behind. Mounted out here they
+            // compete globally at z-70 and sit over both dock layers. LAST in the child list so
+            // they are last in paint order too, which settles it even between equal z-indexes.
+            <NotifyPopover key="notify-popover" />
+            <SysPopover key="sys-popover" />
         </div>
     );
 }
@@ -53,3 +61,5 @@ const instrument = @import("../platform/instrument.zig");
 const TopBar = @import("./topbar.zx").TopBar;
 const SidePanel = @import("../nav/sidepanel.zx").SidePanel;
 const EdgeTabs = @import("../nav/edgetabs.zx").EdgeTabs;
+const NotifyPopover = @import("../notify/notify_bell.zx").NotifyPopover;
+const SysPopover = @import("../nav/sysmenu.zx").SysPopover;
