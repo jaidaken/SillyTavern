@@ -379,6 +379,9 @@ fn transportDropped(status: u32) bool {
     if (live.state == .done) return false;
     // A 404 means the server no longer holds this generation, so there is nothing to re-attach to.
     if (status == 404) return false;
+    // 502/504 is the edge answering for a backend that is not there, so re-attaching cannot reach the
+    // generation either: fall through and let the seal report it instead of spending the retry budget.
+    if (status == 502 or status == 504) return false;
     return true;
 }
 

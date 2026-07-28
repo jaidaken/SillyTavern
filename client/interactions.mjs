@@ -5962,7 +5962,7 @@ async function main() {
             await fetch(`${args.base}/dev/status-mode?m=ok`);
             await page.navigate(`${args.base}/`);
             await openRecentChat();
-            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/backends/text-completions/generate')}&code=502`);
+            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/generation/start')}&code=502`);
             await page.focus('#send_textarea');
             await page.insertText('push probe send');
             await page.click('#composer button[aria-label="Send"]');

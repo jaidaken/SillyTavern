@@ -1278,8 +1278,8 @@ fn filterJoin(a: Allocator, p1: []const u8, p2: []const u8, sep: []const u8) All
     return a.dupe(u8, p2);
 }
 
-/// Builds the JSON body for POST /api/backends/text-completions/generate. `stream` is always true:
-/// the send loop reads the model SSE the server pipes back unchanged. The samplers ride from the
+/// Builds the JSON body for POST /api/generation/start. `stream` is always true: the server reads
+/// the model SSE and buffers it, and the client attaches to that. The samplers ride from the
 /// connection; the server filters them per backend type. Owned result.
 ///
 /// `stop` carries the instruct template's stop sequence (probe tear 8: the body had no stop field at
