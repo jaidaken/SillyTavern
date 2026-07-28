@@ -1,11 +1,11 @@
 //! The Zig-owned SSE streaming orchestrator. Owns the whole send-to-seal lifecycle that used to live
 //! in glue/custom.js (startStream / __st_send_stream / __st_send_stop): it opens the door getReader
 //! pump (D10) via js.global.call, batches the arriving chunks on requestAnimationFrame, drives the
-//! cancel, sources the csrf token from net.zig, and seals through the Stream state machine.
+//! cancel, and seals through the Stream state machine.
 //!
 //! The ONLY streaming code left in JS is the door pump (a genuine browser IO: zx.fetch cannot stream)
 //! and the held DOMPurify+hljs sanitize/seal-highlight, which Zig calls into per render and once at
-//! seal. Framing, batching, lifecycle, cancel and csrf are all here.
+//! seal. Framing, batching, lifecycle and cancel are all here.
 
 const std = @import("std");
 const zx = @import("zx");
@@ -78,6 +78,10 @@ var s: Session = .{};
 /// chat-appended for that reply can be recognised as one this page already has.
 var sealed_generation: []u8 = &.{};
 
+/// The session a pending re-attach timer was armed for. Every other door callback carries the door's
+/// own stream id to compare against; a timer has nothing to carry, so it leaves this behind instead.
+var reattach_session_id: f64 = 0;
+
 /// Whether a stream is actually in progress. The Stream's own state is not the test: it rests in
 /// `.done` between the reply sealing and the session being torn down, and a send offered there is
 /// perfectly fine to accept.
@@ -130,14 +134,7 @@ pub fn cancel() void {
     if (zx.platform.role != .client) return;
     if (!s.active) return;
     s.stopping = true;
-    if (s.generation_id.len > 0) {
-        const url = std.fmt.allocPrint(gpa, "/api/generation/{s}/stop", .{s.generation_id}) catch {
-            log.err("stop: could not build the stop url", .{});
-            return;
-        };
-        defer gpa.free(url);
-        net.request(url, "{}", 0, onStopDone, .{ .retry_403 = false });
-    }
+    requestServerStop();
     if (!s.door_open) {
         // Stop arrived before the door registered the stream: the door cancel op would no-op on an
         // unknown id, so flag it and let the start callback seal instead of opening.
@@ -162,9 +159,23 @@ pub fn detach() void {
     live.end();
     live.state = .idle;
     reader.streamEnd();
-    if (s.generation_id.len > 0) setOwned(&sealed_generation, s.generation_id);
+    // sealed_generation is NOT set here. It means "this page already rendered that reply to the end",
+    // which is exactly what giving up mid-flight did not do; claiming it would make the server's own
+    // append for this generation look like a duplicate and drop the reply on the floor.
     resetSession();
     regions.bumpMessageLog();
+}
+
+/// Asks the server to end the generation. No-op with no id yet, which is why a stop that beat the
+/// start reply has to come back through here once the id lands.
+fn requestServerStop() void {
+    if (s.generation_id.len == 0) return;
+    const url = std.fmt.allocPrint(gpa, "/api/generation/{s}/stop", .{s.generation_id}) catch {
+        log.err("stop: could not build the stop url", .{});
+        return;
+    };
+    defer gpa.free(url);
+    net.request(url, "{}", 0, onStopDone, .{ .retry_403 = false });
 }
 
 fn onStopDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
@@ -178,24 +189,22 @@ fn onStopDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
 fn onStartDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     _ = tag;
     if (!s.active) return;
-    if (s.cancelled) {
-        // The user stopped during the start round-trip: run the single seal path with a non-2xx status
-        // so a group send tells its rotation (onStreamFailed) instead of running on regardless.
-        __st_stream_closed(s.id, 0);
+    // 409 means the server is already running a generation for this chat. The server owns it, so the
+    // right move is to watch that one rather than drop the message this page has already begun.
+    const started = status == 409 or (status >= 200 and status < 300);
+    // A stop that landed during this round trip is read AFTER the id, not before it: the server began
+    // the run the moment the POST arrived, and the id is the only thing that can name it to the stop
+    // route. Sealing here without it leaves the model running with nobody watching.
+    if (!started) {
+        if (!s.cancelled) log.warn("send: the server refused the generation start ({d})", .{status});
+        __st_stream_closed(s.id, if (s.cancelled) 0 else status);
         return;
     }
     const r = res orelse {
         __st_stream_closed(s.id, 0);
         return;
     };
-    // 409 means the server is already running a generation for this chat. The server owns it, so the
-    // right move is to watch that one rather than drop the message this page has already begun.
-    if (status != 409 and (status < 200 or status >= 300)) {
-        log.warn("send: the server refused the generation start ({d})", .{status});
-        __st_stream_closed(s.id, status);
-        return;
-    }
-    const parsed = r.json(struct { generation_id: []const u8 = "", last_event_id: ?i64 = null }) catch {
+    const parsed = r.json(struct { generation_id: []const u8 = "" }) catch {
         log.err("send: the start reply did not parse", .{});
         __st_stream_closed(s.id, 0);
         return;
@@ -211,6 +220,11 @@ fn onStartDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         __st_stream_closed(s.id, 0);
         return;
     }
+    if (s.cancelled) {
+        requestServerStop();
+        __st_stream_closed(s.id, 0);
+        return;
+    }
     openStreamDoor(0);
 }
 
@@ -223,8 +237,7 @@ fn openStreamDoor(cursor: u64) void {
         return;
     };
     defer gpa.free(url);
-    // A GET carries no csrf; the door picks GET on an empty body.
-    openDoor(url, "", "");
+    openDoor(url);
 }
 
 fn setOwned(slot: *[]u8, value: []const u8) void {
@@ -232,12 +245,14 @@ fn setOwned(slot: *[]u8, value: []const u8) void {
     slot.* = gpa.dupe(u8, value) catch &.{};
 }
 
-fn openDoor(url: []const u8, body: []const u8, csrf: []const u8) void {
+/// Every stream this module opens is a GET, so the door's body and csrf arguments are always empty:
+/// an empty body is what makes the door pick GET, and a GET carries no csrf.
+fn openDoor(url: []const u8) void {
     js.global.call(void, "__st_stream_open", .{
         s.id,
         js.string(url),
-        js.string(body),
-        js.string(csrf),
+        js.string(""),
+        js.string(""),
     }) catch {
         log.err("send: __st_stream_open door op missing", .{});
         __st_stream_closed(s.id, 0);
@@ -393,6 +408,7 @@ fn beginReattach() bool {
         return false;
     }
     s.reattaches += 1;
+    reattach_session_id = s.id;
     log.info("stream: transport dropped, re-attaching at cursor {d} (try {d})", .{ live.last_event_id, s.reattaches });
     _ = zx.client.setTimeout(reattachNow, reattach_delay_ms);
     return true;
@@ -400,6 +416,11 @@ fn beginReattach() bool {
 
 fn reattachNow() void {
     if (!s.active or s.stopping or s.generation_id.len == 0) return;
+    // The session this timer was armed for may already be gone: a store reload gives up the stream and
+    // the chat re-open attaches a NEW one inside the backoff. Opening here would put a second door pump
+    // on that session and every token would arrive twice.
+    if (reattach_session_id != s.id) return;
+    live.resumeTransport();
     openStreamDoor(live.last_event_id);
 }
 
@@ -533,8 +554,7 @@ fn openDev(url: []const u8, name: []const u8) void {
         abortOpen();
         return;
     }
-    // Dev streams are GET with no csrf; open the door directly.
-    openDoor(s.url, "", "");
+    openDoor(s.url);
 }
 
 fn setDev(url_slot: *[]u8, name_slot: *[]u8, url: []const u8, name: []const u8) void {

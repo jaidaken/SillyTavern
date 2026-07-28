@@ -703,6 +703,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # the drop the re-attach row needs, which nothing else can produce on demand.
     gen_drop_at = 0
     gen_drops = 0
+    # A drop at a frame BOUNDARY is the kind gen_drop_at makes. A real network loss lands wherever the
+    # bytes happen to be, so this one cuts the socket PART WAY THROUGH a frame, inside a multi-byte
+    # codepoint, leaving the viewer holding an unterminated line and half a character.
+    gen_cut_at = 0
+    gen_cuts = 0
+    # Milliseconds the start route holds its reply back AFTER the generation is already running, which
+    # is the window a stop can land in with no generation id on the client yet.
+    gen_start_delay_ms = 0
+    # Emit a chat-changed a beat after the next transport cut, so the viewer's re-attach backoff and a
+    # store reload overlap by construction rather than by polling luck.
+    gen_resync_after_drop_ms = 0
+    # End the generation as the next /active query arrives, which puts the completion strictly between
+    # a reloading page's chat fetch and its re-attach question: the narrow real window, made repeatable.
+    gen_finish_on_active = False
     # P3-MOCK: the SSE channel. `events_ring` is every event ever emitted (id, type, data), which is
     # what a Last-Event-ID resume replays from; `events_open` is the live streams' queues, so an
     # emit reaches each of them. A lock because ThreadingTCPServer runs one thread per connection.
@@ -1096,6 +1110,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 Handler.gen_drop_at = int((q.get("n") or ["0"])[0])
                 return self.mock_json({"ok": True, "drop_at": Handler.gen_drop_at})
+            if self.path.startswith("/dev/gen-cut-after"):
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                Handler.gen_cut_at = int((q.get("n") or ["0"])[0])
+                return self.mock_json({"ok": True, "cut_at": Handler.gen_cut_at})
+            if self.path.startswith("/dev/gen-start-delay"):
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                Handler.gen_start_delay_ms = int((q.get("ms") or ["0"])[0])
+                return self.mock_json({"ok": True, "start_delay_ms": Handler.gen_start_delay_ms})
+            if self.path.startswith("/dev/gen-finish-on-next-active"):
+                Handler.gen_finish_on_active = True
+                return self.mock_json({"armed": True})
+            if self.path.startswith("/dev/gen-resync-after-drop"):
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                Handler.gen_resync_after_drop_ms = int((q.get("ms") or ["50"])[0])
+                return self.mock_json({"ok": True, "resync_after_drop_ms": Handler.gen_resync_after_drop_ms})
             if self.path.startswith("/dev/gen-state"):
                 with Handler.gen_lock:
                     running = [gid for gid, s in Handler.gen_sessions.items() if s["status"] == "running"]
@@ -1103,8 +1132,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     if Handler.gen_sessions:
                         gid = sorted(Handler.gen_sessions, key=lambda k: int(k[3:]))[-1]
                         s = Handler.gen_sessions[gid]
-                        latest = {"id": gid, "status": s["status"], "text": s["text"], "frames": len(s["frames"])}
-                return self.mock_json({"running": running, "latest": latest, "drops": Handler.gen_drops})
+                        latest = {
+                            "id": gid,
+                            "status": s["status"],
+                            "text": s["text"],
+                            "frames": len(s["frames"]),
+                            "opens": list(s.get("opens") or []),
+                        }
+                return self.mock_json({
+                    "running": running,
+                    "latest": latest,
+                    "drops": Handler.gen_drops,
+                    "cuts": Handler.gen_cuts,
+                })
             if self.path.startswith("/dev/clear-generate"):
                 Handler.last_generate_body = None
                 Handler.last_generate_prompt = None
@@ -1274,7 +1314,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # ===== server-owned generation mock =====
     # The same token script the legacy /generate mock streams, so every send-loop row keeps its
     # meaning: "lantern" is the first body token, "FIN" arrives only on completion.
-    GEN_REPLY = ["<th", "ink>mull the tides", "</th", "ink>", "lantern "] + [f"w{i} " for i in range(22)] + ["FIN"]
+    # w1 carries a multi-byte codepoint and the frames go out with ensure_ascii off, so the wire holds
+    # real UTF-8 the way a model's output does. A cut inside that sequence is what the mid-frame row needs.
+    GEN_REPLY = ["<th", "ink>mull the tides", "</th", "ink>", "lantern "] + [f"w{i}世 " if i == 1 else f"w{i} " for i in range(22)] + ["FIN"]
+
+    @staticmethod
+    def gen_frame_bytes(frame):
+        return f"id: {frame['id']}\ndata: {frame['data']}\n\n".encode()
+
+    @staticmethod
+    def gen_midcodepoint_cut(raw):
+        """Byte length to write so the peer is left holding an incomplete codepoint.
+
+        Returns the index one past the last multi-byte lead byte, so its continuation bytes stay
+        unsent. None when the frame is pure ASCII and cannot express the failure."""
+        for i in range(len(raw) - 1, -1, -1):
+            if raw[i] & 0xC0 == 0xC0:
+                return i + 1
+        return None
 
     @staticmethod
     def gen_key(chat):
@@ -1357,7 +1414,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 if not s or s["status"] != "running":
                     return
                 s["text"] += tok
-            if not Handler.gen_push(gid, json.dumps({"choices": [{"text": tok}]})):
+            if not Handler.gen_push(gid, json.dumps({"choices": [{"text": tok}]}, ensure_ascii=False)):
                 return
         Handler.gen_finish(gid, "done")
 
@@ -1384,9 +1441,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "next_id": 0,
                 "text": "",
                 "drop_at": Handler.gen_drop_at,
+                "cut_at": Handler.gen_cut_at,
+                "opens": [],
             }
             Handler.gen_drop_at = 0
+            Handler.gen_cut_at = 0
+            delay_ms = Handler.gen_start_delay_ms
+            Handler.gen_start_delay_ms = 0
         threading.Thread(target=Handler.gen_produce, args=(gid,), daemon=True).start()
+        # The generation is ALREADY running while this sleeps: a client that stops in this window has
+        # begun a reply it holds no id for, and the model runs on regardless of what the tab does.
+        if delay_ms:
+            time.sleep(delay_ms / 1000.0)
         return self.mock_json({"generation_id": gid, "last_event_id": 0})
 
     def gen_stream(self, gid):
@@ -1409,6 +1475,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         with Handler.gen_lock:
             drop_after = session.get("drop_at") or 0
             session["drop_at"] = 0
+            cut_after = session.get("cut_at") or 0
+            session["cut_at"] = 0
+            # Every open records the cursor it asked from, so a row can tell a fresh attach (0) from a
+            # resume, and read back the ORDER the two arrived in.
+            session.setdefault("opens", []).append(cursor)
         sent = 0
         try:
             while True:
@@ -1421,7 +1492,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         Handler.gen_lock.wait(0.2)
                         continue
                 for frame in pending:
-                    self.wfile.write(f"id: {frame['id']}\ndata: {frame['data']}\n\n".encode())
+                    raw = Handler.gen_frame_bytes(frame)
+                    if cut_after and sent >= cut_after:
+                        at = Handler.gen_midcodepoint_cut(raw)
+                        if at is not None:
+                            self.wfile.write(raw[:at])
+                            self.wfile.flush()
+                            Handler.gen_cuts += 1
+                            self.gen_after_break()
+                            return
+                    self.wfile.write(raw)
                     self.wfile.flush()
                     cursor = frame["id"]
                     sent += 1
@@ -1429,9 +1509,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         return
                     if drop_after and sent >= drop_after:
                         Handler.gen_drops += 1
+                        self.gen_after_break()
                         return
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    def gen_after_break(self):
+        """Optionally fire a chat-changed a beat after a transport break.
+
+        The viewer schedules its re-attach the moment the socket closes, so an event timed from HERE
+        lands inside that backoff every run instead of whenever a polling driver happens to notice."""
+        delay_ms = Handler.gen_resync_after_drop_ms
+        if not delay_ms:
+            return
+        Handler.gen_resync_after_drop_ms = 0
+        threading.Timer(delay_ms / 1000.0, Handler.emit_event, args=("chat-changed", {})).start()
 
     def gen_active(self):
         params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -1440,6 +1532,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             "file_name": (params.get("file_name") or [""])[0],
             "group_id": (params.get("group_id") or [""])[0],
         })
+        if Handler.gen_finish_on_active:
+            Handler.gen_finish_on_active = False
+            with Handler.gen_lock:
+                ending = [gid for gid, s in Handler.gen_sessions.items() if s["key"] == key and s["status"] == "running"]
+            for gid in ending:
+                Handler.gen_finish(gid, "done")
         with Handler.gen_lock:
             for gid, s in Handler.gen_sessions.items():
                 if s["key"] == key and s["status"] == "running":

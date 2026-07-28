@@ -1381,6 +1381,165 @@ async function main() {
             'SL-REATTACH a dropped transport re-attaches and the reply is byte-identical',
             `drops=${reattachState.drops} identical=${normalise(reattachText) === reattachExpected}`);
 
+        // Focus mode retires the composer after an idle spell, and every row below waits out a slow
+        // generation before it clicks again. The reveal is POINTER PROXIMITY, so the wake has to put the
+        // pointer where the composer lives, and the wait has to be on the button actually OVERLAPPING
+        // the viewport: a retired composer keeps its size and its visibility, it is just not there any
+        // more, so a size-and-visibility predicate reads ready while a click still lands on nothing.
+        const composerHittable = (label) => `(function(){
+            var b=document.querySelector('#composer button[aria-label=\\'${label}\\']');
+            if(!b) return false;
+            var r=b.getBoundingClientRect();
+            var w=Math.min(r.right,window.innerWidth)-Math.max(r.left,0);
+            var h=Math.min(r.bottom,window.innerHeight)-Math.max(r.top,0);
+            return w>0 && h>0 && getComputedStyle(b).visibility!=='hidden' && getComputedStyle(b).display!=='none';
+        })()`;
+        const wakeComposer = async (label) => {
+            for (let i = 0; i < 12; i++) {
+                const pt = await page.eval('(function(){return {x: Math.round(window.innerWidth/2), y: window.innerHeight - 12};})()');
+                await page.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: pt.x, y: pt.y, buttons: 0 }, page.sessionId);
+                await page.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: pt.x, y: pt.y - 4, buttons: 0 }, page.sessionId);
+                if (await page.waitFor(composerHittable(label), 1200)) return true;
+            }
+            const rect = await page.eval(`(function(){var b=document.querySelector('#composer button[aria-label=\\'${label}\\']');return b?JSON.stringify(b.getBoundingClientRect()):'none';})()`);
+            console.log(`wakeComposer: ${label} never became hittable, rect=${rect}`);
+            return false;
+        };
+
+        // SL-REATTACH-MIDFRAME: the row above cuts at a frame BOUNDARY, which is the tidiest drop a
+        // network never gives you. This one cuts PART WAY THROUGH a frame, one byte into the three-byte
+        // sequence for the codepoint in "w1世 ", so the viewer resumes holding an unterminated data:
+        // line and half a character. Anything that resumes onto those stale bytes loses the token,
+        // swallows the id: line behind it and mangles the codepoint, so the body stops matching.
+        await (await fetch(`${args.base}/dev/gen-cut-after?n=6`)).json();
+        await wakeComposer('Send');
+        const cutBefore = await page.eval("document.querySelectorAll('#chat .mes').length");
+        await page.focus('#send_textarea');
+        await page.insertText('MIDFRAME PROBE');
+        await page.click('#composer button[aria-label="Send"]');
+        const cutGrew = await page.waitFor(`document.querySelectorAll('#chat .mes').length >= ${cutBefore} + 2`, 8000);
+        const cutDone = cutGrew && await page.waitFor(`document.body.textContent.includes('FIN') && ${idle}`, 25000);
+        const cutState = await (await fetch(`${args.base}/dev/gen-state`)).json();
+        const cutText = await lastMessageText();
+        const cutExpected = cutState.latest ? bodyOf(cutState.latest.text) : null;
+        const cutIdentical = normalise(cutText) === cutExpected;
+        row('must', cutDone && cutState.cuts >= 1 && cutIdentical,
+            'SL-REATTACH-MIDFRAME a transport cut inside a frame resumes without losing or mangling a token',
+            `cuts=${cutState.cuts} identical=${cutIdentical} got=${JSON.stringify(normalise(cutText).slice(0, 90))}`);
+
+        // SL-REATTACH-STALE: a store reload lands INSIDE the re-attach backoff. The reload gives up the
+        // old session and opens a new one, so the timer that was armed for the old session must not
+        // open a second pump on the new one: two pumps feeding one stream double every token.
+        // The mock times the reload from the cut itself, so the overlap happens by construction rather
+        // than by a poll noticing in time; `opens` reads back the cursor of every stream open in order,
+        // which is what tells a hit window (second open at cursor 0) from a missed one.
+        await (await fetch(`${args.base}/dev/gen-pace?ms=150`)).json();
+        let staleState = null;
+        let staleText = '';
+        let staleWindowHit = false;
+        let staleOpens = [];
+        let staleIdentical = false;
+        for (let attempt = 0; attempt < 3 && !(staleWindowHit && staleIdentical); attempt++) {
+            const before = await (await fetch(`${args.base}/dev/gen-state`)).json();
+            const priorId = before.latest ? before.latest.id : null;
+            await (await fetch(`${args.base}/dev/gen-drop-after?n=4`)).json();
+            await (await fetch(`${args.base}/dev/gen-resync-after-drop?ms=50`)).json();
+            await wakeComposer('Send');
+            await page.focus('#send_textarea');
+            await page.insertText(`STALE TIMER PROBE ${attempt}`);
+            await page.click('#composer button[aria-label="Send"]');
+            // Wait on the SERVER finishing THIS generation. Screen state cannot serve: every earlier
+            // reply already left FIN in the document, and the gap between the reload dropping the
+            // stream and the re-attach opening one looks exactly as idle as a finished reply does.
+            for (let i = 0; i < 300; i++) {
+                staleState = await (await fetch(`${args.base}/dev/gen-state`)).json();
+                if (staleState.latest && staleState.latest.id !== priorId && staleState.latest.status !== 'running') break;
+                await sleep(100);
+            }
+            // Only now can the page be judged: the tokens all exist, so anything missing or doubled is
+            // the client's doing.
+            await page.waitFor(`${idle} && (function(){var m=document.querySelectorAll('#chat .mes');if(!m.length)return false;var t=m[m.length-1].querySelector('.mes_text');return !!t && t.textContent.includes('FIN');})()`, 20000);
+            staleText = await lastMessageText();
+            staleOpens = (staleState.latest && staleState.latest.opens) || [];
+            const expected = staleState.latest ? bodyOf(staleState.latest.text) : null;
+            staleIdentical = normalise(staleText) === expected;
+            // The reload's own attach always asks from 0. Seeing it SECOND means it beat the backoff,
+            // which is the only arrangement that can express the double-feed.
+            staleWindowHit = staleOpens.length >= 2 && staleOpens[1] === 0;
+            console.log(`STALE attempt ${attempt}: opens=${JSON.stringify(staleOpens)} drops=${staleState.drops} status=${staleState.latest && staleState.latest.status} identical=${staleIdentical}`);
+        }
+        row('must', staleWindowHit && staleOpens.length === 2 && staleIdentical,
+            'SL-REATTACH-STALE a reload inside the re-attach backoff does not open a second pump',
+            `windowHit=${staleWindowHit} opens=${JSON.stringify(staleOpens)} identical=${staleIdentical}`);
+
+        // SL-STOP-EARLY: stop BEFORE the start reply arrives. The client holds no generation id yet, so
+        // nothing local can name the run to the server, but the server started it the moment the POST
+        // landed. Without the id being carried forward the model runs to completion unwatched, which is
+        // the one thing an explicit stop exists to prevent.
+        await (await fetch(`${args.base}/dev/gen-pace?ms=300`)).json();
+        await (await fetch(`${args.base}/dev/gen-start-delay?ms=1200`)).json();
+        await wakeComposer('Send');
+        const earlyBefore = await page.eval("document.querySelectorAll('#chat .mes').length");
+        await page.focus('#send_textarea');
+        await page.insertText('STOP EARLY PROBE');
+        await page.click('#composer button[aria-label="Send"]');
+        // The reply bubble opens before the start POST answers, so Stop is reachable inside the window.
+        const earlyStopReady = await page.waitFor(`document.querySelectorAll('#chat .mes').length >= ${earlyBefore} + 2 && (function(){var t=document.querySelector('#composer button[aria-label=\\'Stop\\']');return !!t && getComputedStyle(t).display!=='none';})()`, 4000);
+        await page.click('#composer button[aria-label="Stop"]');
+        let earlyState = { running: [], latest: null };
+        for (let i = 0; i < 50; i++) {
+            earlyState = await (await fetch(`${args.base}/dev/gen-state`)).json();
+            if (earlyState.latest && earlyState.latest.status !== 'running') break;
+            await sleep(120);
+        }
+        row('must', earlyStopReady && earlyState.latest && earlyState.latest.status === 'stopped' && earlyState.running.length === 0,
+            'SL-STOP-EARLY a stop before the start reply still ends the generation on the server',
+            `ready=${earlyStopReady} status=${earlyState.latest && earlyState.latest.status} running=${earlyState.running.length}`);
+        // An unstopped generation would 409 every send that follows, so end it whatever the row found.
+        if (earlyState.latest && earlyState.latest.status === 'running') {
+            await fetch(`${args.base}/api/generation/${earlyState.latest.id}/stop`, { method: 'POST', body: '{}' });
+            for (let i = 0; i < 50; i++) {
+                const st = await (await fetch(`${args.base}/dev/gen-state`)).json();
+                if (st.running.length === 0) break;
+                await sleep(120);
+            }
+        }
+        await page.waitFor(idle, 8000);
+
+        // SL-DETACH-BROADCAST: giving up the view of a generation is not the same as having rendered it.
+        // A reload drops the stream, the generation finishes while the page is between the chat fetch and
+        // its "is anything running" question, and the server's own append is then the ONLY way the reply
+        // can reach this page. Recording the detached generation as one already rendered drops it.
+        await (await fetch(`${args.base}/dev/gen-pace?ms=300`)).json();
+        await wakeComposer('Send');
+        const detBefore = await page.eval("document.querySelectorAll('#chat .mes').length");
+        await page.focus('#send_textarea');
+        await page.insertText('DETACH BROADCAST PROBE');
+        await page.click('#composer button[aria-label="Send"]');
+        let detMid = { running: [], latest: null };
+        for (let i = 0; i < 80; i++) {
+            detMid = await (await fetch(`${args.base}/dev/gen-state`)).json();
+            if (detMid.running.length === 1 && detMid.latest.frames >= 4) break;
+            await sleep(100);
+        }
+        // The generation ends the instant the reloaded page asks what is running, so the chat fetch that
+        // came first cannot carry the reply and the answer is an honest "nothing is running".
+        await (await fetch(`${args.base}/dev/gen-finish-on-next-active`)).json();
+        await fetch(`${args.base}/dev/emit-event?type=chat-changed&data=${encodeURIComponent('{}')}`);
+        const detSettled = await page.waitFor(`${idle} && document.querySelectorAll('#chat .mes').length >= ${detBefore} + 1`, 15000);
+        const detState = await (await fetch(`${args.base}/dev/gen-state`)).json();
+        const detExpected = detState.latest ? bodyOf(detState.latest.text) : null;
+        const detLanded = await page.waitFor(
+            `(function(){var m=document.querySelectorAll('#chat .mes');if(!m.length)return false;var t=m[m.length-1].querySelector('.mes_text');return !!t && t.textContent.replace(/\\s+/g,' ').trim() === ${JSON.stringify(detExpected)};})()`,
+            10000);
+        row('must', detSettled && detMid.running.length === 1 && detState.latest && detState.latest.status === 'done' && detLanded,
+            'SL-DETACH-BROADCAST a generation given up mid-flight still lands from the server append',
+            `wasRunning=${detMid.running.length} status=${detState.latest && detState.latest.status} landed=${detLanded}`);
+        await (await fetch(`${args.base}/dev/gen-pace?ms=60`)).json();
+        // Leave a normal completed reply as the last message: the rows below read it.
+        await wakeComposer('Send');
+        await sendProbe('MIDFRAME BLOCK RESET');
+
         // SL-RELOAD: reload the page mid-generation. The old client lost every token that had already
         // streamed; this one asks the server what is running and rebuilds the whole reply from the log.
         await (await fetch(`${args.base}/dev/gen-pace?ms=220`)).json();
