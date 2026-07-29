@@ -13,9 +13,10 @@
 #chat-root[data-reading-measure="wide"] .seg-btn[data-reading-set="measure"][data-reading-val="wide"],
 #chat-root[data-reading-justify="on"] .seg-btn[data-reading-set="justify"][data-reading-val="on"],
 #chat-root[data-reading-justify="off"] .seg-btn[data-reading-set="justify"][data-reading-val="off"],
-#chat-root[data-reading-indent="novel"] .seg-btn[data-reading-set="indent"][data-reading-val="novel"],
+#chat-root[data-reading-paraindent="on"] .seg-btn[data-reading-set="paraindent"][data-reading-val="on"],
+#chat-root[data-reading-paraindent="off"] .seg-btn[data-reading-set="paraindent"][data-reading-val="off"],
 #chat-root[data-reading-indent="chat"] .seg-btn[data-reading-set="indent"][data-reading-val="chat"],
-#chat-root[data-reading-indent="blockquote"] .seg-btn[data-reading-set="indent"][data-reading-val="blockquote"],
+#chat-root[data-reading-indent="novel"] .seg-btn[data-reading-set="indent"][data-reading-val="novel"],
 #chat-root[data-reading-indent="stage"] .seg-btn[data-reading-set="indent"][data-reading-val="stage"],
 #chat-root[data-reading-indent="vn"] .seg-btn[data-reading-set="indent"][data-reading-val="vn"],
 #chat-root[data-reading-font="newsreader"] .seg-btn[data-reading-set="font"][data-reading-val="newsreader"],
@@ -26,6 +27,10 @@
 #chat-root[data-reading-theme="paper"] .seg-btn[data-reading-set="theme"][data-reading-val="paper"],
 #chat-root[data-reading-avatars="on"] .seg-btn[data-reading-set="avatars"][data-reading-val="on"],
 #chat-root[data-reading-avatars="off"] .seg-btn[data-reading-set="avatars"][data-reading-val="off"],
+#chat-root[data-reading-avatarsize="small"] .seg-btn[data-reading-set="avatarsize"][data-reading-val="small"],
+#chat-root[data-reading-avatarsize="medium"] .seg-btn[data-reading-set="avatarsize"][data-reading-val="medium"],
+#chat-root[data-reading-avatarsize="large"] .seg-btn[data-reading-set="avatarsize"][data-reading-val="large"],
+#chat-root[data-reading-avatarsize="vn"] .seg-btn[data-reading-set="avatarsize"][data-reading-val="vn"],
 #chat-root[data-reading-focus="on"] .seg-btn[data-reading-set="focus"][data-reading-val="on"],
 #chat-root[data-reading-focus="off"] .seg-btn[data-reading-set="focus"][data-reading-val="off"] {
     background: var(--color-surface-2);

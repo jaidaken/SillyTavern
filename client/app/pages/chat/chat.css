@@ -89,6 +89,24 @@
 #chat-root:has(#chat .mes[aria-busy="true"]) .composer-send { display: none; }
 #chat-root:has(#chat .mes[aria-busy="true"]) .composer-stop { display: grid; }
 
+/* An open dock is a fixed OVERLAY over the full-width centre column, so without this the composer's
+   Send button sits UNDER the dock and a click lands on the dock's list instead of Send. The composer
+   text column (.composer-measure) is centred at its reading measure; here each side's margin grows
+   ONLY when a dock actually overlaps that edge, and only by the overlap. natural = the centred margin
+   (100% - measure)/2; the dock term is the dock's LIVE on-screen width, its --dock-w minus how far it
+   has slid off (--dock-anim), so the shrink animates in step with the slide. A dock narrower than the
+   natural margin never reaches the column, so max() leaves that side untouched: the column shrinks on
+   the overlapped side ONLY, the opposite edge never moves, and a dock that clears the column does
+   nothing. The chat above is untouched, so its avatars never reflow. Desktop only: below 768px a dock
+   goes full-screen and covers the composer regardless. */
+@media (width >= 768px) {
+    #composer .composer-measure {
+        width: auto;
+        margin-left: max(calc((100% - var(--reading-measure, var(--reading-cap))) / 2), calc(var(--dock-w-left, 0px) + var(--dock-anim-left, 0px)));
+        margin-right: max(calc((100% - var(--reading-measure, var(--reading-cap))) / 2), calc(var(--dock-w-right, 0px) - var(--dock-anim-right, 0px)));
+    }
+}
+
 /* ===== C-MSG: message action menu (append-only zone) =====
    The trigger is opacity-0 chrome revealed on message hover/focus, gated to hover-capable pointers
    (WD25) so touch keeps it shown (the .zx sets max-[640px]:opacity-60); it stays lit while its menu
@@ -113,7 +131,6 @@
 /* The model's thinking above the spoken turn: quiet mono meta-chrome, never the character's serif
    voice, so the eye reads it as stage direction rather than speech. */
 .mes_reasoning {
-    grid-column: 2;
     margin-block-end: 0.5rem;
 }
 

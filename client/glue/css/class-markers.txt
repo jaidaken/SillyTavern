@@ -8,6 +8,8 @@ aria-pressed:outline-1
 aria-pressed:outline-tool-ring
 backgrounds-body
 before:right-[5px]
+bg-tile
+bg-tile-action
 bg-upload-file
 bg-upload-row
 cfg-reset
@@ -47,9 +49,11 @@ chatmgr-btn
 chatmgr-import-file
 chatmgr-list
 chatmgr-row
+chatmgr-row-btn
 conn-connect
 conn-key-clear
 conn-key-save
+dd-list
 extensions-body
 focus-visible:before:opacity-70
 focus-visible:outline-2
@@ -72,11 +76,13 @@ group-data-[view=grid]/list:right-[2px]
 group-data-[view=grid]/list:top-auto
 group-data-[view=grid]/list:translate-y-0
 group-editor
+group-member-btn
 group-member-row
 group-panel
 group-quick
 group-quick-empty
 group-roster
+group-row-edit
 group-row-wrap
 group/row
 home-threads
@@ -108,8 +114,10 @@ preset-retry
 preset-save
 preset-save-name
 qd
+reading-slider
 sampler-num
 sampler-range
+seg
 selected:bg-selected
 selected:outline-1
 selected:outline-selected-ring
@@ -127,5 +135,7 @@ wi-entries
 wi-import-file
 wi-list-actions
 wi-retry
+wi-row
+wi-row-action
 wi-save-status
 …

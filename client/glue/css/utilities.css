@@ -19,6 +19,7 @@
 .top-\[var\(--topbar-h\)\]{top:var(--topbar-h)}
 .top-1{top:var(--spacing)}
 .top-1\/2{top:50%}
+.top-\[calc\(var\(--topbar-h\)\+0\.3rem\)\]{top:calc(var(--topbar-h) + .3rem)}
 .top-\[calc\(var\(--topbar-h\)\+0\.5rem\)\]{top:calc(var(--topbar-h) + .5rem)}
 .top-\[calc\(var\(--topbar-h\)\+3\.2rem\)\]{top:calc(var(--topbar-h) + 3.2rem)}
 .top-\[calc\(var\(--topbar-h\)\+6rem\)\]{top:calc(var(--topbar-h) + 6rem)}
@@ -27,6 +28,7 @@
 .-right-\[6px\]{right:-6px}
 .right-0{right:0}
 .right-1{right:var(--spacing)}
+.right-2{right:calc(var(--spacing) * 2)}
 .right-4{right:calc(var(--spacing) * 4)}
 .right-9{right:calc(var(--spacing) * 9)}
 .bottom-0{bottom:0}
@@ -44,6 +46,7 @@
 .z-40{z-index:40}
 .z-50{z-index:50}
 .z-\[1\]{z-index:1}
+.z-\[70\]{z-index:70}
 .col-span-full{grid-column:1/-1}
 .col-start-1{grid-column-start:1}
 .col-start-2{grid-column-start:2}
@@ -88,6 +91,7 @@
 .h-4{height:calc(var(--spacing) * 4)}
 .h-9{height:calc(var(--spacing) * 9)}
 .h-12{height:calc(var(--spacing) * 12)}
+.h-\[2\.2rem\]{height:2.2rem}
 .h-\[100dvh\]{height:100dvh}
 .h-\[var\(--topbar-h\)\]{height:var(--topbar-h)}
 .max-h-64{max-height:calc(var(--spacing) * 64)}
@@ -98,6 +102,7 @@
 .max-h-\[min\(22rem\,46vh\)\]{max-height:min(22rem,46vh)}
 .max-h-\[min\(24rem\,60vh\)\]{max-height:min(24rem,60vh)}
 .max-h-\[min\(28rem\,calc\(100dvh_-_7rem\)\)\]{max-height:min(28rem,100dvh - 7rem)}
+.max-h-\[min\(28rem\,calc\(100dvh_-_var\(--topbar-h\)_-_1rem\)\)\]{max-height:min(28rem, calc(100dvh - var(--topbar-h) - 1rem))}
 .max-h-\[min\(60vh\,26rem\)\]{max-height:min(60vh,26rem)}
 .min-h-4{min-height:calc(var(--spacing) * 4)}
 .min-h-\[1\.25rem\]{min-height:1.25rem}
@@ -115,7 +120,9 @@
 .w-\[12px\]{width:12px}
 .w-\[19rem\]{width:19rem}
 .w-\[21rem\]{width:21rem}
+.w-\[min\(19rem\,calc\(100vw-1rem\)\)\]{width:min(19rem,100vw - 1rem)}
 .w-\[min\(20rem\,calc\(100vw_-_1rem\)\)\]{width:min(20rem,100vw - 1rem)}
+.w-\[min\(29rem\,calc\(100vw-1rem\)\)\]{width:min(29rem,100vw - 1rem)}
 .w-\[min\(22rem\,calc\(100vw-2rem\)\)\]{width:min(22rem,100vw - 2rem)}
 .w-\[min\(34rem\,100\%\)\]{width:min(34rem,100%)}
 .max-w-\[8rem\]{max-width:8rem}
@@ -151,6 +158,10 @@
 .resize{resize:both}
 .resize-none{resize:none}
 .resize-y{resize:vertical}
+.\[content-visibility\:auto\]{content-visibility:auto}
+.\[contain-intrinsic-size\:auto_3rem\]{contain-intrinsic-size:auto 3rem}
+.\[contain-intrinsic-size\:auto_3\.5rem\]{contain-intrinsic-size:auto 3.5rem}
+.group-data-\[view\=grid\]\/list\:\[contain-intrinsic-size\:auto_9\.5rem\]:is(:where(.group\/list)[data-view=grid] *){contain-intrinsic-size:auto 9.5rem}
 .\[scrollbar-width\:none\]{scrollbar-width:none}
 .\[scrollbar-width\:thin\]{scrollbar-width:thin}
 .\[scrollbar-color\:var\(--color-border\)_transparent\]{scrollbar-color:var(--color-border) transparent}
@@ -421,4 +432,4 @@
 .selected\:outline-selected-ring:is([data-selected=true],.is-selected){outline-color:var(--color-selected-ring)}
 .dragging\:before\:opacity-100.is-dragging:before{content:var(--tw-content);opacity:1}
 @media (hover:none){.\[\@media\(hover\:none\)\]\:pointer-events-auto{pointer-events:auto}.\[\@media\(hover\:none\)\]\:opacity-100{opacity:1}}
-@media (pointer:coarse){.\[\@media\(pointer\:coarse\)\]\:pointer-events-auto{pointer-events:auto}.\[\@media\(pointer\:coarse\)\]\:size-11{width:calc(var(--spacing) * 11);height:calc(var(--spacing) * 11)}.\[\@media\(pointer\:coarse\)\]\:min-h-11{min-height:calc(var(--spacing) * 11)}.\[\@media\(pointer\:coarse\)\]\:opacity-100{opacity:1}}
+@media (pointer:coarse){.\[\@media\(pointer\:coarse\)\]\:pointer-events-auto{pointer-events:auto}.\[\@media\(pointer\:coarse\)\]\:h-11{height:calc(var(--spacing) * 11)}.\[\@media\(pointer\:coarse\)\]\:size-11{width:calc(var(--spacing) * 11);height:calc(var(--spacing) * 11)}.\[\@media\(pointer\:coarse\)\]\:min-h-11{min-height:calc(var(--spacing) * 11)}.\[\@media\(pointer\:coarse\)\]\:opacity-100{opacity:1}}

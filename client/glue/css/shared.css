@@ -23,8 +23,8 @@ button[aria-expanded="true"] .dd-caret::before {
     transform: rotate(180deg);
 }
 
-/* The dock slide. Ported from the single stylesheet: these belong to no one page because the
-   marker is carried by nav's panel and edge tab AND notify's bell and popover, so they slide as
-   one. The rationale sits with the tokens that drive it, in tokens.css. */
+/* The dock slide. Ported from the single stylesheet: it belongs to no one page because nav's panel
+   and its edge tab both carry the marker and slide as one. Rationale sits with the tokens that drive
+   it, in tokens.css. */
 .dock-slide-left { transform: translateX(var(--dock-anim-left, 0px)); will-change: transform; }
 .dock-slide-right { transform: translateX(var(--dock-anim-right, 0px)); will-change: transform; }

@@ -69,12 +69,17 @@ var settle_last_h: f64 = -1;
 var settle_stable: u32 = 0;
 var settle_iters: u32 = 0;
 var settle_pending: bool = false;
+// Where the settle last parked the scroller. Content growing moves scrollHeight, never scrollTop, so
+// a scrollTop that differs from this between frames was moved by the reader, not by us.
+var settle_last_top: f64 = -1;
+const USER_SCROLL_SLOP: f64 = 4;
 
 /// Snap the container to its full height across frames: content-visibility lays out late rows after
 /// the first frame, so a single snap lands short. Keeps snapping until the height stops growing.
 pub fn scrollBottom() void {
     if (zx.platform.role != .client) return;
     settle_last_h = -1;
+    settle_last_top = -1;
     settle_stable = 0;
     settle_iters = 0;
     if (settle_pending) return;
@@ -86,8 +91,18 @@ fn settleFrame() void {
     settle_pending = false;
     const chat = chatEl() orelse return;
     defer chat.deinit();
+    // A reply that renders every frame keeps the height changing, so the settle would otherwise run
+    // for as long as the stream does and drag the view back to the bottom every frame. Whoever moved
+    // the scroller between frames is the reader: stop settling and let the pin follow them.
+    const now_top = chat.get(f64, "scrollTop") catch return;
+    if (settle_last_top >= 0 and @abs(now_top - settle_last_top) > USER_SCROLL_SLOP) {
+        settle_last_top = -1;
+        if (stream_active) stream_pinned = nearBottomEl(chat);
+        return;
+    }
     const sh = chat.get(f64, "scrollHeight") catch return;
     chat.set("scrollTop", sh) catch {};
+    settle_last_top = chat.get(f64, "scrollTop") catch sh;
     if (sh == settle_last_h) {
         settle_stable += 1;
     } else {

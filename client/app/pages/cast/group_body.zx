@@ -73,7 +73,7 @@ fn listView(ctx: *zx.ComponentCtx(void)) zx.Component {
                                 onclick={ctx.bind(onRowOpen)}
                                 onkeydown={ctx.bind(onRowKey)}
                             >
-                                <img class={char_list.avatar_class} src={rowAvatarUrl(ctx.allocator, &g)} alt={g.name} loading="lazy" />
+                                <img class={char_list.avatar_class} src={rowAvatarUrl(ctx.allocator, &g)} alt={g.name} loading="lazy" decoding="async" />
                                 <div class={char_list.info_class}>
                                     <div class={char_list.name_class}>{g.name}</div>
                                     <div class={char_list.desc_class}>{rowMeta(ctx.allocator, &g)}</div>

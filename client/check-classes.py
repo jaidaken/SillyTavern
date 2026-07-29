@@ -47,6 +47,12 @@ def leads_with_space(name):
     return False
 
 
+def is_markup(lit):
+    """True for an HTML fragment rather than a class list. narration.zig's fixtures build markup by
+    concatenation (`"<p>" ++ line_open`), and a tag boundary needs no separating space."""
+    return "<" in lit or ">" in lit
+
+
 def check_separators():
     bad = []
     for p in markup_files():
@@ -55,11 +61,11 @@ def check_separators():
                 continue
             for m in re.finditer(r"(\w+)\s*\+\+\s*\"([^\"]*)\"", line):
                 lit = m.group(2)
-                if lit and not lit.startswith(" "):
+                if lit and not lit.startswith(" ") and not is_markup(lit):
                     bad.append((p, i, f"{m.group(1)} ++ \"{lit[:40]}\""))
             for m in re.finditer(r"\"([^\"]*)\"\s*\+\+\s*(\w+)", line):
                 lit, rhs = m.group(1), m.group(2)
-                if not lit or lit.endswith(" ") or lit.endswith("-"):
+                if not lit or lit.endswith(" ") or lit.endswith("-") or is_markup(lit):
                     continue
                 if leads_with_space(rhs):
                     continue
@@ -75,19 +81,22 @@ BARE_RE = re.compile(r"(?<![\w.])([a-z_]\w*)(?![\w.(])")
 def const_rhs(text, name):
     """The right-hand side of `const name = ...;`, or None when it is not a class string.
 
-    Single line only, and no `{`, `[` or `@`: a class const is a flat run of literals joined with
-    `++`, while a struct literal, an array of demo rows or an @import is not one. Without that shape
-    filter the resolver walks into `const cast = [_]Char{ .{ .name = "Bob" ...`, and every label in
-    the app arrives as a class token that no rule defines."""
+    Single line only, and the shape test runs on what is left once the string literals are removed:
+    a class const is a flat run of literals joined with `++`, while a struct literal, an array of demo
+    rows, an @import or a call is not one. Testing the raw text instead would reject every arbitrary
+    utility, since `group-data-[view=grid]/list:flex-col` carries brackets of its own inside the
+    literal. Without the test at all the resolver walks into `const cast = [_]Char{ .{ .name = "Bob"`,
+    and every label in the app arrives as a class token that no rule defines."""
     m = re.search(r"(?:pub\s+)?const\s+" + re.escape(name) + r"\s*=\s*([^;\n]*);", text)
     if not m:
         return None
     rhs = m.group(1)
-    if any(c in rhs for c in "{[@"):
+    rest = re.sub(r'"[^"]*"', "", rhs)
+    if any(c in rest for c in "{[@"):
         return None
     # a call is runtime work, not a class string: `const s = datasetUp(target, "groupOpen")` would
     # otherwise hand the stylesheet a dataset key to define
-    calls = re.findall(r"\b(\w+)\s*\(", re.sub(r'"[^"]*"', "", rhs))
+    calls = re.findall(r"\b(\w+)\s*\(", rest)
     return None if any(c not in ("if", "else", "switch", "while", "for") for c in calls) else rhs
 
 

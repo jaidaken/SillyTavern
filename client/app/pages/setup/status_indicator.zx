@@ -1,0 +1,34 @@
+// The backend's standing state, as a dot and a word in the top bar. It is the reason the backend
+// up/down TOASTS are gone: a state permanently on screen needs no interruption to announce itself,
+// which leaves notifications for EVENTS (a send that failed, a save that did not land).
+//
+// The dot keys off the same data-conn-state attribute the connections panel uses, so both surfaces
+// paint from one vocabulary (app-input.css). The word is the SHORT form; the panel's standing line
+// is what carries the model name and the remedy.
+pub fn StatusIndicator(allocator: zx.Allocator) zx.Component {
+    return (
+        <div
+            @allocator={allocator}
+            id="conn-chip"
+            // Built to sit in the same set as the bell and the gear beside it: same 2.2rem height,
+            // same rounding, same control-border and surface tokens, so the three read as one row of
+            // chrome rather than a panel widget parked in a bar. It is NOT interactive (role=status),
+            // so it takes no hover or focus treatment - matching those would promise a click.
+            // The word echoes the wordmark's beta badge (mono, uppercase, wide tracking), which is the
+            // bar's existing vocabulary for a small standing label.
+            class="flex h-[2.2rem] flex-none items-center gap-2 rounded-md border border-control-border bg-surface px-2.5 max-[480px]:px-2 [@media(pointer:coarse)]:h-11"
+            data-conn-state={connection.stateName()}
+            // A live region announces its TEXT changing, never an aria-label changing, so the word
+            // below is a real text node and carries no aria-hidden. It also stays visible at every
+            // width: asleep and offline paint the same amber, so the word is the only thing that
+            // tells them apart, for a red-green reader as much as a screen-reader one (WD38).
+            role="status"
+        >
+            <span class="conn-dot flex-none" aria-hidden="true"></span>
+            <span class="font-mono text-[0.6rem] leading-none font-medium tracking-[0.12em] text-muted uppercase">{connection.statusWord()}</span>
+        </div>
+    );
+}
+
+const zx = @import("zx");
+const connection = @import("./connection.zig");

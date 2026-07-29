@@ -28,18 +28,16 @@
    overlay the panel never pushes the page, so nothing behind it reflows and its own content (avatars)
    does not resize. --dock-anim is zero in place, its off-edge value while hidden.
 
-   .dock-slide-<side> is the ONE membership marker: the panel, the edge tab, the notify bell and its
-   popover all carry it, so every dock-anchored element slides through the same transform and none can
-   drift the way the old hand-kept ID list let the bell. transform (not left/right) keeps the movement
-   on the GPU; will-change promotes each to its own layer, so the slide composites at 60fps instead of
-   relaying out or repainting the avatar list every frame. */
+   .dock-slide-<side> is the ONE membership marker: the panel and its edge tab carry it, so every
+   dock-anchored element slides through the same transform and none can drift the way the old
+   hand-kept ID list let the bell. (The bell itself is no longer a member: it moved into the top bar,
+   which does not move with a dock.) transform (not left/right) keeps the movement on the GPU;
+   will-change promotes each to its own layer, so the slide composites at 60fps instead of relaying
+   out or repainting the avatar list every frame. */
 
-/* mobile
-   Sub-768px overrides that must reach elements OUTSIDE the top-bar subtree. The compact bar height is
-   a :root token here, not a header-scoped utility: the docks and the top drawer position against
-   var(--topbar-h) from outside the header, so a header-local value would leave them reading the 3rem
-   desktop height and floating a sliver of chat above a bar that is only 2.6rem tall. The breakpoint
-   is width < 768px to match tailwind's max-[768px] variant (the point the docks go full-screen). */
-@media (width < 768px) {
-    :root { --topbar-h: 2.6rem; }
-}
+/* The bar was 2.6rem below 768px and is now the desktop 3rem at every width, so the override is GONE
+   rather than restated: it carries the notification bell and the system gear, which grow to the 44px
+   iOS tap minimum on a coarse pointer (WD35), and a 41.6px bar cannot hold a 44px target. The 6.4px
+   this costs the conversation buys the two controls that are a phone's ONLY route to notifications
+   and settings. --topbar-h stays a :root token (not a header utility) because the docks position
+   against it from outside the header. */

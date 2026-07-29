@@ -12,11 +12,12 @@ const seg_btn = "seg-btn cursor-pointer rounded-sm border-0 bg-transparent px-[0
 const seg_motion = "seg-btn cursor-pointer rounded-sm border-0 bg-transparent px-[0.7rem] py-[0.3rem] font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text aria-checked:bg-surface-2 aria-checked:text-accent";
 const settings_tab = "settings-tab cursor-pointer border-0 border-b-2 border-b-transparent bg-transparent px-[0.8rem] py-[0.4rem] font-mono text-sm text-muted hover:text-text";
 
-// This body renders inside the system card, which is capped at 336px so it never covers the app it
-// restyles (nav/sysmenu.zx). The rows therefore WRAP on their own rather than at a viewport
-// breakpoint: a media query cannot see how wide the card is, and the same markup has to read at
-// drawer width and at card width. A label and its control sit side by side while both fit and stack
-// when they do not; a segmented group wraps its own buttons rather than overflowing the card.
+// This body renders inside the system card, which is capped at 464px so it never covers the app it
+// restyles (nav/sysmenu.zx). The rows still WRAP on their own rather than at a viewport breakpoint:
+// a media query cannot see how wide the card is, and the same markup has to read at drawer width and
+// at card width. A label and its control sit side by side while both fit and stack when they do not;
+// a segmented group wraps its own buttons rather than overflowing the card. The card width is set so
+// the widest group (four buttons) clears that threshold instead of relying on the wrap.
 const row = "setting-row flex flex-wrap items-center justify-between gap-x-4 gap-y-2";
 const seg_group = "seg inline-flex flex-wrap rounded-md border border-control-border bg-bg p-[2px]";
 const label_text = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
@@ -77,12 +78,27 @@ pub fn SettingsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         <button class={seg_btn} data-reading-set="justify" data-reading-val="off" type="button" onclick={onReadingClick}>Off</button>
                     </div>
                 </div>
+                // Unlike the deleted first Indent toggle (which restyled EVERY layout and made Chat
+                // identical to Novel), this one only lifts Novel's own first-line indent; the
+                // half-line paragraph gaps still separate Novel's paragraphs with it off, and Chat /
+                // Stage / VN never carry the attribute in any rule.
                 <div class={row}>
-                    <span class={label_text}>Paragraphs</span>
-                    <div class={seg_group} role="group" aria-label="Paragraph style">
+                    <span class={label_text}>Indent</span>
+                    <div class={seg_group} role="group" aria-label="First-line paragraph indent in Novel layout">
+                        <button class={seg_btn} data-reading-set="paraindent" data-reading-val="on" type="button" onclick={onReadingClick}>On</button>
+                        <button class={seg_btn} data-reading-set="paraindent" data-reading-val="off" type="button" onclick={onReadingClick}>Off</button>
+                    </div>
+                </div>
+                <div class={row}>
+                    <span class={label_text}>Layout</span>
+                    // Four layouts, each with a real basis (researched 2026-07-28, wiki topic
+                    // fiction-dialogue-typesetting): Chat = raw, imposes nothing. Novel = prose
+                    // convention. Stage / VN = script conventions. There is no speech-on-its-own-line
+                    // layout beyond the script pair, because that styling is block quotation and has
+                    // no prose-fiction convention behind it.
+                    <div class={seg_group} role="group" aria-label="Message layout">
                         <button class={seg_btn} data-reading-set="indent" data-reading-val="chat" type="button" onclick={onReadingClick}>Chat</button>
                         <button class={seg_btn} data-reading-set="indent" data-reading-val="novel" type="button" onclick={onReadingClick}>Novel</button>
-                        <button class={seg_btn} data-reading-set="indent" data-reading-val="blockquote" type="button" onclick={onReadingClick}>Quoted</button>
                         <button class={seg_btn} data-reading-set="indent" data-reading-val="stage" type="button" onclick={onReadingClick}>Stage</button>
                         <button class={seg_btn} data-reading-set="indent" data-reading-val="vn" type="button" onclick={onReadingClick}>VN</button>
                     </div>
@@ -108,6 +124,19 @@ pub fn SettingsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     <div class={seg_group} role="group" aria-label="Chat message avatars">
                         <button class={seg_btn} data-reading-set="avatars" data-reading-val="on" type="button" onclick={onReadingClick}>On</button>
                         <button class={seg_btn} data-reading-set="avatars" data-reading-val="off" type="button" onclick={onReadingClick}>Off</button>
+                    </div>
+                </div>
+                // VN is a SIZE, not a layout: it takes the per-message avatar out of the message rows
+                // and gives the character one portrait stage across the top half of the chat instead.
+                // Distinct from Layout > VN above, which is a TEXT convention (script setting) and
+                // composes with any of these four.
+                <div class={row}>
+                    <span class={label_text}>Avatar size</span>
+                    <div class={seg_group} role="group" aria-label="Chat avatar size">
+                        <button class={seg_btn} data-reading-set="avatarsize" data-reading-val="small" type="button" onclick={onReadingClick}>Small</button>
+                        <button class={seg_btn} data-reading-set="avatarsize" data-reading-val="medium" type="button" onclick={onReadingClick}>Medium</button>
+                        <button class={seg_btn} data-reading-set="avatarsize" data-reading-val="large" type="button" onclick={onReadingClick}>Large</button>
+                        <button class={seg_btn} data-reading-set="avatarsize" data-reading-val="vn" type="button" onclick={onReadingClick}>VN</button>
                     </div>
                 </div>
                 <div class={row}>

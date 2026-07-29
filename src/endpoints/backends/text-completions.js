@@ -14,7 +14,7 @@ import {
     OPENAI_KEYS,
 } from '../../constants.js';
 import { forwardFetchResponse, trimV1, getConfigValue } from '../../util.js';
-import { setAdditionalHeaders } from '../../additional-headers.js';
+import { setAdditionalHeaders, setAdditionalHeadersByType } from '../../additional-headers.js';
 import { createHash } from 'node:crypto';
 import { log } from '../../log.js';
 
@@ -46,16 +46,18 @@ async function parseOllamaStream(jsonStream, request, response) {
                 }
                 const text = json.response || '';
                 const thinking = json.thinking || '';
-                const chunk = { choices: [{ text, thinking }] };
-                response.write(`data: ${JSON.stringify(chunk)}\n\n`);
+                const sseChunk = { choices: [{ text, thinking }] };
+                response.write(`data: ${JSON.stringify(sseChunk)}\n\n`);
                 partialData = '';
             }
         });
 
-        request.socket.on('close', function () {
+        const onSocketClose = function () {
             if (jsonStream.body instanceof Readable) jsonStream.body.destroy();
             response.end();
-        });
+        };
+
+        request.socket.on('close', onSocketClose);
 
         jsonStream.body.on('end', () => {
             log.net.info('Streaming request finished');
@@ -280,6 +282,146 @@ router.post('/props', async function (request, response) {
     }
 });
 
+/**
+ * Builds the upstream completion request for one backend type. Shared by the /generate route and the
+ * server-owned generation start route, so the two can never drift into different upstream bodies.
+ *
+ * Mutates `params` in place the way the route always has (the per-backend key filters), so callers
+ * pass a body they own.
+ * @param {import('express').Request} request Express request, used only for the additional-headers lookup.
+ * @param {any} params The generation parameters.
+ * @param {AbortSignal} signal Abort signal for the upstream fetch.
+ * @returns {Promise<{url: string, args: any, apiType: string, baseUrl: string}>}
+ */
+export async function buildUpstreamRequest(request, params, signal) {
+    if (typeof params.api_server === 'string' && params.api_server.indexOf('localhost') !== -1) {
+        params.api_server = params.api_server.replace('localhost', '127.0.0.1');
+    }
+
+    const apiType = params.api_type;
+    const baseUrl = params.api_server;
+    let url = trimV1(baseUrl);
+
+    switch (apiType) {
+        case TEXTGEN_TYPES.GENERIC:
+        case TEXTGEN_TYPES.VLLM:
+        case TEXTGEN_TYPES.FEATHERLESS:
+        case TEXTGEN_TYPES.APHRODITE:
+        case TEXTGEN_TYPES.OOBA:
+        case TEXTGEN_TYPES.TABBY:
+        case TEXTGEN_TYPES.KOBOLDCPP:
+        case TEXTGEN_TYPES.TOGETHERAI:
+        case TEXTGEN_TYPES.INFERMATICAI:
+        case TEXTGEN_TYPES.HUGGINGFACE:
+            url += '/v1/completions';
+            break;
+        case TEXTGEN_TYPES.DREAMGEN:
+            url += '/api/openai/v1/completions';
+            break;
+        case TEXTGEN_TYPES.MANCER:
+            url += '/oai/v1/completions';
+            break;
+        case TEXTGEN_TYPES.LLAMACPP:
+            url += '/completion';
+            break;
+        case TEXTGEN_TYPES.OLLAMA:
+            url += '/api/generate';
+            break;
+        case TEXTGEN_TYPES.OPENROUTER:
+            url += '/v1/chat/completions';
+            break;
+    }
+
+    const args = {
+        method: 'POST',
+        body: JSON.stringify(params),
+        headers: { 'Content-Type': 'application/json' },
+        signal,
+        timeout: 0,
+    };
+
+    // Keyed off the params handed in, not request.body: /start nests them under `generate`, so
+    // request.body.api_type is undefined there and no auth header would be attached.
+    await setAdditionalHeadersByType(args.headers, params.api_type, baseUrl, request.user.directories, params.secret_id ?? null);
+
+    if (apiType === TEXTGEN_TYPES.TOGETHERAI) {
+        params = _.pickBy(params, (_v, key) => TOGETHERAI_KEYS.includes(key));
+        args.body = JSON.stringify(params);
+    }
+
+    if (apiType === TEXTGEN_TYPES.INFERMATICAI) {
+        params = _.pickBy(params, (_v, key) => INFERMATICAI_KEYS.includes(key));
+        args.body = JSON.stringify(params);
+    }
+
+    if (apiType === TEXTGEN_TYPES.FEATHERLESS) {
+        params = _.pickBy(params, (_v, key) => FEATHERLESS_KEYS.includes(key));
+        args.body = JSON.stringify(params);
+    }
+
+    if (apiType === TEXTGEN_TYPES.DREAMGEN) {
+        args.body = JSON.stringify(params);
+    }
+
+    if (apiType === TEXTGEN_TYPES.GENERIC) {
+        params = _.pickBy(params, (_v, key) => OPENAI_KEYS.includes(key));
+        if (Array.isArray(params.stop)) { params.stop = params.stop.slice(0, 4); }
+        args.body = JSON.stringify(params);
+    }
+
+    if (apiType === TEXTGEN_TYPES.OPENROUTER) {
+        if (Array.isArray(params.provider) && params.provider.length > 0) {
+            params.provider = {
+                allow_fallbacks: params.allow_fallbacks ?? true,
+                order: params.provider,
+            };
+        } else {
+            delete params.provider;
+        }
+
+        if (Array.isArray(params.quantizations) && params.quantizations.length > 0) {
+            params.provider ??= {};
+            params.provider.quantizations = params.quantizations;
+        }
+
+        params = _.pickBy(params, (_v, key) => OPENROUTER_KEYS.includes(key));
+        args.body = JSON.stringify(params);
+    }
+
+    if (apiType === TEXTGEN_TYPES.VLLM) {
+        params = _.pickBy(params, (_v, key) => VLLM_KEYS.includes(key));
+        args.body = JSON.stringify(params);
+    }
+
+    if (apiType === TEXTGEN_TYPES.OLLAMA) {
+        const keepAlive = Number(getConfigValue('ollama.keepAlive', -1, 'number'));
+        const numBatch = Number(getConfigValue('ollama.batchSize', -1, 'number'));
+        if (numBatch > 0) {
+            params.num_batch = numBatch;
+        }
+        args.body = JSON.stringify({
+            model: params.model,
+            prompt: params.prompt,
+            stream: params.stream ?? false,
+            keep_alive: keepAlive,
+            raw: true,
+            options: _.pickBy(params, (_v, key) => OLLAMA_KEYS.includes(key)),
+        });
+    }
+
+    return { url, args, apiType, baseUrl, params };
+}
+
+/**
+ * Aborts a KoboldCpp generation on client disconnect, matching the behaviour the route has always had.
+ * @param {import('express').Request} request Express request.
+ * @param {string} baseUrl The backend base url.
+ * @returns {Promise<void>}
+ */
+export async function abortKoboldCppIfNeeded(request, baseUrl) {
+    await abortKoboldCppRequest(request, trimV1(baseUrl));
+}
+
 router.post('/generate', async function (request, response) {
     if (!request.body) return response.sendStatus(400);
 
@@ -302,119 +444,14 @@ router.post('/generate', async function (request, response) {
             controller.abort();
         });
 
-        let url = trimV1(baseUrl);
-
-        switch (request.body.api_type) {
-            case TEXTGEN_TYPES.GENERIC:
-            case TEXTGEN_TYPES.VLLM:
-            case TEXTGEN_TYPES.FEATHERLESS:
-            case TEXTGEN_TYPES.APHRODITE:
-            case TEXTGEN_TYPES.OOBA:
-            case TEXTGEN_TYPES.TABBY:
-            case TEXTGEN_TYPES.KOBOLDCPP:
-            case TEXTGEN_TYPES.TOGETHERAI:
-            case TEXTGEN_TYPES.INFERMATICAI:
-            case TEXTGEN_TYPES.HUGGINGFACE:
-                url += '/v1/completions';
-                break;
-            case TEXTGEN_TYPES.DREAMGEN:
-                url += '/api/openai/v1/completions';
-                break;
-            case TEXTGEN_TYPES.MANCER:
-                url += '/oai/v1/completions';
-                break;
-            case TEXTGEN_TYPES.LLAMACPP:
-                url += '/completion';
-                break;
-            case TEXTGEN_TYPES.OLLAMA:
-                url += '/api/generate';
-                break;
-            case TEXTGEN_TYPES.OPENROUTER:
-                url += '/v1/chat/completions';
-                break;
-        }
-
-        const args = {
-            method: 'POST',
-            body: JSON.stringify(request.body),
-            headers: { 'Content-Type': 'application/json' },
-            signal: controller.signal,
-            timeout: 0,
-        };
-
-        await setAdditionalHeaders(request, args, baseUrl);
-
-        if (request.body.api_type === TEXTGEN_TYPES.TOGETHERAI) {
-            request.body = _.pickBy(request.body, (_, key) => TOGETHERAI_KEYS.includes(key));
-            args.body = JSON.stringify(request.body);
-        }
-
-        if (request.body.api_type === TEXTGEN_TYPES.INFERMATICAI) {
-            request.body = _.pickBy(request.body, (_, key) => INFERMATICAI_KEYS.includes(key));
-            args.body = JSON.stringify(request.body);
-        }
-
-        if (request.body.api_type === TEXTGEN_TYPES.FEATHERLESS) {
-            request.body = _.pickBy(request.body, (_, key) => FEATHERLESS_KEYS.includes(key));
-            args.body = JSON.stringify(request.body);
-        }
-
-        if (request.body.api_type === TEXTGEN_TYPES.DREAMGEN) {
-            args.body = JSON.stringify(request.body);
-        }
-
-        if (request.body.api_type === TEXTGEN_TYPES.GENERIC) {
-            request.body = _.pickBy(request.body, (_, key) => OPENAI_KEYS.includes(key));
-            if (Array.isArray(request.body.stop)) { request.body.stop = request.body.stop.slice(0, 4); }
-            args.body = JSON.stringify(request.body);
-        }
-
-        if (request.body.api_type === TEXTGEN_TYPES.OPENROUTER) {
-            if (Array.isArray(request.body.provider) && request.body.provider.length > 0) {
-                request.body.provider = {
-                    allow_fallbacks: request.body.allow_fallbacks ?? true,
-                    order: request.body.provider,
-                };
-            } else {
-                delete request.body.provider;
-            }
-
-            if (Array.isArray(request.body.quantizations) && request.body.quantizations.length > 0) {
-                request.body.provider ??= {};
-                request.body.provider.quantizations = request.body.quantizations;
-            }
-
-            request.body = _.pickBy(request.body, (_, key) => OPENROUTER_KEYS.includes(key));
-            args.body = JSON.stringify(request.body);
-        }
-
-        if (request.body.api_type === TEXTGEN_TYPES.VLLM) {
-            request.body = _.pickBy(request.body, (_, key) => VLLM_KEYS.includes(key));
-            args.body = JSON.stringify(request.body);
-        }
-
-        if (request.body.api_type === TEXTGEN_TYPES.OLLAMA) {
-            const keepAlive = Number(getConfigValue('ollama.keepAlive', -1, 'number'));
-            const numBatch = Number(getConfigValue('ollama.batchSize', -1, 'number'));
-            if (numBatch > 0) {
-                request.body.num_batch = numBatch;
-            }
-            args.body = JSON.stringify({
-                model: request.body.model,
-                prompt: request.body.prompt,
-                stream: request.body.stream ?? false,
-                keep_alive: keepAlive,
-                raw: true,
-                options: _.pickBy(request.body, (_, key) => OLLAMA_KEYS.includes(key)),
-            });
-        }
+        const { url, args, params } = await buildUpstreamRequest(request, request.body, controller.signal);
+        request.body = params;
 
         if (request.body.api_type === TEXTGEN_TYPES.OLLAMA && request.body.stream) {
             const stream = await fetch(url, args);
             parseOllamaStream(stream, request, response);
         } else if (request.body.stream) {
             const completionsStream = await fetch(url, args);
-            // Pipe remote SSE stream to Express response
             await forwardFetchResponse(completionsStream, response);
         } else {
             const completionsReply = await fetch(url, args);

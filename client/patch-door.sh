@@ -805,6 +805,9 @@ else:
 # The pump reads response.body.getReader() and hands each raw chunk to the wasm export __st_stream_chunk
 # (Zig batches on rAF); __st_stream_closed fires exactly once on natural end / error / cancel, the single
 # seal point. Cancel aborts the reader so the awaiting read() rejects and the loop ends.
+#
+# Both callbacks carry the streamId the map is keyed by (T4): without it two concurrent door streams
+# would interleave into one Zig session with nothing able to tell their chunks apart.
 
 stream_anchor = "  const bridge = new ZxBridge(instance.exports);"
 stream_block = stream_anchor + """
@@ -820,7 +823,7 @@ stream_block = stream_anchor + """
       if (body) headers["Content-Type"] = "application/json";
       if (csrf) headers["X-CSRF-Token"] = csrf;
       fetch(url, { method: method, headers: headers, body: body || undefined, signal: controller.signal }).then(async (response) => {
-        if (!response.ok || !response.body) { streams.delete(streamId); exp.__st_stream_closed(response.status); return; }
+        if (!response.ok || !response.body) { streams.delete(streamId); exp.__st_stream_closed(streamId, response.status); return; }
         const reader = response.body.getReader();
         rec.reader = reader;
         for (;;) {
@@ -830,11 +833,11 @@ stream_block = stream_anchor + """
           const bytes = step.value;
           const ptr = exp.__zx_alloc(bytes.length);
           writeBytes(ptr, bytes);
-          exp.__st_stream_chunk(ptr, bytes.length);
+          exp.__st_stream_chunk(streamId, ptr, bytes.length);
         }
         streams.delete(streamId);
-        exp.__st_stream_closed(response.status);
-      }).catch(() => { streams.delete(streamId); exp.__st_stream_closed(0); });
+        exp.__st_stream_closed(streamId, response.status);
+      }).catch(() => { streams.delete(streamId); exp.__st_stream_closed(streamId, 0); });
     };
     globalThis.__st_stream_cancel = function (streamId) {
       const rec = streams.get(streamId);

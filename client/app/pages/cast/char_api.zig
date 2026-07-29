@@ -808,6 +808,71 @@ fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     } else {
         scrollChatToNewest();
     }
+    checkActiveGeneration();
+}
+
+/// Asks whether the chat just opened is mid-reply. A refresh during a generation lands here, and the
+/// answer routes into stream_drive.attach, which rebuilds the reply from the server's frame log rather
+/// than leaving the page showing a chat that stops short of the text still being written.
+fn checkActiveGeneration() void {
+    if (zx.platform.role != .client) return;
+    if (stream_drive.live.state == .streaming) return;
+    const url = activeGenerationUrl() orelse return;
+    defer alloc.free(url);
+    net.request(url, "", 0, onActiveGenerationDone, .{ .method = .GET, .with_csrf = false });
+}
+
+fn activeGenerationUrl() ?[]u8 {
+    if (open_group_index != null) {
+        const g = group_store.selected() orelse return null;
+        const gid = data.encodeUriComponent(alloc, g.id) catch return null;
+        defer alloc.free(gid);
+        return std.fmt.allocPrint(alloc, "/api/generation/active?group_id={s}", .{gid}) catch null;
+    }
+    const c = char_store.global.selected() orelse return null;
+    const file = chatFileName(c) orelse return null;
+    defer alloc.free(file);
+    const avatar_enc = data.encodeUriComponent(alloc, c.avatar) catch return null;
+    defer alloc.free(avatar_enc);
+    const file_enc = data.encodeUriComponent(alloc, file) catch return null;
+    defer alloc.free(file_enc);
+    return std.fmt.allocPrint(alloc, "/api/generation/active?avatar_url={s}&file_name={s}", .{ avatar_enc, file_enc }) catch null;
+}
+
+fn onActiveGenerationDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
+    _ = tag;
+    if (status < 200 or status >= 300) return;
+    const r = res orelse return;
+    const parsed = r.json(struct {
+        active: bool = false,
+        generation_id: []const u8 = "",
+        character_name: []const u8 = "",
+    }) catch return;
+    defer parsed.deinit();
+    if (!parsed.value.active or parsed.value.generation_id.len == 0) return;
+    if (stream_drive.live.state == .streaming) return;
+
+    const c = char_store.global.selected();
+    const name = if (parsed.value.character_name.len > 0)
+        parsed.value.character_name
+    else if (c) |ch| ch.name else "";
+    const avatar: ?[]u8 = if (c) |ch|
+        (if (ch.avatar.len > 0) data.thumbUrl(alloc, "avatar", ch.avatar) catch null else null)
+    else
+        null;
+    defer if (avatar) |u| alloc.free(u);
+    chars_log.info("attaching to the generation already running on this chat", .{});
+    // The send context is what a later user turn appends against, so it must name this chat even
+    // though this page did not start the generation.
+    if (c) |ch| setOwned(&send_avatar, ch.avatar);
+    if (c) |ch| {
+        if (chatFileName(ch)) |fname| {
+            setOwned(&send_file, fname);
+            alloc.free(fname);
+        }
+    }
+    send_seq = chat_load_seq;
+    stream_drive.attach(parsed.value.generation_id, name, avatar orelse "");
 }
 
 /// Reloads the currently open chat's tail window. The scroll-up pump calls this (via the
@@ -834,6 +899,18 @@ pub fn applyRemoteAppend(payload: []const u8) void {
         else => return,
     };
     if (!appendTargetsOpenChat(obj)) return;
+
+    // The change token is the file's state AFTER this append. Adopting it here keeps the next local
+    // append off a stale token, which would otherwise 409 and force a full re-sync.
+    const token = jsonStrField(obj, "change_token");
+    if (token.len > 0) pager.setFullToken(token);
+
+    // A generation this page watched is already in the message log, token for token. Taking the
+    // server's copy too would show the same reply twice.
+    if (stream_drive.renderedGeneration(jsonStrField(obj, "generation_id"))) {
+        chars_log.debug("live: skipping the append for a generation this page streamed", .{});
+        return;
+    }
 
     const char = char_store.global.selected();
     const char_avatar: ?[]u8 = if (open_group_index == null)
@@ -904,6 +981,9 @@ fn jsonStrField(obj: std.json.ObjectMap, key: []const u8) []const u8 {
 }
 
 pub fn reloadCurrentChat() void {
+    // The reload replaces the store, so a reply streaming into it would be fed into a message that no
+    // longer exists. Hand the view back: the server keeps generating and the re-open re-attaches.
+    stream_drive.detach();
     // w3-chatref: a group chat re-syncs through its own window loader, same anchor mechanics.
     if (open_group_index) |gidx| {
         chars_log.info("reader re-sync: reloading current group chat after a stale prepend", .{});
@@ -1377,15 +1457,21 @@ pub fn sendMessage() void {
         net_log.warn("send: no character selected", .{});
         return;
     };
-    // A prior send is still assembling its prompt window; drop this one rather than race two builds
-    // through the single pending slot. The window is one fetch RTT.
-    if (pend_active) {
-        net_log.warn("send: previous send still assembling its prompt", .{});
+    // Refuse a send while one is in flight, but never silently, and above readComposer so the text stays.
+    if (pend_active or stream_drive.busy()) {
+        net_log.warn("send refused: a reply is still {s}; your message was kept in the composer", .{
+            if (pend_active) "being prepared" else "streaming",
+        });
         return;
     }
-    const text = readComposer() orelse return;
-    defer alloc.free(text);
-    clearComposer();
+    // Empty composer triggers a generation without a user turn: the AI responds as the character
+    // to whatever is already in the chat.
+    const text_opt = readComposer();
+    const is_empty = text_opt == null;
+    const text = text_opt orelse "";
+    defer if (text_opt) |t| alloc.free(t);
+
+    if (!is_empty) clearComposer();
 
     const persona = activePersona();
     const user_name = if (persona) |p| p.name else "You";
@@ -1397,22 +1483,22 @@ pub fn sendMessage() void {
     const char_avatar: ?[]u8 = if (c.avatar.len > 0) data.thumbUrl(alloc, "avatar", c.avatar) catch null else null;
     defer if (char_avatar) |u| alloc.free(u);
 
-    store.global.appendCopy(user_name, text, persona_avatar orelse "") catch |err| {
-        chars_log.err("send: append user turn failed: {s}", .{@errorName(err)});
-        return;
-    };
-    regions.bumpMessageLog();
-    pinChatToBottom();
+    if (!is_empty) {
+        store.global.appendCopy(user_name, text, persona_avatar orelse "") catch |err| {
+            chars_log.err("send: append user turn failed: {s}", .{@errorName(err)});
+            return;
+        };
+        regions.bumpMessageLog();
+        pinChatToBottom();
+    }
 
-    // Capture the append context, then persist the user turn now so a failed generation still keeps
-    // it. The assistant turn persists on stream seal (persistNewTurns via the __st_persist_turns hook).
     setOwned(&send_avatar, c.avatar);
     if (chatFileName(c)) |fname| {
         setOwned(&send_file, fname);
         alloc.free(fname);
     }
     send_seq = chat_load_seq;
-    appendTurn(user_name, text, true, "");
+    if (!is_empty) appendTurn(user_name, text, true, "");
 
     if (!stashSend(conn, c, persona, user_name, text, char_avatar orelse "")) {
         chars_log.err("send: could not stash the send context", .{});
@@ -1611,8 +1697,8 @@ fn endSend() void {
     freePending();
 }
 
-/// Opens the generate stream from a finished prompt, then ends the send. Reads the connection and the
-/// character identity from the still-live pending state (endSend frees them last).
+/// Starts the server-owned generation from a finished prompt, then ends the send. Reads the connection
+/// and the character identity from the still-live pending state (endSend frees them last).
 fn finishSend(prompt: []const u8) void {
     defer endSend();
     const conn = pend_conn orelse return;
@@ -1621,9 +1707,35 @@ fn finishSend(prompt: []const u8) void {
         return;
     };
     defer alloc.free(body);
-    // stream_drive owns the SSE lifecycle now (opens the door pump, batches, seals). It copies what it
-    // keeps, so freeing body/pending after this returns is safe. persistNewTurns runs on seal.
-    stream_drive.send("/api/backends/text-completions/generate", pend_char_name, pend_char_avatar, body);
+    const start_body = buildStartBody(body) orelse {
+        net_log.warn("send: start-body build failed", .{});
+        return;
+    };
+    defer alloc.free(start_body);
+    stream_drive.send(pend_char_name, pend_char_avatar, start_body);
+}
+
+/// Wraps the generation parameters with the chat this reply belongs to. The server resolves the chat
+/// under the caller's own directories and writes the finished turn there, so this is the only place
+/// the target travels; the parameters themselves stay exactly what the backend expects.
+fn buildStartBody(generate_body: []const u8) ?[]u8 {
+    // group_send owns the group id for exactly as long as a rotation is live, so it is the authority
+    // here. Keying on the open chat instead misses a rotation driven while a solo chat is on screen,
+    // and the member's reply would then be written into the solo file.
+    const gid: []const u8 = group_send.chatId() orelse "";
+    const chat = if (gid.len > 0)
+        std.json.Stringify.valueAlloc(alloc, .{
+            .group_id = gid,
+            .character_name = pend_char_name,
+        }, .{}) catch return null
+    else
+        std.json.Stringify.valueAlloc(alloc, .{
+            .avatar_url = send_avatar,
+            .file_name = send_file,
+            .character_name = pend_char_name,
+        }, .{}) catch return null;
+    defer alloc.free(chat);
+    return std.fmt.allocPrint(alloc, "{{\"chat\":{s},\"generate\":{s}}}", .{ chat, generate_body }) catch null;
 }
 
 /// Trim on byte lengths against the char budget: the classic pre-token behavior and the fallback when a
@@ -1993,32 +2105,41 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
     startTokenJob(pieces, generate.promptTokenBudget(conn), generate.promptCharBudget(conn), kind, disc, encode_path, remote, stop_owned);
 }
 
-/// Called by stream_drive on stream seal: persist the assistant reply. It is the last message, since
-/// a single stream runs between send and seal, and this only fires when the stream actually began
-/// (stream_drive.open refuses a second stream and seals a begun-but-empty one, so no stray persist).
-pub fn persistNewTurns() void {
+/// Called by stream_drive on stream seal. The assistant turn is written by the server that ran the
+/// generation, so nothing is persisted here; a group rotation still needs its seal to advance.
+pub fn onStreamSealed() void {
     if (zx.platform.role != .client) return;
-    // w3-grp: a group rotation owns this seal (member append + advance); solo must not double-append.
-    if (group_send.sealCurrent()) return;
-    if (send_file.len == 0) return;
-    // A resync (a 409 append, or the user opening another chat) replaced the store mid-generation, so
-    // the last message is no longer this send's reply. Skip rather than append a stale message.
-    if (chat_load_seq != send_seq) {
-        chars_log.debug("assistant append skipped: chat re-synced mid-generation", .{});
-        return;
+    group_send.sealCurrent();
+    // wi-timed: the reply is on disk by the time the server's chat-appended lands, so the timed
+    // window is persisted off the seal rather than chained behind an append this client no longer does.
+    if (pend_timed_persist) {
+        pend_timed_persist = false;
+        persistTimedMetadata();
     }
-    const msgs = store.slice();
-    if (msgs.len == 0) return;
-    const last = msgs[msgs.len - 1];
-    appendTurn(last.name, last.body, false, last.reasoning);
 }
 
+/// The user turn this client is trying to persist, held so a rejected append can be re-issued against
+/// the token the server hands back. Only the user turn needs this: the assistant turn is the server's.
+var pend_turn_name: []u8 = &.{};
+var pend_turn_mes: []u8 = &.{};
+var pend_turn_retries: u8 = 0;
+const max_turn_retries: u8 = 3;
+
 /// Persist one turn to the open chat via the server append route, never a whole-file save, so history
-/// above the display window is preserved (invariant 2). The user turn goes on send, the assistant
-/// turn on seal. The change token is the reader's, shared for optimistic concurrency.
+/// above the display window is preserved (invariant 2). Only the user turn comes through here now;
+/// the assistant turn is written by the server that ran the generation.
 fn appendTurn(name: []const u8, mes: []const u8, is_user: bool, reasoning_text: []const u8) void {
     if (zx.platform.role != .client) return;
     if (send_file.len == 0 or send_avatar.len == 0) return;
+    if (is_user) {
+        setOwned(&pend_turn_name, name);
+        setOwned(&pend_turn_mes, mes);
+        pend_turn_retries = 0;
+    }
+    sendAppend(name, mes, is_user, reasoning_text, pager.fullToken());
+}
+
+fn sendAppend(name: []const u8, mes: []const u8, is_user: bool, reasoning_text: []const u8, token: []const u8) void {
     const send_date: i64 = @intFromFloat(nowMs());
     // w3-reason: the sealed reply's thinking persists as extra.reasoning (the classic client's key);
     // a user turn carries "" and loads back as no block.
@@ -2028,7 +2149,7 @@ fn appendTurn(name: []const u8, mes: []const u8, is_user: bool, reasoning_text: 
         .limit = pager.TAIL_LIMIT,
         // The append gate is the whole-file token (limit-invariant), matching edit/delete; the tail
         // token would 409 whenever the held window limit differs from TAIL_LIMIT (e.g. after a resync).
-        .change_token = pager.fullToken(),
+        .change_token = token,
         .messages = .{
             .{
                 .name = name,
@@ -2044,13 +2165,32 @@ fn appendTurn(name: []const u8, mes: []const u8, is_user: bool, reasoning_text: 
     net.request("/api/chats/append", body, @intFromBool(is_user), onAppendDone, .{});
 }
 
+/// The token a 409 body carries, copied into a static buffer because the response dies with the call.
+var fresh_token_buf: [128]u8 = undefined;
+
+fn freshToken(r: *zx.Fetch.Response) []const u8 {
+    const parsed = r.json(struct { change_token: []const u8 = "" }) catch return "";
+    defer parsed.deinit();
+    const t = parsed.value.change_token;
+    if (t.len == 0 or t.len > fresh_token_buf.len) return "";
+    @memcpy(fresh_token_buf[0..t.len], t);
+    return fresh_token_buf[0..t.len];
+}
+
 fn onAppendDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     const which: []const u8 = if (tag != 0) "user" else "assistant";
     if (status == 409) {
-        // A concurrent whole-file save changed the file under us. Re-sync to the tail via the reader's
-        // 409 path; the just-added turn drops from view and the user re-sends. Accepted rare edge: a
-        // save landing mid-generation means the streamed reply also needs a re-send to persist.
-        chars_log.info("chat append ({s}): file changed (409), re-syncing to the tail", .{which});
+        // Re-issue on the token the server hands back rather than dropping the turn: the SERVER writes
+        // the reply now and that write succeeds, so a dropped user turn leaves a reply to nothing.
+        const fresh = if (res) |r| freshToken(r) else "";
+        if (tag != 0 and fresh.len > 0 and pend_turn_retries < max_turn_retries and pend_turn_mes.len > 0) {
+            pend_turn_retries += 1;
+            pager.setFullToken(fresh);
+            chars_log.info("chat append (user): file changed (409), re-issuing on the server's token (try {d})", .{pend_turn_retries});
+            sendAppend(pend_turn_name, pend_turn_mes, true, "", fresh);
+            return;
+        }
+        net_log.warn("chat append ({s}): file changed (409) and the turn could not be re-issued; re-syncing", .{which});
         pager.beginResync();
         reloadCurrentChat();
         return;
@@ -2068,12 +2208,6 @@ fn onAppendDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         } else |_| {}
     }
     chars_log.debug("chat append ({s}) persisted", .{which});
-    // wi-timed: the assistant seal (tag 0) just settled the token, so persist the timed window now,
-    // chained after the append rather than racing it. A user turn (tag != 0) never carries it.
-    if (tag == 0 and pend_timed_persist) {
-        pend_timed_persist = false;
-        persistTimedMetadata();
-    }
 }
 
 /// Write the chat's live timed-effect state to the header via /api/chats/metadata (the timedWorldInfo

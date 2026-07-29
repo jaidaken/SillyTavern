@@ -20,6 +20,7 @@ const Allocator = std.mem.Allocator;
 const Store = store_mod.Store;
 
 const data_prefix = "data:";
+const id_prefix = "id:";
 
 /// One SSE `data:` line is one token payload, far below this. The cap bounds a peer that streams
 /// bytes without ever sending `\n`, which would otherwise grow `line` until the wasm heap dies.
@@ -43,6 +44,12 @@ pub const Stream = struct {
     /// Set by `emit` on `[DONE]`, acted on by `feed` once `drain` has stopped reading `line`.
     /// Sealing from inside `emit` would free the buffer `drain` is iterating.
     saw_done: bool = false,
+    /// The resume cursor: the id of the last frame whose payload actually reached the message. A
+    /// re-attach asks the server for frames after this one, so a drop costs no tokens and repeats none.
+    last_event_id: u64 = 0,
+    /// The id line of the frame currently being read. Promoted to `last_event_id` only once that
+    /// frame's payload has been applied, so a failed emit cannot advance the cursor past a lost token.
+    pending_id: ?u64 = null,
     /// w3-reason: routes token bytes into the body or the reasoning tail off the think tags.
     think: ThinkSplit = .{},
 
@@ -61,10 +68,25 @@ pub const Stream = struct {
         self.line.clearRetainingCapacity();
         self.tokens = 0;
         self.saw_done = false;
+        self.last_event_id = 0;
+        self.pending_id = null;
         self.think.reset();
 
         try self.store.beginStream(name, avatar);
         self.state = .streaming;
+    }
+
+    /// Re-points the framer at a replacement transport, keeping the message and the cursor.
+    ///
+    /// A drop lands wherever the bytes are, so the dead transport leaves a half-read line and a
+    /// half-read codepoint behind. The server resends the whole frame those bytes were cut out of,
+    /// so keeping them would prefix the resent frame with a duplicate fragment. `begin` cannot serve
+    /// here: it appends a second message and rewinds the cursor to zero.
+    pub fn resumeTransport(self: *Stream) void {
+        if (self.state != .streaming) return;
+        self.decoder = .{};
+        self.line.clearRetainingCapacity();
+        self.pending_id = null;
     }
 
     /// Feeds raw bytes from the door. One call per animation frame, not per token.
@@ -175,6 +197,13 @@ pub const Stream = struct {
 
         var line = raw_line;
         if (line.len > 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
+        // The cursor branch lives in the framer, not in a per-chunk scan: the door splits lines
+        // mid-token, so an `id:` can arrive cut in half and only the line buffer sees it whole.
+        if (std.mem.startsWith(u8, line, id_prefix)) {
+            const raw_id = std.mem.trim(u8, line[id_prefix.len..], " \t");
+            self.pending_id = std.fmt.parseInt(u64, raw_id, 10) catch null;
+            return;
+        }
         if (!std.mem.startsWith(u8, line, data_prefix)) return;
 
         // parsePayload trims surrounding whitespace, decodes the backend's JSON token shapes, and
@@ -188,6 +217,10 @@ pub const Stream = struct {
             // Only flagged: `drain` is iterating `line`, which `end` frees.
             .done => self.saw_done = true,
             .empty => {},
+        }
+        if (self.pending_id) |id| {
+            self.last_event_id = id;
+            self.pending_id = null;
         }
     }
 };
@@ -551,6 +584,89 @@ test "stream_seals_on_a_done_sentinel_that_has_no_trailing_newline" {
     try testing.expectEqual(State.done, f.stream.state);
     try testing.expectEqualStrings("real", f.body(0));
     try testing.expectEqual(@as(usize, 1), f.stream.tokens);
+}
+
+/// One server frame exactly as the generation route writes it: an `id:` line, then the payload.
+inline fn frame(comptime id: []const u8, comptime tok: []const u8) []const u8 {
+    return "id: " ++ id ++ "\ndata: {\"content\":\"" ++ tok ++ "\"}\n\n";
+}
+
+test "a_transport_cut_inside_a_frame_leaves_a_partial_line_and_a_partial_codepoint" {
+    var f: Fixture = undefined;
+    f.init(testing.allocator);
+    defer f.deinit();
+
+    try f.open(testing.allocator, "Seraphina");
+    // Two whole frames, then the third cut one byte into the three-byte sequence for U+4E16.
+    try f.stream.feed(frame("1", "alpha") ++ frame("2", "beta") ++ "id: 3\ndata: {\"content\":\"ga\xe4");
+
+    try testing.expectEqual(@as(u64, 2), f.stream.last_event_id);
+    try testing.expectEqual(@as(?u64, 3), f.stream.pending_id);
+    try testing.expect(f.stream.line.items.len > 0);
+    try testing.expectEqual(@as(usize, 1), f.stream.decoder.partial_len);
+    try testing.expectEqualStrings("alphabeta", f.body(0));
+}
+
+test "resume_clears_the_dead_transports_bytes_and_keeps_the_message_and_cursor" {
+    var f: Fixture = undefined;
+    f.init(testing.allocator);
+    defer f.deinit();
+
+    try f.open(testing.allocator, "Seraphina");
+    try f.stream.feed(frame("1", "alpha") ++ frame("2", "beta") ++ "id: 3\ndata: {\"content\":\"ga\xe4");
+
+    f.stream.resumeTransport();
+
+    // Gone: everything the dead transport was part way through reading.
+    try testing.expectEqual(@as(usize, 0), f.stream.line.items.len);
+    try testing.expectEqual(@as(usize, 0), f.stream.decoder.partial_len);
+    try testing.expectEqual(@as(?u64, null), f.stream.pending_id);
+    // Kept: the cursor the resume asks from, the message being written, and what is in it.
+    try testing.expectEqual(@as(u64, 2), f.stream.last_event_id);
+    try testing.expectEqual(State.streaming, f.stream.state);
+    try testing.expectEqual(@as(?usize, 0), f.store.stream_index);
+    try testing.expectEqual(@as(usize, 2), f.stream.tokens);
+    try testing.expectEqualStrings("alphabeta", f.body(0));
+}
+
+test "a_resumed_stream_ends_byte_identical_to_one_that_never_dropped" {
+    const whole = frame("1", "alpha") ++ frame("2", "beta") ++ frame("3", "ga\u{4E16}mma") ++ frame("4", "delta") ++ "data: [DONE]\n";
+
+    var clean: Fixture = undefined;
+    clean.init(testing.allocator);
+    defer clean.deinit();
+    try clean.open(testing.allocator, "Seraphina");
+    try clean.stream.feed(whole);
+
+    var cut: Fixture = undefined;
+    cut.init(testing.allocator);
+    defer cut.deinit();
+    try cut.open(testing.allocator, "Seraphina");
+    try cut.stream.feed(frame("1", "alpha") ++ frame("2", "beta") ++ "id: 3\ndata: {\"content\":\"ga\xe4");
+    cut.stream.resumeTransport();
+    // The server resends whole frames from after the cursor, so frame 3 arrives again in full.
+    try testing.expectEqual(@as(u64, 2), cut.stream.last_event_id);
+    try cut.stream.feed(frame("3", "ga\u{4E16}mma") ++ frame("4", "delta") ++ "data: [DONE]\n");
+
+    try testing.expectEqualStrings(clean.body(0), cut.body(0));
+    try testing.expectEqual(clean.stream.tokens, cut.stream.tokens);
+    try testing.expectEqual(clean.stream.last_event_id, cut.stream.last_event_id);
+}
+
+test "resume_is_ignored_once_the_stream_has_already_sealed" {
+    var f: Fixture = undefined;
+    f.init(testing.allocator);
+    defer f.deinit();
+
+    try f.open(testing.allocator, "Seraphina");
+    try f.stream.feed(frame("1", "alpha") ++ "data: [DONE]\n");
+    try testing.expectEqual(State.done, f.stream.state);
+
+    f.stream.resumeTransport();
+
+    try testing.expectEqual(State.done, f.stream.state);
+    try testing.expectEqual(@as(u64, 1), f.stream.last_event_id);
+    try testing.expectEqualStrings("alpha", f.body(0));
 }
 
 test "stream_strips_a_trailing_carriage_return_before_extraction" {

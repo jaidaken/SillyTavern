@@ -1,17 +1,16 @@
-//! The notification bell's half of the state: whether its popover is up, the two faces the one
-//! button wears, and the handlers. notify_bell.zx is the markup; notifications.zig owns the store,
-//! the unread count and the read receipt.
+//! The notification bell's half of the state: whether its card is up, the two faces the one button
+//! wears, and the handlers. notify_bell.zx is the markup; notifications.zig owns the store, the
+//! unread count and the read receipt.
 //!
-//! The bell replaces the one that used to sit in the 13-icon topbar. It is not a panel: the history
-//! is a glance, not a place you navigate to, so it opens beside the tab it belongs to instead of
-//! taking a dock and pushing the conversation aside.
+//! The bell is a permanent top-bar button. Its card is not a panel: the history is a glance, not a
+//! place you navigate to, so it drops from the bar instead of taking a dock and pushing the
+//! conversation aside. Opening it closes the system card, arbitrated in topbar_menus.zig.
 
 const std = @import("std");
 const zx = @import("zx");
 
 const notifications = @import("./notifications.zig");
 const regions = @import("../shell/regions.zig");
-const edgetabs_state = @import("../nav/edgetabs_state.zig");
 const overlay_exit = @import("../platform/overlay_exit.zig");
 const dom_event = @import("../platform/dom_event.zig");
 
@@ -36,18 +35,11 @@ pub fn isClosing() bool {
     return exit.isClosing();
 }
 
-/// The bell rides the CAST TAB'S REVEAL: it is there whenever that tab is, and gone whenever it is.
-///
-/// The alternative shapes both fail. A bell that keys on the unread count alone can only be reached
-/// by being lucky enough to have unread items, and nothing you have already read is ever reviewable
-/// again. A permanently-visible bell costs resting chrome, which is the thing this whole rework is
-/// removing. Reaching for the right edge is already the gesture that summons navigation, so arriving
-/// with the tab costs nothing at rest and keeps the history always reachable.
-///
-/// It also stays while its own popover is up, whatever the pointer is doing: the button that opened
-/// the card is the button that closes it, and it cannot fade out from under that job.
-pub fn bellShown() bool {
-    return exit.isMounted() or edgetabs_state.tabShown(.right);
+/// Close on behalf of the other top-bar menu (topbar_menus.zig). A no-op when already shut, so the
+/// arbiter can call it unconditionally. Leaves focus ALONE: the card is being swapped for the system
+/// card, so pulling focus onto the bell would steal it from the button the user just pressed.
+pub fn closeIfOpen() void {
+    if (exit.isOpen()) closePopoverInner(false);
 }
 
 /// The COUNT is the part that keys on unread, so a quiet app shows a bell with nothing on it. Empty
@@ -125,9 +117,14 @@ pub fn onKey(ev: zx.client.Event) void {
 /// before anyone saw it. Opening IS the read receipt (markAllRead in onToggle), the behaviour the
 /// drawer had, so the count clears as the list is shown rather than needing a second gesture.
 fn closePopover() void {
+    closePopoverInner(true);
+}
+
+/// `restore_focus` is false only for the arbiter's swap path, where another control is taking focus.
+fn closePopoverInner(restore_focus: bool) void {
     if (!exit.requestClose()) return;
     regions.bumpShell();
-    focusId("notify-bell");
+    if (restore_focus) focusId("notify-bell");
     if (zx.platform.role == .client) _ = zx.client.setTimeout(closeTick, close_ms);
 }
 

@@ -11,6 +11,19 @@
     border-radius: var(--radius-full);
     background: var(--color-faint);
 }
+/* In the top bar the dot is the only colour in a row of monochrome chrome, so it gets a soft halo to
+   read as a lit indicator rather than a stray bullet. Scoped to #conn-chip: the same dot inside the
+   connections panel sits among other colour and needs no help. */
+#conn-chip .conn-dot {
+    color: var(--color-faint);
+    box-shadow: 0 0 6px -1px currentcolor;
+}
+
+#conn-chip[data-conn-state="connected"] .conn-dot { color: var(--color-status-success); }
+#conn-chip[data-conn-state="asleep"] .conn-dot,
+#conn-chip[data-conn-state="offline"] .conn-dot { color: var(--color-status-warning); }
+#conn-chip[data-conn-state="err"] .conn-dot { color: var(--color-status-error); }
+#conn-chip[data-conn-state="configured"] .conn-dot { color: var(--color-status-info); }
 [data-conn-state="connected"] .conn-dot { background: var(--color-status-success); }
 [data-conn-state="asleep"] .conn-dot { background: var(--color-status-warning); }
 [data-conn-state="offline"] .conn-dot { background: var(--color-status-warning); }

@@ -720,7 +720,7 @@ const MAX_PAGE_LIMIT = 100000;
 /**
  * Resolves which chat file a request targets, unifying the solo and group families.
  */
-class ChatRef {
+export class ChatRef {
     /** @param {string} filePath Resolved chat file path. */
     constructor(filePath) {
         this.filePath = filePath;
@@ -1919,7 +1919,61 @@ function tailToken(headerRaw, messages, limit) {
  * Appends messages to an existing chat without reading or overwriting the whole file, so a
  * windowed client that holds only a tail can persist new turns. Existing bytes are copied
  * forward verbatim: the header and every prior line stay byte-identical, history never truncates.
+ *
+ * The one append writer in the process: the /append route and the server-owned generation
+ * completion both come through here, so an assistant turn has exactly one path onto disk.
+ * @param {any} user The request user with resolved directories and profile.
+ * @param {ChatRef} ref The resolved target chat.
+ * @param {string} cardName Card name or group id, used for backups and cache busting.
+ * @param {Array<object>} messages Non-empty array of message objects to append.
+ * @param {string|null} changeToken Optimistic-concurrency token, or null to append unconditionally.
+ * @param {*} limit The caller's window size, used only for the returned tail token.
+ * @returns {Promise<{ok: true, appended: number, change_token: string, tail_token: string}|{ok: false, status: number, error: string, change_token?: string}>}
  */
+export async function appendChatMessages(user, ref, cardName, messages, changeToken = null, limit = undefined) {
+    const isMessageObject = m => m !== null && typeof m === 'object' && !Array.isArray(m);
+    if (!Array.isArray(messages) || messages.length === 0 || !messages.every(isMessageObject)) {
+        return { ok: false, status: 400, error: 'messages must be a non-empty array of objects' };
+    }
+    const handle = user.profile.handle;
+    const backupsDir = user.directories.backups;
+
+    const fileStat = await fs.promises.stat(ref.filePath).catch(() => null);
+    if (!fileStat || fileStat.size === 0) {
+        return { ok: false, status: 404, error: 'not_found' };
+    }
+
+    return await withFileLock(ref.filePath, async () => {
+        const raw = await tryReadFile(ref.filePath);
+        if (raw === null || raw.length === 0) {
+            return { ok: false, status: 404, error: 'not_found' };
+        }
+        const parsed = parseChatContent(raw);
+        // Gate on the whole-file token, not the tail token: the tail token depends on the window
+        // limit, so a client that re-synced at one limit and appends at another would 409 forever.
+        const entryToken = computeFullToken(parsed.headerRaw, parsed.messages);
+        if (typeof changeToken === 'string' && changeToken !== entryToken) {
+            return { ok: false, status: 409, error: 'version_mismatch', change_token: entryToken };
+        }
+        if (cfIdEnabled) {
+            mintChatIds(messages);
+        }
+        const appendedRaw = messages.map(m => JSON.stringify(m)).join('\n');
+        const base = raw.endsWith('\n') ? raw.slice(0, -1) : raw;
+        await tryWriteFile(ref.filePath, `${base}\n${appendedRaw}`);
+        chatInfoCache.delete(ref.filePath);
+        getBackupFunction(handle)(backupsDir, cardName, `${base}\n${appendedRaw}`);
+        bustCharacterListCacheForCharacter(handle, cardName);
+        const after = await readChatFile(ref.filePath);
+        return {
+            ok: true,
+            appended: messages.length,
+            change_token: computeFullToken(after.headerRaw, after.messages),
+            tail_token: tailToken(after.headerRaw, after.messages, limit),
+        };
+    });
+}
+
 router.post('/append', async function (request, response) {
     try {
         const resolved = resolveUndoRef(request);
@@ -1927,57 +1981,30 @@ router.post('/append', async function (request, response) {
             return response.sendStatus(400);
         }
         const messages = request.body.messages;
-        const isMessageObject = m => m !== null && typeof m === 'object' && !Array.isArray(m);
-        if (!Array.isArray(messages) || messages.length === 0 || !messages.every(isMessageObject)) {
-            return response.status(400).send({ error: 'messages must be a non-empty array of objects' });
+        const changeToken = typeof request.body.change_token === 'string' ? request.body.change_token : null;
+        const result = await appendChatMessages(request.user, resolved.ref, resolved.cardName, messages, changeToken, request.body.limit);
+        if (!result.ok) {
+            const body = result.status === 409
+                ? { error: 'version_mismatch', change_token: result.change_token }
+                : { error: result.error };
+            return response.status(result.status).send(body);
         }
-        const handle = request.user.profile.handle;
-        const backupsDir = request.user.directories.backups;
-
-        const fileStat = await fs.promises.stat(resolved.ref.filePath).catch(() => null);
-        if (!fileStat || fileStat.size === 0) {
-            return response.status(404).send({ error: 'not_found' });
-        }
-
-        await withFileLock(resolved.ref.filePath, async () => {
-            const raw = await tryReadFile(resolved.ref.filePath);
-            if (raw === null || raw.length === 0) {
-                return response.status(404).send({ error: 'not_found' });
-            }
-            const parsed = parseChatContent(raw);
-            // Gate on the whole-file token, not the tail token: the tail token depends on the window
-            // limit, so a client that re-synced at one limit and appends at another would 409 forever.
-            const entryToken = computeFullToken(parsed.headerRaw, parsed.messages);
-            if (typeof request.body.change_token === 'string' && request.body.change_token !== entryToken) {
-                return response.status(409).send({ error: 'version_mismatch', change_token: entryToken });
-            }
-            if (cfIdEnabled) {
-                mintChatIds(messages);
-            }
-            const appendedRaw = messages.map(m => JSON.stringify(m)).join('\n');
-            const base = raw.endsWith('\n') ? raw.slice(0, -1) : raw;
-            await tryWriteFile(resolved.ref.filePath, `${base}\n${appendedRaw}`);
-            chatInfoCache.delete(resolved.ref.filePath);
-            getBackupFunction(handle)(backupsDir, resolved.cardName, `${base}\n${appendedRaw}`);
-            bustCharacterListCacheForCharacter(handle, resolved.cardName);
-            const after = await readChatFile(resolved.ref.filePath);
-            // Hot path: the appended messages ride the event so another device appends them
-            // directly instead of refetching the whole chat file.
-            emitForRequest(request, 'chat-appended', {
-                card: resolved.cardName,
-                file: request.body.file_name ? String(request.body.file_name) : null,
-                group_id: request.body.group_id ? String(request.body.group_id) : null,
-                messages,
-                change_token: computeFullToken(after.headerRaw, after.messages),
-            });
-            // change_token is the whole-file token (the append gate); tail_token refreshes the reader's
-            // window path in the same response, mirroring runMutation's edit/delete contract.
-            return response.send({
-                ok: true,
-                appended: messages.length,
-                change_token: computeFullToken(after.headerRaw, after.messages),
-                tail_token: tailToken(after.headerRaw, after.messages, request.body.limit),
-            });
+        // Hot path: the appended messages ride the event so another device appends them
+        // directly instead of refetching the whole chat file.
+        emitForRequest(request, 'chat-appended', {
+            card: resolved.cardName,
+            file: request.body.file_name ? String(request.body.file_name) : null,
+            group_id: request.body.group_id ? String(request.body.group_id) : null,
+            messages,
+            change_token: result.change_token,
+        });
+        // change_token is the whole-file token (the append gate); tail_token refreshes the reader's
+        // window path in the same response, mirroring runMutation's edit/delete contract.
+        return response.send({
+            ok: true,
+            appended: result.appended,
+            change_token: result.change_token,
+            tail_token: result.tail_token,
         });
     } catch (error) {
         log.chat.error(error);

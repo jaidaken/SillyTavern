@@ -36,24 +36,30 @@ pub fn MessageView(allocator: zx.Allocator, props: MessageProps) zx.Component {
     // The message frame keeps its bare class names. `mes`, `mes_name` and `mes_text` are the app's
     // API: the regression gate greps the served HTML for those exact class attributes, and the body
     // is markdown rendered at runtime, so no class of ours can reach inside it. Their styling, the
-    // candlelight margin rule and the arrival settle with it, stays in the stylesheet. The avatar is
-    // plain authored chrome, so it wears utilities.
+    // candlelight margin rule and the arrival settle with it, stays in the stylesheet.
+    //
+    // .mes is a FLEX row of two items, the avatar and .mes-body. The avatar's size is a reading
+    // control now, and as a grid item spanning every row a tall one had its surplus height shared out
+    // between the rows, opening a gap under the name. Two flex items cannot do that. The avatar's
+    // size therefore comes from the stylesheet (--avatar-size), not a utility on the element.
     return (
         <div @allocator={allocator} class="mes" data-abs-index={props.abs_index} aria-busy={if (props.streaming) "true" else "false"}>
             { if (props.msg.avatar.len > 0) (
-                <img class="mes_avatar row-span-full mt-[0.15em] size-[1.8rem] flex-none cursor-pointer rounded-[4px] object-cover hover:brightness-110 max-[640px]:size-[1.5rem]" src={props.msg.avatar} alt={props.msg.name} loading="lazy" />
+                <img class="mes_avatar mt-[0.15em] flex-none cursor-pointer rounded-[4px] object-cover hover:brightness-110" src={props.msg.avatar} alt={props.msg.name} loading="lazy" />
             ) }
-            <div class="mes_name">{props.msg.name}</div>
-            <div class={reasoning_class}>
-                <button
-                    type="button"
-                    class="mes_reasoning_toggle"
-                    data-reason-toggle={props.abs_index}
-                    aria-expanded={if (reasoning_open) "true" else "false"}
-                >Thinking</button>
-                <div class={reasoning_body_class} @escaping={.none}>{html.sink(reasoning_html)}</div>
+            <div class="mes-body">
+                <div class="mes_name">{props.msg.name}</div>
+                <div class={reasoning_class}>
+                    <button
+                        type="button"
+                        class="mes_reasoning_toggle"
+                        data-reason-toggle={props.abs_index}
+                        aria-expanded={if (reasoning_open) "true" else "false"}
+                    >Thinking</button>
+                    <div class={reasoning_body_class} @escaping={.none}>{html.sink(reasoning_html)}</div>
+                </div>
+                <div class={text_class} style={speakerVar(allocator, props.msg.name)} @escaping={.none}>{html.sink(body)}</div>
             </div>
-            <div class={text_class} style={speakerVar(allocator, props.msg.name)} @escaping={.none}>{html.sink(body)}</div>
             <MessageMenuTrigger abs={props.abs_index} />
         </div>
     );

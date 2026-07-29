@@ -225,6 +225,27 @@ class Page {
     async insertText(text) {
         await this.cdp.send('Input.insertText', { text }, this.sessionId);
     }
+    /// A REAL key press, for the paths that only a keyboard reaches (the command palette's Ctrl-K, an
+    /// Enter on its selected row). insertText fires an input event and never a keydown, so it cannot
+    /// drive a shortcut. `windowsVirtualKeyCode` matters: the door reports document-level keys by
+    /// code, and a dispatch without one arrives as key 0.
+    async key(key, { ctrl = false, code = null, vk = null } = {}) {
+        const KEYS = {
+            Enter: { code: 'Enter', vk: 13, text: '\r' },
+            Escape: { code: 'Escape', vk: 27 },
+            ArrowDown: { code: 'ArrowDown', vk: 40 },
+            ArrowUp: { code: 'ArrowUp', vk: 38 },
+        };
+        const spec = KEYS[key] || { code: code || `Key${key.toUpperCase()}`, vk: vk || key.toUpperCase().charCodeAt(0) };
+        const base = {
+            key, code: spec.code, windowsVirtualKeyCode: spec.vk, nativeVirtualKeyCode: spec.vk,
+            modifiers: ctrl ? 2 : 0,
+        };
+        await this.cdp.send('Input.dispatchKeyEvent',
+            { type: spec.text && !ctrl ? 'keyDown' : 'rawKeyDown', ...base, text: ctrl ? undefined : spec.text },
+            this.sessionId);
+        await this.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base }, this.sessionId);
+    }
     sawConsole(needle) {
         return this.consoleLines.some((l) => l.includes(needle));
     }
@@ -448,14 +469,13 @@ async function main() {
                 root: '#card-editor',
                 back: '#card-editor-back',
             },
-            // #notify-bell is ALWAYS in the DOM and rides the Cast tab's reveal, so presence proves
-            // nothing and the pointer has to reach the right flank before the click lands. The count
-            // chip is a separate child, absent at zero unread; the button's aria-label carries the
-            // number, which is the readable half of the same fact.
+            // #notify-bell is a permanent top-bar button: always in the DOM AND always clickable, so it
+            // needs no `reveal` (it rode the Cast tab's proximity fade before moving into the bar). The
+            // count chip is a separate child, absent at zero unread; the button's aria-label carries
+            // the number, which is the readable half of the same fact.
             notifications: {
                 kind: 'toggle',
                 control: '#notify-bell',
-                reveal: 'right',
                 root: '#notify-popover',
                 close: '#notify-popover button[aria-label="Close notifications"]',
             },
@@ -816,6 +836,73 @@ async function main() {
             'C-TAB-SYNC the edge tab travels with the panel, not after it',
             `panel=${panelMoved.toFixed(1)} tab=${tabMoved.toFixed(1)}`);
 
+        // C-MENU-OVER: a top-bar card must outrank an open dock, and this is a HIT TEST rather than a
+        // z-index read because a z-index read is exactly what missed the bug. The cards once rendered
+        // inside #topbar, whose z-20 makes it a stacking context: the card declared z-[70], the dock
+        // only z-40, and the dock still won, because the whole BAR was competing at 20. Computed style
+        // reported 70 the entire time. Only elementFromPoint at the card's own centre caught it, so
+        // that is what this asserts, plus the structural cause (the card is not inside the bar).
+        // Opened only if it is not already: the right dock survives from A8/A9b above, and an
+        // unconditional tab click would TOGGLE it shut, leaving nothing for the card to sit over.
+        if (!await page.eval(`!!document.querySelector('${dockSel('right')}')`)) {
+            await page.click(SIDE_TAB.right);
+        }
+        const menuDockOpen = await page.waitFor(`document.querySelector('${dockSel('right')}')`, 8000);
+        await page.eval(`(function(){var b=document.querySelector('#notify-bell');if(b)b.click();return true})()`);
+        await page.waitFor("document.querySelector('#notify-popover')", 4000);
+        await sleep(350);
+        const overDock = await page.eval(`(function(){
+            var pop = document.querySelector('#notify-popover');
+            var dock = document.querySelector('${dockSel('right')}');
+            if (!pop || !dock) return { err: 'missing', pop: !!pop, dock: !!dock };
+            var r = pop.getBoundingClientRect();
+            var hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+            return { clickLands: pop.contains(hit), insideBar: !!pop.closest('#topbar'),
+                     popZ: getComputedStyle(pop).zIndex, dockZ: getComputedStyle(dock).zIndex,
+                     hit: hit ? (hit.id || hit.tagName) : null };
+        })()`);
+        row('must', menuDockOpen && overDock.clickLands === true && overDock.insideBar === false,
+            'C-MENU-OVER a top-bar card takes the click over an open dock, not just a higher z-index',
+            `dockOpen=${menuDockOpen} ${JSON.stringify(overDock)}`);
+
+        // C-MENU-EXCL: the two cards drop from the same corner and each is wider than the gap between
+        // their buttons, so both open at once would overlap and the newer would eat the older's clicks.
+        // Opening either closes the other (topbar_menus.zig). Asserted BOTH ways: a one-way close
+        // would still leave the pair overlapping when opened in the other order.
+        await page.eval(`(function(){var g=document.querySelector('#sys-gear');if(g)g.click();return true})()`);
+        await page.waitFor("document.querySelector('#sys-popover')", 4000);
+        await sleep(350);
+        const gearWins = await page.eval("({ notify: !!document.querySelector('#notify-popover'), sys: !!document.querySelector('#sys-popover') })");
+        await page.eval(`(function(){var b=document.querySelector('#notify-bell');if(b)b.click();return true})()`);
+        await page.waitFor("document.querySelector('#notify-popover')", 4000);
+        await sleep(350);
+        const bellWins = await page.eval("({ notify: !!document.querySelector('#notify-popover'), sys: !!document.querySelector('#sys-popover') })");
+        row('must', gearWins.sys && !gearWins.notify && bellWins.notify && !bellWins.sys,
+            'C-MENU-EXCL the two top-bar cards are mutually exclusive, in both orders',
+            `gear=${JSON.stringify(gearWins)} bell=${JSON.stringify(bellWins)}`);
+
+        // C-MENU-EXCL-2: the palette is the system card's SECOND door, and it opened the card without
+        // going through the arbiter, so a bell card left open stayed open underneath it. Exclusivity
+        // asserted per ENTRY POINT, not once: a third door would need its own row here.
+        await page.eval(`(function(){var b=document.querySelector('#notify-bell');if(b&&!document.querySelector('#notify-popover'))b.click();return true})()`);
+        await page.waitFor("document.querySelector('#notify-popover')", 4000);
+        await page.key('k', { ctrl: true });
+        const paletteUp = await page.waitFor("!!document.querySelector('#palette-input')", 4000);
+        await page.insertText('system');
+        await sleep(250);
+        await page.key('Enter');
+        await page.waitFor("document.querySelector('#sys-popover')", 4000);
+        await sleep(400);
+        const paletteExcl = await page.eval("({ notify: !!document.querySelector('#notify-popover'), sys: !!document.querySelector('#sys-popover') })");
+        row('must', paletteUp && paletteExcl.sys === true && paletteExcl.notify === false,
+            'C-MENU-EXCL-2 opening the system card from the palette also closes the bell card',
+            `paletteUp=${paletteUp} ${JSON.stringify(paletteExcl)}`);
+        await page.key('Escape');
+        await sleep(300);
+        await page.eval(`(function(){var b=document.querySelector('#notify-bell');if(b)b.click();return true})()`);
+        await page.click(SIDE_TAB.right);
+        await page.waitFor(`!document.querySelector('${dockSel('right')}')`, 4000);
+
         // ---- the edge tabs themselves ----
         // Every row above reaches a panel through a tab that ?showtabs pinned, so nothing yet asks
         // whether an UNPINNED tab appears at all. These three load without the flag and drive the
@@ -898,6 +985,180 @@ async function main() {
         row('must', fAtk && fLit && fNws,
             'A13 the reading Font control changes the .mes_text computed family (Atkinson/Literata/Newsreader)',
             `atkinson=${fAtk} literata=${fLit} newsreader=${fNws}`);
+
+        /* C-LAYOUT: the reading LAYOUTS, which had no coverage at all until every one of their
+           regressions landed on the operator's screen instead of here (2026-07-28). Each layout is
+           asserted on what it MEANS, from the typesetting research (wiki topic
+           fiction-dialogue-typesetting), not on a class name:
+             chat  - imposes NOTHING: no indent, keeps the paragraph gap, speech inline.
+             novel - prose convention: speech INLINE with its tag, first-line indent, gap 0.
+             stage/vn - script convention: speech and narration set as their own lines.
+           The load-bearing row is C-LAYOUT-2. An indent control that applied to every layout once made
+           chat byte-identical to novel, and nothing failed. */
+        console.log('== C-LAYOUT the reading layouts ==');
+        {
+            const layoutFacts = async (mode) => {
+                await page.eval(`(function(){document.getElementById('chat-root').setAttribute('data-reading-indent',${JSON.stringify(mode)});return 1})()`);
+                await sleep(120);
+                return page.eval(`(function(){
+                    var t = document.querySelector('#chat .mes_text');
+                    var p = t.querySelector('p');
+                    var q = t.querySelector('q.custom-q-turn');
+                    var n = t.querySelector('span.custom-narr');
+                    var cs = getComputedStyle(p);
+                    // The indent lives on the LINE (the model's paragraph), not on the <p>, so read it
+                    // there: reading the paragraph reported 0 and hid whether the indent worked at all.
+                    var lines = t.querySelectorAll('span.custom-line');
+                    var first = lines[0], later = lines[lines.length - 1];
+                    return { indent: first ? getComputedStyle(first).textIndent : null,
+                             lastLineIndent: later ? getComputedStyle(later).textIndent : null,
+                             lineDisplay: first ? getComputedStyle(first).display : null,
+                             gap: cs.marginBottom,
+                             speech: q ? getComputedStyle(q).display : null,
+                             narr: n ? getComputedStyle(n).display : null };
+                })()`);
+            };
+            const lChat = await layoutFacts('chat');
+            const lNovel = await layoutFacts('novel');
+            const lStage = await layoutFacts('stage');
+            const lVn = await layoutFacts('vn');
+
+            row('must', lChat.indent === '0px' && parseFloat(lChat.lastLineIndent) === 0
+                && parseFloat(lChat.gap) > 0 && lChat.speech === 'inline',
+                'C-LAYOUT-1 Chat imposes nothing: no indent, paragraph gap kept, speech inline',
+                JSON.stringify(lChat));
+
+            row('must', JSON.stringify(lChat) !== JSON.stringify(lNovel),
+                'C-LAYOUT-2 Chat and Novel are DIFFERENT layouts, not the same one twice',
+                `chat=${JSON.stringify(lChat)} novel=${JSON.stringify(lNovel)}`);
+
+            // The SINGLE-paragraph message, which is the commonest one a model writes and the exact
+            // case that rendered identically in both layouts when the first paragraph was set flush.
+            const oneParaFacts = async (mode) => {
+                await page.eval(`(function(){
+                    document.getElementById('chat-root').setAttribute('data-reading-indent',${JSON.stringify(mode)});
+                    var t=document.querySelector('#chat .mes_text');
+                    t.innerHTML='<p><span class="custom-line"><span class="custom-narr">One paragraph, no breaks at all, exactly as a model usually writes a turn.</span></span></p>';
+                    return 1})()`);
+                await sleep(120);
+                return page.eval(`(function(){var l=document.querySelector('#chat .mes_text span.custom-line');
+                    return { indent:getComputedStyle(l).textIndent };})()`);
+            };
+            const oneChat = await oneParaFacts('chat');
+            const oneNovel = await oneParaFacts('novel');
+            row('must', parseFloat(oneChat.indent) === 0 && parseFloat(oneNovel.indent) > 0,
+                'C-LAYOUT-2b a single-paragraph message still renders differently in Chat and Novel',
+                `chat=${JSON.stringify(oneChat)} novel=${JSON.stringify(oneNovel)}`);
+
+            // EVERY paragraph indents, the first included. A message is a continuation of one running
+            // scene, not a chapter opening, and the flush-first convention applied per message made a
+            // single-paragraph message (the commonest kind) render identically to Chat.
+            row('must', parseFloat(lNovel.indent) > 0 && parseFloat(lNovel.lastLineIndent) > 0
+                && parseFloat(lNovel.gap) === 0 && lNovel.speech === 'inline' && lNovel.lineDisplay === 'block',
+                'C-LAYOUT-3 Novel is the prose convention: speech inline, every paragraph indented, no gap',
+                JSON.stringify(lNovel));
+
+            row('must', lStage.speech === 'block' && lVn.speech === 'block'
+                && lStage.narr === 'block' && lVn.narr === 'block',
+                'C-LAYOUT-4 Stage and VN are the script convention: speech and narration each take their own line',
+                `stage=${JSON.stringify(lStage)} vn=${JSON.stringify(lVn)}`);
+
+            // The deleted speech-on-its-own-line layout must not come back as a fifth button, and a
+            // profile still holding its stored value has to land on novel rather than on no rule at all.
+            const offered = await page.eval(`[...document.querySelectorAll('[data-reading-set="indent"]')].map(function(b){return b.dataset.readingVal})`);
+            row('must', Array.isArray(offered) && offered.length === 4
+                && offered.join(',') === 'chat,novel,stage,vn',
+                'C-LAYOUT-5 exactly four layouts are offered, and blockquote is not one of them',
+                JSON.stringify(offered));
+
+            await page.eval(`(function(){localStorage.setItem('st-reading-indent','blockquote');return 1})()`);
+            await page.navigate(`${args.base}/?demo=1`);
+            await page.waitFor(hydrated, 15000);
+            const migrated = await page.eval(`(function(){return {attr:document.getElementById('chat-root').getAttribute('data-reading-indent'),stored:localStorage.getItem('st-reading-indent')}})()`);
+            row('must', migrated.attr === 'novel' && migrated.stored === 'novel',
+                'C-LAYOUT-6 a profile stored on the deleted blockquote layout migrates once to novel',
+                JSON.stringify(migrated));
+
+            // The structural invariant narration.zig exists for: every run of narration is an ELEMENT,
+            // never loose text, so a layout has something to attach a first-line indent to. Bare text
+            // among block siblings is the anonymous box that no selector and no indent can reach.
+            const bare = await page.eval(`(function(){
+                var out = [];
+                [...document.querySelectorAll('#chat .mes_text p')].forEach(function(p){
+                    [...p.childNodes].forEach(function(n){
+                        if (n.nodeType === 3 && n.nodeValue.trim()) out.push(n.nodeValue.trim().slice(0, 24));
+                    });
+                });
+                return { paragraphs: document.querySelectorAll('#chat .mes_text p').length, bare: out };
+            })()`);
+            row('must', bare.paragraphs > 0 && bare.bare.length === 0,
+                'C-LAYOUT-7 every narration run is an element, so no paragraph holds loose unstyleable text',
+                JSON.stringify(bare));
+
+            // THE ROW THAT PROVES NOVEL DOES SOMETHING. A model writes a turn as one unbroken block, so
+            // Novel has to INSERT the paragraph breaks; indenting one block only indents one line of
+            // it, which is why Chat and Novel looked identical on the operator's screen twice.
+            // Asserted on the RENDERED result: more vertical bands in Novel than in Chat.
+            const bandFacts = async (mode) => {
+                await page.eval(`(function(){
+                    document.getElementById('chat-root').setAttribute('data-reading-indent',${JSON.stringify(mode)});
+                    var t=document.querySelector('#chat .mes_text');
+                    // allow-raw-html-sink: driver-only literal, the exact markup narration.zig emits.
+                    t.innerHTML='<p><span class="custom-line">'
+                      + '<span class="custom-seg"><span class="custom-narr">She crossed the room and stopped at the glass. </span></span>'
+                      + '<span class="custom-seg"><q class="custom-q-turn">Stay.</q><span class="custom-narr"> he said, not turning.</span></span>'
+                      + '<span class="custom-seg"><span class="custom-narr"> The rain had not let up all evening.</span></span>'
+                      + '</span></p>';
+                    return 1})()`);
+                await sleep(120);
+                return page.eval(`(function(){
+                    // Scoped to the injected message: the demo chat's other messages carry segs too.
+                    var segs=[...document.querySelector('#chat .mes_text').querySelectorAll('span.custom-seg')];
+                    var tops=[...new Set(segs.map(function(s){return Math.round(s.getBoundingClientRect().top)}))];
+                    return { segs: segs.length, bands: tops.length,
+                             display: segs[0] ? getComputedStyle(segs[0]).display : null,
+                             indent: segs[1] ? getComputedStyle(segs[1]).textIndent : null };
+                })()`);
+            };
+            const bChat = await bandFacts('chat');
+            const bNovel = await bandFacts('novel');
+            row('must', bNovel.bands === 3 && bChat.bands === 1
+                && bNovel.display === 'block' && bChat.display === 'inline'
+                && parseFloat(bNovel.indent) > 0,
+                'C-LAYOUT-8 Novel breaks a run-together turn into paragraphs; Chat leaves it as one',
+                `chat=${JSON.stringify(bChat)} novel=${JSON.stringify(bNovel)}`);
+
+            // The Indent toggle lifts NOVEL'S first-line indent and nothing else. The first Indent
+            // toggle restyled every layout and made Chat identical to Novel; this row is the fence
+            // against that coming back: gaps must survive off, and Chat must not read the attribute.
+            const indentFacts = async (layout, para) => {
+                await page.eval(`(function(){
+                    var r=document.getElementById('chat-root');
+                    r.setAttribute('data-reading-indent',${JSON.stringify(layout)});
+                    r.setAttribute('data-reading-paraindent',${JSON.stringify(para)});
+                    return 1})()`);
+                await sleep(120);
+                return page.eval(`(function(){
+                    var s=document.querySelector('#chat .mes_text span.custom-seg');
+                    var cs=getComputedStyle(s);
+                    return { indent: cs.textIndent, mt: cs.marginTop, display: cs.display };})()`);
+            };
+            const piOn = await indentFacts('novel', 'on');
+            const piOff = await indentFacts('novel', 'off');
+            const piChat = await indentFacts('chat', 'off');
+            row('must', parseFloat(piOn.indent) > 0 && parseFloat(piOff.indent) === 0
+                && parseFloat(piOff.mt) > 0 && piOff.display === 'block'
+                && piChat.display === 'inline',
+                'C-LAYOUT-9 the Indent toggle lifts Novel first-line indent only: gaps stay, Chat unaffected',
+                `on=${JSON.stringify(piOn)} off=${JSON.stringify(piOff)} chat=${JSON.stringify(piChat)}`);
+
+            await page.eval(`(function(){var r=document.getElementById('chat-root');r.setAttribute('data-reading-indent','chat');r.setAttribute('data-reading-paraindent','on');return 1})()`);
+        }
+        /* C-LAYOUT END */
+
+        await openPanel('settings');
+        await page.click('.settings-tab[data-reading-val="reading"]');
+        await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-tab')==='reading'", 2500);
 
         // Numeric size persists through a reload: the slider writes localStorage, and applyAll re-applies
         // the inline --reading-size at boot before the first paint.
@@ -1255,10 +1516,12 @@ async function main() {
         await page.click('#composer button[aria-label="Send"]');
         await page.waitFor("(function(){var m=document.querySelectorAll('#chat .mes');return m.length && m[m.length-1].textContent.includes('lantern')})()", 8000);
         let chipShown = false;
-        for (let i = 0; i < 14 && !chipShown; i++) {
+        // Read AFTER the settle has had a frame to react to the scroll, not in the same tick as the
+        // write: the pin releases on the frame following the one that moved the scroller.
+        for (let i = 0; i < 30 && !chipShown; i++) {
             await page.eval("document.getElementById('chat').scrollTop = 0");
+            await sleep(120);
             chipShown = await page.eval("!!document.querySelector('.chat-newmsg-chip.is-visible')");
-            await sleep(60);
         }
         const chipExists = await page.eval("!!document.querySelector('.chat-newmsg-chip')");
         await page.eval("(function(){var c=document.getElementById('chat');c.scrollTop = c.scrollHeight;})()");
@@ -1274,6 +1537,234 @@ async function main() {
         await page.click('#composer button[aria-label="Stop"]');
         const stopped = await page.waitFor(`${idle} && (function(){var m=document.querySelectorAll('#chat .mes');var t=m[m.length-1].textContent;return t.includes('w2') && !t.includes('FIN')})()`, 5000);
         row('must', stopped, 'SL-stop seals the reply partial (no FIN) and returns to idle');
+
+        // The generation is the server's now, so a stop that only closes the local reader would leave
+        // the model running. This row reads the server's own view of it.
+        const stopState = await (await fetch(`${args.base}/dev/gen-state`)).json();
+        row('must', stopState.latest && stopState.latest.status === 'stopped' && stopState.running.length === 0,
+            'SL-STOP-SERVER stop ends the generation on the server, not just in the tab',
+            `status=${stopState.latest && stopState.latest.status} running=${stopState.running.length}`);
+
+        // Body text only: the think block streams into its own region, so the message body starts at
+        // the closing tag. Whitespace is normalised because the markdown render owns the spacing.
+        const normalise = (s) => s.replace(/\s+/g, ' ').trim();
+        const bodyOf = (serverText) => normalise(serverText.split('</think>').pop());
+        const lastMessageText = () => page.eval("(function(){var m=document.querySelectorAll('#chat .mes');if(!m.length)return '';var t=m[m.length-1].querySelector('.mes_text');return t?t.textContent:'';})()");
+
+        // SL-REATTACH: cut the viewer's transport mid-reply. The generation keeps running server-side,
+        // the client re-attaches at its cursor, and the finished body must equal what the server holds:
+        // a re-attach that "seemed to work" but dropped or repeated a token fails here.
+        await (await fetch(`${args.base}/dev/gen-drop-after?n=6`)).json();
+        const countBefore = await page.eval("document.querySelectorAll('#chat .mes').length");
+        await page.focus('#send_textarea');
+        await page.insertText('REATTACH PROBE');
+        await page.click('#composer button[aria-label="Send"]');
+        const grew = await page.waitFor(`document.querySelectorAll('#chat .mes').length >= ${countBefore} + 2`, 8000);
+        const reattachDone = grew && await page.waitFor(`document.body.textContent.includes('FIN') && ${idle}`, 25000);
+        const reattachState = await (await fetch(`${args.base}/dev/gen-state`)).json();
+        const reattachText = await lastMessageText();
+        const reattachExpected = reattachState.latest ? bodyOf(reattachState.latest.text) : null;
+        row('must', reattachDone && reattachState.drops >= 1 && normalise(reattachText) === reattachExpected,
+            'SL-REATTACH a dropped transport re-attaches and the reply is byte-identical',
+            `drops=${reattachState.drops} identical=${normalise(reattachText) === reattachExpected}`);
+
+        // Focus mode retires the composer after an idle spell, and every row below waits out a slow
+        // generation before it clicks again. The reveal is POINTER PROXIMITY, so the wake has to put the
+        // pointer where the composer lives, and the wait has to be on the button actually OVERLAPPING
+        // the viewport: a retired composer keeps its size and its visibility, it is just not there any
+        // more, so a size-and-visibility predicate reads ready while a click still lands on nothing.
+        const composerHittable = (label) => `(function(){
+            var b=document.querySelector('#composer button[aria-label=\\'${label}\\']');
+            if(!b) return false;
+            var r=b.getBoundingClientRect();
+            var w=Math.min(r.right,window.innerWidth)-Math.max(r.left,0);
+            var h=Math.min(r.bottom,window.innerHeight)-Math.max(r.top,0);
+            return w>0 && h>0 && getComputedStyle(b).visibility!=='hidden' && getComputedStyle(b).display!=='none';
+        })()`;
+        const wakeComposer = async (label) => {
+            for (let i = 0; i < 12; i++) {
+                const pt = await page.eval('(function(){return {x: Math.round(window.innerWidth/2), y: window.innerHeight - 12};})()');
+                await page.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: pt.x, y: pt.y, buttons: 0 }, page.sessionId);
+                await page.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: pt.x, y: pt.y - 4, buttons: 0 }, page.sessionId);
+                if (await page.waitFor(composerHittable(label), 1200)) return true;
+            }
+            const rect = await page.eval(`(function(){var b=document.querySelector('#composer button[aria-label=\\'${label}\\']');return b?JSON.stringify(b.getBoundingClientRect()):'none';})()`);
+            console.log(`wakeComposer: ${label} never became hittable, rect=${rect}`);
+            return false;
+        };
+
+        // SL-REATTACH-MIDFRAME: the row above cuts at a frame BOUNDARY, which is the tidiest drop a
+        // network never gives you. This one cuts PART WAY THROUGH a frame, one byte into the three-byte
+        // sequence for the codepoint in "w1世 ", so the viewer resumes holding an unterminated data:
+        // line and half a character. Anything that resumes onto those stale bytes loses the token,
+        // swallows the id: line behind it and mangles the codepoint, so the body stops matching.
+        await (await fetch(`${args.base}/dev/gen-cut-after?n=6`)).json();
+        await wakeComposer('Send');
+        const cutBefore = await page.eval("document.querySelectorAll('#chat .mes').length");
+        await page.focus('#send_textarea');
+        await page.insertText('MIDFRAME PROBE');
+        await page.click('#composer button[aria-label="Send"]');
+        const cutGrew = await page.waitFor(`document.querySelectorAll('#chat .mes').length >= ${cutBefore} + 2`, 8000);
+        const cutDone = cutGrew && await page.waitFor(`document.body.textContent.includes('FIN') && ${idle}`, 25000);
+        const cutState = await (await fetch(`${args.base}/dev/gen-state`)).json();
+        const cutText = await lastMessageText();
+        const cutExpected = cutState.latest ? bodyOf(cutState.latest.text) : null;
+        const cutIdentical = normalise(cutText) === cutExpected;
+        row('must', cutDone && cutState.cuts >= 1 && cutIdentical,
+            'SL-REATTACH-MIDFRAME a transport cut inside a frame resumes without losing or mangling a token',
+            `cuts=${cutState.cuts} identical=${cutIdentical} got=${JSON.stringify(normalise(cutText).slice(0, 90))}`);
+
+        // SL-REATTACH-STALE: a store reload lands INSIDE the re-attach backoff. The reload gives up the
+        // old session and opens a new one, so the timer that was armed for the old session must not
+        // open a second pump on the new one: two pumps feeding one stream double every token.
+        // The mock times the reload from the cut itself, so the overlap happens by construction rather
+        // than by a poll noticing in time; `opens` reads back the cursor of every stream open in order,
+        // which is what tells a hit window (second open at cursor 0) from a missed one.
+        await (await fetch(`${args.base}/dev/gen-pace?ms=150`)).json();
+        let staleState = null;
+        let staleText = '';
+        let staleWindowHit = false;
+        let staleOpens = [];
+        let staleIdentical = false;
+        for (let attempt = 0; attempt < 3 && !(staleWindowHit && staleIdentical); attempt++) {
+            const before = await (await fetch(`${args.base}/dev/gen-state`)).json();
+            const priorId = before.latest ? before.latest.id : null;
+            await (await fetch(`${args.base}/dev/gen-drop-after?n=4`)).json();
+            await (await fetch(`${args.base}/dev/gen-resync-after-drop?ms=50`)).json();
+            await wakeComposer('Send');
+            await page.focus('#send_textarea');
+            await page.insertText(`STALE TIMER PROBE ${attempt}`);
+            await page.click('#composer button[aria-label="Send"]');
+            // Wait on the SERVER finishing THIS generation. Screen state cannot serve: every earlier
+            // reply already left FIN in the document, and the gap between the reload dropping the
+            // stream and the re-attach opening one looks exactly as idle as a finished reply does.
+            for (let i = 0; i < 300; i++) {
+                staleState = await (await fetch(`${args.base}/dev/gen-state`)).json();
+                if (staleState.latest && staleState.latest.id !== priorId && staleState.latest.status !== 'running') break;
+                await sleep(100);
+            }
+            // Only now can the page be judged: the tokens all exist, so anything missing or doubled is
+            // the client's doing.
+            await page.waitFor(`${idle} && (function(){var m=document.querySelectorAll('#chat .mes');if(!m.length)return false;var t=m[m.length-1].querySelector('.mes_text');return !!t && t.textContent.includes('FIN');})()`, 20000);
+            staleText = await lastMessageText();
+            staleOpens = (staleState.latest && staleState.latest.opens) || [];
+            const expected = staleState.latest ? bodyOf(staleState.latest.text) : null;
+            staleIdentical = normalise(staleText) === expected;
+            // The reload's own attach always asks from 0. Seeing it SECOND means it beat the backoff,
+            // which is the only arrangement that can express the double-feed.
+            staleWindowHit = staleOpens.length >= 2 && staleOpens[1] === 0;
+            console.log(`STALE attempt ${attempt}: opens=${JSON.stringify(staleOpens)} drops=${staleState.drops} status=${staleState.latest && staleState.latest.status} identical=${staleIdentical}`);
+        }
+        row('must', staleWindowHit && staleOpens.length === 2 && staleIdentical,
+            'SL-REATTACH-STALE a reload inside the re-attach backoff does not open a second pump',
+            `windowHit=${staleWindowHit} opens=${JSON.stringify(staleOpens)} identical=${staleIdentical}`);
+
+        // SL-STOP-EARLY: stop BEFORE the start reply arrives. The client holds no generation id yet, so
+        // nothing local can name the run to the server, but the server started it the moment the POST
+        // landed. Without the id being carried forward the model runs to completion unwatched, which is
+        // the one thing an explicit stop exists to prevent.
+        await (await fetch(`${args.base}/dev/gen-pace?ms=300`)).json();
+        await (await fetch(`${args.base}/dev/gen-start-delay?ms=1200`)).json();
+        await wakeComposer('Send');
+        const earlyBefore = await page.eval("document.querySelectorAll('#chat .mes').length");
+        await page.focus('#send_textarea');
+        await page.insertText('STOP EARLY PROBE');
+        await page.click('#composer button[aria-label="Send"]');
+        // The reply bubble opens before the start POST answers, so Stop is reachable inside the window.
+        const earlyStopReady = await page.waitFor(`document.querySelectorAll('#chat .mes').length >= ${earlyBefore} + 2 && (function(){var t=document.querySelector('#composer button[aria-label=\\'Stop\\']');return !!t && getComputedStyle(t).display!=='none';})()`, 4000);
+        await page.click('#composer button[aria-label="Stop"]');
+        let earlyState = { running: [], latest: null };
+        for (let i = 0; i < 50; i++) {
+            earlyState = await (await fetch(`${args.base}/dev/gen-state`)).json();
+            if (earlyState.latest && earlyState.latest.status !== 'running') break;
+            await sleep(120);
+        }
+        row('must', earlyStopReady && earlyState.latest && earlyState.latest.status === 'stopped' && earlyState.running.length === 0,
+            'SL-STOP-EARLY a stop before the start reply still ends the generation on the server',
+            `ready=${earlyStopReady} status=${earlyState.latest && earlyState.latest.status} running=${earlyState.running.length}`);
+        // An unstopped generation would 409 every send that follows, so end it whatever the row found.
+        if (earlyState.latest && earlyState.latest.status === 'running') {
+            await fetch(`${args.base}/api/generation/${earlyState.latest.id}/stop`, { method: 'POST', body: '{}' });
+            for (let i = 0; i < 50; i++) {
+                const st = await (await fetch(`${args.base}/dev/gen-state`)).json();
+                if (st.running.length === 0) break;
+                await sleep(120);
+            }
+        }
+        await page.waitFor(idle, 8000);
+
+        // SL-DETACH-BROADCAST: giving up the view of a generation is not the same as having rendered it.
+        // A reload drops the stream, the generation finishes while the page is between the chat fetch and
+        // its "is anything running" question, and the server's own append is then the ONLY way the reply
+        // can reach this page. Recording the detached generation as one already rendered drops it.
+        await (await fetch(`${args.base}/dev/gen-pace?ms=300`)).json();
+        await wakeComposer('Send');
+        const detBefore = await page.eval("document.querySelectorAll('#chat .mes').length");
+        await page.focus('#send_textarea');
+        await page.insertText('DETACH BROADCAST PROBE');
+        await page.click('#composer button[aria-label="Send"]');
+        let detMid = { running: [], latest: null };
+        for (let i = 0; i < 80; i++) {
+            detMid = await (await fetch(`${args.base}/dev/gen-state`)).json();
+            if (detMid.running.length === 1 && detMid.latest.frames >= 4) break;
+            await sleep(100);
+        }
+        // The generation ends the instant the reloaded page asks what is running, so the chat fetch that
+        // came first cannot carry the reply and the answer is an honest "nothing is running".
+        await (await fetch(`${args.base}/dev/gen-finish-on-next-active`)).json();
+        await fetch(`${args.base}/dev/emit-event?type=chat-changed&data=${encodeURIComponent('{}')}`);
+        const detSettled = await page.waitFor(`${idle} && document.querySelectorAll('#chat .mes').length >= ${detBefore} + 1`, 15000);
+        const detState = await (await fetch(`${args.base}/dev/gen-state`)).json();
+        const detExpected = detState.latest ? bodyOf(detState.latest.text) : null;
+        const detLanded = await page.waitFor(
+            `(function(){var m=document.querySelectorAll('#chat .mes');if(!m.length)return false;var t=m[m.length-1].querySelector('.mes_text');return !!t && t.textContent.replace(/\\s+/g,' ').trim() === ${JSON.stringify(detExpected)};})()`,
+            10000);
+        row('must', detSettled && detMid.running.length === 1 && detState.latest && detState.latest.status === 'done' && detLanded,
+            'SL-DETACH-BROADCAST a generation given up mid-flight still lands from the server append',
+            `wasRunning=${detMid.running.length} status=${detState.latest && detState.latest.status} landed=${detLanded}`);
+        await (await fetch(`${args.base}/dev/gen-pace?ms=60`)).json();
+        // Leave a normal completed reply as the last message: the rows below read it.
+        await wakeComposer('Send');
+        await sendProbe('MIDFRAME BLOCK RESET');
+
+        // SL-RELOAD: reload the page mid-generation. The old client lost every token that had already
+        // streamed; this one asks the server what is running and rebuilds the whole reply from the log.
+        await (await fetch(`${args.base}/dev/gen-pace?ms=220`)).json();
+        await page.focus('#send_textarea');
+        await page.insertText('RELOAD PROBE');
+        await page.click('#composer button[aria-label="Send"]');
+        // The server's own view of the generation, not page text: every earlier reply already put
+        // "lantern" in the document, so a text predicate here would return before this send started.
+        let midFlight = { running: [] };
+        for (let i = 0; i < 60; i++) {
+            midFlight = await (await fetch(`${args.base}/dev/gen-state`)).json();
+            if (midFlight.running.length === 1 && midFlight.latest.frames >= 5) break;
+            await sleep(100);
+        }
+        await page.navigate(`${args.base}/`);
+        await openRecentChat();
+
+        // SL-REATTACH-LIVE: the re-attached reply must present as LIVE, not just render. The busy
+        // marker is what the composer's Send/Stop toggle keys off, so if it is missing the user sees
+        // Send during a running reply, cannot stop it, and a click on it does nothing.
+        const liveMarked = await page.waitFor("!!document.querySelector('#chat .mes[aria-busy=\\'true\\']')", 10000);
+        const stopOffered = await page.eval("(function(){var s=document.querySelector('#composer button[aria-label=\\'Send\\']');var t=document.querySelector('#composer button[aria-label=\\'Stop\\']');return (t&&getComputedStyle(t).display!=='none')&&(s&&getComputedStyle(s).display==='none');})()");
+        row('must', liveMarked && stopOffered,
+            'SL-REATTACH-LIVE a re-attached reply reads as live, so Stop is offered and Send is not',
+            `busy=${liveMarked} stopShown=${stopOffered}`);
+
+        const reloadDone = await page.waitFor(`document.body.textContent.includes('FIN') && ${idle}`, 30000);
+        const reloadState = await (await fetch(`${args.base}/dev/gen-state`)).json();
+        const reloadText = await lastMessageText();
+        const reloadExpected = reloadState.latest ? bodyOf(reloadState.latest.text) : null;
+        row('must', reloadDone && midFlight.running.length === 1 && normalise(reloadText) === reloadExpected,
+            'SL-RELOAD a reload mid-generation resumes instead of truncating',
+            `wasRunning=${midFlight.running.length} identical=${normalise(reloadText) === reloadExpected}`);
+        await (await fetch(`${args.base}/dev/gen-pace?ms=60`)).json();
+        // Focus mode fades the composer after an idle spell, and the reload row spends several
+        // seconds waiting on a slow generation. Wake the chrome so the next row can reach Send.
+        await page.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 400, y: 400, buttons: 0 }, page.sessionId);
+        await page.waitFor("(function(){var b=document.querySelector('#composer button[aria-label=\\'Send\\']');if(!b)return false;var r=b.getBoundingClientRect();return r.width>0 && r.height>0 && getComputedStyle(b).visibility!=='hidden';})()", 5000);
 
         // ENTER: Shift+Enter must NOT send (returns to insert a newline); a bare Enter sends.
         const beforeEnter = await page.eval("document.querySelectorAll('#chat .mes').length");
@@ -1428,7 +1919,57 @@ async function main() {
         const beforePersist = await page.eval("document.querySelectorAll('#chat .mes').length");
         await page.focus('#send_textarea');
         await page.insertText('PERSIST PROBE');
+        const genBeforePersist = (await (await fetch(`${args.base}/dev/gen-state`)).json()).latest?.id ?? null;
         await page.click('#composer button[aria-label="Send"]');
+        // One click, and it must land on the first one: a re-sync that orphaned the live stream used to
+        // leave this send refused with nothing on screen to say so.
+        const persistAccepted = await page.waitFor(`document.querySelectorAll('#chat .mes').length > ${beforePersist}`, 5000);
+        row('must', persistAccepted, 'SL-send is accepted on the first click after a reply settles');
+        await page.waitFor(`${idle}`, 15000);
+
+        // SL-409-ORDER: the server writes the reply, so a user turn rejected on a stale token can no
+        // longer be dropped: the file would hold a reply to a message it does not contain. One 409 is
+        // armed, the turn must be re-issued on the token the server handed back, and the file must end
+        // with the user turn THEN its reply, in that order.
+        // Settle against the SERVER, not the page: a send is not finished when the composer looks idle,
+        // because the gap between the user turn and the reply opening is idle too, and the reply's own
+        // write lands later still. Arming before that write would spend the one-shot 409 on it.
+        const appendedLen = async () => ((await (await fetch(`${args.base}/dev/state`)).json()).appended || []).length;
+        for (let i = 0; i < 160; i++) {
+            const st = await (await fetch(`${args.base}/dev/gen-state`)).json();
+            const started = st.latest && st.latest.id !== genBeforePersist;
+            if (started && st.running.length === 0 && await page.eval(idle)) break;
+            await sleep(150);
+        }
+        let stable = await appendedLen();
+        let steady = 0;
+        for (let i = 0; i < 40 && steady < 3; i++) {
+            await sleep(150);
+            const now = await appendedLen();
+            steady = now === stable ? steady + 1 : 0;
+            stable = now;
+        }
+        await (await fetch(`${args.base}/dev/arm-append-409-once`)).json();
+        const base409 = stable;
+        const count409 = await page.eval("document.querySelectorAll('#chat .mes').length");
+        await page.focus('#send_textarea');
+        await page.insertText('ORDER PROBE');
+        await page.click('#composer button[aria-label="Send"]');
+        // Non-vacuous: prove the send actually happened before judging what reached the file.
+        const sent409 = await page.waitFor(`document.body.textContent.includes('ORDER PROBE') && document.querySelectorAll('#chat .mes').length >= ${count409} + 2`, 10000);
+        await page.waitFor(`document.body.textContent.includes('FIN') && ${idle}`, 20000);
+        let after409 = [];
+        for (let i = 0; i < 60; i++) {
+            after409 = ((await (await fetch(`${args.base}/dev/state`)).json()).appended || []).slice(base409);
+            if (after409.length >= 2) break;
+            await sleep(150);
+        }
+        const orderOk = sent409 && after409.length === 2
+            && after409[0].is_user === true && after409[0].mes === 'ORDER PROBE'
+            && after409[1].is_user === false && after409[1].mes.includes('FIN');
+        row('must', orderOk,
+            'SL-409-ORDER a rejected user turn is re-issued, so the reply never lands without it',
+            JSON.stringify(after409.map(m => ({ u: m.is_user, t: String(m.mes).slice(0, 12) }))));
         await page.waitFor(`${idle} && document.querySelectorAll('#chat .mes').length >= ${beforePersist} + 2`, 8000);
         let appends = { appended: [] };
         for (let i = 0; i < 40; i++) {
@@ -5110,17 +5651,9 @@ async function main() {
                 const badge = document.querySelector('#notify-count');
                 return { toasts: t, badge: badge ? badge.textContent : null };
             })()`);
-            row('must', asleepToast.toasts.length === 1 && asleepToast.toasts[0].level === 'warning'
-                && asleepToast.toasts[0].text === 'Backend asleep - unlock at silly',
-                'C-CONN-DOT-8 an asleep backend also raises a notification',
+            row('must', asleepToast.toasts.length === 0 && asleepToast.badge === null,
+                'C-CONN-DOT-8 an asleep backend raises NO toast: the dot beside it is the whole report',
                 JSON.stringify(asleepToast));
-            // The counting half of the old row, kept as its own claim rather than dropped with the
-            // bell it was written against: the badge rode the topbar's notifications button.
-            // Reads the badge rather than opening anything, so it goes fatal the moment the bell is
-            // in the table, with no edit here.
-            row(LAUNCHERS.notifications ? 'must' : 'pending', asleepToast.badge === '1',
-                'C-CONN-DOT-8b the unread badge counts that notification',
-                `badge=${JSON.stringify(asleepToast.badge)} (LAUNCHERS.notifications ${LAUNCHERS.notifications ? 'set' : 'is null'})`);
 
             const offline = await reloadWith('offline');
             row('must', offline.state === 'offline' && offline.words === 'Backend offline - unlock at silly',
@@ -5568,14 +6101,17 @@ async function main() {
                 return settled();
             };
 
+            // The AMBIENT probe is deliberately silent: the top bar's chip shows standing backend state
+            // permanently, so a toast repeated it on every poll cadence. C-CONN-DOT-2/3/4 prove the
+            // chip actually moves, which is what makes this silence safe rather than a dropped signal.
             const bootOffline = await bootWith('offline');
-            row('must', only(bootOffline, 'warning', 'Backend offline - unlock at silly'),
-                'C-PUSH-1 boot probe offline raises exactly its own warning',
+            row('must', bootOffline.length === 0,
+                'C-PUSH-1 an offline boot probe stays silent: the status chip owns standing state',
                 JSON.stringify(bootOffline));
 
             const bootErr = await bootWith('error');
-            row('must', only(bootErr, 'err', 'Backend error 500'),
-                'C-PUSH-2 boot probe error carries its status code into the toast',
+            row('must', bootErr.length === 0,
+                'C-PUSH-2 an errored boot probe stays silent, for the same reason',
                 JSON.stringify(bootErr));
 
             const bootOk = await bootWith('ok');
@@ -5603,9 +6139,11 @@ async function main() {
                 'C-PUSH-7 a probe that succeeds but a persist that fails says the SAVE failed',
                 JSON.stringify(saveFailed));
 
+            // Success is the one Connect outcome with no toast: "backend up" is exactly what the chip
+            // is for. Its FAILURES (4-7 above) still push, because a button press is owed an outcome.
             const connected = await connectWith('ok', null);
-            row('must', only(connected, 'success', 'Connected: mock-model'),
-                'C-PUSH-8 a Connect that lands names the model it connected to',
+            row('must', connected.length === 0,
+                'C-PUSH-8 a Connect that lands stays silent: the chip is what says it went online',
                 JSON.stringify(connected));
 
             // The key lifecycle. Save then remove, each in both outcomes, from a silent boot.
@@ -5770,13 +6308,16 @@ async function main() {
             await fetch(`${args.base}/dev/status-mode?m=ok`);
             await page.navigate(`${args.base}/`);
             await openRecentChat();
-            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/backends/text-completions/generate')}&code=502`);
+            await fetch(`${args.base}/dev/fail-next?path=${encodeURIComponent('/api/generation/start')}&code=502`);
             await page.focus('#send_textarea');
             await page.insertText('push probe send');
             await page.click('#composer button[aria-label="Send"]');
+            // This one KEEPS its toast where the ambient probe lost one, and names the SEND rather than
+            // the state: the chip can say the backend is asleep, but not that the message just sent got
+            // no reply, and the eye is on the conversation at that moment, not on the top bar.
             const streamAsleep = await settled(15000);
-            row('must', streamAsleep.some((t) => t.level === 'warning' && t.text === 'Backend asleep - unlock at silly'),
-                'C-PUSH-22 a send whose stream 502s at the edge raises the asleep warning',
+            row('must', streamAsleep.some((t) => t.level === 'err' && t.text === 'Send failed - backend asleep, unlock at silly'),
+                'C-PUSH-22 a send whose stream 502s at the edge says the SEND failed',
                 JSON.stringify(streamAsleep));
 
             await fetch(`${args.base}/dev/clear-fail-next`);

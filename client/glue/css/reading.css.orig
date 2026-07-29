@@ -6,14 +6,11 @@
    with it, because the regression gate pins those three class attributes exactly as
    they read today and the signature has to survive intact.
    =================================================================================== */
-/* FLEX, not grid. The avatar used to be a grid item spanning every row, which meant an avatar taller
-   than the text beside it had its surplus height distributed BETWEEN the rows, opening a gap under the
-   speaker name that grew with the avatar size. A flex row cannot do that: the avatar and the text
-   column are two independent items, so the avatar's height sets the row's height and nothing else. */
 .mes {
-    display: flex;
-    align-items: flex-start;
-    gap: 1rem;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.75rem 1rem;
+    align-items: start;
     position: relative;
     padding-block: 1rem;
     padding-inline-start: 1rem;
@@ -39,15 +36,9 @@
     transform-origin: top;
 }
 
-/* The text column beside the avatar. min-width: 0 so a long unbroken token (a URL, a code span) wraps
-   instead of stretching the flex item past the reading measure. */
-.mes-body {
-    flex: 1 1 auto;
-    min-width: 0;
-}
-
 /* The speaker name is the character's voice on the page: book serif, warm-tinted, mixed case. */
 .mes_name {
+    grid-column: 2;
     font-family: var(--font-serif);
     font-size: var(--text-name);
     font-weight: 600;
@@ -61,6 +52,7 @@
    repeated on 20 flat selectors (native CSS nesting, passed through by Tailwind v4's Lightning CSS;
    pure readability, identical rendering). */
 .mes_text {
+    grid-column: 2;
     /* The reading Font control points --reading-font at the chosen family; unset falls back to the
        Newsreader serif base. */
     font-family: var(--reading-font, var(--font-serif));
@@ -198,6 +190,7 @@
    .mes_text so the source sits at the same measure and family; pre-wrap preserves the raw whitespace
    (so markdown indentation shows as typed) and the highlight styles content while the markers stay. */
 .mes_edit {
+    grid-column: 2;
     display: flex;
     flex-direction: column;
     gap: 0.45rem;
@@ -326,121 +319,6 @@
 #chat-root[data-reading-measure="wide"] { --reading-measure: 48rem; }
 #chat-root[data-reading-avatars="off"] .mes_avatar { display: none; }
 
-/* AVATAR SIZE. One custom property carries the scale and one rule reads it, so the mobile step-down
-   below is a single override rather than three. The rule outranks the element's own `size-[1.8rem]`
-   utility on both counts: higher specificity, and unlayered beats Tailwind's utilities layer.
-
-   The scale starts where it does deliberately: 3rem was the first pass's LARGE and is the operator's
-   small (2026-07-29), so every step moved up rather than the top end stretching. */
-#chat-root { --avatar-size: 4.5rem; }
-#chat-root[data-reading-avatarsize="small"] { --avatar-size: 3rem; }
-#chat-root[data-reading-avatarsize="medium"] { --avatar-size: 4.5rem; }
-#chat-root[data-reading-avatarsize="large"] { --avatar-size: 6.5rem; }
-
-#chat-root .mes_avatar {
-    width: var(--avatar-size);
-    height: var(--avatar-size);
-}
-
-/* Narrow screens: the avatar column is taken out of the reading measure, so the same rem values eat a
-   far larger share of a phone's width. Three quarters keeps the step order intact. */
-@media (max-width: 640px) {
-    #chat-root[data-reading-avatarsize="small"] { --avatar-size: 2.25rem; }
-    #chat-root[data-reading-avatarsize="medium"] { --avatar-size: 3.25rem; }
-    #chat-root[data-reading-avatarsize="large"] { --avatar-size: 4.75rem; }
-}
-
-/* VN: the per-message avatars go away and the character gets ONE portrait stage across the top half
-   of the chat.
-
-   The stage is a GRID ROW above the scroller, not an overlay inside it, so the space is genuinely
-   reserved: the log cannot render into it and cannot scroll through it. `.chat-cell` is the grid item
-   the app shell places (col 2, row 2); it splits that cell into the stage row and the scroller row.
-
-   50% because the row is a percentage of a DEFINITE height - the cell comes from the shell's
-   `minmax(0,1fr)` inside a 100dvh grid - so it is half of the chat area as it actually renders, with
-   no viewport arithmetic guessing at the top bar and composer. The first attempt made #chat a
-   `container-type: size` and asked for 50cqh; that stopped the scroller constraining its content and
-   #chat grew to 8794px (measured). A percentage row has no such circularity.
-
-   Off VN the stage is display:none and the auto row collapses to zero, so the layout is byte-identical
-   to before this control existed. It renders in every mode rather than mounting on the pref: a size
-   click must not restructure the scroller's child list mid-session. */
-.chat-cell {
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
-    min-height: 0;
-    min-width: 0;
-}
-
-/* Both rows are assigned EXPLICITLY. A display:none stage stops being a grid item, so with auto
-   placement the scroller slid up into row 1 (auto) and took its content height instead of the cell's
-   - measured 1807px against a 8794px cell. Pinned rows leave row 1 simply empty and zero-high. */
-.chat-cell > .vn-stage { grid-row: 1; }
-.chat-cell > #chat { grid-row: 2; }
-
-/* --vn-split is the drag's stored fraction, written inline on #chat-root by reading_prefs.zig; the
-   50% here is the unset default and what a reset (Home / dblclick) returns to. */
-#chat-root[data-reading-avatarsize="vn"] .chat-cell {
-    grid-template-rows: var(--vn-split, 50%) minmax(0, 1fr);
-}
-
-#chat-root[data-reading-avatarsize="vn"] .mes_avatar { display: none; }
-
-#chat-root[data-reading-avatarsize="vn"] .vn-stage {
-    display: block;
-    position: relative;
-    min-height: 0;
-    border-bottom: 1px solid var(--color-border-soft);
-}
-
-/* The split handle: the horizontal twin of .chat-resize, same idea and same affordance. A 12px grab
-   strip straddling the boundary (so the target is reachable from either side), showing a 2px accent
-   line only on hover, focus or drag. touch-action none because a vertical drag inside a scroller
-   would otherwise be claimed as a scroll gesture before pointermove ever fires. */
-#chat-root[data-reading-avatarsize="vn"] .vn-resize {
-    position: absolute;
-    inset-inline: 0;
-    bottom: -6px;
-    z-index: 3;
-    height: 12px;
-    cursor: row-resize;
-    touch-action: none;
-    user-select: none;
-}
-
-#chat-root[data-reading-avatarsize="vn"] .vn-resize::before {
-    content: "";
-    position: absolute;
-    inset-inline: 8px;
-    top: 5px;
-    height: 2px;
-    border-radius: 2px;
-    background: var(--color-accent);
-    opacity: 0;
-    transition: opacity 150ms ease;
-}
-
-#chat-root[data-reading-avatarsize="vn"] .vn-resize:hover::before,
-#chat-root[data-reading-avatarsize="vn"] .vn-resize:focus-visible::before {
-    opacity: 0.7;
-}
-
-#chat-root[data-reading-avatarsize="vn"] .vn-resize.is-dragging::before {
-    opacity: 1;
-}
-
-#chat-root[data-reading-avatarsize="vn"] .vn-stage-img {
-    width: 100%;
-    height: 100%;
-    /* Contain, not cover: a character card is 2:3 and must not be cropped to a letterbox strip.
-       Top-anchored so what pressure there is eats the feet rather than the face. */
-    object-fit: contain;
-    object-position: center top;
-}
-
-.vn-stage { display: none; }
-
 /* The comfort ceiling on line length. A fixed px measure yields MORE characters per line as the text
    shrinks (40rem is ~75ch at the default size but ~84ch a size down), past the 45-75ch reading band.
    The cap scales with --reading-size so it holds a near-constant ~74ch at every size: 1ch is about
@@ -462,153 +340,58 @@
     -webkit-hyphens: none;
 }
 
-/* CHAT imposes NOTHING. No indent, the base paragraph gap as its only separator, speech and action
-   inline exactly as the model wrote them. It is the raw view, not a typographic style: when it has
-   looked like novel prose, that was the model's paragraphing being lucky, not this layout working.
-
-   NOVEL is the prose convention, imposed rather than hoped for. Researched 2026-07-28 (wiki topic
-   fiction-dialogue-typesetting; CMOS ch.13, Touchstone Editing, Zoe McCarthy's guidelines, Book
-   Editing Associates, Grammargeddon). Fiction has exactly ONE hard paragraphing rule and a set of
-   soft ones, and knowing which is which is the whole design:
-   - HARD: a new speaker starts a new paragraph. Nothing else is absolute.
-   - A dialogue tag or a brief action beat by the SAME character stays with that character's speech
-     ("if at all possible, keep the action and dialogue in the same paragraph").
-   - SOFT: a new paragraph is also taken when a new event or idea enters, when the description of one
-     thing ends and another begins, when the camera moves, and when the reader needs a break from a
-     long paragraph.
-   - Paragraphs are marked by a first-line indent with NO blank line between them, indent and gap
-     being exclusive separators (Butterick).
-
-   WHY THE SOFT RULES ARE THE ONES THAT MATTER HERE: a roleplay turn is a SINGLE character, so the
-   hard rule never fires inside one and, by the letter of the convention, the entire wall of text is a
-   legitimate paragraph. What makes it read wrong is the soft rules, and those are judgements about
-   meaning that no text transform can make. So Novel uses the one structural proxy that stands in for
-   them honestly: a speech act plus its attribution is a unit, and narration past that attribution is
-   a new event. Cut there, and nowhere a reader would notice the machine guessing.
-
-   There is no separate speech-on-its-own-line layout. Setting every quote on its own indented line is
-   block quotation, which is what you use when QUOTING fiction inside another text, and it has no
-   prose-fiction convention behind it. The layouts that legitimately isolate speech are the SCRIPT
-   ones below. */
+/* Paragraph styles differ in the first-line indent AND, for novel, the gap. Indent and gap are
+   exclusive separators (Butterick): a first-line indent carries the paragraph break on its own, so
+   pairing it with a blank-line gap is the belts-and-braces mistake. chat is flush and keeps the base
+   0.7em gap; novel indents every paragraph (including the first, so the indent shows on a single-
+   paragraph message) and drops the gap to zero so the indent is the only separator. */
 #chat-root[data-reading-indent="chat"] .mes_text p {
     text-indent: 0;
 }
-
-/* A LINE is the model's paragraph, in every layout: narration.zig wraps each `<br>`-separated line of
-   a paragraph as its own element, so the piece the model meant as a paragraph is addressable. Block
-   in all layouts, which is exactly what the `<br>` it replaced already did. */
-.mes_text span.custom-line {
-    display: block;
-}
-
-/* A SEGMENT is the paragraph the model SHOULD have started and did not. narration.zig cuts a line at
-   each speech turn that does not already open it, and again after that speech's dialogue tag, so the
-   speech and its attribution stay together and the narration past them becomes its own paragraph.
-   Inline by default, so Chat renders the model's own structure untouched; only a layout that means to
-   impose paragraphing promotes them. */
-.mes_text span.custom-seg {
-    display: inline;
-}
-
-/* Novel puts the indent on the LINE, not the paragraph, because that is the unit the model writes.
-   Paragraph text-indent stays 0 so nothing inherits into the line and doubles up. */
 #chat-root[data-reading-indent="novel"] .mes_text p {
-    text-indent: 0;
+    text-indent: 2em;
     margin-bottom: 0;
 }
 
-#chat-root[data-reading-indent="novel"] .mes_text span.custom-line {
-    text-indent: 2em;
-    margin-block: 0.5lh;
-}
-
-/* THE RULE THAT MAKES NOVEL A NOVEL. A model writes a whole turn as one block: speech, tag, narration,
-   speech, tag, narration, no break anywhere. Indenting that block once changes nothing, because the
-   breaks are not in the text and have to be put there. Promoting the segments puts them there, and
-   each then takes the indent like any other paragraph.
-
-   The half-line `margin-block` is operator styling ON TOP of the print convention (print uses indent
-   XOR gap; he wants both, and the screen is not a page). `0.5lh` tracks the line-height slider, and
-   margin COLLAPSING is what keeps it a half line everywhere: seg-inside-line, line-against-line and
-   line-through-p margins all collapse to one 0.5lh, never stack to a full line. */
-#chat-root[data-reading-indent="novel"] .mes_text span.custom-seg {
-    display: block;
-    text-indent: 2em;
-    margin-block: 0.5lh;
-}
-
-/* The Indent toggle lifts NOVEL'S OWN first-line indent and nothing else (operator ask 2026-07-29).
-   Safe where the deleted first toggle was not: that one restyled every layout and made Chat identical
-   to Novel; this attribute appears in no other layout's rules, and with it off Novel's paragraphs are
-   still separated by the half-line gaps, so Novel stays a distinct layout either way. */
-#chat-root[data-reading-indent="novel"][data-reading-paraindent="off"] .mes_text span.custom-line,
-#chat-root[data-reading-indent="novel"][data-reading-paraindent="off"] .mes_text span.custom-seg {
-    text-indent: 0;
-}
-
-/* NO flush-first-paragraph rule, deliberately, and this is the one place the book convention does not
-   transfer. In print, the opening paragraph of a CHAPTER or of a scene after a space break is set
-   full-out. A chat message is neither: it is a continuation of one running scene, with the paragraph
-   before it sitting in the previous message. Treating each message as a section opening also made
-   every SINGLE-paragraph message render with no indent at all, which is most of them, so Novel came
-   out pixel-identical to Chat on the commonest message there is. Every paragraph indents. */
-
-/* SCRIPT LAYOUTS (stage, vn): name, then speech, each turn on its own line, narration as separate
-   direction lines. quotes.zig tags a speech turn (custom-q-turn) and an action beat (custom-em-turn);
-   narration.zig gives every narration run its own element (custom-narr). Promoting those three to
-   blocks is what unpacks a run-together message onto lines. */
+/* Speech on its own line: blockquote / stage / vn share the mechanism. quotes.zig tags a quote that
+   opens a speech turn (class custom-q-turn; its delimiters wrapped in custom-qd), so each turn becomes
+   a block and the run-together message unpacks onto lines. Section colours match every other mode:
+   speech amber, *action* emphasis grey, plain narration in the text colour; the layout does the
+   distinguishing, not a recolour. A quoted word mid-sentence is not a turn, so it stays inline. */
+#chat-root[data-reading-indent="blockquote"] .mes_text p,
 #chat-root[data-reading-indent="stage"] .mes_text p,
 #chat-root[data-reading-indent="vn"] .mes_text p {
     text-indent: 0;
 }
-
-/* In a script layout the indent rides the narration RUN, not the paragraph, and it has to: markdown
-   puts a whole turn in one <p>, and `text-indent` reaches only the first line of the paragraph BOX,
-   so narration following a speech block is an anonymous box no selector reaches and no indent touches
-   (`each-line` does not reach it either, measured). Indenting the paragraph instead moves EVERY line,
-   wrapped ones included, which is a block quote and not a paragraph indent. */
-#chat-root[data-reading-indent="stage"] .mes_text span.custom-narr,
-#chat-root[data-reading-indent="vn"] .mes_text span.custom-narr {
-    display: block;
-}
-
-/* A turn sets its OWN air: half a line above and below, whatever surrounds it. `lh` is literally half
-   the body's line box, so it tracks the line-height slider instead of drifting from it. Paragraph
-   margins do not add to this: a child block's margin collapses with its parent's, taking the larger,
-   and half a line beats the 0.7em paragraph gap at every setting. */
+#chat-root[data-reading-indent="blockquote"] .mes_text q.custom-q-turn,
 #chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn,
-#chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn,
-#chat-root[data-reading-indent="stage"] .mes_text em.custom-em-turn,
-#chat-root[data-reading-indent="vn"] .mes_text em.custom-em-turn {
+#chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn {
     display: block;
-    margin-block: 0.5lh;
+    margin-block: 0.2em 0;
 }
 
-/* A RETURN LEFT AGAINST A TURN, which models emit constantly. Invisible in the source, but it costs a
-   full empty line box, and one turn measured a 39px gap where its neighbours measured 3px: the same
-   layout spaced 13x apart by whitespace nobody can see. The turn's own margin is the whole rhythm.
-   SCOPED to the script layouts, and it has to be: where a turn is inline (chat, novel) that return is
-   the author's own line break carrying real meaning, and hiding it ran two intended lines together. */
-#chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn + br,
-#chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn + br,
-#chat-root[data-reading-indent="stage"] .mes_text br:has(+ q.custom-q-turn),
-#chat-root[data-reading-indent="vn"] .mes_text br:has(+ q.custom-q-turn),
-#chat-root[data-reading-indent="stage"] .mes_text em.custom-em-turn + br,
-#chat-root[data-reading-indent="vn"] .mes_text em.custom-em-turn + br,
-#chat-root[data-reading-indent="stage"] .mes_text br:has(+ em.custom-em-turn),
-#chat-root[data-reading-indent="vn"] .mes_text br:has(+ em.custom-em-turn) {
-    display: none;
+/* Blockquote keeps the quote marks; the speech insets from the flush narration like a set-apart quote. */
+#chat-root[data-reading-indent="blockquote"] .mes_text q.custom-q-turn {
+    padding-left: 1.6em;
+}
+
+/* A speech turn that ends its paragraph reads as a new line, not a set-apart block: the paragraph's
+   0.7em trailing margin would otherwise leave a blank-line gap under the speech, so tighten it to the
+   turn's own 0.2em rhythm. Narration-only paragraphs keep their normal spacing. */
+#chat-root[data-reading-indent="blockquote"] .mes_text p:has(> q.custom-q-turn:last-child) {
+    margin-bottom: 0.2em;
 }
 
 /* Stage: the NAME. and the spoken line sit flush at the left margin; the direction beneath is the
-   indented block. Directions are the indented block; the speech is what pulls flush. The name prints inline before the speech (no column), quote marks hidden. */
+   indented block. This is the inverse of blockquote, which insets the speech and leaves narration
+   flush. The name prints inline before the speech (no column), quote marks hidden. */
 #chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn {
     /* The turn nests inside the 6em-indented paragraph; pull it back so the spoken line is flush at the
        margin while the surrounding narration stays indented. Block margin sets the dialogue apart from
        the directions above and below. */
     margin-left: -6em;
     text-indent: 0;
-    margin-block: 0.5lh;
+    margin-block: 0.5em;
 }
 #chat-root[data-reading-indent="stage"] .mes_text q.custom-q-turn .custom-qd {
     display: none;
@@ -633,21 +416,12 @@
 #chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn .custom-qd {
     display: none;
 }
-/* A FIXED 5.5em column, not a 5em minimum, and that is the whole point of this mode. The minimum let
-   any name wider than it push its OWN first line right while the wrapped lines stayed at the hanging
-   indent, so the column this mode exists to create drifted by up to 95px between speakers and by 8px
-   between the two lines of a single turn. Width 5.5em (border-box, so it equals the hanging indent
-   exactly) puts every turn's text on the same column. A long name WRAPS inside its column rather than
-   being truncated: a half-shown character name is worse than an uneven label. */
 #chat-root[data-reading-indent="vn"] .mes_text q.custom-q-turn::before {
     content: var(--speaker, "") ":";
     display: inline-block;
-    box-sizing: border-box;
-    width: 5.5em;
+    min-width: 5em;
     padding-right: 0.5em;
     text-indent: 0;
-    white-space: normal;
-    vertical-align: top;
     font-weight: 700;
     color: var(--color-text);
 }
@@ -677,7 +451,7 @@
     --color-border-soft: oklch(0.86 0.02 84);
     /* Speech + emphasis must darken too, or dialogue (the most common styled RP text) sits near-invisible. */
     --color-st-quote: oklch(0.450 0.115 72);
-    --color-st-em: oklch(0.400 0.055 66);
+    --color-st-em: oklch(0.400 0.020 66);
     background: var(--color-bg);
 }
 #chat-root[data-reading-theme="paper"] #chat {
@@ -686,7 +460,7 @@
     --color-accent: oklch(0.470 0.130 45);
     --color-border-soft: oklch(0.90 0.006 90);
     --color-st-quote: oklch(0.420 0.125 55);
-    --color-st-em: oklch(0.360 0.050 60);
+    --color-st-em: oklch(0.360 0.015 60);
     background: var(--color-bg);
 }
 
@@ -713,7 +487,7 @@
     .mes {
         font-size: 0.92rem;
         line-height: 1.55;
-        gap: 0.75rem;
+        gap: 0.5rem 0.75rem;
         padding-inline-start: 0.75rem;
     }
 
@@ -769,4 +543,3 @@
 #chat-root.revealing .chat-inner .mes:nth-child(12) { --md: 1100ms; }
 #chat-root.revealing .chat-inner .mes:nth-child(13) { --md: 1200ms; }
 #chat-root.revealing .chat-inner .mes:nth-child(14) { --md: 1300ms; }
-

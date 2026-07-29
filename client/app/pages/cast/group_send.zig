@@ -134,25 +134,21 @@ pub fn cancel() void {
     if (pending_launch) finish();
 }
 
-/// Seal hook, called by char_api.persistNewTurns FIRST: true = this seal belonged to a group
-/// rotation and was handled here (the solo path must not also append it).
-pub fn sealCurrent() bool {
-    if (rot == null) return false;
+/// Seal hook: advances the rotation to its next member, or ends it. The member's own turn is written
+/// by the server that ran the generation, so nothing is persisted here. No-op outside a rotation.
+pub fn sealCurrent() void {
+    if (rot == null) return;
     const r = &rot.?;
-    const m = r.current() orelse {
+    if (r.current() == null) {
         finish();
-        return true;
-    };
+        return;
+    }
     if (char_api.chatLoadSeq() != grp_seq) {
         grp_log.debug("group seal skipped: chat re-synced mid-rotation", .{});
         finish();
-        return true;
+        return;
     }
-    const msgs = store.slice();
-    // The rotation's member list is the attribution authority; the store's last body is the text.
-    if (msgs.len > 0) appendGroupTurn(m.name, msgs[msgs.len - 1].body, false);
     if (r.advance() != null) launchCurrent() else finish();
-    return true;
 }
 
 /// The JS pump's stream fetch failed before sealing (backend gone mid-rotation): no turn to

@@ -1,9 +1,12 @@
-// PROTOTYPE: the top bar is now the wordmark alone.
+// The top bar: the wordmark, and three app-wide controls at the right edge.
 //
-// The 13-icon drawer row that used to fill the right of this bar is GONE (rework section 2, CLEAN
-// BASE): thirteen unlabelled monochrome glyphs of equal weight was the thing that read as flattened.
-// Every panel it opened is reached from the two edge tabs (edgetabs.zx) or the system gear
-// (sysmenu.zx) instead, so the base page is the conversation and the composer.
+// The 13-icon drawer row that used to fill this bar is GONE (rework section 2, CLEAN BASE): thirteen
+// unlabelled monochrome glyphs of equal weight was the thing that read as flattened. What is here
+// instead is the irreducible set - backend state, notifications, system - with every PANEL still
+// reached from the two edge tabs (edgetabs.zx) or from the system card's own switcher.
+//
+// These render the trigger BUTTONS only. Both cards mount in shell.zx, outside this header, because
+// the `z-20` below makes the bar a stacking context that would cap them under the docks.
 pub fn TopBar(allocator: zx.Allocator) zx.Component {
     return (
         <header
@@ -25,8 +28,19 @@ pub fn TopBar(allocator: zx.Allocator) zx.Component {
                     <span class="hidden normal-case tracking-normal max-[480px]:inline">β</span>
                 </span>
             </h1>
+            // The two app-wide affordances live at the bar's right edge: notifications, then the system
+            // gear. Both render their trigger button in this flex (so they align in the bar) and their
+            // own popover as a fixed overlay that drops from below the bar (notify_bell.zx / sysmenu.zx).
+            <div class="flex flex-none items-center gap-1">
+                <StatusIndicator />
+                <NotifyBell />
+                <SysMenu />
+            </div>
         </header>
     );
 }
 
+const StatusIndicator = @import("../setup/status_indicator.zx").StatusIndicator;
+const NotifyBell = @import("../notify/notify_bell.zx").NotifyBell;
+const SysMenu = @import("../nav/sysmenu.zx").SysMenu;
 const zx = @import("zx");
