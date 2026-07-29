@@ -112,8 +112,25 @@
 /* Tighter side padding on a phone. The utility the markup asked for was never in this
    branch's extract, so the chip kept its desktop padding below 480px; rule taken from main. */
 @media not all and (min-width:480px) { .setup-conn-chip { padding-inline:calc(var(--spacing) * 2) } }
+
+/* The chip opens the API Connections panel, so it has to LOOK pressable: the bell and the gear
+   beside it are the vocabulary, and a control that matched them while doing nothing was the reason
+   this one used to take no hover at all. Hover is gated to a pointer that can hover (WD25); the
+   focus ring is the keyboard's only signal that the bar's first control is where it landed (WD37). */
+.setup-conn-chip { cursor: pointer; transition: background-color 120ms ease, border-color 120ms ease; }
+@media (hover: hover) and (pointer: fine) {
+    .setup-conn-chip:hover { background-color: var(--color-surface-2); border-color: var(--color-border); }
+}
+.setup-conn-chip:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+
 .setup-conn-chip-dot { flex:none }
 .setup-conn-chip-word { font-family:var(--font-mono); font-size:.6rem; --tw-leading:1;line-height:1; --tw-font-weight:var(--font-weight-medium);font-weight:var(--font-weight-medium); --tw-tracking:.12em;letter-spacing:.12em; color:var(--color-muted); text-transform:uppercase }
+
+/* A model name is arbitrary length and this sits in a fixed bar, so it truncates rather than pushing
+   the bell and the gear off the edge. 10em holds a name like "mock-model" whole and clips only the
+   long quantised filenames, which stay readable from their first token. */
+.setup-conn-chip-word { max-width: 10em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media not all and (min-width:480px) { .setup-conn-chip-word { max-width: 5em } }
 .wi-body { display:flex; flex-direction:column; gap:calc(var(--spacing) * 3) }
 .wi-editor { display:grid; grid-template-columns:repeat(1,minmax(0,1fr)); align-items:flex-start; gap:calc(var(--spacing) * 3) }
 @container (min-width:36rem) { .wi-editor { grid-template-columns:repeat(2,minmax(0,1fr)) } }

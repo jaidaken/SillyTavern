@@ -125,6 +125,16 @@ pub fn statusModel() []const u8 {
     return c.api_type;
 }
 
+/// What the chip in the top bar reads. A working backend names the MODEL, because "Online" answers a
+/// question nobody asks twice while "which model am I talking to" is asked constantly; the dot beside
+/// it already carries the healthy/unhealthy signal in colour. Any state that is not connected has no
+/// model worth naming, so it falls back to the state word, which is then the whole message.
+pub fn chipText() []const u8 {
+    if (state != .connected) return statusWord();
+    const model = statusModel();
+    return if (model.len > 0) model else statusWord();
+}
+
 fn setState(s: ConnState) void {
     state = s;
     state_code = 0;

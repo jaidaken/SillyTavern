@@ -28,8 +28,7 @@ else
 fi
 
 # Apply the Zig-source patches (not the door: 03 is the upstream core.ts diff, applied to the
-# compiled door separately in patch-door.sh). 10 patches the tailwind plugin's class scanner.
-# 11 fixes a UAF in that plugin's dep-file writer (deps freed before writeDepFile reads them).
+# compiled door separately in patch-door.sh). 10 + 11 patched the tailwind plugin and went with it.
 # 12 orders PLACEMENT/MOVE by reference node so the vtree and the DOM cannot drift apart.
 # 14 gives convertValue sole ownership of the returned handle: callAlloc/getAlloc also freed it on
 # an error, so a type mismatch (eg call(void) on an async helper) freed one jsz slot twice.

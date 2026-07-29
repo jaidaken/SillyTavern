@@ -1,34 +1,46 @@
-// The backend's standing state, as a dot and a word in the top bar. It is the reason the backend
-// up/down TOASTS are gone: a state permanently on screen needs no interruption to announce itself,
-// which leaves notifications for EVENTS (a send that failed, a save that did not land).
+// The backend's standing state, as a dot and a word in the top bar, and the door to the panel that
+// configures it. It is the reason the backend up/down TOASTS are gone: a state permanently on screen
+// needs no interruption to announce itself, which leaves notifications for EVENTS (a send that
+// failed, a save that did not land).
 //
 // The dot keys off the same data-conn-state attribute the connections panel uses, so both surfaces
-// paint from one vocabulary (app-input.css). The word is the SHORT form; the panel's standing line
-// is what carries the model name and the remedy.
+// paint from one vocabulary. The word names the MODEL while the backend is up (connection.chipText)
+// and falls back to the state when there is no model to name; the panel's standing line is what
+// carries the remedy.
 pub fn StatusIndicator(allocator: zx.Allocator) zx.Component {
     return (
-        <div
+        <button
             @allocator={allocator}
             id="conn-chip"
+            type="button"
             // Built to sit in the same set as the bell and the gear beside it: same 2.2rem height,
             // same rounding, same control-border and surface tokens, so the three read as one row of
-            // chrome rather than a panel widget parked in a bar. It is NOT interactive (role=status),
-            // so it takes no hover or focus treatment - matching those would promise a click.
-            // The word echoes the wordmark's beta badge (mono, uppercase, wide tracking), which is the
-            // bar's existing vocabulary for a small standing label.
+            // chrome rather than a panel widget parked in a bar. Unlike those two it opens a DOCK
+            // rather than a card of its own, so it carries no aria-expanded: the panel it opens is
+            // not owned by this button and outlives a second click elsewhere.
             class="setup-conn-chip"
             data-conn-state={connection.stateName()}
-            // A live region announces its TEXT changing, never an aria-label changing, so the word
-            // below is a real text node and carries no aria-hidden. It also stays visible at every
-            // width: asleep and offline paint the same amber, so the word is the only thing that
-            // tells them apart, for a red-green reader as much as a screen-reader one (WD38).
-            role="status"
+            // The label names the DESTINATION, not the state. State reaches a screen reader through
+            // the live region on the word below, which announces its text CHANGING; an aria-label
+            // that changed would announce nothing, which is why the word is a real text node.
+            aria-label="API connections"
+            onclick={onOpenApi}
         >
             <span class="conn-dot setup-conn-chip-dot" aria-hidden="true"></span>
-            <span class="setup-conn-chip-word">{connection.statusWord()}</span>
-        </div>
+            // Stays visible at every width: asleep and offline paint the same amber, so the word is
+            // the only thing that tells them apart, for a red-green reader as much as a
+            // screen-reader one (WD38).
+            <span class="setup-conn-chip-word" role="status">{connection.chipText()}</span>
+        </button>
     );
 }
 
+/// Open (or close) the API Connections panel. A toggle, like every other control that fronts a dock,
+/// so the button that showed you the panel is also the one that puts it away.
+fn onOpenApi(_: zx.client.Event) void {
+    ui.toggle(.connections);
+}
+
 const zx = @import("zx");
+const ui = @import("../nav/ui.zig");
 const connection = @import("./connection.zig");

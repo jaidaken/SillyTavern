@@ -5708,6 +5708,36 @@ async function main() {
                 && standing.progressEmpty,
                 'C-CONN-DOT-7 the panel shows the standing line, with Connect progress still its own',
                 JSON.stringify(standing));
+
+            // C-CONN-CHIP: the top bar's chip is the door to the panel above, and it names the model.
+            // It is a real <button>, not a div wearing a click handler, because that is the only
+            // version a keyboard can reach and a screen reader will call a control (WD35, WD37).
+            const chip = await page.eval(`(function(){
+                const el = document.getElementById('conn-chip');
+                if (!el) return null;
+                const word = el.querySelector('.setup-conn-chip-word');
+                return { tag: el.tagName.toLowerCase(), label: el.getAttribute('aria-label'),
+                         live: word ? word.getAttribute('role') : null,
+                         text: word ? word.textContent.trim() : null,
+                         state: el.dataset.connState,
+                         focusable: el.tabIndex >= 0 };
+            })()`);
+            row('must', !!chip && chip.tag === 'button' && chip.focusable && chip.live === 'status'
+                && !!chip.label && chip.text === 'mock-model' && chip.state === 'connected',
+                'C-CONN-CHIP-1 the top-bar chip is a focusable button naming the live model',
+                JSON.stringify(chip));
+
+            // The click, from a shut dock, and then again to prove it is a toggle rather than a
+            // one-way door: a control that opens but cannot close strands the panel it opened.
+            await closeSide('left');
+            await page.click('#conn-chip');
+            const opened = await page.waitFor(
+                `!!document.querySelector('#panel-view.panel-left nav button[data-section="connections"][aria-current="true"]')`, 6000);
+            await page.click('#conn-chip');
+            const shut = await page.waitFor(`!document.querySelector('#panel-view.panel-left')`, 6000);
+            row('must', opened && shut,
+                'C-CONN-CHIP-2 clicking the chip opens API Connections, and clicking it again puts it away',
+                `opened=${opened} shut=${shut}`);
         }
         /* C-CONN-DOT END */
 
