@@ -23,13 +23,16 @@
 :root:has(#shell.motion-on) { --move: 1; }
 :root:has(#shell.motion-off) { --move: 0; }
 
-/* The dock CLOSE slides shut by easing --dock-w itself frame by frame (ui.zig closeFrame, driven by
-   requestAnimationFrame): the panel width, the edge tab offset and the auto grid column all read that
-   one custom property, so they narrow together and the page reflows gently. It is done in Zig, not a
-   CSS transition, because the panel node is re-created on the close re-render (a transition needs a
-   stable prior value; a keyframe animates opacity on the fresh node but width cannot), and a custom
-   property is not CSS-transitionable without an @property whose length initial-value the minifier
-   strips. Open and drag write the width instantly (no ease), so only the close animates. */
+/* The dock slides via a TRANSLATE, not a width change: the fixed-overlay panel keeps its --dock-w width
+   and moves by --dock-anim (a px offset the rAF slide in ui.zig writes each frame). Being a fixed
+   overlay the panel never pushes the page, so nothing behind it reflows and its own content (avatars)
+   does not resize. --dock-anim is zero in place, its off-edge value while hidden.
+
+   .dock-slide-<side> is the ONE membership marker: the panel, the edge tab, the notify bell and its
+   popover all carry it, so every dock-anchored element slides through the same transform and none can
+   drift the way the old hand-kept ID list let the bell. transform (not left/right) keeps the movement
+   on the GPU; will-change promotes each to its own layer, so the slide composites at 60fps instead of
+   relaying out or repainting the avatar list every frame. */
 
 /* mobile
    Sub-768px overrides that must reach elements OUTSIDE the top-bar subtree. The compact bar height is

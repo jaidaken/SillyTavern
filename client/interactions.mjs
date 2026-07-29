@@ -607,6 +607,12 @@ async function main() {
                     throw new Error(`openPanel: the ${side} dock never opened for ${panel}`);
                 }
             }
+            // The open SLIDES the dock in, so a full-width panel can still be mostly off-screen: wait
+            // for its resting place, or a click dispatched at coordinates lands beside its control.
+            const settled = side === 'left'
+                ? `(function(){var e=document.querySelector('${dockSel(side)}');return e && e.getBoundingClientRect().left > -1;})()`
+                : `(function(){var e=document.querySelector('${dockSel(side)}');return e && e.getBoundingClientRect().right < innerWidth + 1;})()`;
+            await page.waitFor(settled, 4000);
             // The tab reopens the side on its REMEMBERED section, which is rarely the one wanted, so
             // the switcher click is unconditional; selecting the section already shown is a no-op the
             // app absorbs. Retried because page.click dispatches at COORDINATES and the dock arrives
@@ -781,22 +787,34 @@ async function main() {
             `bothOpen=${bothOpen} scrolledTo=${scrolledTo} after=${keptScroll}`);
         await closeSide('left');
 
-        // C-PANEL-EASE: closing a dock EASES its rendered width shut, not a snap. Open the left dock,
-        // read its width, click the tab to close, then measure the panel's width a beat later while it
-        // lingers: it must be mid-transition (0 < w < full), proving the panel and the page slide shut
-        // together rather than the column collapsing at once. Then the panel unmounts. (--dock-w itself
-        // jumps; the panel's own width is what transitions, so this reads the element, not the var.)
+        // C-PANEL-EASE: closing a dock SLIDES it off its own screen edge, not a snap. The dock is a
+        // fixed overlay, so it keeps its full --dock-w width the whole way out and travels on
+        // --dock-anim-left; a beat into the close that offset must sit between zero and a full width.
+        // C-TAB-SYNC then asks the question the width-only slide got wrong: the edge tab rides the
+        // panel's inner edge, so it must have MOVED BY THE SAME AMOUNT at that same instant, rather
+        // than standing still and jumping to the screen edge once the panel had already gone.
         await page.click(SIDE_TAB.left);
         await page.waitFor(`document.querySelector('${dockSel('left')}')`, 8000);
         const dockW = "parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--dock-w-left'))";
+        const dockAnim = "parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--dock-anim-left'))";
+        const edges = `(function(){var p=document.querySelector('${dockSel('left')}'),t=document.querySelector('${SIDE_TAB.left}');`
+            + `return p && t ? [p.getBoundingClientRect().left, t.getBoundingClientRect().left] : null;})()`;
+        await page.waitFor(`(isNaN(${dockAnim}) || ${dockAnim} === 0) && ${edges}`, 4000);
         const dceFull = await page.eval(dockW);
+        const atRest = await page.eval(edges);
         await page.click(SIDE_TAB.left);
         await sleep(40);
-        const dceMid = await page.eval(dockW);
+        const dceMid = await page.eval(dockAnim);
+        const midway = await page.eval(edges);
         const dceGone = await page.waitFor(`${dockW} === 0`, 2000);
-        row('must', dceFull > 100 && dceMid > 5 && dceMid < dceFull - 5 && dceGone,
-            'C-PANEL-EASE the dock width eases shut instead of snapping',
-            `full=${dceFull} mid=${dceMid} gone=${dceGone}`);
+        const panelMoved = atRest && midway ? midway[0] - atRest[0] : 0;
+        const tabMoved = atRest && midway ? midway[1] - atRest[1] : 0;
+        row('must', dceFull > 100 && dceMid < -5 && dceMid > -dceFull + 5 && dceGone,
+            'C-PANEL-EASE the dock slides off the edge instead of snapping',
+            `full=${dceFull} midOffset=${dceMid} gone=${dceGone}`);
+        row('must', panelMoved < -5 && Math.abs(panelMoved - tabMoved) < 2,
+            'C-TAB-SYNC the edge tab travels with the panel, not after it',
+            `panel=${panelMoved.toFixed(1)} tab=${tabMoved.toFixed(1)}`);
 
         // ---- the edge tabs themselves ----
         // Every row above reaches a panel through a tab that ?showtabs pinned, so nothing yet asks

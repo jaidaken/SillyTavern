@@ -16,6 +16,7 @@
 .-top-1{top:calc(var(--spacing) * -1)}
 .-top-12{top:calc(var(--spacing) * -12)}
 .top-0{top:0}
+.top-\[var\(--topbar-h\)\]{top:var(--topbar-h)}
 .top-1{top:var(--spacing)}
 .top-1\/2{top:50%}
 .top-\[calc\(var\(--topbar-h\)\+0\.5rem\)\]{top:calc(var(--topbar-h) + .5rem)}

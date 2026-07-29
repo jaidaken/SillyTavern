@@ -49,8 +49,8 @@ const tab_base = "icon fixed top-[calc(var(--topbar-h)+0.5rem)] z-40 grid size-[
 
 // Four literals rather than a computed string: the tailwind scanner reads .zx text, so a utility
 // assembled in Zig is never generated.
-const tab_left = tab_base ++ " rounded-r-md border-l-0";
-const tab_right = tab_base ++ " rounded-l-md border-r-0";
+const tab_left = tab_base ++ " dock-slide-left rounded-r-md border-l-0";
+const tab_right = tab_base ++ " dock-slide-right rounded-l-md border-r-0";
 
 /// An open side's tab stays lit and takes the accent, since it is now the close affordance. A closed
 /// one waits for the pointer to enter its flank, unless ?showtabs pinned it for a still frame. Hidden
