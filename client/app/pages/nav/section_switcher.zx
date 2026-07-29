@@ -12,11 +12,11 @@ pub const SwitcherProps = struct {
 
 // A nav, not a tablist: each control opens a panel that owns its own heading, and plain buttons are
 // Tab-reachable and Enter/Space-operable with no roving-tabindex machinery (WD35, WD37).
-const nav_class = "flex flex-none items-center gap-1 overflow-x-auto border-b border-border-soft px-2 py-1.5 [scrollbar-width:none] max-[768px]:px-3";
+const nav_class = "panel-sections";
 
 // text-muted -> text-text on the current one, on a warm accent-mixed ground: the same active
 // vocabulary as the character toolbar, so one look means "this is the one showing" app-wide.
-const section_class = "flex-none cursor-pointer rounded-sm border border-transparent bg-transparent px-2 py-1 font-mono text-xs tracking-[0.06em] whitespace-nowrap text-muted uppercase transition-colors duration-120 ease-[ease] hover:bg-tool-hover hover:text-text aria-[current=true]:border-border aria-[current=true]:bg-tool-on aria-[current=true]:text-text max-[768px]:min-h-11 max-[768px]:px-3";
+const section_class = "panel-section-btn";
 
 pub fn SectionSwitcher(allocator: zx.Allocator, props: SwitcherProps) zx.Component {
     const side = props.side;

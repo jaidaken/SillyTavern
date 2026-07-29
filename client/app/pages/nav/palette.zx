@@ -25,7 +25,7 @@ pub fn Palette(ctx: *zx.ComponentCtx(void)) zx.Component {
         // path has parity through onkeydown on this same element, and the overlay's own controls are
         // a real <input> and role=option rows driven by aria-activedescendant (WD37, WD38).
         // allow-div-onclick: region-level delegation root; keyboard parity via onkeydown here
-        <div @allocator={allocator} id="palette" class="contents" onclick={onClick} onkeydown={onKey}>
+        <div @allocator={allocator} id="palette" class="palette-mount" onclick={onClick} onkeydown={onKey}>
             {if (state.isMounted()) (
                 <div class={if (state.isClosing()) frame_out else frame}>
                     <div class={if (state.isClosing()) backdrop_out else backdrop} data-palette-dismiss="1" aria-hidden="true"></div>
@@ -85,38 +85,38 @@ pub fn Palette(ctx: *zx.ComponentCtx(void)) zx.Component {
 
 // Docked above centre rather than mid-screen: the list grows downward, and a centred card would
 // shift under the query as rows drop out. Modest and centred, never full-bleed.
-const frame = "fixed inset-0 z-50 flex items-start justify-center px-4 pt-[12vh] max-[640px]:px-2 max-[640px]:pt-[6vh]";
+const frame = "palette-frame";
 // While the card fades out the frame drops its pointer events so a click reaches the page behind it.
 const frame_out = frame ++ " pointer-events-none";
 
 // Close-only (WD24, see the component doc): the palette appears instantly, so backdrop and card carry
 // NO enter animation; they gain the exit utilities only while closing (literals so the scanner emits
 // them). The dimming backdrop fades out with the card.
-const backdrop = "absolute inset-0 bg-bg/70";
+const backdrop = "palette-backdrop";
 const backdrop_out = backdrop ++ " animate-fade-out";
 
 // Depth on borders, no shadow: the house convention for this dark theme (WD16). The card zooms out a
 // touch on `palette-out` as a dialog leaving; no matching enter, per WD24.
-const card = "relative z-10 flex w-[min(34rem,100%)] flex-col gap-2 rounded-lg border border-border bg-surface p-2";
+const card = "palette-card";
 const card_out = card ++ " animate-palette-out";
 
-const title = "px-1 font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
+const title = "palette-title";
 
-const box = "w-full rounded-md border border-control-border bg-bg px-[0.7rem] py-[0.5rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
+const box = "palette-input";
 
-const list = "flex max-h-[min(22rem,46vh)] list-none flex-col gap-px overflow-y-auto p-0 [scrollbar-width:thin]";
+const list = "palette-list";
 
 // The highlighted row wears the same tool-on ground the section switcher's current control does, so
 // one look means "this is the one" across the whole app.
-const row_base = "flex cursor-pointer items-baseline gap-2 rounded-sm px-2 py-[0.35rem] text-sm [@media(pointer:coarse)]:min-h-11";
+const row_base = "palette-row";
 const row_off = row_base ++ " text-muted";
 const row_on = row_base ++ " bg-tool-on text-text";
 
-const group_cls = "flex-none font-mono text-[0.62rem] tracking-[0.12em] text-faint uppercase";
+const group_cls = "palette-group";
 
-const empty = "px-2 py-3 text-sm text-muted";
+const empty = "palette-empty";
 
-const keys = "px-1 font-mono text-[0.62rem] leading-ui text-faint";
+const keys = "palette-keys";
 
 fn boolStr(b: bool) []const u8 {
     return if (b) "true" else "false";

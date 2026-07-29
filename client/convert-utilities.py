@@ -52,6 +52,23 @@ def split_rules(css):
         i = close + 1
 
 
+def split_selectors(selector):
+    """Split a selector list at top-level commas only: a comma inside :is(...) is not a separator."""
+    depth, part, out = 0, [], []
+    for ch in selector:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append("".join(part))
+            part = []
+            continue
+        part.append(ch)
+    out.append("".join(part))
+    return out
+
+
 def token_of(selector):
     """The class token a utility selector is built from, unescaped, plus whatever follows it."""
     if not selector.startswith("."):
@@ -80,7 +97,7 @@ def load_utilities():
         if not path.exists():
             continue
         for wrapper, selector, decls in split_rules(path.read_text(encoding="utf-8")):
-            for one in selector.split(",\n"):
+            for one in split_selectors(selector):
                 tok, suffix = token_of(one.strip())
                 if not tok:
                     continue
@@ -103,9 +120,15 @@ CLASS_CONST = re.compile(r'((?:pub\s+)?const\s+\w+\s*=\s*)"([^"]*)"')
 GENERIC = ("base", "class", "cls", "style", "styles")
 
 
-def semantic_name(tokens, marks, page, used, hint):
-    """Prefer a name the markup already carries: a marker on the same element IS the element's name."""
+def semantic_name(tokens, marks, page, used, hint, util):
+    """Prefer a name the markup already carries: a marker on the same element IS the element's name.
+
+    A marker only qualifies while it names ONE set of utilities. panel-left sits on both the entering
+    and the leaving dock, and letting both claim it put the leaving variant's pointer-events:none on
+    the open panel."""
     for t in tokens:
+        if t in used and used[t] != util:
+            continue
         # A marker can be a VARIANT token the stylesheet happens not to define (focus-visible:outline-2
         # is allowlisted), and one of those as a class name emits `.focus-visible:outline-2`, which a
         # browser reads as a pseudo-class. Only a plain word-and-dash name can be an element's name.
@@ -118,7 +141,7 @@ def semantic_name(tokens, marks, page, used, hint):
     if not base.startswith(page + "-") and base != page:
         base = f"{page}-{base}"
     name, i = base, 2
-    while name in used:
+    while name in used and used[name] != util:
         name = f"{base}-{i}"
         i += 1
     return name
@@ -156,7 +179,7 @@ def main():
     page = page_dir.name
     sheet = pathlib.Path(a.sheet)
 
-    used, rules, converted = set(), [], 0
+    used, rules, converted = {}, [], 0
     for f in sorted(page_dir.glob("*.zx")) + sorted(page_dir.glob("*.zig")):
         text = f.read_text(encoding="utf-8")
         original = text
@@ -168,11 +191,19 @@ def main():
             keep = [t for t in toks if t not in table]
             if not util:
                 return None
-            name = semantic_name(toks, marks, page, used, hint)
-            used.add(name)
-            rules.extend(emit(name, util, table))
+            key = frozenset(util)
+            name = semantic_name(toks, marks, page, used, hint, key)
+            if used.get(name) != key:
+                used[name] = key
+                rules.extend(emit(name, util, table))
             converted += 1
-            return " ".join(keep + ([name] if name not in keep else []))
+            body = " ".join(keep + ([name] if name not in keep else []))
+            # The edge whitespace IS the separator when the const is concatenated with another
+            # (`"panel-left ... " ++ panel_base`). Dropping it welds two class names into one that
+            # matches nothing, and the build stays green.
+            lead = " " if class_text[:1] == " " else ""
+            trail = " " if class_text[-1:] == " " else ""
+            return lead + body + trail
 
         def attr_sub(m):
             # Name the element after its own id when it has one; the tag it sits in starts at the last

@@ -22,17 +22,17 @@ pub const PanelProps = struct {
 // in over the page via a transform (panel-in/out). Being out of flow, its column never exists, so the
 // centre content keeps the full viewport width and nothing behind the dock reflows when it opens or
 // closes. Below 768px it goes full width. The per-side anchor (left-0 / right-0) is on the aside.
-const panel_base = "fixed top-[var(--topbar-h)] bottom-0 z-40 flex min-w-0 flex-col overflow-hidden border-border bg-surface max-[768px]:inset-x-0 max-[768px]:z-50 max-[768px]:w-full! max-[768px]:max-w-none max-[768px]:rounded-none max-[768px]:border-0 max-[768px]:border-t";
+const panel_base = "panel-frame";
 
 // Enter/leave class per side, held as literals so the tailwind scanner generates the animate-*
 // utilities (it reads .zx text). A left dock slides in from and out to the left edge, a right dock
 // the right; while it fades out it drops its pointer events so a click reaches the page behind it.
 // ui.sideClosing (ui.zig's exit layer) decides which pair a mounted dock wears; openOn keeps the
 // panel mounted through the leave.
-const panel_left_in = "panel-left dock-slide-left left-0 border-r animate-panel-in " ++ panel_base;
-const panel_left_out = "panel-left dock-slide-left left-0 border-r animate-panel-out pointer-events-none " ++ panel_base;
-const panel_right_in = "panel-right dock-slide-right right-0 border-l animate-panel-in-right " ++ panel_base;
-const panel_right_out = "panel-right dock-slide-right right-0 border-l animate-panel-out-right pointer-events-none " ++ panel_base;
+const panel_left_in = "panel-left dock-slide-left " ++ panel_base;
+const panel_left_out = "panel-left dock-slide-left panel-left-leaving " ++ panel_base;
+const panel_right_in = "panel-right dock-slide-right " ++ panel_base;
+const panel_right_out = "panel-right dock-slide-right panel-right-leaving " ++ panel_base;
 
 pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
     const p = props.panel;
@@ -54,7 +54,7 @@ pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
             // which read THIS element's inline size.
             // panel-scroll is this element's identity, not part of its look: the browser gate reads
             // its scrollTop to prove that opening one dock leaves the other one's scroll alone.
-            <div class="panel-scroll @container flex-1 overflow-y-auto p-4 [scrollbar-width:thin] max-[768px]:px-3 max-[768px]:pt-3 max-[768px]:pb-[calc(0.75rem_+_env(safe-area-inset-bottom,0px))] max-[768px]:[-webkit-overflow-scrolling:touch]">
+            <div class="panel-scroll">
                 {if (p.id == .ai_config) (
                     <AiConfigBody />
                 ) else if (p.id == .formatting) (
@@ -66,7 +66,7 @@ pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
                 ) else if (p.id == .persona) (
                     <PersonaList />
                 ) else if (p.id == .characters) (
-                    <div class="flex min-h-0 flex-col gap-2">
+                    <div class="panel-head">
                         <CharacterToolbar />
                         <CharacterActions />
                         <GroupQuickList />
@@ -88,7 +88,7 @@ pub fn SidePanel(allocator: zx.Allocator, props: PanelProps) zx.Component {
                 )}
             </div>
             <div
-                class="panel-resize absolute top-0 bottom-0 w-[9px] cursor-col-resize touch-none hover:bg-resize data-[side=left]:right-0 data-[side=right]:left-0 max-[768px]:hidden"
+                class="panel-resize"
                 data-side={ui.sideStr(p.side)}
                 role="separator"
                 tabindex="0"

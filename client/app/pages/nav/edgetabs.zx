@@ -12,7 +12,7 @@
 // through a drag rather than jumping when the drag ends (ui_state.tabOffsetStyle).
 pub fn EdgeTabs(allocator: zx.Allocator) zx.Component {
     return (
-        <div @allocator={allocator} class="contents">
+        <div @allocator={allocator} class="edgetabs-mount">
             <button
                 id="tab-setup"
                 type="button"
@@ -44,7 +44,7 @@ pub fn EdgeTabs(allocator: zx.Allocator) zx.Component {
 // carries the word instead (WD38).
 // A coarse pointer never hovers, so the tab stays lit and live there, and it grows to the 44px tap
 // minimum: on touch these two tabs are the only launchers, so they carry the whole navigation.
-const tab_base = "icon fixed top-[calc(var(--topbar-h)+0.5rem)] z-40 grid size-[2.4rem] cursor-pointer place-items-center border border-border bg-surface-2 transition-opacity duration-200 ease-[ease] hover:text-accent focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(pointer:coarse)]:size-11 [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100";
+const tab_base = "edge-tab";
 
 // Four literals rather than a computed string: the tailwind scanner reads .zx text, so a utility
 // assembled in Zig is never generated.

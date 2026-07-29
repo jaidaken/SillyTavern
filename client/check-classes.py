@@ -53,11 +53,18 @@ def is_markup(lit):
     return "<" in lit or ">" in lit
 
 
-def check_separators():
+def check_separators(is_class_token=None):
+    """A concatenation is CLASS-BEARING when its literal names a class the stylesheet knows, not when
+    the line happens to contain the word `class`. Keying on the word missed `const panel_left_in =
+    "panel-left ... " ++ panel_base`, where losing the trailing space welds two class names together
+    and the build stays green."""
     bad = []
     for p in markup_files():
         for i, line in enumerate(p.read_text(encoding="utf-8").split("\n"), 1):
-            if "class" not in line and "_cls" not in line:
+            if is_class_token is None:
+                if "class" not in line and "_cls" not in line:
+                    continue
+            elif not any(is_class_token(t) for lit in re.findall(r'"([^"]*)"', line) for t in lit.split()):
                 continue
             for m in re.finditer(r"(\w+)\s*\+\+\s*\"([^\"]*)\"", line):
                 lit = m.group(2)
@@ -189,15 +196,19 @@ def class_probe(css):
 
 
 def main():
-    bad = check_separators()
+    known = None
+    if BUILT.exists():
+        ALLOW = allowed()
+        is_defined = class_probe(BUILT.read_text(encoding="utf-8"))
+        known = lambda t: t in ALLOW or is_defined(t)  # noqa: E731 - one expression, named for the call site
+
+    bad = check_separators(known)
     print(f"check 1 separator: {len(bad)} concatenation(s) missing a class separator")
     for p, i, what in bad[:20]:
         print(f"  MISSING SPACE  {p}:{i}  {what}")
 
     undefined = []
     if BUILT.exists():
-        ALLOW = allowed()
-        is_defined = class_probe(BUILT.read_text(encoding="utf-8"))
         used = used_classes()
         for tok, p in sorted(used.items()):
             if tok in ALLOW or is_defined(tok):

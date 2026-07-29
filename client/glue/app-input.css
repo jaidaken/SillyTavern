@@ -44,6 +44,7 @@
 @import "../app/pages/system/system.css";
 @import "./css/parked.css";
 @import "../app/pages/shell/shell.css";
+@import "../app/pages/nav/nav.css";
 @import "./css/shared.css";
 @import "../app/pages/system/backgrounds.css";
 @import "../app/pages/cast/cast.css";

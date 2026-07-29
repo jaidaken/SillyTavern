@@ -31,7 +31,7 @@ pub fn SysMenu(allocator: zx.Allocator) zx.Component {
 /// for, and clicks meant for it would land on the dock behind.
 pub fn SysPopover(allocator: zx.Allocator) zx.Component {
     return (
-        <div @allocator={allocator} class="contents">
+        <div @allocator={allocator} class="sysmenu-mount">
             {if (state.isMounted()) (
                 <div
                     id="sys-popover"
@@ -41,7 +41,7 @@ pub fn SysPopover(allocator: zx.Allocator) zx.Component {
                     tabindex="-1"
                     onkeydown={state.onKey}
                 >
-                    <div class="flex flex-none items-center justify-between gap-2 px-3 pt-3 pb-2">
+                    <div class="sysmenu-head">
                         <h2 id="sys-heading" class={heading}>System</h2>
                         <button
                             type="button"
@@ -56,10 +56,10 @@ pub fn SysPopover(allocator: zx.Allocator) zx.Component {
 
                     <div class={body} data-sys-body={model.sectionTag(state.section())}>
                         {if (state.section() == .look) (
-                            <div class="flex flex-col gap-3">
-                                <div class="flex flex-col gap-1">
+                            <div class="sysmenu-look">
+                                <div class="sysmenu-group">
                                     <span class={group_label}>Motion</span>
-                                    <div class="flex gap-1">
+                                    <div class="sysmenu-seg-row">
                                         {for (motion_opts_slice) |m| (
                                             <button
                                                 type="button"
@@ -71,7 +71,7 @@ pub fn SysPopover(allocator: zx.Allocator) zx.Component {
                                         )}
                                     </div>
                                 </div>
-                                <div class="flex flex-col gap-1">
+                                <div class="sysmenu-group">
                                     <span class={group_label}>Background</span>
                                     <BackgroundsBody />
                                 </div>
@@ -92,7 +92,7 @@ pub fn SysPopover(allocator: zx.Allocator) zx.Component {
 
 // The bell's twin, at the bar's far right. It grows to the 44px tap minimum on a coarse pointer,
 // which is what --topbar-h yields 3rem for on mobile: a 2.6rem bar could not hold one (WD35).
-const gear = "icon grid size-[2.2rem] flex-none cursor-pointer place-items-center rounded-md border border-control-border bg-surface text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-accent [@media(pointer:coarse)]:size-11";
+const gear = "sysmenu-gear";
 
 // 464px wide and 28rem tall at most, dropped from under the bar's right edge. It was 336px, where
 // every reading row wrapped its label above its buttons and the four-button groups (Layout, Avatar
@@ -106,27 +106,27 @@ const gear = "icon grid size-[2.2rem] flex-none cursor-pointer place-items-cente
 // animate-* utilities have to appear here as literals to be generated. It DROPS on `drawer-in`, the
 // bell card's animation rather than the `pop-in` it used when the gear sat in the bottom corner: a
 // card that rose from below a top-bar button read as coming from the wrong place.
-const popover_base = "fixed top-[calc(var(--topbar-h)+0.3rem)] right-2 z-[70] flex max-h-[min(28rem,calc(100dvh_-_var(--topbar-h)_-_1rem))] w-[min(29rem,calc(100vw-1rem))] flex-col overflow-hidden rounded-lg border border-border bg-surface";
+const popover_base = "sysmenu-popover";
 const popover_in = popover_base ++ " animate-drawer-in";
 const popover_out = popover_base ++ " animate-drawer-out pointer-events-none";
 
-const heading = "font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
+const heading = "sysmenu-heading";
 
-const close_btn = "icon grid size-[1.6rem] flex-none cursor-pointer place-items-center rounded-md border-0 bg-transparent text-muted hover:bg-surface-2 hover:text-text";
+const close_btn = "sysmenu-close";
 
 // The one scrolling region. The card holds its size and this grows a scrollbar, which is what keeps
 // a full-size form from turning the card into the overlay it must not be. It carries data-sys-body,
 // which names the group currently mounted: the browser gate drives this card through that attribute
 // and the three body ids, so neither depends on a class or on visible text surviving a restyle.
-const body = "flex-1 overflow-y-auto px-3 py-3 [scrollbar-width:thin]";
+const body = "sysmenu-body";
 
-const group_label = "font-mono text-[0.62rem] tracking-[0.12em] text-faint uppercase";
+const group_label = "sysmenu-group-label";
 
-const note = "flex-none border-t border-border-soft px-3 py-2 font-mono text-[0.62rem] leading-ui text-faint";
+const note = "sysmenu-note";
 
 // The segmented motion control. Its selected look rides aria-pressed, which the button carries for
 // assistive tech anyway, so no class is computed for state.
-const seg = "flex-1 cursor-pointer rounded-md border border-control-border bg-transparent px-2 py-1 font-mono text-[0.68rem] text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-text aria-pressed:border-accent aria-pressed:bg-surface-2 aria-pressed:text-accent";
+const seg = "sysmenu-seg";
 
 const MotionOpt = struct { pref: ui.MotionPref, value: []const u8, label: []const u8 };
 const motion_opts = [_]MotionOpt{

@@ -67,15 +67,15 @@ var anchor_left: f32 = 0;
 var anchor_width: f32 = 0;
 var registry: std.StringHashMapUnmanaged(Entry) = .empty;
 
-const button_cls = "inline-flex min-w-[10rem] max-w-full cursor-pointer items-center justify-between gap-2 rounded-md border border-control-border bg-surface px-3 py-[0.4rem] font-mono text-sm text-text transition-colors duration-120 ease-[ease] hover:border-border aria-expanded:border-accent";
+const button_cls = "dd-button";
 // The list drops in on `drawer-in` and, while it fades out, wears `menu-out` (a fast fade, a dropdown
 // closes often so a slow one drags, WD24) and drops its pointer events so the click behind lands. Both
 // literals so the tailwind scanner generates the animate-* utilities.
-const list_base = "dd-list z-40 flex max-h-[min(16rem,60vh)] list-none flex-col gap-[1px] overflow-y-auto rounded-md border border-border bg-surface p-1 outline-none [scrollbar-width:thin]";
+const list_base = "dd-list";
 const list_in = list_base ++ " animate-drawer-in";
 const list_out = list_base ++ " animate-menu-out pointer-events-none";
-const option_cls = "cursor-pointer rounded-sm px-3 py-[0.35rem] font-mono text-sm text-muted aria-selected:text-accent";
-const option_active_cls = "cursor-pointer rounded-sm bg-surface-2 px-3 py-[0.35rem] font-mono text-sm text-text aria-selected:text-accent";
+const option_cls = "dd-option";
+const option_active_cls = "dd-option-active";
 
 pub fn Dropdown(allocator: zx.Allocator, props: Props) zx.Component {
     if (zx.platform.role == .client) {
@@ -94,7 +94,7 @@ pub fn Dropdown(allocator: zx.Allocator, props: Props) zx.Component {
     const btn_id = std.fmt.allocPrint(allocator, "dd-btn-{s}", .{props.name}) catch "dd-btn";
     const list_id = std.fmt.allocPrint(allocator, "dd-list-{s}", .{props.name}) catch "dd-list";
     return (
-        <div @allocator={allocator} class="relative inline-block">
+        <div @allocator={allocator} class="dd-anchor">
             <button
                 type="button"
                 id={btn_id}
@@ -108,11 +108,11 @@ pub fn Dropdown(allocator: zx.Allocator, props: Props) zx.Component {
                 data-dd-toggle={props.name}
                 class={button_cls}
             >
-                <span class="truncate">{face}</span>
-                <span class="icon dd-caret shrink-0" data-icon="chevron-down" aria-hidden="true"></span>
+                <span class="dd-face">{face}</span>
+                <span class="dd-caret dd-caret-icon" data-icon="chevron-down" aria-hidden="true"></span>
             </button>
             {if (open) (
-                <div data-dd-dismiss={props.name} aria-hidden="true" class="fixed inset-0 z-30"></div>
+                <div data-dd-dismiss={props.name} aria-hidden="true" class="dd-dismiss"></div>
             )}
             {if (mounted) (
                 <ul
