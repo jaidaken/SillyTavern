@@ -14,16 +14,16 @@ pub fn ChatManagerBody(ctx: *zx.ComponentCtx(void)) zx.Component {
     if (sel) |c| chat_actions.ensureFor(c.avatar);
     const st = chat_actions.mgrState();
     return (
-        <div @allocator={ctx.allocator} class="chatmgr flex flex-col gap-3" @rendering={.client}>
+        <div @allocator={ctx.allocator} class="chatmgr chatmgr-panel" @rendering={.client}>
             {if (sel == null) (
-                <p class="panel-empty text-sm leading-ui text-muted">Select a character to browse its chats.</p>
+                <p class="panel-empty">Select a character to browse its chats.</p>
             ) else (
-                <div class="flex min-h-0 flex-col gap-3">
+                <div class="chatmgr-toolbar">
                     <input
-                        id="chat-mgr-search"
-                        name="chat-mgr-search"
+                        id="chatmgr-search"
+                        name="chatmgr-search"
                         type="search"
-                        class="w-full rounded-md border border-control-border bg-surface-2 px-3 py-1.5 font-mono text-sm text-text placeholder:text-faint focus-visible:outline-2 focus-visible:outline-tool-ring"
+                        class="chatmgr-search"
                         placeholder="Search these chats"
                         aria-label="Search this character's chats"
                         autocomplete="off"
@@ -31,43 +31,43 @@ pub fn ChatManagerBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         onkeydown={onSearchKey}
                         onchange={onSearchChange}
                     />
-                    <div class="flex items-center gap-2">
+                    <div class="chatmgr-search-row">
                         <label class={act_btn ++ " inline-flex cursor-pointer items-center"} for="chat-import-input">Import</label>
                         <input id="chat-import-input" name="chat-import-input" type="file" accept=".jsonl,.json" class={file_input} aria-label="Import a chat file" onchange={onImportPick} />
                     </div>
 
                     {if (st == .loading) (
-                        <p class="text-sm text-muted" aria-busy="true">Loading chats{"\u{2026}"}</p>
+                        <p class="chatmgr-note" aria-busy="true">Loading chats{"\u{2026}"}</p>
                     ) else if (st == .err) (
-                        <div class="flex flex-col items-start gap-2 rounded-md border border-border-soft p-3" role="alert">
-                            <p class="text-sm text-muted">Could not load this character's chats.</p>
+                        <div class="chatmgr-error" role="alert">
+                            <p class="chatmgr-note">Could not load this character's chats.</p>
                             <button type="button" class={act_btn} onclick={onRetry}>Try again</button>
                         </div>
                     ) else if (chat_actions.rowsSlice().len == 0) (
-                        <div class="flex flex-col gap-1 rounded-md border border-dashed border-border-soft p-4">
-                            <p class="font-serif text-sm text-text">{if (chat_actions.queryText().len > 0) "No chats match the search" else "No saved chats yet"}</p>
-                            <p class="text-xs text-muted">{if (chat_actions.queryText().len > 0) "Clear the search to see every chat." else "Send a message and this list fills in."}</p>
+                        <div class="chatmgr-empty">
+                            <p class="chatmgr-empty-title">{if (chat_actions.queryText().len > 0) "No chats match the search" else "No saved chats yet"}</p>
+                            <p class="chatmgr-empty-hint">{if (chat_actions.queryText().len > 0) "Clear the search to see every chat." else "Send a message and this list fills in."}</p>
                         </div>
                     ) else (
-                        <div class="chatmgr-list flex flex-col gap-2" role="list" aria-label="This character's chats">
+                        <div class="chatmgr-list" role="list" aria-label="This character's chats">
                             {for (chat_actions.rowsSlice(), 0..) |r, i| (
                                 <div
-                                    class="chatmgr-row group/chat flex cursor-pointer flex-col gap-2 rounded-md border border-border-soft p-3 transition-colors duration-150 ease-[ease] select-none hover:border-border hover:bg-surface-2 focus-within:border-border focus-visible:outline-2 focus-visible:outline-tool-ring"
+                                    class="chatmgr-row group/chat"
                                     role="listitem"
                                     tabindex="0"
                                     data-chat-row={i}
                                     onclick={onRowOpen}
                                     onkeydown={onRowKey}
                                 >
-                                    <div class="flex min-w-0 items-baseline gap-2">
-                                        <span class="min-w-0 flex-1 truncate font-serif text-sm font-semibold text-text">{titleText(ctx.allocator, r.file_name)}</span>
+                                    <div class="chatmgr-row-head">
+                                        <span class="chatmgr-row-name">{titleText(ctx.allocator, r.file_name)}</span>
                                         {if (isCurrent(r.file_name)) (
-                                            <span class="flex-none rounded border border-beta-edge bg-tool-on px-1.5 py-px text-[0.65rem] tracking-wide text-text uppercase">open</span>
+                                            <span class="chatmgr-row-current">open</span>
                                         )}
-                                        <span class="flex-none text-xs whitespace-nowrap text-faint">{r.when}</span>
+                                        <span class="chatmgr-row-when">{r.when}</span>
                                     </div>
-                                    <div class="text-xs text-faint">{msgCount(ctx.allocator, r.message_count)}{" \u{00b7} "}{r.file_size}</div>
-                                    <div class="flex flex-wrap gap-1 border-t border-border-soft pt-2">
+                                    <div class="chatmgr-row-count">{msgCount(ctx.allocator, r.message_count)}{" \u{00b7} "}{r.file_size}</div>
+                                    <div class="chatmgr-row-actions">
                                         <button type="button" class={row_btn} data-icon="pencil" data-chat-act="rename" data-chat-row={i} onclick={onRowAct} aria-label="Rename this chat" title="Rename"><span class={row_label}>Rename</span></button>
                                         <button type="button" class={row_btn} data-icon="copy" data-chat-act="duplicate" data-chat-row={i} onclick={onRowAct} aria-label="Duplicate this chat" title="Duplicate"><span class={row_label}>Duplicate</span></button>
                                         <button type="button" class={row_btn} data-icon="branch" data-chat-act="branch" data-chat-row={i} onclick={onRowAct} aria-label="Branch this chat at a message" title="Branch"><span class={row_label}>Branch</span></button>
@@ -79,7 +79,7 @@ pub fn ChatManagerBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         </div>
                     )}
 
-                    <p id="chat-mgr-status" class="min-h-4 text-xs text-muted" aria-live="polite">{chat_actions.statusText()}</p>
+                    <p id="chatmgr-status" class="chatmgr-status" aria-live="polite">{chat_actions.statusText()}</p>
                 </div>
             )}
         </div>
@@ -88,13 +88,13 @@ pub fn ChatManagerBody(ctx: *zx.ComponentCtx(void)) zx.Component {
 
 // The persona/character action-button tokens, unchanged (an interactive edge is control-border, the
 // chrome is mono); the row buttons drop to text-xs so five of them fit a drawer row.
-const act_btn = "chatmgr-btn flex-none cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-text hover:bg-tool-hover";
+const act_btn = "chatmgr-btn";
 // The row actions are ICON buttons that fit five across at the default dock width; the text label
 // rides along only once the panel is dragged wide enough to hold all five (@container on the panel
 // scroller), so nothing runs onto a second line at any width. `icon` draws the data-icon glyph.
-const row_btn = "chatmgr-row-btn icon inline-flex flex-none items-center gap-1.5 cursor-pointer rounded border border-control-border bg-surface-2 px-2 py-1 font-mono text-xs text-text hover:bg-tool-hover focus-visible:outline-2 focus-visible:outline-tool-ring max-[768px]:min-h-9 max-[768px]:px-2.5";
+const row_btn = "chatmgr-row-btn";
 const row_danger = row_btn ++ " hover:bg-danger-hover hover:outline-1 hover:outline-danger-ring";
-const row_label = "hidden @min-[38rem]:inline";
+const row_label = "chatmgr-row-label";
 const file_input = "chatmgr-import-file " ++ panelchrome.file_picker;
 
 fn isCurrent(stem: []const u8) bool {

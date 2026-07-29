@@ -21,11 +21,11 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
     // The shell's centre cell is split into the VN portrait row and the scroller row by .chat-cell.
     // Off VN the stage row collapses to zero, so this is the same single-scroller layout as before.
     return (
-        <div @allocator={ctx.allocator} class="chat-cell col-start-2 row-start-2">
+        <div @allocator={ctx.allocator} class="chat-cell chat-messagelog-part">
         <VnStage />
         <main
             id="chat"
-            class="group/chat min-h-0 min-w-0 overflow-y-auto [overscroll-behavior:contain] [scrollbar-color:var(--color-border)_transparent] [scrollbar-width:thin]"
+            class="group/chat chat"
             onclick={message_actions.onLogClick}
             onkeydown={message_actions.onLogKey}
             oninput={message_editor.onInput}
@@ -33,7 +33,7 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
             onanimationend={reveal.onMesRise}
         >
             <div
-                class="chat-inner relative mx-auto max-w-[var(--reading-measure,var(--reading-cap))] px-4 pt-6 pb-8 group-aria-busy/chat:opacity-55 max-[640px]:px-2 max-[640px]:pt-3 max-[640px]:pb-4"
+                class="chat-inner chat-scroll-inner"
             >
                 <div class="chat-top" aria-hidden="true"></div>
                 <div class="chat-history">
@@ -47,7 +47,7 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
                     )}
                 </div>
                 <div
-                    class="chat-resize absolute top-0 -right-[6px] bottom-0 z-10 w-[12px] cursor-col-resize touch-none select-none before:absolute before:top-[8px] before:right-[5px] before:bottom-[8px] before:w-[2px] before:rounded-[2px] before:bg-accent before:opacity-0 before:transition-opacity before:duration-150 before:ease-[ease] hover:before:opacity-70 focus-visible:before:opacity-70 dragging:before:opacity-100"
+                    class="chat-resize"
                     role="separator"
                     tabindex="0"
                     aria-label="Resize reading width"

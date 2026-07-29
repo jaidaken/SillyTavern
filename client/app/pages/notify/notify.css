@@ -1,40 +1,5 @@
 /* Notifications: the overlay toast and the drawer row are one visual idea in two places. */
 
-/* Notifications. The toast in the overlay and the row in the drawer are one visual idea at two
-   sizes, so they share the ground, the radius and the level edge; only the layout differs. Written
-   as rules rather than utilities because notifications.zig computes these class names and the
-   tailwind scan reads *.zx only (see the @source note at the top). Depth is border against the
-   raised surface, never a shadow (WD16, dark UI). */
-.st-toast,
-.st-note {
-    border: 1px solid var(--color-border);
-    border-left-width: 4px;
-    border-radius: var(--radius-md);
-    background: var(--color-surface-2);
-    padding-block: 0.5rem;
-    padding-inline: 0.75rem;
-    font-size: var(--text-sm);
-    line-height: var(--leading-ui);
-    color: var(--color-text);
-}
-/* Declared literally rather than as an --animate-* theme key: those generate an animate-toast-in
-   utility class nobody uses, and the shorthand has one consumer. (A var() indirection was tried on a
-   theory that it restarted the animation; measured, it made no difference. C-NOTIF-18 holds the real
-   property, that an arriving toast does not rebuild the ones already up.) */
-.st-toast {
-    pointer-events: auto;
-    animation: toast-in 180ms var(--ease-settle);
-}
-.st-toast.is-leaving {
-    animation: toast-out 240ms var(--ease-settle) forwards;
-}
-.st-note {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-items: baseline;
-    column-gap: 0.75rem;
-}
-
 /* ================= Converted off the utility classes =================
    16 class attributes. Every selector, wrapper and declaration below is the one utilities.css
    emitted for the utilities that element carried; only the class NAME changed, which is what lets
@@ -87,3 +52,39 @@
    click meant for the page. Narrow screens pull it in and widen it to the viewport. */
 .toast-stack { pointer-events:none; position:fixed; right:calc(var(--spacing) * 4); bottom:calc(var(--spacing) * 24); z-index:50; display:flex; width:min(22rem,100vw - 2rem); flex-direction:column; gap:calc(var(--spacing) * 2) }
 @media not all and (min-width:640px) { .toast-stack { right:calc(var(--spacing) * 2); bottom:calc(var(--spacing) * 20); width:calc(100vw - 1rem) } }
+
+
+/* Notifications. The toast in the overlay and the row in the drawer are one visual idea at two
+   sizes, so they share the ground, the radius and the level edge; only the layout differs. Written
+   as rules rather than utilities because notifications.zig computes these class names and the
+   tailwind scan reads *.zx only (see the @source note at the top). Depth is border against the
+   raised surface, never a shadow (WD16, dark UI). */
+.st-toast,
+.st-note {
+    border: 1px solid var(--color-border);
+    border-left-width: 4px;
+    border-radius: var(--radius-md);
+    background: var(--color-surface-2);
+    padding-block: 0.5rem;
+    padding-inline: 0.75rem;
+    font-size: var(--text-sm);
+    line-height: var(--leading-ui);
+    color: var(--color-text);
+}
+/* Declared literally rather than as an --animate-* theme key: those generate an animate-toast-in
+   utility class nobody uses, and the shorthand has one consumer. (A var() indirection was tried on a
+   theory that it restarted the animation; measured, it made no difference. C-NOTIF-18 holds the real
+   property, that an arriving toast does not rebuild the ones already up.) */
+.st-toast {
+    pointer-events: auto;
+    animation: toast-in 180ms var(--ease-settle);
+}
+.st-toast.is-leaving {
+    animation: toast-out 240ms var(--ease-settle) forwards;
+}
+.st-note {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: baseline;
+    column-gap: 0.75rem;
+}

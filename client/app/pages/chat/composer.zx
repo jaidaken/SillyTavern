@@ -17,7 +17,7 @@
 // permanent label about the backend inside the space you write in. The status is the topbar's now
 // (a dot and the model on the connections button, the full line in that panel), so the composer is
 // only the composer. C-CONN-DOT-6 fails if a connection readout reappears in here.
-const btn_base = "icon grid size-[2.7rem] flex-none cursor-pointer place-items-center rounded-md border border-control-border transition-[background,color,filter,transform] duration-120 ease-[ease] active:[transform:translateY(calc(var(--move)*1px))_scale(calc(1_-_var(--move)*0.03))] max-[640px]:size-11 max-[640px]:before:size-4";
+const btn_base = "composer-btn";
 
 pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
     instrument.bumpComposer();
@@ -25,7 +25,7 @@ pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
         <footer
             @allocator={ctx.allocator}
             id="composer"
-            class="col-start-2 row-start-3 border-t border-border bg-surface p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] max-[640px]:p-2"
+            class="composer-frame"
             @rendering={.client}
             onclick={ui.onPageClick}
             onkeydown={ui.onPageKey}
@@ -33,8 +33,8 @@ pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
             {if (dropdown_demo.enabled()) (
                 <DropdownDemo />
             )}
-            <div class="composer-measure mx-auto grid w-full max-w-[var(--reading-measure,var(--reading-cap))] grid-cols-1 gap-1">
-                <div class="flex items-end gap-2">
+            <div class="composer-measure composer-column">
+                <div class="composer-row">
                     <button
                         type="button"
                         class={btn_base ++ " bg-transparent text-muted hover:bg-surface-2 hover:text-text"}
@@ -43,12 +43,12 @@ pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
                         aria-haspopup="dialog"
                         onclick={undo.onOpenSnapshots}
                     ></button>
-                    <label for="send_textarea" class="sr-only top-0 left-0">Message</label>
+                    <label for="send_textarea" class="composer-label">Message</label>
                     <textarea
                         id="send_textarea"
                         name="message"
                         autocomplete="off"
-                        class="max-h-[40vh] min-h-[2.7rem] flex-1 resize-none rounded-md border border-control-border bg-bg px-[0.85rem] py-[0.6rem] font-serif text-md leading-ui text-text transition-[border-color] duration-120 ease-[ease] placeholder:text-faint placeholder:italic focus:border-accent focus:not-focus-visible:outline-none max-[640px]:max-h-[30vh] max-[640px]:p-2 max-[640px]:text-[16px]"
+                        class="composer-textarea"
                         rows="1"
                         placeholder="Type a message..."
                         oninput={ctx.bind(onComposerInput)}

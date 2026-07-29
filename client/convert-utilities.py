@@ -241,9 +241,16 @@ def main():
             f.write_text(text, encoding="utf-8")
 
     banner = f"\n/* ---- Converted off the utility classes, {converted} class attributes. Selectors, wrappers and\n" \
-             f"   declarations are the ones utilities.css emitted; only the class NAME changed. ---- */\n"
+             f"   declarations are the ones utilities.css emitted; only the class NAME changed.\n" \
+             f"   This block sits ABOVE the page's authored rules because that is where the utilities sat:\n" \
+             f"   an authored rule is written to beat a utility at equal specificity (.composer-stop's\n" \
+             f"   display:none over btn_base's grid), and appending would have handed the win back. ---- */\n"
     if not a.dry_run and rules:
-        sheet.write_text(sheet.read_text(encoding="utf-8") + banner + "\n".join(rules) + "\n", encoding="utf-8")
+        text = sheet.read_text(encoding="utf-8")
+        head = text.find("*/")
+        cut = text.index("\n", head) + 1 if head != -1 else 0
+        body = banner + "\n".join(rules) + "\n"
+        sheet.write_text(text[:cut] + body + text[cut:], encoding="utf-8")
     print(f"{page}: {converted} class strings converted, {len(rules)} rules emitted -> {sheet}")
     return 0
 

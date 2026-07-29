@@ -17,31 +17,31 @@ pub fn UndoVersions(allocator: zx.Allocator) zx.Component {
             style={undo.anchorStyle(allocator, store.undo.anchor_top, store.undo.anchor_right)}
             class={if (store.undo.closing) versions_out else versions_in}
         >
-            <div class="flex flex-none items-center justify-between gap-2">
-                <h3 class="font-mono text-xs font-medium tracking-[0.08em] text-muted uppercase">Earlier versions</h3>
+            <div class="undo-ver-head">
+                <h3 class="undo-ver-title">Earlier versions</h3>
                 <button
                     type="button"
-                    class="icon grid size-7 flex-none place-items-center rounded-md border-0 bg-transparent text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                    class="undo-ver-refresh"
                     data-icon="close"
                     data-undo-close="1"
                     aria-label="Close history"
                 ></button>
             </div>
-            <p class="text-xs leading-ui text-faint">Saved snapshots, last 50. Not every keystroke: two edits within ten seconds can merge into one.</p>
+            <p class="undo-ver-hint">Saved snapshots, last 50. Not every keystroke: two edits within ten seconds can merge into one.</p>
             { if (store.undo.busy) (
-                <p class="text-sm text-muted">Loading history...</p>
+                <p class="undo-note">Loading history...</p>
             ) else if (store.undo.note.len > 0) (
-                <p class="text-sm text-muted">{store.undo.note}</p>
+                <p class="undo-note">{store.undo.note}</p>
             ) else (
-                <ul class="flex flex-1 list-none flex-col gap-2 overflow-y-auto p-0 [scrollbar-width:thin]">
+                <ul class="undo-ver-list">
                     { for (store.undo.versions.items) |v| (
-                        <li class="flex flex-col gap-1 rounded-md border border-border-soft bg-surface-2 p-2">
-                            <div class="line-clamp-3 font-serif text-sm text-text">{v.mes}</div>
-                            <div class="flex items-center justify-between gap-2">
-                                <span class="font-mono text-[0.68rem] text-faint">{undo.fmtTs(allocator, v.backup_ts)}</span>
+                        <li class="undo-ver-row">
+                            <div class="undo-ver-preview">{v.mes}</div>
+                            <div class="undo-ver-foot">
+                                <span class="undo-ver-time">{undo.fmtTs(allocator, v.backup_ts)}</span>
                                 <button
                                     type="button"
-                                    class="cursor-pointer rounded-md border border-accent bg-transparent px-2 py-1 font-mono text-xs text-accent transition-[background,color] duration-120 ease-[ease] hover:bg-accent hover:text-on-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                                    class="undo-ver-restore"
                                     data-undo-restore={v.backup_ts}
                                     data-undo-kind="version"
                                 >Restore</button>
@@ -60,7 +60,7 @@ pub fn UndoSnapshots(allocator: zx.Allocator) zx.Component {
     return (
         <div
             @allocator={allocator}
-            class="fixed inset-0 z-40 flex items-end justify-center p-4 max-[640px]:p-0"
+            class="undo-snap-surface"
         >
             <div
                 id="undo-surface"
@@ -69,42 +69,42 @@ pub fn UndoSnapshots(allocator: zx.Allocator) zx.Component {
                 aria-label="Chat snapshots"
                 class={if (store.undo.closing) snaps_out else snaps_in}
             >
-                <div class="flex flex-none items-center justify-between gap-2 border-b border-border p-2 pl-4">
-                    <h2 class="font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase">Chat snapshots</h2>
+                <div class="undo-snap-head">
+                    <h2 class="undo-snap-title">Chat snapshots</h2>
                     <button
                         type="button"
-                        class="icon grid size-[1.9rem] flex-none place-items-center rounded-md border-0 bg-transparent text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent max-[768px]:size-10 max-[768px]:min-h-11 max-[768px]:min-w-11"
+                        class="undo-snap-refresh"
                         data-icon="close"
                         data-undo-close="1"
                         aria-label="Close snapshots"
                     ></button>
                 </div>
-                <div class="flex-1 overflow-y-auto p-4 [scrollbar-width:thin] max-[640px]:pb-[calc(1rem_+_env(safe-area-inset-bottom,0px))]">
-                    <p class="mb-3 text-xs leading-ui text-faint">Restore the whole chat to an earlier save. Saved snapshots, last 50, not every keystroke: two edits within ten seconds can merge into one.</p>
+                <div class="undo-snap-body">
+                    <p class="undo-snap-hint">Restore the whole chat to an earlier save. Saved snapshots, last 50, not every keystroke: two edits within ten seconds can merge into one.</p>
                     { if (store.undo.busy) (
-                        <p class="text-sm text-muted">Loading snapshots...</p>
+                        <p class="undo-note">Loading snapshots...</p>
                     ) else if (store.undo.note.len > 0) (
-                        <p class="text-sm text-muted">{store.undo.note}</p>
+                        <p class="undo-note">{store.undo.note}</p>
                     ) else (
-                        <ul class="flex list-none flex-col gap-2 p-0">
+                        <ul class="undo-snap-list">
                             { for (store.undo.snapshots.items) |s| (
-                                <li class="flex flex-col gap-1.5 rounded-md border border-border-soft bg-surface-2 p-3">
-                                    <div class="line-clamp-2 font-serif text-sm text-text">{s.last_mes_preview}</div>
-                                    <div class="flex flex-wrap items-center justify-between gap-2">
-                                        <div class="flex flex-col gap-0.5">
-                                            <span class="font-mono text-[0.68rem] text-faint">{undo.fmtTs(allocator, s.backup_ts)}</span>
-                                            <span class="text-[0.7rem] text-muted">{undo.snapMeta(allocator, s)}</span>
+                                <li class="undo-snap-row">
+                                    <div class="undo-snap-preview">{s.last_mes_preview}</div>
+                                    <div class="undo-snap-foot">
+                                        <div class="undo-snap-meta">
+                                            <span class="undo-ver-time">{undo.fmtTs(allocator, s.backup_ts)}</span>
+                                            <span class="undo-snap-size">{undo.snapMeta(allocator, s)}</span>
                                         </div>
-                                        <div class="flex flex-none gap-2">
+                                        <div class="undo-snap-actions">
                                             <button
                                                 type="button"
-                                                class="cursor-pointer rounded-md border border-control-border bg-transparent px-2.5 py-1 font-mono text-xs text-muted transition-[background,color,border-color] duration-120 ease-[ease] hover:border-border hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent max-[640px]:min-h-11"
+                                                class="undo-snap-restore"
                                                 data-undo-restore={s.backup_ts}
                                                 data-undo-kind="deleted"
                                             >Recover deleted</button>
                                             <button
                                                 type="button"
-                                                class="cursor-pointer rounded-md border border-accent bg-transparent px-2.5 py-1 font-mono text-xs text-accent transition-[background,color] duration-120 ease-[ease] hover:bg-accent hover:text-on-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent max-[640px]:min-h-11"
+                                                class="undo-snap-delete"
                                                 data-undo-restore={s.backup_ts}
                                                 data-undo-kind="snapshot"
                                             >Restore</button>
@@ -123,10 +123,10 @@ pub fn UndoSnapshots(allocator: zx.Allocator) zx.Component {
 // Both undo surfaces drop in on `drawer-in` and fade out on `drawer-out`, dropping pointer events
 // while they leave. Literals so the tailwind scanner generates the animate-* utilities; store.undo
 // keeps `mode` through the fade so the mount survives until the timer commits.
-const versions_common = "z-40 flex max-h-[min(24rem,60vh)] w-[min(20rem,calc(100vw_-_1rem))] flex-col gap-2 rounded-lg border border-border bg-surface p-3 outline-none";
+const versions_common = "undo-ver-btn";
 const versions_in = versions_common ++ " animate-drawer-in";
 const versions_out = versions_common ++ " animate-drawer-out pointer-events-none";
-const snaps_common = "flex max-h-[70vh] w-[min(34rem,100%)] flex-col overflow-hidden rounded-lg border border-border bg-surface outline-none max-[640px]:max-h-[85vh] max-[640px]:rounded-none max-[640px]:rounded-t-lg";
+const snaps_common = "undo-snap-btn";
 const snaps_in = snaps_common ++ " animate-drawer-in";
 const snaps_out = snaps_common ++ " animate-drawer-out pointer-events-none";
 

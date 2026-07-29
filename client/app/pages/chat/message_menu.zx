@@ -15,7 +15,7 @@ pub fn MessageMenuTrigger(allocator: zx.Allocator, props: MenuTriggerProps) zx.C
         <button
             @allocator={allocator}
             type="button"
-            class="msg-menu-trigger icon absolute top-1 right-1 z-10 grid size-7 place-items-center rounded-md border-0 bg-transparent text-muted opacity-0 transition-[opacity,color,background] duration-120 ease-[ease] hover:bg-surface-2 hover:text-text focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent max-[640px]:size-9 max-[640px]:min-h-11 max-[640px]:min-w-11 max-[640px]:opacity-60"
+            class="msg-menu-trigger chat-message-menu-part"
             data-icon="dots"
             data-msg-menu={props.abs}
             aria-label="Message actions"
@@ -31,7 +31,7 @@ pub fn MessageMenu(allocator: zx.Allocator) zx.Component {
     const wo = store.windowOffset();
     const in_window = abs >= wo and (abs - wo) < store.slice().len;
     const hidden = in_window and store.slice()[abs - wo].is_system;
-    const item = "cursor-pointer rounded-md border-0 bg-transparent px-3 py-1.5 text-left font-mono text-xs text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-text focus-visible:bg-surface-2 focus-visible:text-text focus-visible:outline-none max-[640px]:min-h-11";
+    const item = "chatmgr-item";
     return (
         <div
             @allocator={allocator}
@@ -55,7 +55,7 @@ pub fn MessageMenu(allocator: zx.Allocator) zx.Component {
 // The popped list drops in on `drawer-in` and closes on `menu-out` (a fast fade: the action menu is
 // opened often, so a slow dismiss drags, WD24), dropping its pointer events while it leaves. Literals
 // so the tailwind scanner generates the animate-* utilities.
-const menu_common = "z-40 flex min-w-[10rem] flex-col gap-0.5 rounded-lg border border-border bg-surface p-1 outline-none";
+const menu_common = "msg-menu-item";
 const menu_in = menu_common ++ " animate-drawer-in";
 const menu_out = menu_common ++ " animate-menu-out pointer-events-none";
 
