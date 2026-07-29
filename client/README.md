@@ -15,8 +15,8 @@ See [notes/frontend-stack.md](../notes/frontend-stack.md) for the stack decision
 
 ## Requirements
 
-Zig `0.16.0` (pinned in `.zigversion`). Node is needed at build time: ziex's tailwind plugin and the
-`esbuild` minify step both run under it. The two vendored browser libraries are committed under
+Zig `0.16.0` (pinned in `.zigversion`). Node is needed at build time for `esbuild`, which bundles the
+stylesheet and minifies the shipped assets. The two vendored browser libraries are committed under
 `glue/vendor/` (copied from `../node_modules`), so the running site fetches no third-party CDN.
 
 ## Build
@@ -78,12 +78,30 @@ bespoke bridge.
 
 ## Styling
 
-Every component wears Tailwind utility classes inline. There is one stylesheet, `glue/app-input.css`,
-which holds the design tokens, the generated-state rules, and the message frame's own styling. ziex's
-first-party tailwind plugin (patched, `patches/10-tailwind-oxide-scanner.patch`, because the stock
-regex extractor dropped every paren-bearing utility) compiles it **inside `zig build`** into
-`zig-out/static/glue/app.css`, and the export step copies it to `dist/`. No separate Tailwind CLI
-runs.
+There is no Tailwind. `glue/app-input.css` is a manifest of `@import`s and nothing else; the list IS
+the cascade order, and `esbuild` bundles it **inside `zig build`** into `zig-out/static/glue/app.css`,
+which the export step copies to `dist/`.
+
+Each component wears one semantic class, and its rules live in the sheet beside its markup:
+`app/pages/<page>/<page>.css`. Shared ground sits under `glue/css/`: the design tokens, a vendored
+`modern-normalize` plus the opinionated half of what Tailwind's preflight used to add, the layout
+primitives, the icon masks, the motion keyframes, and the reading surface (a message body is markdown
+rendered at runtime, so no class of ours can reach inside it and its styling has to be written by
+element).
+
+`glue/css/utilities.css` is what is left of the utility set, and it only ever shrinks. Three checks
+keep the arrangement honest, all wired into `build.sh`:
+
+- `check-classes.py` fails the build on a class the markup asks for that no rule defines, and on a
+  `++` concatenation that lost the space between two class names.
+- `check-reset-coverage.py` proves every selector/property pair the old preflight set is still covered.
+- `check-primitives-parity.py` compared each primitive against Tailwind's own output while both
+  existed; it self-skips now that the handover is done.
+
+`css-parity.mjs` is the tool that made the conversion provable: it records the full computed style of
+every element in five app states and diffs two captures, so a rename that changes anything a browser
+renders shows up as the property that moved. `convert-utilities.py` and `prune-utilities.py` did the
+mechanical half and are kept for the same reason.
 
 ### Sanitization is the security boundary
 
@@ -105,8 +123,8 @@ every `data:` URI whose mediatype is not an image, including `image/svg+xml`.
 ## Layout
 
 ```
-build.zig                 ziex.init wiring: jsglue_href, tailwind plugin, export step
-build.zig.zon             ziex + its tailwind plugin, pinned as path deps (.ziex)
+build.zig                 ziex.init wiring: jsglue_href, esbuild css bundle, export step
+build.zig.zon             ziex, pinned as a path dep (.ziex)
 build.sh                  the real build: setup-ziex, gates, build, export, patch, minify, prune
 setup-ziex.sh             materialise the patched ziex into .ziex
 patch-door.sh             edit ziex's exported door in place, post-export
@@ -126,7 +144,10 @@ app/pages/net.zig         the fetch wrapper
 app/pages/html.zig        SanitizedHtml + the extern "env" host functions
 app/pages/reading_prefs.zig  persisted reading-width and motion prefs
 glue/custom.js            the door: classic script, dynamic import, env namespace, JS adapters
-glue/app-input.css        the one stylesheet, compiled by the tailwind plugin inside zig build
+glue/app-input.css        the stylesheet manifest: an @import list that IS the cascade order
+glue/css/               shared ground: tokens, reset, primitives, icons, motion, reading surface
+app/pages/*/            each page's markup and the sheet beside it
+css-parity.mjs            computed-style capture + diff, the oracle for a styling refactor
 glue/vendor/              purify.es.mjs, hljs.mjs, hljs-theme.css
 ```
 
