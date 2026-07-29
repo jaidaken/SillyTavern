@@ -17,6 +17,7 @@ rewrite changed nothing a browser renders.
     ./convert-utilities.py app/pages/notify --sheet app/pages/notify/notify.css [--dry-run]
 """
 import argparse
+import os
 import pathlib
 import re
 import sys
@@ -107,6 +108,22 @@ def load_utilities():
     return table, order
 
 
+def shared_tokens(page_dir):
+    """Class tokens that appear in markup OUTSIDE this page, so this page cannot claim them."""
+    out = set()
+    for root, _dirs, files in os.walk("app"):
+        here = pathlib.Path(root)
+        if here == page_dir or page_dir in here.parents:
+            continue
+        for f in files:
+            if not f.endswith((".zx", ".zig")):
+                continue
+            text = (here / f).read_text(encoding="utf-8")
+            for lit in re.findall(r'"([^"]*)"', text):
+                out.update(lit.split())
+    return out
+
+
 def markers():
     if not MARKERS.exists():
         return set()
@@ -120,7 +137,7 @@ CLASS_CONST = re.compile(r'((?:pub\s+)?const\s+\w+\s*=\s*)"([^"]*)"')
 GENERIC = ("base", "class", "cls", "style", "styles")
 
 
-def semantic_name(tokens, marks, page, used, hint, util):
+def semantic_name(tokens, marks, shared, page, used, hint, util):
     """Prefer a name the markup already carries: a marker on the same element IS the element's name.
 
     A marker only qualifies while it names ONE set of utilities. panel-left sits on both the entering
@@ -128,6 +145,11 @@ def semantic_name(tokens, marks, page, used, hint, util):
     the open panel."""
     for t in tokens:
         if t in used and used[t] != util:
+            continue
+        # A marker carried by ANOTHER page is that page's element name too. Writing this page's
+        # declarations under it hands them to the other page's element: system's `.setting-col`
+        # (flex column) landed on setup's grid rows and flattened them.
+        if t in shared:
             continue
         # A marker can be a VARIANT token the stylesheet happens not to define (focus-visible:outline-2
         # is allowlisted), and one of those as a class name emits `.focus-visible:outline-2`, which a
@@ -171,16 +193,22 @@ def main():
     ap.add_argument("page")
     ap.add_argument("--sheet", required=True)
     ap.add_argument("--dry-run", action="store_true")
+    # A page can own more than one sheet (system has backgrounds.css beside system.css); this keeps a
+    # component's rules in the sheet its markup belongs to.
+    ap.add_argument("--only", default=None, help="convert only files whose name contains this")
     a = ap.parse_args()
 
     table, _ = load_utilities()
     marks = markers()
     page_dir = pathlib.Path(a.page)
+    shared = shared_tokens(page_dir)
     page = page_dir.name
     sheet = pathlib.Path(a.sheet)
 
     used, rules, converted = {}, [], 0
     for f in sorted(page_dir.glob("*.zx")) + sorted(page_dir.glob("*.zig")):
+        if a.only and a.only not in f.name:
+            continue
         text = f.read_text(encoding="utf-8")
         original = text
 
@@ -192,7 +220,7 @@ def main():
             if not util:
                 return None
             key = frozenset(util)
-            name = semantic_name(toks, marks, page, used, hint, key)
+            name = semantic_name(toks, marks, shared, page, used, hint, key)
             if used.get(name) != key:
                 used[name] = key
                 rules.extend(emit(name, util, table))

@@ -1,6 +1,44 @@
 /* Backgrounds panel. The markup is app/pages/system/backgrounds_body.zx, so this sheet lives
    beside it rather than under setup/, where an earlier pass filed it by zone name. */
 
+/* ---- Converted off the utility classes, 25 class attributes. Selectors, wrappers and
+   declarations are the ones utilities.css emitted; only the class NAME changed.
+   This block sits ABOVE the page's authored rules because that is where the utilities sat:
+   an authored rule is written to beat a utility at equal specificity (.composer-stop's
+   display:none over btn_base's grid), and appending would have handed the win back. ---- */
+.backgrounds-body { display:flex; flex-direction:column; gap:calc(var(--spacing) * 3) }
+.bg-error { display:flex; flex-direction:column; align-items:flex-start; gap:calc(var(--spacing) * 2); border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-bg); padding:calc(var(--spacing) * 3) }
+.bg-error-text { font-size:var(--text-sm); color:var(--color-text) }
+.bg-skel-tile { aspect-ratio:16/9; animation:var(--animate-pulse); border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-surface-2) }
+.bg-empty { display:flex; flex-direction:column; gap:var(--spacing); border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-bg); padding:calc(var(--spacing) * 4) }
+.bg-empty-title { font-size:var(--text-base); color:var(--color-text) }
+.bg-empty-hint { font-size:var(--text-sm); color:var(--color-muted) }
+.bg-tile-wrap-inner { position:relative }
+.bg-tile-img { display:block; aspect-ratio:16/9; width:100%; object-fit:cover }
+.bg-tile-name { display:block; text-overflow:ellipsis; white-space:nowrap; overflow:hidden; padding-inline:calc(var(--spacing) * 2); padding-block:var(--spacing); font-family:var(--font-mono); font-size:var(--text-xs); color:var(--color-muted) }
+.bg-tile-actions-row { pointer-events:none; position:absolute; top:var(--spacing); left:var(--spacing); border-radius:var(--radius-sm); background-color:#15110ccc; padding-inline:var(--spacing); font-family:var(--font-mono); font-size:.65rem; color:var(--color-muted) }
+@supports (color:color-mix(in lab, red, red)) { .bg-tile-actions-row { background-color:color-mix(in oklab, var(--color-bg) 80%, transparent) } }
+.bg-tile-apply { position:absolute; top:var(--spacing); right:var(--spacing); display:flex; gap:var(--spacing) }
+.bg-tile-delete:before { content:"";width:1.1rem;height:1.1rem;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;mask:var(--i) center / contain no-repeat;background:currentColor;display:block }
+.bg-upload-row { display:flex; flex-wrap:wrap; align-items:center; gap:calc(var(--spacing) * 2) }
+.bg-upload-btn { font-family:var(--font-mono); font-size:var(--text-xs); color:var(--color-muted) }
+.bg-upload-status { display:flex; flex-direction:column; align-items:flex-start; gap:calc(var(--spacing) * 2); border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-bg); padding:calc(var(--spacing) * 3) }
+.bg-upload-error { font-size:var(--text-sm); color:var(--color-text) }
+.bg-upload-error-text { font-size:var(--text-sm); color:var(--color-muted) }
+.bg-upload-hint { font-size:var(--text-sm); color:var(--color-muted) }
+@media not all and (min-width:768px) { .bg-upload-hint { font-size:.78rem } }
+.bg-tile-action { display:grid; width:calc(var(--spacing) * 7);height:calc(var(--spacing) * 7); cursor:pointer; place-items:center; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:#29231de6; color:var(--color-muted); transition-property:color,background-color,border-color,outline-color,text-decoration-color,fill,stroke,--tw-gradient-from,--tw-gradient-via,--tw-gradient-to;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
+@supports (color:color-mix(in lab, red, red)) { .bg-tile-action { background-color:color-mix(in oklab, var(--color-surface-2) 90%, transparent) } }
+@media (hover:hover) { .bg-tile-action:hover { color:var(--color-text) } }
+.settings-retry-btn { cursor:pointer; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-surface-2); padding-inline:calc(var(--spacing) * 3); padding-block:var(--spacing); font-family:var(--font-mono); font-size:var(--text-sm); color:var(--color-muted); transition-property:color,background-color,border-color,outline-color,text-decoration-color,fill,stroke,--tw-gradient-from,--tw-gradient-via,--tw-gradient-to;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
+@media (hover:hover) { .settings-retry-btn:hover { color:var(--color-text) } }
+.bg-tile { display:block; width:100%; cursor:pointer; overflow:hidden; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-bg); padding:0; text-align:left; transition-property:color,background-color,border-color,outline-color,text-decoration-color,fill,stroke,--tw-gradient-from,--tw-gradient-via,--tw-gradient-to;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
+.bg-tile[aria-pressed=true] { border-color:var(--color-accent) }
+.bg-none-btn { display:grid; aspect-ratio:16/9; cursor:pointer; place-items:center; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-bg); font-family:var(--font-mono); font-size:var(--text-sm); color:var(--color-muted); transition-property:color,background-color,border-color,outline-color,text-decoration-color,fill,stroke,--tw-gradient-from,--tw-gradient-via,--tw-gradient-to;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
+@media (hover:hover) { .bg-none-btn:hover { color:var(--color-text) } }
+.bg-none-btn[aria-pressed=true] { border-color:var(--color-accent); color:var(--color-accent) }
+.bg-tile-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(7.5rem,1fr)); gap:calc(var(--spacing) * 3) }
+
 /* ===== C-BG: backgrounds (append-only zone) =====
    The chosen image is chrome BEHIND the reading surface (invariant 6): a fixed layer under the
    content, never a rule that can reach .mes_text. body carries `bg-bg` and <html> carries no

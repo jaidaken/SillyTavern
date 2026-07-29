@@ -7,7 +7,6 @@
    an authored rule is written to beat a utility at equal specificity (.composer-stop's
    display:none over btn_base's grid), and appending would have handed the win back. ---- */
 .chatmgr-panel { display:flex; flex-direction:column; gap:calc(var(--spacing) * 3) }
-.panel-empty { font-size:var(--text-sm); --tw-leading:var(--leading-ui);line-height:var(--leading-ui); color:var(--color-muted) }
 .chatmgr-toolbar { display:flex; min-height:0; flex-direction:column; gap:calc(var(--spacing) * 3) }
 .chatmgr-search { width:100%; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-surface-2); padding-inline:calc(var(--spacing) * 3); padding-block:calc(var(--spacing) * 1.5); font-family:var(--font-mono); font-size:var(--text-sm); color:var(--color-text) }
 .chatmgr-search::placeholder { color:var(--color-faint) }

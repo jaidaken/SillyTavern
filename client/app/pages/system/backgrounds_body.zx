@@ -9,17 +9,17 @@
 //
 // A tile is a button and its two file actions are its SIBLINGS, not its children: a button inside a
 // button is invalid, and the actions must stay reachable by keyboard on their own.
-const tile_action = "bg-tile-action grid size-7 cursor-pointer place-items-center rounded-md border border-control-border bg-surface-2/90 text-muted transition-colors duration-120 ease-[ease] hover:text-text";
-const retry_btn = "cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text";
-const tile_btn = "bg-tile block w-full cursor-pointer overflow-hidden rounded-md border border-control-border bg-bg p-0 text-left transition-colors duration-120 ease-[ease] aria-pressed:border-accent";
+const tile_action = "bg-tile-action";
+const retry_btn = "settings-retry-btn";
+const tile_btn = "bg-tile";
 const file_input = "bg-upload-file " ++ panelchrome.file_picker;
-const none_btn = "bg-tile grid aspect-[16/9] cursor-pointer place-items-center rounded-md border border-control-border bg-bg font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text aria-pressed:border-accent aria-pressed:text-accent";
+const none_btn = "bg-tile bg-none-btn";
 
 // The gallery and its skeleton share one track definition so the tiles cannot land on a different
 // grid than the placeholder that reserved their space (WD43). 7.5rem is the narrowest tile still
 // legible, chosen so two fit across the system card's 336px body (nav/sysmenu.zx) while a wide
 // drawer simply fits more; auto-fill does the rest, so neither width needs a breakpoint.
-const tile_grid = "grid grid-cols-[repeat(auto-fill,minmax(7.5rem,1fr))] gap-3";
+const tile_grid = "bg-tile-grid";
 
 pub fn BackgroundsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
     backgrounds.region = ctx.state(u32, 0);
@@ -27,22 +27,22 @@ pub fn BackgroundsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
 
     const sel = backgrounds.selected(ctx.allocator);
     return (
-        <div @allocator={ctx.allocator} id="backgrounds-body" class="backgrounds-body flex flex-col gap-3" @rendering={.client}>
+        <div @allocator={ctx.allocator} id="backgrounds-body" class="backgrounds-body" @rendering={.client}>
             {if (backgrounds.state() == .failed) (
-                <div class="flex flex-col items-start gap-2 rounded-md border border-control-border bg-bg p-3" role="alert">
-                    <p class="text-sm text-text">{backgrounds.errorText()}</p>
+                <div class="bg-error" role="alert">
+                    <p class="bg-error-text">{backgrounds.errorText()}</p>
                     <button class={retry_btn} type="button" data-bg-retry="1" onclick={onRetry}>Try again</button>
                 </div>
             ) else if (backgrounds.state() == .loading) (
                 <div class={tile_grid} aria-busy="true" aria-label="Loading backgrounds">
                     {for (skeleton_slots) |_| (
-                        <div class="aspect-[16/9] animate-pulse rounded-md border border-control-border bg-surface-2"></div>
+                        <div class="bg-skel-tile"></div>
                     )}
                 </div>
             ) else if (backgrounds.list().len == 0) (
-                <div class="flex flex-col gap-1 rounded-md border border-control-border bg-bg p-4">
-                    <p class="text-base text-text">No backgrounds yet.</p>
-                    <p class="text-sm text-muted">Drop image files into the server's backgrounds folder, then reload this panel.</p>
+                <div class="bg-empty">
+                    <p class="bg-empty-title">No backgrounds yet.</p>
+                    <p class="bg-empty-hint">Drop image files into the server's backgrounds folder, then reload this panel.</p>
                     <button class={retry_btn} type="button" data-bg-retry="1" onclick={onRetry}>Reload</button>
                 </div>
             ) else (
@@ -56,7 +56,7 @@ pub fn BackgroundsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     >None</button>
 
                     {for (backgrounds.list()) |b| (
-                        <div class="bg-tile-wrap relative">
+                        <div class="bg-tile-wrap bg-tile-wrap-inner">
                             <button
                                 class={tile_btn}
                                 type="button"
@@ -65,18 +65,18 @@ pub fn BackgroundsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                                 onclick={onSelect}
                             >
                                 <img
-                                    class="block aspect-[16/9] w-full object-cover"
+                                    class="bg-tile-img"
                                     src={backgrounds.thumbFor(ctx.allocator, b.filename)}
                                     alt=""
                                     loading="lazy"
                                     decoding="async"
                                 />
-                                <span class="block truncate px-2 py-1 font-mono text-xs text-muted">{b.filename}</span>
+                                <span class="bg-tile-name">{b.filename}</span>
                             </button>
                             {if (b.is_animated) (
-                                <span class="pointer-events-none absolute top-1 left-1 rounded-sm bg-bg/80 px-1 font-mono text-[0.65rem] text-muted">GIF</span>
+                                <span class="bg-tile-actions-row">GIF</span>
                             )}
-                            <div class="bg-tile-actions absolute top-1 right-1 flex gap-1">
+                            <div class="bg-tile-actions bg-tile-apply">
                                 <button
                                     class={tile_action}
                                     type="button"
@@ -84,7 +84,7 @@ pub fn BackgroundsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                                     data-bg-rename={b.filename}
                                     aria-label={label(ctx.allocator, "Rename ", b.filename)}
                                     onclick={onRename}
-                                ><span class="icon"></span></button>
+                                ><span class="bg-tile-delete"></span></button>
                                 <button
                                     class={tile_action}
                                     type="button"
@@ -92,13 +92,13 @@ pub fn BackgroundsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                                     data-bg-delete={b.filename}
                                     aria-label={label(ctx.allocator, "Delete ", b.filename)}
                                     onclick={onDelete}
-                                ><span class="icon"></span></button>
+                                ><span class="bg-tile-delete"></span></button>
                             </div>
                         </div>
                     )}
                 </div>
             )}
-            <div class="bg-upload-row flex flex-wrap items-center gap-2">
+            <div class="bg-upload-row">
                 <input
                     id="bg-upload-input"
                     name="bg-upload-input"
@@ -110,16 +110,16 @@ pub fn BackgroundsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     onchange={onUploadPick}
                 />
                 {if (backgrounds.uploadState() == .sending) (
-                    <span class="font-mono text-xs text-muted" role="status">Uploading...</span>
+                    <span class="bg-upload-btn" role="status">Uploading...</span>
                 )}
             </div>
             {if (backgrounds.uploadState() == .failed) (
-                <div class="flex flex-col items-start gap-2 rounded-md border border-control-border bg-bg p-3" role="alert">
-                    <p id="bg-upload-error" class="text-sm text-text">{backgrounds.uploadErrorText()}</p>
-                    <p class="text-sm text-muted">Choose the file again to retry.</p>
+                <div class="bg-upload-status" role="alert">
+                    <p id="bg-upload-error" class="bg-upload-error">{backgrounds.uploadErrorText()}</p>
+                    <p class="bg-upload-error-text">Choose the file again to retry.</p>
                 </div>
             )}
-            <p class="setting-note text-sm text-muted max-[768px]:text-[0.78rem]">The background sits behind the chat, dimmed so the text stays readable.</p>
+            <p class="setting-note bg-upload-hint">The background sits behind the chat, dimmed so the text stays readable.</p>
         </div>
     );
 }

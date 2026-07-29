@@ -1,5 +1,39 @@
 /* System panel: settings tabs, panel switching, appearance controls. */
 
+/* ---- Converted off the utility classes, 17 class attributes. Selectors, wrappers and
+   declarations are the ones utilities.css emitted; only the class NAME changed.
+   This block sits ABOVE the page's authored rules because that is where the utilities sat:
+   an authored rule is written to beat a utility at equal specificity (.composer-stop's
+   display:none over btn_base's grid), and appending would have handed the win back. ---- */
+.settings-column { display:flex; flex-direction:column; gap:calc(var(--spacing) * 3) }
+.settings-tabs { margin-bottom:calc(var(--spacing) * 3); display:flex; gap:2px; border-bottom-style:var(--tw-border-style);border-bottom-width:1px; border-color:var(--color-border) }
+.setting-control-row { display:flex; flex:none; align-items:center; gap:calc(var(--spacing) * 2) }
+.setting-control-row-2 { display:flex; flex:none; align-items:center; gap:calc(var(--spacing) * 2) }
+.settings-swatch-btn { width:calc(var(--spacing) * 8);height:calc(var(--spacing) * 8); flex:none; cursor:pointer; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:#0000; padding:2px }
+.settings-reset-btn { cursor:pointer; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-surface-2); padding-inline:calc(var(--spacing) * 3); padding-block:var(--spacing); font-family:var(--font-mono); font-size:var(--text-sm); color:var(--color-muted); transition-property:color,background-color,border-color,outline-color,text-decoration-color,fill,stroke,--tw-gradient-from,--tw-gradient-via,--tw-gradient-to;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
+@media (hover:hover) { .settings-reset-btn:hover { color:var(--color-text) } }
+.theme-color-btn { display:flex; flex-direction:column; gap:calc(var(--spacing) * 2) }
+.settings-custom-css { min-height:7rem; width:100%; resize:vertical; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-bg); padding-inline:calc(var(--spacing) * 3); padding-block:calc(var(--spacing) * 2); font-family:var(--font-mono); font-size:var(--text-sm); color:var(--color-text); transition-property:border-color;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
+.settings-custom-css::placeholder { color:var(--color-faint) }
+.settings-custom-css:focus { border-color:var(--color-accent) }
+.settings-custom-css:focus:not(:focus-visible) { --tw-outline-style:none;outline-style:none }
+.settings-seg-btn { cursor:pointer; border-radius:var(--radius-sm); border-style:var(--tw-border-style);border-width:0; background-color:#0000; padding-inline:.7rem; padding-block:.3rem; font-family:var(--font-mono); font-size:var(--text-sm); color:var(--color-muted); transition-property:color,background-color,border-color,outline-color,text-decoration-color,fill,stroke,--tw-gradient-from,--tw-gradient-via,--tw-gradient-to;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
+@media (hover:hover) { .settings-seg-btn:hover { color:var(--color-text) } }
+.settings-seg-motion { cursor:pointer; border-radius:var(--radius-sm); border-style:var(--tw-border-style);border-width:0; background-color:#0000; padding-inline:.7rem; padding-block:.3rem; font-family:var(--font-mono); font-size:var(--text-sm); color:var(--color-muted); transition-property:color,background-color,border-color,outline-color,text-decoration-color,fill,stroke,--tw-gradient-from,--tw-gradient-via,--tw-gradient-to;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
+@media (hover:hover) { .settings-seg-motion:hover { color:var(--color-text) } }
+.settings-seg-motion[aria-checked=true] { background-color:var(--color-surface-2); color:var(--color-accent) }
+.settings-tab-btn { cursor:pointer; border-style:var(--tw-border-style);border-width:0; border-bottom-style:var(--tw-border-style);border-bottom-width:2px; border-bottom-color:#0000; background-color:#0000; padding-inline:.8rem; padding-block:.4rem; font-family:var(--font-mono); font-size:var(--text-sm); color:var(--color-muted) }
+@media (hover:hover) { .settings-tab-btn:hover { color:var(--color-text) } }
+.settings-row { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; column-gap:calc(var(--spacing) * 4); row-gap:calc(var(--spacing) * 2) }
+.settings-seg-group { display:inline-flex; flex-wrap:wrap; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-bg); padding:2px }
+.settings-label { font-size:var(--text-base); --tw-font-weight:var(--font-weight-medium);font-weight:var(--font-weight-medium) }
+@media not all and (min-width:768px) { .settings-label { font-size:.88rem } }
+.settings-note { font-size:var(--text-sm); color:var(--color-muted) }
+@media not all and (min-width:768px) { .settings-note { font-size:.78rem } }
+.reading-slider { width:calc(var(--spacing) * 32); flex:none; cursor:pointer; accent-color:var(--color-accent) }
+@media not all and (min-width:768px) { .reading-slider { width:calc(var(--spacing) * 24) } }
+.settings-value { width:3.6rem; text-align:right; font-family:var(--font-mono); font-size:var(--text-sm); color:var(--color-muted); --tw-numeric-spacing:tabular-nums;font-variant-numeric:var(--tw-ordinal,) var(--tw-slashed-zero,) var(--tw-numeric-figure,) var(--tw-numeric-spacing,) var(--tw-numeric-fraction,) }
+
 /* ===================================================================================
    GENERATED-STATE RULES. Deliberately UNLAYERED, so they beat any utility: the element
    they light up is not the element whose state decides it. Which reading control is lit
