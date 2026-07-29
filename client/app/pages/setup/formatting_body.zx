@@ -19,22 +19,22 @@
 // Setup section now, so its width is the dock's (240-620px, resizable), never the window's. Keyed to
 // the viewport, a 340px dock clipped both Save buttons off the panel edge.
 
-const input_cls = "min-w-[9rem] flex-1 rounded-md border border-control-border bg-bg px-[0.7rem] py-[0.45rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
-const area_cls = "min-h-[6rem] w-full resize-y rounded-md border border-control-border bg-bg p-[0.7rem] font-mono text-sm leading-ui text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
-const label_cls = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
-const hint_cls = "setting-note text-sm text-muted max-[768px]:text-[0.78rem]";
-const head_cls = "font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
+const input_cls = "setup-input";
+const area_cls = "setup-area";
+const label_cls = "setting-label setup-label";
+const hint_cls = "setting-note setup-hint";
+const head_cls = "setup-head-2";
 // Every button here clears the 44px touch target at phone width, the way the repo's own action
 // buttons do (character_list.zx:170 carries these on an otherwise identical class string).
-const tap_cls = " max-[768px]:min-h-11 max-[768px]:px-3 max-[768px]:py-2";
+const tap_cls = " setup-tap";
 // The LOOK only. `an-save` is the note button's identity, not part of its styling, so it is applied
 // at that one button rather than riding this constant: three buttons sharing the class would make
 // `.an-save` mean "whichever save button renders first" and silently move what a click hits.
-const save_cls = "cursor-pointer rounded-md border border-accent bg-accent px-[0.9rem] py-[0.45rem] font-mono text-sm text-on-accent transition-[background,filter] duration-120 ease-[ease] hover:brightness-[1.06]" ++ tap_cls;
+const save_cls = "setup-save" ++ tap_cls;
 const note_save_cls = "an-save " ++ save_cls;
 // `tpl-preset-retry`, NOT the sibling's `.preset-retry`: both panels can sit in the DOM at once, so a
 // shared token would make that selector mean "whichever retry rendered first" for a handler or a row.
-const retry_cls = "tpl-preset-retry self-start cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text" ++ tap_cls;
+const retry_cls = "tpl-preset-retry" ++ tap_cls;
 
 /// One preset family's pick-and-save row. TWO of these render (instruct, context) over two families
 /// whose only difference is which strings they name, so it is one component with the variance in
@@ -65,8 +65,8 @@ fn PresetRow(allocator: zx.Allocator, props: PresetProps) zx.Component {
     // The hint is rendered ALWAYS and is a live region for the same reason: a region inserted whole,
     // already holding its news, announces nothing to a reader who never had it (WD39).
     return (
-        <div @allocator={allocator} class="flex flex-col gap-3">
-            <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
+        <div @allocator={allocator} class="setup-formatting-section">
+            <div class="setting-row setup-formatting-row">
                 <span class={label_cls}>Preset</span>
                 <Dropdown
                     options={presets.optionsFor(props.kind)}
@@ -80,7 +80,7 @@ fn PresetRow(allocator: zx.Allocator, props: PresetProps) zx.Component {
             {if (presets.loadFailed()) (
                 <button type="button" class={retry_cls} onclick={props.onretry}>Retry loading presets</button>
             )}
-            <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
+            <div class="setting-row setup-formatting-row">
                 <label class={label_cls} for={props.name_id}>Save as</label>
                 <input
                     id={props.name_id}
@@ -96,7 +96,7 @@ fn PresetRow(allocator: zx.Allocator, props: PresetProps) zx.Component {
                     oninput={props.onname}
                 />
                 <button type="button" class={save_cls} onclick={props.onsave}>Save preset</button>
-                <span id={status_id} role="status" aria-live="polite" class="text-sm text-muted empty:hidden">{presets.statusFor(props.kind)}</span>
+                <span id={status_id} role="status" aria-live="polite" class="setup-formatting-body-text-3">{presets.statusFor(props.kind)}</span>
             </div>
         </div>
     );
@@ -125,12 +125,12 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
     return (
         <div
             @allocator={ctx.allocator}
-            class="settings-body grid grid-cols-1 items-start gap-5 @min-[38rem]:grid-cols-2"
+            class="settings-body setup-formatting-column"
             @rendering={.client}
             onclick={onBodyClick}
             onkeydown={onBodyKey}
         >
-            <section class="flex flex-col gap-3">
+            <section class="setup-formatting-section">
                 <h3 class={head_cls}>Instruct template</h3>
                 <PresetRow
                     kind={.instruct}
@@ -143,13 +143,13 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     onsave={&onSaveInstructPreset}
                     onretry={&onRetryPresets}
                 />
-                <div class="setting-row flex items-center justify-between gap-3">
+                <div class="setting-row setup-instruct-preset-name-row">
                     <label class={label_cls} for="instruct-enabled">Wrap turns in sequences</label>
                     <input
                         id="instruct-enabled"
                         name="instruct_enabled"
                         type="checkbox"
-                        class="size-4 flex-none accent-accent"
+                        class="setup-instruct-enabled"
                         checked={boolAttr(config_state.instructEnabled())}
                         onchange={ctx.bind(onEnabledChange)}
                     />
@@ -157,9 +157,9 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                 <p class={hint_cls}>Off sends plain "Name: message" lines. On wraps each turn in the sequences below, which is what a chat-tuned model expects.</p>
 
                 {if (config_state.instructEnabled()) (
-                    <div class="flex flex-col gap-3">
+                    <div class="setup-instruct-enabled-box">
                         {for (config_state.instruct_fields_slice) |f| (
-                            <div class="setting-row flex flex-col gap-1">
+                            <div class="setting-row setup-instruct-enabled-row-2">
                                 <label class={label_cls} for={fieldId(ctx.allocator, f.id)}>{f.label}</label>
                                 <input
                                     id={fieldId(ctx.allocator, f.id)}
@@ -176,7 +176,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                                 <p id={fieldHintId(ctx.allocator, f.id)} class={hint_cls}>{f.hint}</p>
                             </div>
                         )}
-                        <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
+                        <div class="setting-row setup-instruct-enabled-row-3">
                             <span class={label_cls}>Speaker names</span>
                             <Dropdown
                                 options={config_state.names_options}
@@ -191,7 +191,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                 )}
             </section>
 
-            <section class="flex flex-col gap-3">
+            <section class="setup-instruct-enabled-box">
                 <h3 class={head_cls}>Context template</h3>
                 <PresetRow
                     kind={.context}
@@ -204,7 +204,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     onsave={&onSaveContextPreset}
                     onretry={&onRetryPresets}
                 />
-                <div class="setting-row flex flex-col gap-1">
+                <div class="setting-row setup-context-preset-name-row">
                     <label class={label_cls} for="ctx-story">Story string</label>
                     <textarea
                         id="ctx-story"
@@ -217,7 +217,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     >{config_state.storyString()}</textarea>
                     <p id="ctx-story-hint" class={hint_cls}>Orders the card block. Conditional blocks and field names are supported over system, description, personality, scenario, persona, wiBefore, wiAfter, anchorBefore and anchorAfter.</p>
                 </div>
-                <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
+                <div class="setting-row setup-ctx-story-hint-row">
                     <label class={label_cls} for="ctx-chat-start">Chat start</label>
                     <input
                         id="ctx-chat-start"
@@ -229,7 +229,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         oninput={ctx.bind(onChatStartInput)}
                     />
                 </div>
-                <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
+                <div class="setting-row setup-ctx-chat-start-row">
                     <label class={label_cls} for="ctx-example-sep">Example separator</label>
                     <input
                         id="ctx-example-sep"
@@ -244,14 +244,14 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                 <p class={hint_cls}>Saved to your SillyTavern settings and shared with the classic client.</p>
             </section>
 
-            <section class="flex flex-col gap-3">
+            <section class="setup-ctx-example-sep-section">
                 <h3 class={head_cls}>Author's note</h3>
                 {if (!an_state.hasChat()) (
                     <p class={hint_cls}>Open a chat to write its note. A note belongs to one chat, so it travels with that conversation rather than with the character.</p>
                 )}
                 {if (an_state.hasChat()) (
-                    <div class="flex flex-col gap-3">
-                        <div class="setting-row flex flex-col gap-1">
+                    <div class="setup-ctx-example-sep-section">
+                        <div class="setting-row setup-ctx-example-sep-row-2">
                             <label class={label_cls} for="an-prompt">Note</label>
                             <textarea
                                 id="an-prompt"
@@ -263,7 +263,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                             >{an_state.prompt()}</textarea>
                             <p id="an-prompt-hint" class={hint_cls}>Sent with every prompt from this chat, at the position below.</p>
                         </div>
-                        <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
+                        <div class="setting-row setup-an-prompt-hint-row">
                             <span class={label_cls}>Position</span>
                             <Dropdown
                                 options={an_state.position_options}
@@ -273,7 +273,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                                 onchange={&an_state.setPosition}
                             />
                         </div>
-                        <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
+                        <div class="setting-row setup-an-prompt-hint-row">
                             <span class={label_cls}>Speaks as</span>
                             <Dropdown
                                 options={an_state.role_options}
@@ -284,7 +284,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                             />
                         </div>
                         {if (an_state.depthApplies()) (
-                            <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
+                            <div class="setting-row setup-an-prompt-hint-row">
                                 <label class={label_cls} for="an-depth">Depth</label>
                                 <input
                                     id="an-depth"
@@ -305,7 +305,7 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         {if (an_state.depthApplies()) (
                             <p id="an-depth-hint" class={hint_cls}>How many turns back from the newest the note sits. 0 puts it right before the reply.</p>
                         )}
-                        <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
+                        <div class="setting-row setup-an-depth-hint-row">
                             <label class={label_cls} for="an-interval">Every</label>
                             <input
                                 id="an-interval"
@@ -323,9 +323,9 @@ pub fn FormattingBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                             />
                         </div>
                         <p id="an-interval-hint" class={hint_cls}>Messages between insertions. 1 sends it every time; 0 switches the note off without deleting it.</p>
-                        <div class="setting-row flex items-center gap-3">
+                        <div class="setting-row setup-an-interval-hint-row">
                             <button type="button" class={note_save_cls} onclick={onSaveNote}>Save note</button>
-                            <span id="an-status" role="status" aria-live="polite" class="text-sm text-muted empty:hidden"></span>
+                            <span id="an-status" role="status" aria-live="polite" class="setup-an-status"></span>
                         </div>
                         <p class={hint_cls}>Stored in this chat's own file, where the classic client reads it.</p>
                     </div>

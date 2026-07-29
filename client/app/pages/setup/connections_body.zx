@@ -11,7 +11,7 @@
 // its width is the dock's (240-620px, resizable), never the window's. Keyed to the viewport, a 340px
 // dock pushed Save key and Remove past the panel edge.
 
-const input_cls = "min-w-[9rem] flex-1 rounded-md border border-control-border bg-bg px-[0.7rem] py-[0.45rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
+const input_cls = "setup-input";
 // `conn-connect` is the Connect button's own marker: the gate clicks it by class, so no other
 // control may carry it.
 //
@@ -19,11 +19,11 @@ const input_cls = "min-w-[9rem] flex-1 rounded-md border border-control-border b
 // signal (app-input.css:12-13), and Save key wore the identical fill: two golds in one panel, both
 // shouting, neither meaning "this is the button". Save key is the secondary of its own row (it files
 // a key away; Connect is the thing you came here to do), so it keeps the amber as an outline.
-const btn_base = "cursor-pointer rounded-md px-[0.9rem] py-[0.45rem] font-mono text-sm transition-[background,filter,color] duration-120 ease-[ease]";
+const btn_base = "setup-btn";
 const btn_cls = "conn-connect " ++ btn_base ++ " border border-accent bg-accent text-on-accent hover:brightness-[1.06]";
 const key_save_cls = "conn-key-save " ++ btn_base ++ " border border-accent bg-surface-2 text-accent hover:bg-bg";
-const key_clear_cls = "conn-key-clear cursor-pointer rounded-md border border-control-border bg-surface px-[0.9rem] py-[0.45rem] font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:border-border hover:text-text";
-const label_cls = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
+const key_clear_cls = "conn-key-clear";
+const label_cls = "setting-label setup-label";
 
 pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
     connection.ensureSecretState();
@@ -31,21 +31,21 @@ pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
     return (
         <div
             @allocator={ctx.allocator}
-            class="settings-body flex flex-col gap-3"
+            class="settings-body setup-connections-column"
             @rendering={.client}
             onclick={onBodyClick}
             onkeydown={onBodyKey}
         >
-            <div class="grid grid-cols-1 items-start gap-3 @min-[34rem]:grid-cols-2">
+            <div class="setup-connections-group">
                 <div
                     id="conn-standing"
-                    class="setting-row col-span-full flex items-center gap-2 rounded-md border border-border bg-surface-2 px-3 py-2"
+                    class="setting-row setup-conn-standing"
                     data-conn-state={connection.stateName()}
                 >
-                    <span class="conn-dot flex-none" aria-hidden="true"></span>
-                    <span id="conn-standing-text" class="text-sm text-text">{standingText(ctx.allocator)}</span>
+                    <span class="conn-dot setup-conn-standing-dot" aria-hidden="true"></span>
+                    <span id="conn-standing-text" class="setup-conn-standing-text">{standingText(ctx.allocator)}</span>
                 </div>
-                <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
+                <div class="setting-row setup-conn-standing-text-row">
                     <span class={label_cls}>Backend</span>
                     <Dropdown
                         options={textgen.options}
@@ -55,7 +55,7 @@ pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         onchange={&connection.onTypeChange}
                     />
                 </div>
-                <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
+                <div class="setting-row setup-conn-standing-text-row">
                     <label for="llama-url" class={label_cls}>Server URL</label>
                     <input
                         id="llama-url"
@@ -68,7 +68,7 @@ pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     />
                 </div>
                 {if (connection.keyFieldVisible()) (
-                    <div class="setting-row flex flex-wrap items-center gap-3 max-[768px]:gap-2">
+                    <div class="setting-row setup-llama-url-row">
                         <label for="conn-api-key" class={label_cls}>API key</label>
                         <input
                             id="conn-api-key"
@@ -84,16 +84,16 @@ pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     </div>
                 )}
                 {if (connection.keyFieldVisible()) (
-                    <div class="setting-row flex items-center gap-3">
-                        <span id="conn-key-state" class="text-sm text-muted empty:hidden">{connection.keyStatusText(ctx.allocator)}</span>
-                        <span id="conn-key-status" role="status" aria-live="polite" class="text-sm text-muted empty:hidden"></span>
+                    <div class="setting-row setup-conn-api-key-row">
+                        <span id="conn-key-state" class="setup-conn-key-state">{connection.keyStatusText(ctx.allocator)}</span>
+                        <span id="conn-key-status" role="status" aria-live="polite" class="setup-conn-key-status"></span>
                     </div>
                 )}
-                <div class="setting-row flex items-center gap-3">
+                <div class="setting-row setup-conn-key-status-row">
                     <button type="button" class={btn_cls} onclick={onConnect}>Connect</button>
-                    <span id="conn-status" role="status" aria-live="polite" class="text-sm text-muted empty:hidden"></span>
+                    <span id="conn-status" role="status" aria-live="polite" class="setup-conn-status"></span>
                 </div>
-                <p class="setting-note col-span-full text-sm text-muted max-[768px]:text-[0.78rem]">Saved to your SillyTavern settings and shared with the classic client.</p>
+                <p class="setting-note setup-conn-status-text">Saved to your SillyTavern settings and shared with the classic client.</p>
             </div>
         </div>
     );

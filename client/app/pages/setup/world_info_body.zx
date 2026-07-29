@@ -11,18 +11,18 @@
 // setting-row, setting-label, the accent token and the mono face this app already wears. All four
 // async states are drawn for both fetches (WD54).
 
-const input_cls = "flex-1 rounded-md border border-control-border bg-bg px-[0.7rem] py-[0.45rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
-const area_cls = "min-h-[8rem] w-full resize-y rounded-md border border-control-border bg-bg p-[0.7rem] font-mono text-sm leading-ui text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
-const num_cls = "w-24 flex-none rounded-md border border-control-border bg-bg px-[0.7rem] py-[0.45rem] font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] focus:border-accent focus:not-focus-visible:outline-none";
-const label_cls = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
-const hint_cls = "setting-note text-sm text-muted max-[768px]:text-[0.78rem]";
-const head_cls = "font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase";
-const tap_cls = " max-[768px]:min-h-11 max-[768px]:px-3 max-[768px]:py-2";
-const ghost_btn = "cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text" ++ tap_cls;
+const input_cls = "setup-input-2";
+const area_cls = "setup-area-2";
+const num_cls = "setup-num";
+const label_cls = "setting-label setup-label";
+const hint_cls = "setting-note setup-hint";
+const head_cls = "setup-head-2";
+const tap_cls = " setup-tap";
+const ghost_btn = "setup-ghost-btn" ++ tap_cls;
 const retry_btn = "wi-retry " ++ ghost_btn;
-const row_btn = "wi-row min-w-0 flex-1 cursor-pointer rounded-md border-0 bg-transparent px-2 py-[0.45rem] text-left font-mono text-sm text-text transition-colors duration-120 ease-[ease] hover:bg-surface-2";
-const row_action = "wi-row-action grid size-7 flex-none cursor-pointer place-items-center rounded-md border border-control-border bg-surface-2/90 text-muted transition-colors duration-120 ease-[ease] hover:text-text";
-const check_cls = "size-4 flex-none accent-accent";
+const row_btn = "wi-row";
+const row_action = "wi-row-action";
+const check_cls = "setup-check";
 const file_input = "wi-import-file " ++ panelchrome.file_picker;
 
 pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
@@ -30,22 +30,22 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
     actions.ensureListLoaded();
     const e = selEntry();
     return (
-        <div @allocator={ctx.allocator} class="wi-body flex flex-col gap-3" @rendering={.client}>
+        <div @allocator={ctx.allocator} class="wi-body" @rendering={.client}>
             {if (editingEntry()) (
-                <div class="wi-editor grid grid-cols-1 items-start gap-3 @min-[36rem]:grid-cols-2">
-                    <div class="col-span-full flex items-center gap-2">
+                <div class="wi-editor">
+                    <div class="setup-wi-entry">
                         <button class={ghost_btn} type="button" data-wi-toentries="1" onclick={onBackToEntries}>Back</button>
-                        <h3 class="min-w-0 flex-1 truncate font-mono text-sm text-text">{entryTitle(e)}</h3>
+                        <h3 class="setup-world-info-body-box-2">{entryTitle(e)}</h3>
                     </div>
 
-                    <div class="setting-row flex flex-col gap-1">
+                    <div class="setting-row setup-wi-entry-row">
                         <label class={label_cls} for="wi-comment">Title</label>
                         <input id="wi-comment" name="wi-comment" type="text" autocomplete="off" spellcheck="false" class={input_cls}
                             value={e.comment} disabled={boolAttr(readOnly())} data-wi-str="comment" oninput={ctx.bind(onStrInput)} />
                         <p class={hint_cls}>A note to you. The model never sees it.</p>
                     </div>
 
-                    <div class="setting-row flex flex-col gap-1">
+                    <div class="setting-row setup-wi-comment-row">
                         <label class={label_cls} for="wi-keys">Keywords</label>
                         <input id="wi-keys" name="wi-keys" type="text" autocomplete="off" spellcheck="false" class={input_cls}
                             value={keysValue(ctx.allocator, e.keys)} disabled={boolAttr(readOnly())} data-wi-keys="key" oninput={ctx.bind(onKeysInput)}
@@ -53,19 +53,19 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         <p id="wi-keys-hint" class={hint_cls}>Comma separated. Any of these in recent chat pulls the entry in.</p>
                     </div>
 
-                    <div class="setting-row flex flex-col gap-1">
+                    <div class="setting-row setup-wi-keys-hint-row">
                         <label class={label_cls} for="wi-keys2">Filter keywords</label>
                         <input id="wi-keys2" name="wi-keys2" type="text" autocomplete="off" spellcheck="false" class={input_cls}
                             value={keysValue(ctx.allocator, e.keysecondary)} disabled={boolAttr(readOnly())} data-wi-keys="keysecondary" oninput={ctx.bind(onKeysInput)}
                             aria-describedby="wi-keys2-hint" />
                         <p id="wi-keys2-hint" class={hint_cls}>Optional second gate, applied by the rule below.</p>
                     </div>
-                    <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                    <div class="setting-row setup-wi-keys2-hint-row">
                         <span class={label_cls}>Filter rule</span>
                         <Dropdown options={logic_options_slice} value={logicValue(ctx.allocator, e)} name="wi-logic" label="How the filter keywords apply" onchange={&setLogicStr} />
                     </div>
 
-                    <div class="setting-row col-span-full flex flex-col gap-1">
+                    <div class="setting-row setup-wi-keys2-hint-row-2">
                         <label class={label_cls} for="wi-content">Lore</label>
                         <textarea id="wi-content" name="wi-content" class={area_cls} spellcheck="false" autocomplete="off"
                             aria-describedby="wi-content-hint"
@@ -73,12 +73,12 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         <p id="wi-content-hint" class={hint_cls}>What actually joins the prompt when this entry triggers.</p>
                     </div>
 
-                    <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                    <div class="setting-row setup-wi-content-hint-row">
                         <span class={label_cls}>Inserts</span>
                         <Dropdown options={position_options_slice} value={posValue(ctx.allocator, e)} name="wi-position" label="Where the lore inserts" onchange={&setPositionStr} />
                     </div>
                     {if (e.position == .at_depth) (
-                        <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                        <div class="setting-row setup-wi-content-hint-row">
                             <label class={label_cls} for="wi-depth">Depth</label>
                             <input id="wi-depth" name="wi-depth" type="number" min="0" max="999" step="1" inputmode="numeric" autocomplete="off" class={num_cls}
                                 value={numValue(ctx.allocator, e.depth)} disabled={boolAttr(readOnly())} data-wi-num="depth" oninput={ctx.bind(onNumInput)}
@@ -87,7 +87,7 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         </div>
                     )}
                     {if (e.position == .outlet) (
-                        <div class="setting-row flex flex-col gap-1">
+                        <div class="setting-row setup-wi-depth-hint-row">
                             <label class={label_cls} for="wi-outletname">Outlet name</label>
                             <input id="wi-outletname" name="wi-outletname" type="text" autocomplete="off" spellcheck="false" class={input_cls}
                                 value={e.outlet_name} disabled={boolAttr(readOnly())} data-wi-str="outletName" oninput={ctx.bind(onStrInput)}
@@ -96,7 +96,7 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         </div>
                     )}
 
-                    <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                    <div class="setting-row setup-wi-outletname-hint-row">
                         <label class={label_cls} for="wi-order">Order</label>
                         <input id="wi-order" name="wi-order" type="number" min="0" max="100000" step="1" inputmode="numeric" autocomplete="off" class={num_cls}
                             value={numValue(ctx.allocator, e.order)} disabled={boolAttr(readOnly())} data-wi-num="order" oninput={ctx.bind(onNumInput)}
@@ -104,7 +104,7 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         <p id="wi-order-hint" class={hint_cls}>When lore competes for room, higher wins.</p>
                     </div>
 
-                    <div class="setting-row flex items-center gap-3 max-[768px]:flex-wrap max-[768px]:gap-2">
+                    <div class="setting-row setup-wi-order-hint-row">
                         <label class={label_cls} for="wi-probability">Trigger chance %</label>
                         <input id="wi-probability" name="wi-probability" type="number" min="0" max="100" step="1" inputmode="numeric" autocomplete="off" class={num_cls}
                             value={numValue(ctx.allocator, e.probability)} disabled={boolAttr(readOnly())} data-wi-num="probability" oninput={ctx.bind(onNumInput)} />
@@ -113,7 +113,7 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                             checked={boolAttr(e.use_probability)} disabled={boolAttr(readOnly())} data-wi-bool="useProbability" onchange={ctx.bind(onBoolChange)} />
                     </div>
 
-                    <div class="setting-row flex items-center justify-between gap-3">
+                    <div class="setting-row setup-wi-useprob-row">
                         <label class={label_cls} for="wi-constant">Always on</label>
                         <input id="wi-constant" name="wi-constant" type="checkbox" class={check_cls}
                             checked={boolAttr(e.constant)} disabled={boolAttr(readOnly())} data-wi-bool="constant" onchange={ctx.bind(onBoolChange)}
@@ -121,90 +121,90 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     </div>
                     <p id="wi-constant-hint" class={hint_cls}>On means this lore joins every prompt, keywords or not.</p>
 
-                    <div class="setting-row flex items-center justify-between gap-3">
+                    <div class="setting-row setup-wi-constant-hint-row">
                         <label class={label_cls} for="wi-disable">Disabled</label>
                         <input id="wi-disable" name="wi-disable" type="checkbox" class={check_cls}
                             checked={boolAttr(e.disable)} disabled={boolAttr(readOnly())} data-wi-bool="disable" onchange={ctx.bind(onBoolChange)} />
                     </div>
 
                     {if (!readOnly()) (
-                        <div class="flex flex-wrap items-center gap-2">
+                        <div class="setup-wi-disable-box">
                             <button class={ghost_btn} type="button" data-wi-delentry="1" onclick={onDeleteEntry}>Delete entry</button>
                         </div>
                     )}
                 </div>
             ) else if (bookOpen()) (
-                <div class="wi-entries flex flex-col gap-3">
-                    <div class="flex items-center gap-2">
+                <div class="wi-entries">
+                    <div class="setup-wi-disable-box-2">
                         <button class={ghost_btn} type="button" data-wi-back="1" onclick={onCloseBook}>Back</button>
-                        <h3 class="min-w-0 flex-1 truncate font-mono text-sm text-text">{openTitle()}</h3>
+                        <h3 class="setup-wi-disable-box-3">{openTitle()}</h3>
                         {if (!readOnly()) (
-                            <button class={row_action} type="button" data-icon="pencil" data-wi-rename="1" aria-label="Rename this lorebook" onclick={onRenameBook}><span class="icon"></span></button>
+                            <button class={row_action} type="button" data-icon="pencil" data-wi-rename="1" aria-label="Rename this lorebook" onclick={onRenameBook}><span class="setup-wi-disable-text-4"></span></button>
                         )}
                     </div>
                     {if (readOnly()) (
                         <p class={hint_cls}>This book ships inside the character card and is shown read only. Edit it through the card.</p>
                     )}
                     {if (!readOnly() and actions.chatOpen()) (
-                        <div class="setting-row flex items-center justify-between gap-3">
+                        <div class="setting-row setup-wi-disable-row-5">
                             <span class={label_cls}>This chat</span>
                             <button class={ghost_btn} type="button" data-wi-chatlink="1" aria-pressed={boolAttr(chatLinked())} onclick={onChatLink}>{chatLinkLabel()}</button>
                         </div>
                     )}
                     {if (actions.bookState() == .failed) (
-                        <div class="flex flex-col items-start gap-2 rounded-md border border-control-border bg-bg p-3" role="alert">
-                            <p class="text-sm text-text">The book did not load.</p>
+                        <div class="setup-wi-disable-box-6" role="alert">
+                            <p class="setup-wi-disable-text-7">The book did not load.</p>
                             <button class={retry_btn} type="button" data-wi-reopen="1" onclick={onReopenBook}>Try again</button>
                         </div>
                     ) else if (actions.bookState() == .loading) (
-                        <div class="flex flex-col gap-2" aria-busy="true" aria-label="Loading entries">
+                        <div class="setup-wi-disable-box-8" aria-busy="true" aria-label="Loading entries">
                             {for (skeleton_slots) |_| (
-                                <div class="h-9 animate-pulse rounded-md border border-control-border bg-surface-2"></div>
+                                <div class="setup-wi-disable-box-9"></div>
                             )}
                         </div>
                     ) else if (entrySlice().len == 0) (
                         <p class={hint_cls}>No entries yet. An entry is a piece of lore plus the keywords that pull it into the prompt.</p>
                     ) else (
-                        <ul class="flex list-none flex-col gap-1 p-0" aria-label="Entries">
+                        <ul class="setup-wi-disable-box-10" aria-label="Entries">
                             {for (entrySlice()) |row| (
-                                <li class="flex items-center gap-2">
+                                <li class="setup-wi-disable-box-2">
                                     <button class={row_btn} type="button" data-wi-entry={row.uid_key} onclick={onSelectEntry}>
-                                        <span class="block truncate">{entryTitle(row)}</span>
-                                        <span class="block truncate text-xs text-muted">{entrySub(ctx.allocator, row)}</span>
+                                        <span class="setup-wi-disable-text-11">{entryTitle(row)}</span>
+                                        <span class="setup-wi-disable-text-12">{entrySub(ctx.allocator, row)}</span>
                                     </button>
                                 </li>
                             )}
                         </ul>
                     )}
                     {if (!readOnly()) (
-                        <div class="flex flex-wrap items-center gap-2">
+                        <div class="setup-wi-disable-box">
                             <button class={ghost_btn} type="button" data-wi-newentry="1" onclick={onNewEntry}>New entry</button>
                         </div>
                     )}
                 </div>
             ) else (
-                <div class="wi-books flex flex-col gap-3">
+                <div class="wi-books">
                     {if (wi.global.chat_world.len > 0) (
-                        <p class={hint_cls}>This chat pulls from <span class="text-text">{wi.global.chat_world}</span>.</p>
+                        <p class={hint_cls}>This chat pulls from <span class="setup-wi-disable-text-13">{wi.global.chat_world}</span>.</p>
                     )}
                     {if (wi.global.char_world.len > 0) (
-                        <p class={hint_cls}>The selected character links <span class="text-text">{wi.global.char_world}</span>.</p>
+                        <p class={hint_cls}>The selected character links <span class="setup-wi-disable-text-13">{wi.global.char_world}</span>.</p>
                     )}
                     {if (wi.global.char_book != null) (
-                        <div class="setting-row flex items-center justify-between gap-3">
+                        <div class="setting-row setup-wi-disable-row-5">
                             <span class={label_cls}>Character's built-in book</span>
                             <button class={ghost_btn} type="button" data-wi-charbook="1" onclick={onOpenCharBook}>View</button>
                         </div>
                     )}
 
-                    <div class="setting-row flex items-center justify-between gap-3">
+                    <div class="setting-row setup-wi-disable-row-5">
                         <label class={label_cls} for="wi-budget">World info budget</label>
                         <input id="wi-budget" name="wi-budget" type="number" min="1" max="100" step="1" inputmode="numeric" autocomplete="off"
                             class={num_cls} value={budgetValue(ctx.allocator)} aria-describedby="wi-budget-hint" oninput={ctx.bind(onBudgetInput)} />
                     </div>
                     <p id="wi-budget-hint" class={hint_cls}>The most of the prompt, in percent, that triggered lore may take before history wins.</p>
 
-                    <div class="setting-row flex items-center justify-between gap-3">
+                    <div class="setting-row setup-wi-budget-hint-row">
                         <label class={label_cls} for="wi-recursive">Recursive scanning</label>
                         <input id="wi-recursive" name="wi-recursive" type="checkbox" class={check_cls}
                             checked={boolAttr(wi.global.recursive)} aria-describedby="wi-recursive-hint" onchange={ctx.bind(onRecursiveChange)} />
@@ -213,48 +213,48 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
 
                     <h3 class={head_cls}>Lorebooks</h3>
                     {if (actions.listState() == .failed) (
-                        <div class="flex flex-col items-start gap-2 rounded-md border border-control-border bg-bg p-3" role="alert">
-                            <p class="text-sm text-text">The lorebook list did not load.</p>
+                        <div class="setup-wi-recursive-hint-box" role="alert">
+                            <p class="setup-wi-recursive-hint-text-2">The lorebook list did not load.</p>
                             <button class={retry_btn} type="button" data-wi-retry="1" onclick={onRetryList}>Try again</button>
                         </div>
                     ) else if (actions.listState() != .ready) (
-                        <div class="flex flex-col gap-2" aria-busy="true" aria-label="Loading lorebooks">
+                        <div class="setup-wi-recursive-hint-box-3" aria-busy="true" aria-label="Loading lorebooks">
                             {for (skeleton_slots) |_| (
-                                <div class="h-9 animate-pulse rounded-md border border-control-border bg-surface-2"></div>
+                                <div class="setup-wi-recursive-hint-box-4"></div>
                             )}
                         </div>
                     ) else if (wi.global.list().len == 0) (
                         <p class={hint_cls}>No lorebooks yet. Create one, or import a SillyTavern world-info JSON.</p>
                     ) else (
-                        <ul class="flex list-none flex-col gap-1 p-0" aria-label="Lorebooks">
+                        <ul class="setup-wi-recursive-hint-box-5" aria-label="Lorebooks">
                             {for (wi.global.list()) |m| (
-                                <li class="flex items-center gap-2">
+                                <li class="setup-wi-recursive-hint-box-6">
                                     <input type="checkbox" name="wi-global-toggle" class={check_cls}
                                         checked={boolAttr(wi.global.isGlobalSelected(m.file_id))}
                                         data-wi-global={m.file_id}
                                         aria-label={label(ctx.allocator, "Use everywhere: ", m.name)}
                                         onchange={ctx.bind(onGlobalToggle)} />
                                     <button class={row_btn} type="button" data-wi-open={m.file_id} onclick={onOpenBook}>
-                                        <span class="block truncate">{m.name}</span>
+                                        <span class="setup-wi-recursive-hint-text-7">{m.name}</span>
                                     </button>
                                     <button class={row_action} type="button" data-icon="download" data-wi-export={m.file_id}
-                                        aria-label={label(ctx.allocator, "Export ", m.name)} onclick={onExportBook}><span class="icon"></span></button>
+                                        aria-label={label(ctx.allocator, "Export ", m.name)} onclick={onExportBook}><span class="setup-wi-recursive-hint-text-8"></span></button>
                                     <button class={row_action} type="button" data-icon="trash" data-wi-delete={m.file_id}
-                                        aria-label={label(ctx.allocator, "Delete ", m.name)} onclick={onDeleteBook}><span class="icon"></span></button>
+                                        aria-label={label(ctx.allocator, "Delete ", m.name)} onclick={onDeleteBook}><span class="setup-wi-recursive-hint-text-8"></span></button>
                                 </li>
                             )}
                         </ul>
                     )}
                     <p class={hint_cls}>Ticked books apply to every chat. Books also join through the character card or the chat.</p>
 
-                    <div class="wi-list-actions flex flex-wrap items-center gap-2">
+                    <div class="wi-list-actions">
                         <button class={ghost_btn} type="button" data-wi-new="1" onclick={onNewBook}>New book</button>
                         <input id="wi-import-input" name="wi-import-input" type="file" accept=".json,application/json"
                             class={file_input} aria-label="Import a world-info JSON file" onchange={onImportPick} />
                     </div>
                 </div>
             )}
-            <span class="wi-save-status font-mono text-xs text-muted" role="status">{actions.saveStatus()}</span>
+            <span class="wi-save-status" role="status">{actions.saveStatus()}</span>
         </div>
     );
 }
