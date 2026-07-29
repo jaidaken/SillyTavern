@@ -16,7 +16,7 @@ pub fn Toasts(ctx: *zx.ComponentCtx(void)) zx.Component {
         <div
             @allocator={ctx.allocator}
             id="notifications"
-            class="pointer-events-none fixed right-4 bottom-24 z-50 flex w-[min(22rem,calc(100vw-2rem))] flex-col gap-2 max-[640px]:right-2 max-[640px]:bottom-20 max-[640px]:w-[calc(100vw-1rem)]"
+            class="toast-stack"
             role="status"
             aria-live="polite"
         >

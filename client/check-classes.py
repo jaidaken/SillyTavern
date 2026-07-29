@@ -125,7 +125,9 @@ def used_classes():
         imports[p] = mods
 
     used = {}
-    PLAUSIBLE = re.compile(r"^[A-Za-z_@\[][A-Za-z0-9_@\[\]!:./%()+*,~-]*$")
+    # A leading `-` is a NEGATIVE utility (-top-0.5, -translate-y-1/2), not a stray fragment. Excluding
+    # it hid every negative offset the markup asks for from check 2, undefined ones included.
+    PLAUSIBLE = re.compile(r"^[A-Za-z_@\[-][A-Za-z0-9_@\[\]!:./%()+*,~-]*$")
 
     def add(tokens, p):
         for tok in tokens:

@@ -34,3 +34,56 @@
     align-items: baseline;
     column-gap: 0.75rem;
 }
+
+/* ================= Converted off the utility classes =================
+   16 class attributes. Every selector, wrapper and declaration below is the one utilities.css
+   emitted for the utilities that element carried; only the class NAME changed, which is what lets
+   css-parity.mjs prove the swap moved nothing a browser renders. The tailwind bookkeeping customs
+   (--tw-border-style, --tw-tracking, --tw-duration) are kept for the same reason: they are read by
+   the declarations beside them, so paraphrasing them would be a rewrite, not a move.
+   ==================================================================== */
+
+/* The notifications panel: a column of rows under a count line. */
+.notif-panel { display:flex; flex-direction:column; gap:calc(var(--spacing) * 3) }
+.notif-panel-head { display:flex; align-items:center; justify-content:space-between; gap:calc(var(--spacing) * 2) }
+.notif-count-line { font-family:var(--font-mono); font-size:var(--text-xs); --tw-tracking:.08em;letter-spacing:.08em; color:var(--color-muted); text-transform:uppercase }
+/* Clear-all. Mono chrome like the count beside it, never an accent button: it undoes, it does
+   not act. Grows to the 44px tap minimum below 768px (WD35). */
+.notif-clear-btn { cursor:pointer; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-surface-2); padding-inline:calc(var(--spacing) * 3); padding-block:.35rem; font-family:var(--font-mono); font-size:var(--text-xs); color:var(--color-muted); transition-property:color,background-color,border-color,outline-color,text-decoration-color,fill,stroke,--tw-gradient-from,--tw-gradient-via,--tw-gradient-to;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
+@media (hover:hover) { .notif-clear-btn:hover { background-color:var(--color-tool-hover); color:var(--color-text) } }
+@media not all and (min-width:768px) { .notif-clear-btn { min-height:calc(var(--spacing) * 11); padding-inline:calc(var(--spacing) * 4) } }
+/* The rows themselves carry their own level border (see the toast/note rules above). */
+.notif-list { display:flex; list-style-type:none; flex-direction:column; gap:calc(var(--spacing) * 2); padding:0 }
+.notif-text { min-width:0; overflow-wrap:break-word }
+.notif-age { flex:none; font-family:var(--font-mono); font-size:var(--text-xs); white-space:nowrap; color:var(--color-faint) }
+/* display:contents so the mount adds no box of its own: the card positions against the viewport,
+   and a wrapper with a box would have become its containing block. */
+.notify-popover-mount { display:contents }
+/* Heading and close on one line, flex-none so a long heading cannot squeeze the scroller below. */
+.notify-popover-head { display:flex; flex:none; align-items:center; justify-content:space-between; gap:calc(var(--spacing) * 2) }
+.notify-heading { font-family:var(--font-mono); font-size:var(--text-xs); --tw-font-weight:var(--font-weight-medium);font-weight:var(--font-weight-medium); --tw-tracking:.1em;letter-spacing:.1em; color:var(--color-muted); text-transform:uppercase }
+.notify-popover-close:before { content:"";width:1.1rem;height:1.1rem;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;mask:var(--i) center / contain no-repeat;background:currentColor;display:block }
+.notify-popover-close { display:grid; width:1.6rem;height:1.6rem; flex:none; cursor:pointer; place-items:center; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:0; background-color:#0000; color:var(--color-muted) }
+@media (hover:hover) { .notify-popover-close:hover { background-color:var(--color-surface-2); color:var(--color-text) } }
+.notify-popover-scroll { min-height:0; flex:1; overflow-y:auto; scrollbar-width:thin }
+/* The bell button: the gear's twin, so the pair reads as one set of bar controls rather than two
+   unrelated buttons. position:relative anchors the count chip. It grows to the 44px iOS tap minimum
+   on a coarse pointer (WD35), which is what --topbar-h yields 3rem for on mobile. */
+.notify-bell:before { content:"";width:1.1rem;height:1.1rem;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;mask:var(--i) center / contain no-repeat;background:currentColor;display:block }
+.notify-bell { position:relative; display:grid; width:2.2rem;height:2.2rem; flex:none; cursor:pointer; place-items:center; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-surface); transition-property:color,background-color,border-color,outline-color,text-decoration-color,fill,stroke,--tw-gradient-from,--tw-gradient-via,--tw-gradient-to;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
+@media (hover:hover) { .notify-bell:hover { background-color:var(--color-surface-2); color:var(--color-accent) } }
+@media (pointer:coarse) { .notify-bell { width:calc(var(--spacing) * 11);height:calc(var(--spacing) * 11) } }
+/* The unread count, on the corner AWAY from the gear so a two-digit badge never crowds the button
+   beside it. Amber is the one colour this theme spends on a live signal. Inset 2px rather than 4px:
+   a 44px button in a 48px bar leaves only 2px above it, and the wider offset put the badge over the
+   bar's own top edge. */
+.notify-count-chip { pointer-events:none; position:absolute; top:calc(var(--spacing) * -.5); left:calc(var(--spacing) * -.5); display:grid; height:calc(var(--spacing) * 4); min-width:calc(var(--spacing) * 4); place-items:center; border-radius:var(--radius-full); background-color:var(--color-accent); padding-inline:var(--spacing); font-family:var(--font-mono); font-size:.6rem; --tw-leading:1;line-height:1; color:var(--color-on-accent) }
+/* The card, dropped from under the bar's right edge and capped in height with its own scroll so
+   fifty notifications cannot grow it taller than the window. No shadow: depth in this theme is
+   carried on borders (WD16). z-index 70 clears both dock layers (40 desktop, 50 mobile full-screen),
+   which only holds because shell.zx mounts it outside #topbar's stacking context. */
+.notify-popover { position:fixed; top:calc(var(--topbar-h) + .3rem); right:calc(var(--spacing) * 2); z-index:70; display:flex; max-height:min(60vh,26rem); width:min(19rem,100vw - 1rem); flex-direction:column; gap:calc(var(--spacing) * 3); border-radius:var(--radius-lg); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-border); background-color:var(--color-surface); padding:calc(var(--spacing) * 3) }
+/* The toast stack: bottom-right, above the composer, pointer-events:none so a toast never eats a
+   click meant for the page. Narrow screens pull it in and widen it to the viewport. */
+.toast-stack { pointer-events:none; position:fixed; right:calc(var(--spacing) * 4); bottom:calc(var(--spacing) * 24); z-index:50; display:flex; width:min(22rem,100vw - 2rem); flex-direction:column; gap:calc(var(--spacing) * 2) }
+@media not all and (min-width:640px) { .toast-stack { right:calc(var(--spacing) * 2); bottom:calc(var(--spacing) * 20); width:calc(100vw - 1rem) } }

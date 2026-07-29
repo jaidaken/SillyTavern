@@ -21,21 +21,14 @@
 .top-1\/2{top:50%}
 .top-\[calc\(var\(--topbar-h\)\+0\.3rem\)\]{top:calc(var(--topbar-h) + .3rem)}
 .top-\[calc\(var\(--topbar-h\)\+0\.5rem\)\]{top:calc(var(--topbar-h) + .5rem)}
-.top-\[calc\(var\(--topbar-h\)\+3\.2rem\)\]{top:calc(var(--topbar-h) + 3.2rem)}
-.top-\[calc\(var\(--topbar-h\)\+6rem\)\]{top:calc(var(--topbar-h) + 6rem)}
 .top-\[calc\(var\(--topbar-h\)_\+_0\.5rem\)\]{top:calc(var(--topbar-h) + .5rem)}
 .top-full{top:100%}
 .-right-\[6px\]{right:-6px}
 .right-0{right:0}
 .right-1{right:var(--spacing)}
 .right-2{right:calc(var(--spacing) * 2)}
-.right-4{right:calc(var(--spacing) * 4)}
 .right-9{right:calc(var(--spacing) * 9)}
 .bottom-0{bottom:0}
-.bottom-3{bottom:calc(var(--spacing) * 3)}
-.bottom-24{bottom:calc(var(--spacing) * 24)}
-.bottom-\[3\.6rem\]{bottom:3.6rem}
-.-left-1{left:calc(var(--spacing) * -1)}
 .left-0{left:0}
 .left-1{left:var(--spacing)}
 .left-2{left:calc(var(--spacing) * 2)}
@@ -48,14 +41,10 @@
 .z-\[1\]{z-index:1}
 .z-\[70\]{z-index:70}
 .col-span-full{grid-column:1/-1}
-.col-start-1{grid-column-start:1}
 .col-start-2{grid-column-start:2}
-.col-start-3{grid-column-start:3}
-.row-span-full{grid-row:1/-1}
 .row-start-1{grid-row-start:1}
 .row-start-2{grid-row-start:2}
 .row-start-3{grid-row-start:3}
-.row-end-4{grid-row-end:4}
 .container{width:100%}
 @media (min-width:40rem){.container{max-width:40rem}}
 @media (min-width:48rem){.container{max-width:48rem}}
@@ -82,7 +71,6 @@
 .size-11{width:calc(var(--spacing) * 11);height:calc(var(--spacing) * 11)}
 .size-12{width:calc(var(--spacing) * 12);height:calc(var(--spacing) * 12)}
 .size-\[1\.6rem\]{width:1.6rem;height:1.6rem}
-.size-\[1\.8rem\]{width:1.8rem;height:1.8rem}
 .size-\[1\.9rem\]{width:1.9rem;height:1.9rem}
 .size-\[2\.2rem\]{width:2.2rem;height:2.2rem}
 .size-\[2\.4rem\]{width:2.4rem;height:2.4rem}
@@ -101,9 +89,7 @@
 .max-h-\[min\(16rem\,60vh\)\]{max-height:min(16rem,60vh)}
 .max-h-\[min\(22rem\,46vh\)\]{max-height:min(22rem,46vh)}
 .max-h-\[min\(24rem\,60vh\)\]{max-height:min(24rem,60vh)}
-.max-h-\[min\(28rem\,calc\(100dvh_-_7rem\)\)\]{max-height:min(28rem,100dvh - 7rem)}
 .max-h-\[min\(28rem\,calc\(100dvh_-_var\(--topbar-h\)_-_1rem\)\)\]{max-height:min(28rem, calc(100dvh - var(--topbar-h) - 1rem))}
-.max-h-\[min\(60vh\,26rem\)\]{max-height:min(60vh,26rem)}
 .min-h-4{min-height:calc(var(--spacing) * 4)}
 .min-h-\[1\.25rem\]{min-height:1.25rem}
 .min-h-\[2\.7rem\]{min-height:2.7rem}
@@ -118,20 +104,14 @@
 .w-\[5\.5rem\]{width:5.5rem}
 .w-\[9px\]{width:9px}
 .w-\[12px\]{width:12px}
-.w-\[19rem\]{width:19rem}
-.w-\[21rem\]{width:21rem}
-.w-\[min\(19rem\,calc\(100vw-1rem\)\)\]{width:min(19rem,100vw - 1rem)}
 .w-\[min\(20rem\,calc\(100vw_-_1rem\)\)\]{width:min(20rem,100vw - 1rem)}
 .w-\[min\(29rem\,calc\(100vw-1rem\)\)\]{width:min(29rem,100vw - 1rem)}
-.w-\[min\(22rem\,calc\(100vw-2rem\)\)\]{width:min(22rem,100vw - 2rem)}
 .w-\[min\(34rem\,100\%\)\]{width:min(34rem,100%)}
 .max-w-\[8rem\]{max-width:8rem}
 .max-w-\[13rem\]{max-width:13rem}
-.max-w-\[calc\(100vw-1\.5rem\)\],.max-w-\[calc\(100vw_-_1\.5rem\)\]{max-width:calc(100vw - 1.5rem)}
 .max-w-\[var\(--measure\)\]{max-width:var(--measure)}
 .max-w-\[var\(--reading-measure\,var\(--reading-cap\)\)\]{max-width:var(--reading-measure,var(--reading-cap))}
 .max-w-full{max-width:100%}
-.min-w-4{min-width:calc(var(--spacing) * 4)}
 .min-w-\[6rem\]{min-width:6rem}
 .min-w-\[9rem\]{min-width:9rem}
 .min-w-\[10rem\]{min-width:10rem}
@@ -148,8 +128,6 @@
 .animate-panel-in-right{animation:var(--animate-panel-in-right)}
 .animate-panel-out{animation:var(--animate-panel-out)}
 .animate-panel-out-right{animation:var(--animate-panel-out-right)}
-.animate-pop-in{animation:var(--animate-pop-in)}
-.animate-pop-out{animation:var(--animate-pop-out)}
 .animate-pulse{animation:var(--animate-pulse)}
 .animate-section-rise{animation:var(--animate-section-rise)}
 .cursor-col-resize{cursor:col-resize}

@@ -38,7 +38,7 @@ pub fn NotifyBell(allocator: zx.Allocator) zx.Component {
 /// the docks it drops over.
 pub fn NotifyPopover(allocator: zx.Allocator) zx.Component {
     return (
-        <div @allocator={allocator} class="contents">
+        <div @allocator={allocator} class="notify-popover-mount">
             {if (state.isMounted()) (
                 <div
                     id="notify-popover"
@@ -47,20 +47,20 @@ pub fn NotifyPopover(allocator: zx.Allocator) zx.Component {
                     aria-labelledby="notify-heading"
                     onkeydown={state.onKey}
                 >
-                    <div class="flex flex-none items-center justify-between gap-2">
+                    <div class="notify-popover-head">
                         <h2
                             id="notify-heading"
-                            class="font-mono text-xs font-medium tracking-[0.1em] text-muted uppercase"
+                            class="notify-heading"
                         >Notifications</h2>
                         <button
                             type="button"
-                            class="icon grid size-[1.6rem] flex-none cursor-pointer place-items-center rounded-md border-0 bg-transparent text-muted hover:bg-surface-2 hover:text-text"
+                            class="notify-popover-close"
                             data-icon="close"
                             aria-label="Close notifications"
                             onclick={state.onClose}
                         ></button>
                     </div>
-                    <div class="min-h-0 flex-1 overflow-y-auto [scrollbar-width:thin]">
+                    <div class="notify-popover-scroll">
                         <NotificationsBody />
                     </div>
                 </div>
@@ -72,7 +72,7 @@ pub fn NotifyPopover(allocator: zx.Allocator) zx.Component {
 // The gear's twin, so the pair reads as one set of bar controls rather than two unrelated buttons.
 // `relative` anchors the count chip. It grows to the 44px tap minimum on a coarse pointer, which is
 // what --topbar-h yields 3rem for on mobile: a 2.6rem bar could not hold a 44px target (WD35).
-const bell_base = "icon relative grid size-[2.2rem] flex-none cursor-pointer place-items-center rounded-md border border-control-border bg-surface transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-accent [@media(pointer:coarse)]:size-11";
+const bell_base = "notify-bell";
 
 // Two literals rather than a computed string: the tailwind scanner reads .zx text, so a utility
 // assembled in Zig is never generated. Open takes the accent because the bell is then the close
@@ -90,7 +90,7 @@ fn bellClass() []const u8 {
 // once, not a bare digit after it (WD38).
 // Inset 2px, not 4px: a 44px button in a 48px bar leaves only 2px above it, and the wider offset put
 // the badge over the bar's own top edge.
-const count_chip = "pointer-events-none absolute -top-0.5 -left-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-accent px-1 font-mono text-[0.6rem] leading-none text-on-accent";
+const count_chip = "notify-count-chip";
 
 // Dropped from under the bar's right edge, capped in height with its own scroll so fifty
 // notifications cannot grow a card taller than the window. No shadow: depth in this theme is carried
@@ -99,7 +99,7 @@ const count_chip = "pointer-events-none absolute -top-0.5 -left-0.5 grid h-4 min
 // Two literals rather than a computed string, for the same scanner reason as the bell classes: the
 // card drops in on `drawer-in` and lifts back out on `drawer-out`, dropping its pointer events while
 // it fades so a click reaches the page behind it.
-const popover_base = "fixed top-[calc(var(--topbar-h)+0.3rem)] right-2 z-[70] flex max-h-[min(60vh,26rem)] w-[min(19rem,calc(100vw-1rem))] flex-col gap-3 rounded-lg border border-border bg-surface p-3";
+const popover_base = "notify-popover";
 const popover_in = popover_base ++ " animate-drawer-in";
 const popover_out = popover_base ++ " animate-drawer-out pointer-events-none";
 

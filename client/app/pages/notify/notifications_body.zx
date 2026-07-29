@@ -15,21 +15,21 @@ pub fn NotificationsBody(allocator: zx.Allocator) zx.Component {
     }
     const now = notifications.nowMs();
     return (
-        <div @allocator={allocator} id="notifications-body" class="flex flex-col gap-3">
-            <div class="flex items-center justify-between gap-2">
-                <p class="font-mono text-xs tracking-[0.08em] text-muted uppercase">{countText(allocator, list.len)}</p>
+        <div @allocator={allocator} id="notifications-body" class="notif-panel">
+            <div class="notif-panel-head">
+                <p class="notif-count-line">{countText(allocator, list.len)}</p>
                 <button
                     id="notif-clear"
                     type="button"
-                    class="cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-[0.35rem] font-mono text-xs text-muted transition-colors duration-120 ease-[ease] hover:bg-tool-hover hover:text-text max-[768px]:min-h-11 max-[768px]:px-4"
+                    class="notif-clear-btn"
                     onclick={onClear}
                 >Clear</button>
             </div>
-            <ul id="notif-list" class="flex list-none flex-col gap-2 p-0">
+            <ul id="notif-list" class="notif-list">
                 {for (list) |n| (
                     <li class={notifications.rowClass(n.level)} data-level={notifications.levelName(n.level)}>
-                        <span class="notif-text min-w-0 break-words">{n.text}</span>
-                        <span class="notif-age flex-none font-mono text-xs whitespace-nowrap text-faint">{ageOf(allocator, n, now)}</span>
+                        <span class="notif-text">{n.text}</span>
+                        <span class="notif-age">{ageOf(allocator, n, now)}</span>
                     </li>
                 )}
             </ul>
