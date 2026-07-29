@@ -33,8 +33,8 @@ const FilterBar = filter_bar.FilterBar;
 // aria-pressed variant. Nothing here computes a class.
 // gap-1 / px-2 py-1: the legacy rules asked for `var(--s-1)`, which the token scale never defined
 // (it starts at --s-2), so these controls rendered with no padding and no gap.
-pub const tool_class = "char-tool inline-flex flex-none cursor-pointer items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-1 text-xs text-text hover:bg-tool-hover aria-pressed:bg-tool-on aria-pressed:outline-1 aria-pressed:outline-tool-ring max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:px-3 max-[768px]:py-2";
-const row_class = "char-toolbar-row flex flex-wrap items-center gap-2 max-[640px]:gap-[0.2rem]";
+pub const tool_class = "char-tool";
+const row_class = "char-toolbar-row";
 
 pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
     char_prefs.ensureHydrated();
@@ -44,7 +44,7 @@ pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
     return (
         <div
             @allocator={ctx.allocator}
-            class="char-toolbar flex flex-col gap-2 max-[640px]:gap-[0.2rem]"
+            class="char-toolbar"
             role="toolbar"
             aria-label="Character list controls"
             @rendering={.client}
@@ -52,7 +52,7 @@ pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
             onkeydown={onToolbarKey}
         >
             <div class={row_class}>
-                <div class="min-w-0 flex-1 max-[640px]:w-full max-[640px]:flex-none">
+                <div class="char-toolbar-group">
                     <FilterBar />
                 </div>
                 <Dropdown
@@ -81,9 +81,9 @@ pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
             </div>
             <div class={row_class ++ " char-pager justify-between"} role="group" aria-label="Pagination">
                 <button type="button" class={tool_class} data-page="prev" aria-label="Previous page" onclick={ctx.bind(onPageStep)}>‹</button>
-                <span class="char-page-label flex-1 text-center text-xs text-muted" aria-live="polite">{pageLabel(ctx.allocator, view)}</span>
+                <span class="char-page-label" aria-live="polite">{pageLabel(ctx.allocator, view)}</span>
                 <button type="button" class={tool_class} data-page="next" aria-label="Next page" onclick={ctx.bind(onPageStep)}>›</button>
-                <div class="char-pagesize flex-none max-[640px]:hidden">
+                <div class="char-pagesize char-pagesize-row">
                     <Dropdown
                         options={&page_size_options}
                         value={pageSizeValue(view)}

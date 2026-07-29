@@ -15,16 +15,16 @@
 // content-visibility skips layout+paint for off-screen rows (the .mes list pattern), so a dock full
 // of characters no longer builds and paints every avatar on open. The intrinsic sizes reserve scroll
 // height before a row renders: a list row, then a taller grid tile. Shared by every cast list.
-pub const row_class = "char-item group/row relative flex cursor-pointer items-center gap-3 rounded-md p-2 select-none hover:bg-surface-2 selected:bg-selected selected:outline-1 selected:outline-selected-ring group-data-[view=grid]/list:flex-col group-data-[view=grid]/list:items-stretch group-data-[view=grid]/list:gap-1.5 group-data-[view=grid]/list:p-1.5 group-data-[view=grid]/list:text-center max-[640px]:min-h-[52px] max-[640px]:px-2 max-[640px]:py-[10px] [content-visibility:auto] [contain-intrinsic-size:auto_3.5rem] group-data-[view=grid]/list:[contain-intrinsic-size:auto_9.5rem]";
-pub const avatar_class = "char-avatar size-[2.4rem] flex-none rounded-md bg-bg object-cover group-data-[view=grid]/list:aspect-square group-data-[view=grid]/list:h-auto group-data-[view=grid]/list:w-full max-[640px]:size-10";
-pub const info_class = "min-w-0 flex-1";
-pub const name_class = "char-name truncate font-serif text-sm font-semibold text-text";
+pub const row_class = "char-item group/row cast-row";
+pub const avatar_class = "char-avatar";
+pub const info_class = "cast-info";
+pub const name_class = "char-name";
 /// Kept for persona_list.zx, whose subtitle IS a description (user-authored, and the only thing a
 /// persona row has to say). The character row swapped its description for meta_class below.
-pub const desc_class = "mt-px truncate text-xs text-muted group-data-[view=grid]/list:hidden";
+pub const desc_class = "cast-desc";
 // The character subtitle is metadata, not prose: mono digits line up down the column, and the dot
 // separator only renders when both halves have something to say.
-pub const meta_class = "char-meta mt-px flex items-center gap-1.5 font-mono text-[0.7rem] text-muted group-data-[view=grid]/list:hidden";
+pub const meta_class = "char-meta";
 
 pub fn CharacterList(ctx: *zx.ComponentCtx(void)) zx.Component {
     char_prefs.ensureHydrated();
@@ -41,7 +41,7 @@ pub fn CharacterList(ctx: *zx.ComponentCtx(void)) zx.Component {
         <div
             @allocator={ctx.allocator}
             id="char-list"
-            class="char-list group/list flex min-h-[8rem] flex-col gap-[2px] data-[view=grid]:grid data-[view=grid]:grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] data-[view=grid]:items-start data-[view=grid]:gap-2"
+            class="char-list group/list"
             data-view={if (view.grid) "grid" else "list"}
             role="listbox"
             aria-label="Characters"
@@ -62,18 +62,18 @@ pub fn CharacterList(ctx: *zx.ComponentCtx(void)) zx.Component {
                     <div class={info_class}>
                         <div class={name_class}>{it.char.name}</div>
                         <div class={meta_class}>
-                            <span class="char-when truncate">{lastChat(ctx.allocator, it.char.date_last_chat, now)}</span>
+                            <span class="char-when">{lastChat(ctx.allocator, it.char.date_last_chat, now)}</span>
                             {if (it.char.chat_size > 0) (
-                                <span class="char-dot text-faint" aria-hidden="true">·</span>
+                                <span class="char-dot" aria-hidden="true">·</span>
                             )}
                             {if (it.char.chat_size > 0) (
-                                <span class="char-volume truncate">{chatVolume(ctx.allocator, it.char.chat_size)}</span>
+                                <span class="char-volume">{chatVolume(ctx.allocator, it.char.chat_size)}</span>
                             )}
                         </div>
                     </div>
                     <button
                         type="button"
-                        class="char-fav-star flex-none cursor-pointer border-none bg-transparent px-1 text-lg leading-none text-muted hover:text-accent data-[fav=true]:text-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent group-data-[view=grid]/list:absolute group-data-[view=grid]/list:top-[2px] group-data-[view=grid]/list:right-[2px] group-data-[view=grid]/list:[text-shadow:0_1px_2px_oklch(0_0_0/0.6)] max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:p-2"
+                        class="char-fav-star"
                         data-fav={if (it.char.fav) "true" else "false"}
                         data-char-action="fav"
                         data-char-index={it.index}
@@ -120,8 +120,8 @@ pub fn CharacterList(ctx: *zx.ComponentCtx(void)) zx.Component {
 // door is the Edit control in here, so hiding it would put the editor back out of reach.
 // A pointer that cannot hover never gets the reveal (the C-CHAR stylesheet zone gates it), so on
 // touch the cluster is simply always up: the alternative there is no access at all.
-const actions_class = "char-row-actions pointer-events-none absolute top-1/2 right-9 flex -translate-y-1/2 items-center gap-px rounded-md border border-border bg-surface px-1 py-0.5 opacity-0 transition-opacity duration-120 ease-[ease] group-data-[view=grid]/list:top-auto group-data-[view=grid]/list:right-1 group-data-[view=grid]/list:bottom-[1.75rem] group-data-[view=grid]/list:left-1 group-data-[view=grid]/list:translate-y-0 group-data-[view=grid]/list:justify-center [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100";
-const act_base = "char-row-act icon grid size-6 flex-none cursor-pointer place-items-center rounded-sm border-0 bg-transparent transition-colors duration-120 ease-[ease] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent max-[768px]:size-9";
+const actions_class = "char-row-actions cast-actions";
+const act_base = "char-row-act cast-act-2";
 const act_class = act_base ++ " text-muted hover:bg-surface-2 hover:text-text";
 const act_danger_class = act_base ++ " char-row-act-danger text-muted hover:bg-danger-hover hover:text-text";
 
@@ -162,7 +162,7 @@ fn actionsLabel(alloc: std.mem.Allocator, name: []const u8) []const u8 {
 /// Before the first compute: the store has never answered, so the backend is the thing to talk about.
 fn notLoadedState(allocator: zx.Allocator) zx.Component {
     return (
-        <p @allocator={allocator} class="panel-empty text-sm leading-ui text-muted">No characters loaded. Connect to the SillyTavern backend to see your characters.</p>
+        <p @allocator={allocator} class="panel-empty char-empty-text">No characters loaded. Connect to the SillyTavern backend to see your characters.</p>
     );
 }
 
@@ -172,12 +172,12 @@ fn notLoadedState(allocator: zx.Allocator) zx.Component {
 fn emptyState(ctx: *zx.ComponentCtx(void), view: character_view.View) zx.Component {
     if (!filtersActive(view)) {
         return (
-            <p @allocator={ctx.allocator} class="panel-empty text-sm leading-ui text-muted">No characters here yet. New writes one from scratch, Import reads a card file you already have.</p>
+            <p @allocator={ctx.allocator} class="panel-empty char-empty-text">No characters here yet. New writes one from scratch, Import reads a card file you already have.</p>
         );
     }
     return (
-        <div @allocator={ctx.allocator} class="panel-empty flex flex-col items-start gap-2">
-            <p class="text-sm leading-ui text-muted">{noMatchText(ctx.allocator, view)}</p>
+        <div @allocator={ctx.allocator} class="panel-empty char-nomatch">
+            <p class="char-empty-text">{noMatchText(ctx.allocator, view)}</p>
             <button
                 id="char-clear-filters"
                 class={clear_btn}
@@ -188,7 +188,7 @@ fn emptyState(ctx: *zx.ComponentCtx(void), view: character_view.View) zx.Compone
     );
 }
 
-const clear_btn = "cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-text hover:bg-tool-hover max-[768px]:min-h-11 max-[768px]:px-3 max-[768px]:py-2";
+const clear_btn = "cast-clear-btn";
 
 fn filtersActive(view: character_view.View) bool {
     return view.query.len > 0 or view.fav_only or view.tags.items.len > 0;

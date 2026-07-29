@@ -11,13 +11,13 @@ pub fn GroupQuickList(ctx: *zx.ComponentCtx(void)) zx.Component {
     const groups = gs.slice();
     if (groups.len == 0) {
         return (
-            <div @allocator={ctx.allocator} class="group-quick-empty hidden" @rendering={.client}></div>
+            <div @allocator={ctx.allocator} class="group-quick-empty" @rendering={.client}></div>
         );
     }
     return (
-        <div @allocator={ctx.allocator} class="group-quick flex flex-col gap-1" @rendering={.client}>
-            <h3 class="font-mono text-xs tracking-wide text-muted uppercase">Groups</h3>
-            <div id="group-quick-list" class="flex flex-col gap-[2px]" role="listbox" aria-label="Group chats">
+        <div @allocator={ctx.allocator} class="group-quick" @rendering={.client}>
+            <h3 class="group-quick-title">Groups</h3>
+            <div id="group-quick-list" class="cast-group-quick-list" role="listbox" aria-label="Group chats">
                 {for (groups, 0..) |g, i| (
                     <div
                         class={if (isSelected(i)) (char_list.row_class ++ " is-selected") else char_list.row_class}

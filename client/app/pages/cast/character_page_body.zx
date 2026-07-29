@@ -16,26 +16,26 @@
 // a handler resolves its own element by walking up from the target). The section, action and greeting
 // controls are real buttons with their own bound handlers.
 
-const read_label = "text-sm font-medium text-muted max-[768px]:text-[0.82rem]";
-const read_value = "whitespace-pre-wrap break-words font-serif text-sm leading-ui text-text";
-const read_empty = "font-serif text-sm text-faint italic";
-const section_title = "font-serif text-base font-semibold text-text";
-const field_label = "setting-label text-base font-medium max-[768px]:text-[0.88rem]";
-const field_hint = "setting-note text-sm text-muted max-[768px]:text-[0.78rem]";
-const field_col = "setting-col flex flex-col gap-2";
-const control_base = "w-full rounded-md border border-control-border bg-bg px-3 py-2 font-mono text-sm text-text transition-[border-color] duration-120 ease-[ease] placeholder:text-faint focus:border-accent focus:not-focus-visible:outline-none";
-const text_area = "min-h-[7rem] resize-y " ++ control_base;
+const read_label = "cast-read-label";
+const read_value = "cast-read-value";
+const read_empty = "cast-read-empty";
+const section_title = "cast-section-title";
+const field_label = "setting-label cast-field-label";
+const field_hint = "setting-note cast-field-hint";
+const field_col = "setting-col cast-field-col";
+const control_base = "cast-control";
+const text_area = "cast-text-area " ++ control_base;
 // The ordinary chrome button: an outline slab in mono, matching the card actions and the section Edit.
-const action_btn = "cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:text-text aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
+const action_btn = "cast-action-btn";
 // Save is the one thing an open section is for, so it is the one filled amber in the section: the
 // theme spends the accent once, on the single active signal (app-input.css).
-const save_btn = "cursor-pointer rounded-md border border-accent bg-accent px-3 py-1 font-mono text-sm text-on-accent transition-[background,filter] duration-120 ease-[ease] hover:brightness-[1.06]";
+const save_btn = "cast-save-btn";
 const edit_btn = "char-page-edit " ++ action_btn;
-const greeting_btn = "self-start " ++ action_btn;
+const greeting_btn = "cast-greeting-btn " ++ action_btn;
 // The header card actions. Delete wears the danger hover, matching character_actions.zx's row.
-const header_act = "flex-none cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-text transition-colors duration-120 ease-[ease] hover:bg-tool-hover max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:px-3 max-[768px]:py-2";
+const header_act = "cast-header-act";
 const header_danger = header_act ++ " hover:bg-danger-hover hover:outline-1 hover:outline-danger-ring";
-const back_btn = "flex-none cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-muted transition-colors duration-120 ease-[ease] hover:bg-tool-hover hover:text-text max-[768px]:min-h-11 max-[768px]:px-4";
+const back_btn = "cast-back-btn";
 
 const section_list: []const character_page.Section = &character_page.sections;
 const role_list: []const nav.Option = &card_form.role_options;
@@ -54,28 +54,28 @@ pub fn CharacterPageBody(ctx: *zx.ComponentCtx(void)) zx.Component {
             @allocator={ctx.allocator}
             @rendering={.client}
             id="card-editor"
-            class="char-page animate-drawer-in flex min-h-0 flex-col gap-4"
+            class="char-page"
             onclick={onRootClick}
             onkeydown={onRootKey}
         >
-            <div class="flex flex-none items-center gap-3 border-b border-border pb-3">
+            <div class="card-page">
                 <button id="card-editor-back" type="button" class={back_btn} onclick={onBack}>Back</button>
                 {if (selected == null) (
-                    <span class="min-w-0 flex-1 truncate font-serif text-sm text-muted">No character selected.</span>
+                    <span class="card-none-text">No character selected.</span>
                 ) else (
-                    <div class="flex min-w-0 flex-1 items-center gap-3">
+                    <div class="card-pick-row">
                         <img
-                            class="size-12 flex-none rounded-md border border-control-border bg-bg object-cover"
+                            class="card-pick-btn"
                             id="card-avatar-img"
                             src={card_editor.avatarUrl(ctx.allocator)}
                             alt={card_editor.avatarAlt(ctx.allocator)}
                             width="48"
                             height="48"
                         />
-                        <div class="min-w-0 flex-1">
-                            <h2 id="panel-heading" class="truncate font-serif text-lg font-semibold text-text">{headerName(ctx.allocator)}</h2>
+                        <div class="card-avatar-wrap">
+                            <h2 id="panel-heading" class="card-heading">{headerName(ctx.allocator)}</h2>
                             {if (card_editor.value(.character_version).len > 0) (
-                                <p class="truncate font-mono text-xs text-muted">Version {card_editor.value(.character_version)}</p>
+                                <p class="card-version">Version {card_editor.value(.character_version)}</p>
                             ) else (
                                 <></>
                             )}
@@ -85,30 +85,30 @@ pub fn CharacterPageBody(ctx: *zx.ComponentCtx(void)) zx.Component {
             </div>
 
             {if (selected == null) (
-                <p class="text-sm text-muted">Pick a character in the Cast panel and their page opens here.</p>
+                <p class="card-hint">Pick a character in the Cast panel and their page opens here.</p>
             ) else if (st == .loading or st == .idle) (
-                <p class="text-sm text-muted" aria-busy="true">Reading the card...</p>
+                <p class="card-hint" aria-busy="true">Reading the card...</p>
             ) else if (st == .err) (
-                <div class="flex flex-col items-start gap-2" role="alert">
-                    <p class="text-sm text-text">That card would not load. It may have been renamed or removed on the server.</p>
+                <div class="card-error" role="alert">
+                    <p class="card-error-text">That card would not load. It may have been renamed or removed on the server.</p>
                     <button class={action_btn} type="button" onclick={onRetry}>Try again</button>
                 </div>
             ) else (
-                <div class="flex min-h-0 flex-col gap-4">
+                <div class="card-form">
                     {headerActions(ctx)}
 
-                    <p class="min-h-[1.25rem] font-mono text-sm text-muted" id="card-editor-notice" role="status" aria-live="polite">{card_editor.noticeText()}</p>
+                    <p class="card-notice" id="card-editor-notice" role="status" aria-live="polite">{card_editor.noticeText()}</p>
 
                     {for (section_list, 0..) |s, i| (
                         <section
-                            class="char-page-section animate-section-rise flex flex-col gap-2 rounded-md border border-border bg-surface-2 p-3"
+                            class="char-page-section"
                             style={sectionDelay(ctx.allocator, i)}
                             data-section-block={character_page.sectionKey(s.id)}
                         >
-                            <div class="flex items-center justify-between gap-2">
+                            <div class="card-fields">
                                 <h3 class={section_title}>{s.title}</h3>
                                 {if (character_page.isEditing(s.id)) (
-                                    <div class="flex flex-none gap-2">
+                                    <div class="card-field-group">
                                         <button class={action_btn} type="button" data-section-action="cancel" data-section={character_page.sectionKey(s.id)} onclick={ctx.bind(onSectionAction)}>Cancel</button>
                                         <button class={save_btn} type="button" data-section-action="save" data-section={character_page.sectionKey(s.id)} onclick={ctx.bind(onSectionAction)}>Save</button>
                                     </div>
@@ -126,17 +126,17 @@ pub fn CharacterPageBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                             </div>
 
                             {if (character_page.isEditing(s.id)) (
-                                <div class="char-page-edit-body animate-card-edit-in flex flex-col gap-3">
+                                <div class="char-page-edit-body">
                                     {if (s.kind == .greetings) (greetingsEdit(ctx)) else (
-                                        <div class="flex flex-col gap-3">
+                                        <div class="card-field-row">
                                             {for (s.fields) |f| (fieldControl(ctx, f))}
                                         </div>
                                     )}
                                 </div>
                             ) else (
-                                <div class="flex flex-col gap-3">
+                                <div class="card-field-row">
                                     {if (s.kind == .greetings) (greetingsRead(ctx)) else (
-                                        <div class="flex flex-col gap-3">
+                                        <div class="card-field-row">
                                             {for (s.fields) |f| (fieldRead(ctx, f, s.fields.len > 1))}
                                         </div>
                                     )}
@@ -169,7 +169,7 @@ pub fn CharacterPageBody(ctx: *zx.ComponentCtx(void)) zx.Component {
 fn headerActions(ctx: *zx.ComponentCtx(void)) zx.Component {
     const idx = char_store.selectedIndex() orelse 0;
     return (
-        <div @allocator={ctx.allocator} class="flex flex-wrap items-center gap-2" role="group" aria-label="Character actions">
+        <div @allocator={ctx.allocator} class="card-identity" role="group" aria-label="Character actions">
             <button class={header_act} type="button" data-char-action="fav" data-char-index={idx} onclick={ctx.bind(onCharAction)}>{if (isFav()) "Unfavourite" else "Favourite"}</button>
             <button class={header_act} type="button" data-char-action="rename" data-char-index={idx} onclick={ctx.bind(onCharAction)}>Rename</button>
             <button class={header_act} type="button" data-char-action="duplicate" data-char-index={idx} onclick={ctx.bind(onCharAction)}>Duplicate</button>
@@ -187,7 +187,7 @@ fn fieldRead(ctx: *zx.ComponentCtx(void), f: card_form.Field, labeled: bool) zx.
     const spec = card_form.specFor(f);
     const text = readFieldText(ctx.allocator, f);
     return (
-        <div @allocator={ctx.allocator} class="flex flex-col gap-1">
+        <div @allocator={ctx.allocator} class="card-block-row">
             {if (labeled) (
                 <span class={read_label}>{spec.label}</span>
             ) else (
@@ -256,13 +256,13 @@ fn fieldControl(ctx: *zx.ComponentCtx(void), f: card_form.Field) zx.Component {
 /// The greetings, read-only: each opening the user can swipe to, or a note that the card has none.
 fn greetingsRead(ctx: *zx.ComponentCtx(void)) zx.Component {
     return (
-        <div @allocator={ctx.allocator} class="flex flex-col gap-2">
+        <div @allocator={ctx.allocator} class="card-lore-block">
             {if (card_editor.greetingCount() == 0) (
                 <p class={read_empty}>None. The first message is this card's only opening.</p>
             ) else (
-                <div class="flex flex-col gap-2">
+                <div class="card-lore-block">
                     {for (0..card_editor.greetingCount()) |i| (
-                        <div class="flex flex-col gap-1">
+                        <div class="card-block-row">
                             <span class={read_label}>Greeting {card_editor.greetingKey(ctx.allocator, i)}</span>
                             <p class={read_value}>{card_editor.greetingText(i)}</p>
                         </div>
@@ -278,11 +278,11 @@ fn greetingsRead(ctx: *zx.ComponentCtx(void)) zx.Component {
 /// card_editor writes each survivor's text back explicitly).
 fn greetingsEdit(ctx: *zx.ComponentCtx(void)) zx.Component {
     return (
-        <div @allocator={ctx.allocator} class="flex flex-col gap-3">
+        <div @allocator={ctx.allocator} class="card-greetings">
             <p class={field_hint} id="card-greetings-hint">Other openings the user can swipe to instead of the first message.</p>
             {for (0..card_editor.greetingCount()) |i| (
-                <div class="flex flex-col gap-2">
-                    <label class="text-sm text-muted" for={card_editor.greetingDomId(ctx.allocator, i)}>Greeting {card_editor.greetingKey(ctx.allocator, i)}</label>
+                <div class="card-greeting-row">
+                    <label class="card-greeting-label" for={card_editor.greetingDomId(ctx.allocator, i)}>Greeting {card_editor.greetingKey(ctx.allocator, i)}</label>
                     <textarea
                         id={card_editor.greetingDomId(ctx.allocator, i)}
                         name={card_editor.greetingDomId(ctx.allocator, i)}

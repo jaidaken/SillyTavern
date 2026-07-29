@@ -20,14 +20,14 @@ const panelchrome = @import("../shell/panelchrome.zx");
 // --color-control-border is the token the theme defines for an interactive edge and clears WCAG
 // 1.4.11 at 3:1 (app-input.css:32). font-mono, because the chrome is mono and only the prose and the
 // speaker names are serif (app-input.css:11-13).
-const act_base = "flex-none cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-text max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:px-3 max-[768px]:py-2 max-[640px]:flex-1 max-[640px]:justify-center";
+const act_base = "cast-act";
 const act_btn = "char-act-btn " ++ act_base ++ " hover:bg-tool-hover";
 const file_input = "char-import-input " ++ panelchrome.file_picker;
 
 pub fn CharacterActions(ctx: *zx.ComponentCtx(void)) zx.Component {
     return (
-        <div @allocator={ctx.allocator} class="char-actions flex flex-col gap-2 border-t border-border pt-2" @rendering={.client}>
-            <div class="char-actions-bar flex flex-wrap items-center gap-2 max-[640px]:flex-col max-[640px]:gap-[0.4rem]">
+        <div @allocator={ctx.allocator} class="char-actions" @rendering={.client}>
+            <div class="char-actions-bar">
                 <button class={act_btn} type="button" data-char-action="create" onclick={ctx.bind(onCharAction)}>New</button>
                 <input id="char-import-input" type="file" accept=".png,.json,.yaml,.yml,.charx,.byaf" class={file_input} aria-label="Import character file" data-char-action="import" onchange={ctx.bind(onCharAction)} />
             </div>

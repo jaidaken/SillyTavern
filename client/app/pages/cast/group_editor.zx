@@ -14,20 +14,20 @@ pub fn GroupEditor(allocator: zx.Allocator, props: Props) zx.Component {
     const g = gs.slice()[index];
     const draft = g.id.len == 0;
     return (
-        <div @allocator={allocator} class="group-editor flex flex-col gap-3">
-            <div class="flex flex-wrap items-center gap-2">
+        <div @allocator={allocator} class="group-editor">
+            <div class="group-editor-head">
                 <button class={act_btn} type="button" data-group-action="back" onclick={onBack}>Back</button>
-                <span class="min-w-0 flex-1 truncate font-serif font-semibold text-text">{g.name}</span>
+                <span class="group-editor-name">{g.name}</span>
                 <button class={act_btn} type="button" data-group-action="rename" onclick={onRename}>Rename</button>
             </div>
 
             {if (group_actions.errorText().len > 0) (
-                <div class="flex flex-col items-start gap-2 rounded-md border border-control-border bg-bg p-3" role="alert">
-                    <p class="text-sm text-text">{group_actions.errorText()}</p>
+                <div class="group-editor-error" role="alert">
+                    <p class="group-editor-error-text">{group_actions.errorText()}</p>
                 </div>
             )}
 
-            <div class="flex flex-wrap items-center gap-3">
+            <div class="group-settings-row">
                 <Dropdown
                     options={strategy_options}
                     value={strategyValue(g.activation_strategy)}
@@ -42,25 +42,25 @@ pub fn GroupEditor(allocator: zx.Allocator, props: Props) zx.Component {
                     label="Card mode"
                     onchange={&group_actions.setModeFromStr}
                 />
-                <label class="flex cursor-pointer items-center gap-2 font-mono text-sm text-muted" for="grp-allow-self">
+                <label class="group-self-label" for="grp-allow-self">
                     <input id="grp-allow-self" name="grp-allow-self" type="checkbox" checked={g.allow_self_responses} data-group-index={index} onchange={onAllowSelf} />
                     Allow self responses
                 </label>
             </div>
 
-            <div class="flex flex-col gap-1">
-                <h3 class="font-mono text-xs tracking-wide text-muted uppercase">Members</h3>
+            <div class="group-section">
+                <h3 class="group-section-title">Members</h3>
                 {if (g.memberSlice().len == 0) (
-                    <p class="rounded-md border border-control-border bg-bg p-3 text-sm text-muted">No members yet. Add characters from the list below.</p>
+                    <p class="group-members-empty">No members yet. Add characters from the list below.</p>
                 ) else (
-                    <div class="flex flex-col gap-[2px]" role="list" aria-label="Group members">
+                    <div class="group-member-list" role="list" aria-label="Group members">
                         {for (g.memberSlice(), 0..) |m, pos| (
-                            <div class="group-member-row flex items-center gap-2 rounded-md border border-border-soft p-2" role="listitem">
+                            <div class="group-member-row" role="listitem">
                                 <img class={char_list.avatar_class} src={avatarThumb(allocator, m)} alt={memberName(m)} loading="lazy" decoding="async" />
-                                <div class="min-w-0 flex-1">
+                                <div class="group-member-meta">
                                     <div class={char_list.name_class}>{memberName(m)}</div>
                                     {if (gs.isMuted(&gs.global.groups.items[index], m)) (
-                                        <div class="font-mono text-xs text-muted">muted</div>
+                                        <div class="group-member-muted">muted</div>
                                     )}
                                 </div>
                                 <button class={member_btn} type="button" data-member-mute={m} data-group-index={index} aria-pressed={mutedStr(index, m)} aria-label={label(allocator, "Mute ", memberName(m))} onclick={onMemberMute}>Mute</button>
@@ -73,16 +73,16 @@ pub fn GroupEditor(allocator: zx.Allocator, props: Props) zx.Component {
                 )}
             </div>
 
-            <div class="flex flex-col gap-1">
-                <h3 class="font-mono text-xs tracking-wide text-muted uppercase">Add members</h3>
+            <div class="group-section">
+                <h3 class="group-section-title">Add members</h3>
                 {if (candidateCount(index) == 0) (
-                    <p class="text-sm text-muted">Every loaded character is already in this group.</p>
+                    <p class="group-candidates-empty">Every loaded character is already in this group.</p>
                 ) else (
-                    <div class="flex max-h-64 flex-col gap-[2px] overflow-y-auto [scrollbar-width:thin]" role="list" aria-label="Characters not in this group">
+                    <div class="group-candidate-list" role="list" aria-label="Characters not in this group">
                         {for (char_store.slice(), 0..) |c, ci| (
                             <>
                                 {if (!isMember(index, c.avatar)) (
-                                    <div class="group-candidate-row flex items-center gap-2 rounded-md border border-border-soft p-2 [content-visibility:auto] [contain-intrinsic-size:auto_3rem]" role="listitem" data-char-index={ci}>
+                                    <div class="group-candidate-row" role="listitem" data-char-index={ci}>
                                         <img class={char_list.avatar_class} src={avatarThumb(allocator, c.avatar)} alt={c.name} loading="lazy" decoding="async" />
                                         <div class={cand_name}>{c.name}</div>
                                         <button class={member_btn} type="button" data-member-add={c.avatar} data-group-index={index} aria-label={label(allocator, "Add ", c.name)} onclick={onMemberAdd}>Add</button>
@@ -94,7 +94,7 @@ pub fn GroupEditor(allocator: zx.Allocator, props: Props) zx.Component {
                 )}
             </div>
 
-            <div class="flex flex-wrap gap-2 border-t border-border pt-2">
+            <div class="group-editor-foot">
                 {if (draft) (
                     <>
                         <button class={act_btn} type="button" data-group-action="create" onclick={onCommitCreate} disabled={group_actions.createPending()}>
@@ -113,11 +113,11 @@ pub fn GroupEditor(allocator: zx.Allocator, props: Props) zx.Component {
 // ---- shared class strings (character_actions tokens, same reasons: interactive edges use the 3:1
 // --color-control-border, chrome is mono, only prose is serif) -----------------------------------
 
-pub const act_base = "flex-none cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-text max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:px-3 max-[768px]:py-2 max-[640px]:flex-1 max-[640px]:justify-center";
+pub const act_base = "cast-act";
 pub const act_btn = "group-act-btn " ++ act_base ++ " hover:bg-tool-hover disabled:cursor-default disabled:opacity-50";
 pub const act_danger = "group-act-btn group-act-danger " ++ act_base ++ " hover:bg-danger-hover hover:outline-1 hover:outline-danger-ring";
-const member_btn = "group-member-btn flex-none cursor-pointer rounded-md border border-control-border bg-surface-2 px-2 py-[0.2rem] font-mono text-xs text-muted hover:bg-tool-hover hover:text-text aria-pressed:border-accent aria-pressed:text-accent";
-const member_danger = "group-member-btn flex-none cursor-pointer rounded-md border border-control-border bg-surface-2 px-2 py-[0.2rem] font-mono text-xs text-muted hover:bg-danger-hover hover:outline-1 hover:outline-danger-ring";
+const member_btn = "group-member-btn";
+const member_danger = "group-member-btn cast-member-danger";
 const cand_name = char_list.name_class ++ " min-w-0 flex-1";
 
 const strategy_options_arr = [_]Dropdown_mod.Option{

@@ -29,14 +29,14 @@ pub fn FilterBar(allocator: zx.Allocator) zx.Component {
     return (
         <div
             @allocator={allocator}
-            class="char-filter relative flex flex-col"
+            class="char-filter"
             onclick={&onBarClick}
             onkeydown={&onBarKey}
         >
             <div class={field_class}>
                 {for (view.tags.items) |t| (
                     <span class={chip_class} data-chip-tag={t}>
-                        <span class="max-w-[8rem] truncate">{t}</span>
+                        <span class="char-filter-tag">{t}</span>
                         <button
                             type="button"
                             class={chip_x_class}
@@ -64,7 +64,7 @@ pub fn FilterBar(allocator: zx.Allocator) zx.Component {
                     oninput={&onInput}
                 />
             </div>
-            <p id="char-filter-hint" class="sr-only">Typing filters characters by name. Matching tags appear below the field; Arrow Down then Enter adds one as a filter.</p>
+            <p id="char-filter-hint" class="cast-char-filter-hint">Typing filters characters by name. Matching tags appear below the field; Arrow Down then Enter adds one as a filter.</p>
             {if (open) (
                 <ul
                     id="char-filter-suggest"
@@ -90,19 +90,19 @@ pub fn FilterBar(allocator: zx.Allocator) zx.Component {
 // The field wears the app's control edge rather than the browser's, because it now contains chips
 // and a bare input: two boxes with two different borders read as two controls. focus-within moves
 // the accent to the whole field, which is what the user is actually focused on.
-const field_class = "char-filter-field flex flex-wrap items-center gap-1 rounded-md border border-control-border bg-bg px-2 py-1 transition-[border-color] duration-120 ease-[ease] focus-within:border-accent";
-const input_class = "char-search min-w-[6rem] flex-1 border-0 bg-transparent p-0 font-mono text-xs text-text outline-none placeholder:text-faint max-[768px]:min-h-9 max-[768px]:text-base";
+const field_class = "char-filter-field";
+const input_class = "char-search";
 // An ACTIVE filter, so it wears the same tag-on ground the old wall's pressed chips did: the bar
 // has to say which tags are narrowing the list without the user opening anything.
-const chip_class = "char-chip inline-flex items-center gap-1 rounded-full border border-border bg-tag-on py-px pr-1 pl-2 text-xs text-text";
-const chip_x_class = "char-chip-x inline-grid cursor-pointer place-items-center rounded-full border-0 bg-transparent px-1 text-sm leading-none text-muted hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent max-[768px]:min-h-9 max-[768px]:min-w-9";
+const chip_class = "char-chip";
+const chip_x_class = "char-chip-x";
 // NO entry animation, unlike the dropdown menu this otherwise mirrors. That list opens on a click,
 // a few times a session; this one opens, refilters and closes on EVERY KEYSTROKE, and WD24 puts a
 // surface at that frequency in the no-animation band. It also showed: a captured render caught the
 // list mid-fade, drawing the toolbar row straight through it.
-const list_class = "char-filter-suggest absolute top-full right-0 left-0 z-40 mt-1 flex max-h-[14rem] list-none flex-col gap-px overflow-y-auto rounded-md border border-border bg-surface p-1 [scrollbar-width:thin]";
-const option_class = "char-filter-opt cursor-pointer truncate rounded-sm px-2 py-1 font-mono text-xs text-muted";
-const option_on_class = "char-filter-opt cursor-pointer truncate rounded-sm bg-surface-2 px-2 py-1 font-mono text-xs text-text";
+const list_class = "char-filter-suggest";
+const option_class = "char-filter-opt";
+const option_on_class = "char-filter-opt cast-option-on";
 
 /// Which suggestion the keyboard is on, and whether Escape has closed the list until the next
 /// keystroke. Session-local UI state: neither is worth persisting, and neither belongs in the View,

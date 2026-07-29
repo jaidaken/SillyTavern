@@ -15,16 +15,16 @@
 pub fn PersonaList(ctx: *zx.ComponentCtx(void)) zx.Component {
     const ps = persona_store.global.slice();
     return (
-        <div @allocator={ctx.allocator} class="persona-panel flex flex-col gap-2" @rendering={.client}>
-            <div class="persona-actions-bar flex flex-wrap items-center gap-2 max-[640px]:flex-col max-[640px]:gap-[0.4rem]">
+        <div @allocator={ctx.allocator} class="persona-panel" @rendering={.client}>
+            <div class="persona-actions-bar">
                 <button class={act_btn} type="button" data-persona-action="add" onclick={ctx.bind(onPersonaAction)}>New persona</button>
             </div>
             {if (ps.len == 0) (
-                <p class="panel-empty text-sm leading-ui text-muted">No personas loaded. Connect to the SillyTavern backend to see your personas.</p>
+                <p class="panel-empty persona-empty">No personas loaded. Connect to the SillyTavern backend to see your personas.</p>
             ) else (
                 <div
                     id="persona-list"
-                    class="char-list group/list flex min-h-[8rem] flex-col gap-[2px]"
+                    class="char-list group/list cast-persona-list"
                     role="listbox"
                     aria-label="Personas"
                 >
@@ -48,7 +48,7 @@ pub fn PersonaList(ctx: *zx.ComponentCtx(void)) zx.Component {
                 </div>
             )}
             {if (persona_store.selectedIndex()) |_| (selectedActions(ctx)) else (
-                <p @allocator={ctx.allocator} class="persona-actions-hint text-xs text-muted">Select a persona to manage it.</p>
+                <p @allocator={ctx.allocator} class="persona-actions-hint">Select a persona to manage it.</p>
             )}
         </div>
     );
@@ -58,14 +58,14 @@ fn selectedActions(ctx: *zx.ComponentCtx(void)) zx.Component {
     const p_opt = persona_store.selected();
     if (p_opt == null) {
         return (
-            <p @allocator={ctx.allocator} class="persona-actions-hint text-xs text-muted">Select a persona to manage it.</p>
+            <p @allocator={ctx.allocator} class="persona-actions-hint">Select a persona to manage it.</p>
         );
     }
     const p = p_opt.?;
     return (
-        <div @allocator={ctx.allocator} class="persona-actions-selected flex flex-col gap-1 border-t border-border pt-2">
-            <div class="persona-actions-name truncate font-serif font-semibold text-text">{p.name}</div>
-            <div class="persona-actions-row flex flex-wrap gap-1 max-[640px]:gap-[0.4rem]">
+        <div @allocator={ctx.allocator} class="persona-actions-selected">
+            <div class="persona-actions-name">{p.name}</div>
+            <div class="persona-actions-row">
                 <button class={act_btn} type="button" data-persona-action="rename" onclick={ctx.bind(onPersonaAction)}>Rename</button>
                 <button class={act_btn} type="button" data-persona-action="edit" onclick={ctx.bind(onPersonaAction)}>Edit description</button>
                 <button class={act_btn} type="button" data-persona-action="set-default" onclick={ctx.bind(onPersonaAction)}>Set default</button>
@@ -79,7 +79,7 @@ fn selectedActions(ctx: *zx.ComponentCtx(void)) zx.Component {
 // The character panel's buttons, in a persona's clothes: same tokens, same reasons (an interactive
 // edge is --color-control-border at 3:1, not the 1.23:1 structural --color-border; the chrome is mono
 // and only prose is serif). See character_actions.zx.
-const act_base = "flex-none cursor-pointer rounded-md border border-control-border bg-surface-2 px-3 py-1 font-mono text-sm text-text max-[768px]:min-h-11 max-[768px]:min-w-11 max-[768px]:px-3 max-[768px]:py-2 max-[640px]:flex-1 max-[640px]:justify-center";
+const act_base = "cast-act";
 const act_btn = "persona-act-btn " ++ act_base ++ " hover:bg-tool-hover";
 const act_danger = "persona-act-btn persona-act-danger " ++ act_base ++ " hover:bg-danger-hover hover:outline-1 hover:outline-danger-ring";
 const file_input = "persona-avatar-file " ++ panelchrome.file_picker;
