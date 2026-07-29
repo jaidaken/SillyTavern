@@ -14,7 +14,7 @@ import {
     OPENAI_KEYS,
 } from '../../constants.js';
 import { forwardFetchResponse, trimV1, getConfigValue } from '../../util.js';
-import { setAdditionalHeaders } from '../../additional-headers.js';
+import { setAdditionalHeaders, setAdditionalHeadersByType } from '../../additional-headers.js';
 import { createHash } from 'node:crypto';
 import { log } from '../../log.js';
 
@@ -340,7 +340,9 @@ export async function buildUpstreamRequest(request, params, signal) {
         timeout: 0,
     };
 
-    await setAdditionalHeaders(request, args, baseUrl);
+    // Keyed off the params handed in, not request.body: /start nests them under `generate`, so
+    // request.body.api_type is undefined there and no auth header would be attached.
+    await setAdditionalHeadersByType(args.headers, params.api_type, baseUrl, request.user.directories, params.secret_id ?? null);
 
     if (apiType === TEXTGEN_TYPES.TOGETHERAI) {
         params = _.pickBy(params, (_v, key) => TOGETHERAI_KEYS.includes(key));
