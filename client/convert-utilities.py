@@ -205,7 +205,15 @@ def main():
             trail = " " if class_text[-1:] == " " else ""
             return lead + body + trail
 
+        def in_comment(pos):
+            """A class string quoted inside a `//` comment is prose about the markup, not markup."""
+            line_start = text.rfind("\n", 0, pos) + 1
+            slashes = text.find("//", line_start)
+            return slashes != -1 and slashes < pos
+
         def attr_sub(m):
+            if in_comment(m.start()):
+                return m.group(0)
             # Name the element after its own id when it has one; the tag it sits in starts at the last
             # `<` before the attribute.
             tag = text[text.rfind("<", 0, m.start()):m.start()]
@@ -221,6 +229,8 @@ def main():
             return m.group(0) if new is None else f'class="{new}"'
 
         def const_sub(m):
+            if in_comment(m.start()):
+                return m.group(0)
             ident = re.search(r"const\s+(\w+)", m.group(1))
             new = rewrite(m.group(2), ident.group(1).replace("_", "-") if ident else "cls")
             return m.group(0) if new is None else f'{m.group(1)}"{new}"'

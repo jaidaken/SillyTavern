@@ -32,12 +32,12 @@ pub fn Shell(ctx: *zx.ComponentCtx(void)) zx.Component {
             // (insertBefore), and a DOM node that is detached and reattached comes back with its
             // scrollTop at zero. With the slots fixed, no reconcile pass ever moves a panel node, so
             // the right dock keeps its scroll (and its entry animation) while the left one opens.
-            <div class="contents" key="dock-left">
+            <div class="dock-mount" key="dock-left">
                 {if (ui.openOn(.left)) |p| (
                     <SidePanel panel={p} />
                 )}
             </div>
-            <div class="contents" key="dock-right">
+            <div class="dock-mount" key="dock-right">
                 {if (ui.openOn(.right)) |p| (
                     <SidePanel panel={p} />
                 )}

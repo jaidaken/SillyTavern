@@ -11,14 +11,14 @@ pub fn PanelHead(allocator: zx.Allocator, props: HeadProps) zx.Component {
     return (
         <div
             @allocator={allocator}
-            class="flex flex-none items-center justify-between gap-2 border-b border-border p-2 pl-4 max-[768px]:p-3 max-[768px]:pl-4"
+            class="panel-head-row"
         >
             <h2
                 id="panel-heading"
-                class="overflow-hidden font-mono text-xs font-medium tracking-[0.1em] text-ellipsis whitespace-nowrap text-muted uppercase max-[640px]:text-[0.7rem]"
+                class="panel-heading"
             >{props.title}</h2>
             <button
-                class="icon grid size-[1.9rem] flex-none cursor-pointer place-items-center rounded-md border-0 bg-transparent text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-text max-[768px]:size-10 max-[768px]:min-h-11 max-[768px]:min-w-11"
+                class="panel-head-actions"
                 data-icon="close"
                 data-side={props.side}
                 type="button"
@@ -38,7 +38,7 @@ pub const EmptyProps = struct {
 
 pub fn PanelEmpty(allocator: zx.Allocator, props: EmptyProps) zx.Component {
     return (
-        <p @allocator={allocator} class="panel-empty text-sm leading-ui text-muted">{props.text}</p>
+        <p @allocator={allocator} class="panel-empty">{props.text}</p>
     );
 }
 
@@ -48,7 +48,7 @@ pub fn PanelEmpty(allocator: zx.Allocator, props: EmptyProps) zx.Component {
 // app-input.css; this class is the hook that rule keys off. The input stays a real, visible,
 // focusable <input type=file>: two of these are driven by DOM.setFileInputFiles and one by .click()
 // while detached, so hiding it behind a label would trade a cosmetic defect for a broken control.
-pub const file_picker = "file-picker max-w-[13rem] font-mono text-xs text-muted";
+pub const file_picker = "file-picker file-picker-input";
 
 const zx = @import("zx");
 const ui = @import("../nav/ui.zig");
