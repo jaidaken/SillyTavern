@@ -40,6 +40,8 @@ class ScriptedUpstream {
         this.requests = 0;
         this.sent = [];
         this.refuseWith = refuseWith;
+        /** @type {import('http').IncomingHttpHeaders[]} Headers of every upstream request received. */
+        this.received = [];
     }
 
     get baseUrl() {
@@ -50,6 +52,7 @@ class ScriptedUpstream {
         this.port = await allocatePort();
         this.server = http.createServer((req, res) => {
             this.requests += 1;
+            this.received.push(req.headers);
             if (this.refuseWith) {
                 res.writeHead(this.refuseWith.status, { 'Content-Type': 'application/json' });
                 res.end(this.refuseWith.body);
@@ -487,6 +490,29 @@ describe('server-owned generation', () => {
         expect(second.status).toBe(409);
         expect(second.body.generation_id).toBe(first.body.generation_id);
         expect(upstream.requests).toBe(1);
+
+        upstream.finish();
+        await upstream.stop();
+    }, CASE_TIMEOUT_MS);
+
+    test('the start route sends the backend api key upstream', async () => {
+        seedChat(server);
+        const client = await loggedInClient(server);
+        const write = await client.postJson('/api/secrets/write', { key: 'api_key_llamacpp', value: 'sk-live-key', label: 'gen' });
+        expect(write.status).toBe(200);
+
+        const upstream = new ScriptedUpstream();
+        await upstream.start();
+        const start = await client.postJson('/api/generation/start', {
+            chat: { avatar_url: `${CARD}.png`, file_name: CHAT_FILE, character_name: CARD },
+            generate: { api_type: 'llamacpp', api_server: upstream.baseUrl, model: 'mock', prompt: 'hi', max_tokens: 8 },
+        });
+        expect(start.status).toBe(200);
+
+        await until(() => upstream.requests === 1, 'the upstream request');
+        // Regression: the header lookup read request.body.api_type, undefined here because /start
+        // nests its params, so no key was attached and the backend refused every send.
+        expect(upstream.received[0].authorization).toBe('Bearer sk-live-key');
 
         upstream.finish();
         await upstream.stop();
