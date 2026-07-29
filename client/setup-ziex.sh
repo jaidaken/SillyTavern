@@ -52,4 +52,4 @@ for p in "$PATCHES"/01-*.patch "$PATCHES"/02-*.patch "$PATCHES"/04-*.patch "$PAT
     echo "setup-ziex: applied $(basename "$p")"
 done
 
-echo "setup-ziex: $ZIEX_DIR ready at $ZIEX_REV + 20 patches"
+echo "setup-ziex: $ZIEX_DIR ready at $ZIEX_REV + 18 patches"
