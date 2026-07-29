@@ -386,11 +386,14 @@
    with it, because the regression gate pins those three class attributes exactly as
    they read today and the signature has to survive intact.
    =================================================================================== */
+/* FLEX, not grid. The avatar used to be a grid item spanning every row, which meant an avatar taller
+   than the text beside it had its surplus height distributed BETWEEN the rows, opening a gap under the
+   speaker name that grew with the avatar size. A flex row cannot do that: the avatar and the text
+   column are two independent items, so the avatar's height sets the row's height and nothing else. */
 .mes {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 0.75rem 1rem;
-    align-items: start;
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
     position: relative;
     padding-block: 1rem;
     padding-inline-start: 1rem;
@@ -416,9 +419,15 @@
     transform-origin: top;
 }
 
+/* The text column beside the avatar. min-width: 0 so a long unbroken token (a URL, a code span) wraps
+   instead of stretching the flex item past the reading measure. */
+.mes-body {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
 /* The speaker name is the character's voice on the page: book serif, warm-tinted, mixed case. */
 .mes_name {
-    grid-column: 2;
     font-family: var(--font-serif);
     font-size: var(--text-name);
     font-weight: 600;
@@ -432,7 +441,6 @@
    repeated on 20 flat selectors (native CSS nesting, passed through by Tailwind v4's Lightning CSS;
    pure readability, identical rendering). */
 .mes_text {
-    grid-column: 2;
     /* The reading Font control points --reading-font at the chosen family; unset falls back to the
        Newsreader serif base. */
     font-family: var(--reading-font, var(--font-serif));
@@ -570,7 +578,6 @@
    .mes_text so the source sits at the same measure and family; pre-wrap preserves the raw whitespace
    (so markdown indentation shows as typed) and the highlight styles content while the markers stay. */
 .mes_edit {
-    grid-column: 2;
     display: flex;
     flex-direction: column;
     gap: 0.45rem;
@@ -698,6 +705,121 @@
 #chat-root[data-reading-measure="normal"] { --reading-measure: min(var(--measure), var(--reading-cap)); }
 #chat-root[data-reading-measure="wide"] { --reading-measure: 48rem; }
 #chat-root[data-reading-avatars="off"] .mes_avatar { display: none; }
+
+/* AVATAR SIZE. One custom property carries the scale and one rule reads it, so the mobile step-down
+   below is a single override rather than three. The rule outranks the element's own `size-[1.8rem]`
+   utility on both counts: higher specificity, and unlayered beats Tailwind's utilities layer.
+
+   The scale starts where it does deliberately: 3rem was the first pass's LARGE and is the operator's
+   small (2026-07-29), so every step moved up rather than the top end stretching. */
+#chat-root { --avatar-size: 4.5rem; }
+#chat-root[data-reading-avatarsize="small"] { --avatar-size: 3rem; }
+#chat-root[data-reading-avatarsize="medium"] { --avatar-size: 4.5rem; }
+#chat-root[data-reading-avatarsize="large"] { --avatar-size: 6.5rem; }
+
+#chat-root .mes_avatar {
+    width: var(--avatar-size);
+    height: var(--avatar-size);
+}
+
+/* Narrow screens: the avatar column is taken out of the reading measure, so the same rem values eat a
+   far larger share of a phone's width. Three quarters keeps the step order intact. */
+@media (max-width: 640px) {
+    #chat-root[data-reading-avatarsize="small"] { --avatar-size: 2.25rem; }
+    #chat-root[data-reading-avatarsize="medium"] { --avatar-size: 3.25rem; }
+    #chat-root[data-reading-avatarsize="large"] { --avatar-size: 4.75rem; }
+}
+
+/* VN: the per-message avatars go away and the character gets ONE portrait stage across the top half
+   of the chat.
+
+   The stage is a GRID ROW above the scroller, not an overlay inside it, so the space is genuinely
+   reserved: the log cannot render into it and cannot scroll through it. `.chat-cell` is the grid item
+   the app shell places (col 2, row 2); it splits that cell into the stage row and the scroller row.
+
+   50% because the row is a percentage of a DEFINITE height - the cell comes from the shell's
+   `minmax(0,1fr)` inside a 100dvh grid - so it is half of the chat area as it actually renders, with
+   no viewport arithmetic guessing at the top bar and composer. The first attempt made #chat a
+   `container-type: size` and asked for 50cqh; that stopped the scroller constraining its content and
+   #chat grew to 8794px (measured). A percentage row has no such circularity.
+
+   Off VN the stage is display:none and the auto row collapses to zero, so the layout is byte-identical
+   to before this control existed. It renders in every mode rather than mounting on the pref: a size
+   click must not restructure the scroller's child list mid-session. */
+.chat-cell {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    min-height: 0;
+    min-width: 0;
+}
+
+/* Both rows are assigned EXPLICITLY. A display:none stage stops being a grid item, so with auto
+   placement the scroller slid up into row 1 (auto) and took its content height instead of the cell's
+   - measured 1807px against a 8794px cell. Pinned rows leave row 1 simply empty and zero-high. */
+.chat-cell > .vn-stage { grid-row: 1; }
+.chat-cell > #chat { grid-row: 2; }
+
+/* --vn-split is the drag's stored fraction, written inline on #chat-root by reading_prefs.zig; the
+   50% here is the unset default and what a reset (Home / dblclick) returns to. */
+#chat-root[data-reading-avatarsize="vn"] .chat-cell {
+    grid-template-rows: var(--vn-split, 50%) minmax(0, 1fr);
+}
+
+#chat-root[data-reading-avatarsize="vn"] .mes_avatar { display: none; }
+
+#chat-root[data-reading-avatarsize="vn"] .vn-stage {
+    display: block;
+    position: relative;
+    min-height: 0;
+    border-bottom: 1px solid var(--color-border-soft);
+}
+
+/* The split handle: the horizontal twin of .chat-resize, same idea and same affordance. A 12px grab
+   strip straddling the boundary (so the target is reachable from either side), showing a 2px accent
+   line only on hover, focus or drag. touch-action none because a vertical drag inside a scroller
+   would otherwise be claimed as a scroll gesture before pointermove ever fires. */
+#chat-root[data-reading-avatarsize="vn"] .vn-resize {
+    position: absolute;
+    inset-inline: 0;
+    bottom: -6px;
+    z-index: 3;
+    height: 12px;
+    cursor: row-resize;
+    touch-action: none;
+    user-select: none;
+}
+
+#chat-root[data-reading-avatarsize="vn"] .vn-resize::before {
+    content: "";
+    position: absolute;
+    inset-inline: 8px;
+    top: 5px;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--color-accent);
+    opacity: 0;
+    transition: opacity 150ms ease;
+}
+
+#chat-root[data-reading-avatarsize="vn"] .vn-resize:hover::before,
+#chat-root[data-reading-avatarsize="vn"] .vn-resize:focus-visible::before {
+    opacity: 0.7;
+}
+
+#chat-root[data-reading-avatarsize="vn"] .vn-resize.is-dragging::before {
+    opacity: 1;
+}
+
+#chat-root[data-reading-avatarsize="vn"] .vn-stage-img {
+    width: 100%;
+    height: 100%;
+    /* Contain, not cover: a character card is 2:3 and must not be cropped to a letterbox strip.
+       Top-anchored so what pressure there is eats the feet rather than the face. */
+    object-fit: contain;
+    object-position: center top;
+}
+
+.vn-stage { display: none; }
 
 /* The comfort ceiling on line length. A fixed px measure yields MORE characters per line as the text
    shrinks (40rem is ~75ch at the default size but ~84ch a size down), past the 45-75ch reading band.
@@ -971,7 +1093,7 @@
     .mes {
         font-size: 0.92rem;
         line-height: 1.55;
-        gap: 0.5rem 0.75rem;
+        gap: 0.75rem;
         padding-inline-start: 0.75rem;
     }
 
@@ -1164,6 +1286,20 @@
     border-radius: var(--radius-full);
     background: var(--color-faint);
 }
+
+/* In the top bar the dot is the only colour in a row of monochrome chrome, so it gets a soft halo to
+   read as a lit indicator rather than a stray bullet. Scoped to #conn-chip: the same dot inside the
+   connections panel sits among other colour and needs no help. */
+#conn-chip .conn-dot {
+    color: var(--color-faint);
+    box-shadow: 0 0 6px -1px currentcolor;
+}
+
+#conn-chip[data-conn-state="connected"] .conn-dot { color: var(--color-status-success); }
+#conn-chip[data-conn-state="asleep"] .conn-dot,
+#conn-chip[data-conn-state="offline"] .conn-dot { color: var(--color-status-warning); }
+#conn-chip[data-conn-state="err"] .conn-dot { color: var(--color-status-error); }
+#conn-chip[data-conn-state="configured"] .conn-dot { color: var(--color-status-info); }
 [data-conn-state="connected"] .conn-dot { background: var(--color-status-success); }
 [data-conn-state="asleep"] .conn-dot { background: var(--color-status-warning); }
 [data-conn-state="offline"] .conn-dot { background: var(--color-status-warning); }
@@ -1202,6 +1338,10 @@
 #chat-root[data-reading-theme="paper"] .seg-btn[data-reading-set="theme"][data-reading-val="paper"],
 #chat-root[data-reading-avatars="on"] .seg-btn[data-reading-set="avatars"][data-reading-val="on"],
 #chat-root[data-reading-avatars="off"] .seg-btn[data-reading-set="avatars"][data-reading-val="off"],
+#chat-root[data-reading-avatarsize="small"] .seg-btn[data-reading-set="avatarsize"][data-reading-val="small"],
+#chat-root[data-reading-avatarsize="medium"] .seg-btn[data-reading-set="avatarsize"][data-reading-val="medium"],
+#chat-root[data-reading-avatarsize="large"] .seg-btn[data-reading-set="avatarsize"][data-reading-val="large"],
+#chat-root[data-reading-avatarsize="vn"] .seg-btn[data-reading-set="avatarsize"][data-reading-val="vn"],
 #chat-root[data-reading-focus="on"] .seg-btn[data-reading-set="focus"][data-reading-val="on"],
 #chat-root[data-reading-focus="off"] .seg-btn[data-reading-set="focus"][data-reading-val="off"] {
     background: var(--color-surface-2);
@@ -1392,7 +1532,6 @@ html[data-background="on"] body::before {
 /* The model's thinking above the spoken turn: quiet mono meta-chrome, never the character's serif
    voice, so the eye reads it as stage direction rather than speech. */
 .mes_reasoning {
-    grid-column: 2;
     margin-block-end: 0.5rem;
 }
 

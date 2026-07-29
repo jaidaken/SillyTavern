@@ -121,6 +121,16 @@ pub fn rectWidth(el: js.Object) ?f64 {
     return rect.get(f64, "width") catch null;
 }
 
+/// getBoundingClientRect().top and .height together: a vertical drag needs both, and reading them
+/// from ONE rect call keeps them from straddling a layout change mid-gesture.
+pub fn rectTopHeight(el: js.Object) ?struct { top: f64, height: f64 } {
+    const rect = el.call(js.Object, "getBoundingClientRect", .{}) catch return null;
+    defer rect.deinit();
+    const t = rect.get(f64, "top") catch return null;
+    const h = rect.get(f64, "height") catch return null;
+    return .{ .top = t, .height = h };
+}
+
 pub fn addClass(el: js.Object, comptime name: []const u8) void {
     const cl = el.get(js.Object, "classList") catch return;
     defer cl.deinit();

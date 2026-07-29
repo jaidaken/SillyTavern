@@ -94,9 +94,11 @@ pub fn SysPopover(allocator: zx.Allocator) zx.Component {
 // which is what --topbar-h yields 3rem for on mobile: a 2.6rem bar could not hold one (WD35).
 const gear = "icon grid size-[2.2rem] flex-none cursor-pointer place-items-center rounded-md border border-control-border bg-surface text-muted transition-colors duration-120 ease-[ease] hover:bg-surface-2 hover:text-accent [@media(pointer:coarse)]:size-11";
 
-// 336px wide and 28rem tall at most, dropped from under the bar's right edge: wide enough for the
-// real forms once they wrap, narrow enough that the conversation is still readable beside it. Both
-// caps yield to the viewport so the card can never run off a small window. No shadow: this theme
+// 464px wide and 28rem tall at most, dropped from under the bar's right edge. It was 336px, where
+// every reading row wrapped its label above its buttons and the four-button groups (Layout, Avatar
+// size) wrapped again inside themselves, costing three lines each; 29rem fits the widest group on one
+// line and still leaves the conversation readable beside it. Both caps yield to the viewport so the
+// card can never run off a small window. No shadow: this theme
 // carries depth on borders (WD16). Padding lives on the head, body and footer, not here, so the
 // body's scrollbar rides the card edge instead of floating inside a gutter. z-[70] clears both dock
 // layers, which only holds because shell.zx mounts this outside #topbar's stacking context.
@@ -104,7 +106,7 @@ const gear = "icon grid size-[2.2rem] flex-none cursor-pointer place-items-cente
 // animate-* utilities have to appear here as literals to be generated. It DROPS on `drawer-in`, the
 // bell card's animation rather than the `pop-in` it used when the gear sat in the bottom corner: a
 // card that rose from below a top-bar button read as coming from the wrong place.
-const popover_base = "fixed top-[calc(var(--topbar-h)+0.3rem)] right-2 z-[70] flex max-h-[min(28rem,calc(100dvh_-_var(--topbar-h)_-_1rem))] w-[min(21rem,calc(100vw-1rem))] flex-col overflow-hidden rounded-lg border border-border bg-surface";
+const popover_base = "fixed top-[calc(var(--topbar-h)+0.3rem)] right-2 z-[70] flex max-h-[min(28rem,calc(100dvh_-_var(--topbar-h)_-_1rem))] w-[min(29rem,calc(100vw-1rem))] flex-col overflow-hidden rounded-lg border border-border bg-surface";
 const popover_in = popover_base ++ " animate-drawer-in";
 const popover_out = popover_base ++ " animate-drawer-out pointer-events-none";
 

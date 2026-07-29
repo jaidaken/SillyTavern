@@ -18,11 +18,14 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
     // overflow-anchor stays default (auto): native anchoring holds the viewport as content-visibility
     // renders the prepended off-screen rows, and the glue's element-anchored correction (measuring
     // residual displacement) self-calibrates to ~0 when native already held, so no double-correction.
+    // The shell's centre cell is split into the VN portrait row and the scroller row by .chat-cell.
+    // Off VN the stage row collapses to zero, so this is the same single-scroller layout as before.
     return (
+        <div @allocator={ctx.allocator} class="chat-cell col-start-2 row-start-2">
+        <VnStage />
         <main
-            @allocator={ctx.allocator}
             id="chat"
-            class="group/chat col-start-2 row-start-2 min-h-0 min-w-0 overflow-y-auto [overscroll-behavior:contain] [scrollbar-color:var(--color-border)_transparent] [scrollbar-width:thin]"
+            class="group/chat min-h-0 min-w-0 overflow-y-auto [overscroll-behavior:contain] [scrollbar-color:var(--color-border)_transparent] [scrollbar-width:thin]"
             onclick={message_actions.onLogClick}
             onkeydown={message_actions.onLogKey}
             oninput={message_editor.onInput}
@@ -67,10 +70,50 @@ pub fn MessageLog(ctx: *zx.ComponentCtx(void)) zx.Component {
                 <MessageMenu />
             )}
         </main>
+        </div>
+    );
+}
+
+/// The visual-novel portrait stage, shown when Avatar size is VN. Rendered ALWAYS and hidden by CSS
+/// off #chat-root, like every other reading control: mounting it on the pref would make a size click a
+/// structural insert into the scroller mid-session, and the vdom's positional diff is exactly what the
+/// message list's fixed child shape exists to avoid.
+///
+/// It sits FIRST in the scrolled content and sticks to the top, so it reserves the upper half of the
+/// chat and the log runs beneath it; a card portrait is 2:3, so the image is object-contain and the
+/// stage keeps its own background rather than letting a short portrait show the messages through.
+///
+/// The image is the FULL character card (`../characters/<file>`), not the message thumbnail: a
+/// thumbnail rendered at half the viewport is visibly soft.
+fn VnStage(allocator: zx.Allocator) zx.Component {
+    const c = char_store.selected();
+    const avatar: []const u8 = if (c) |ch| ch.avatar else "";
+    const name: []const u8 = if (c) |ch| ch.name else "";
+    return (
+        <div @allocator={allocator} class="vn-stage">
+            { if (avatar.len > 0) (
+                <img class="vn-stage-img" src={char_data.fileUrl(allocator, "characters", avatar)} alt={name} aria-hidden="true" />
+            ) }
+            <div
+                class="vn-resize"
+                role="separator"
+                tabindex="0"
+                aria-label="Resize portrait height"
+                aria-orientation="horizontal"
+                onpointerdown={reading_prefs.onVnSplitDown}
+                onpointermove={reading_prefs.onVnSplitMove}
+                onpointerup={reading_prefs.onVnSplitUp}
+                onpointercancel={reading_prefs.onVnSplitCancel}
+                onkeydown={reading_prefs.onVnSplitKey}
+                ondblclick={reading_prefs.onVnSplitDblclick}
+            ></div>
+        </div>
     );
 }
 
 const zx = @import("zx");
+const char_store = @import("../cast/character_store.zig");
+const char_data = @import("../cast/char_data.zig");
 const message_actions = @import("./message_actions.zig");
 const message_editor = @import("./message_editor.zig");
 const reader = @import("./reader.zig");

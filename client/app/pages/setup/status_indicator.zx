@@ -10,7 +10,13 @@ pub fn StatusIndicator(allocator: zx.Allocator) zx.Component {
         <div
             @allocator={allocator}
             id="conn-chip"
-            class="flex flex-none items-center gap-1.5 rounded-md border border-border bg-surface-2 px-2 py-1"
+            // Built to sit in the same set as the bell and the gear beside it: same 2.2rem height,
+            // same rounding, same control-border and surface tokens, so the three read as one row of
+            // chrome rather than a panel widget parked in a bar. It is NOT interactive (role=status),
+            // so it takes no hover or focus treatment - matching those would promise a click.
+            // The word echoes the wordmark's beta badge (mono, uppercase, wide tracking), which is the
+            // bar's existing vocabulary for a small standing label.
+            class="flex h-[2.2rem] flex-none items-center gap-2 rounded-md border border-control-border bg-surface px-2.5 max-[480px]:px-2 [@media(pointer:coarse)]:h-11"
             data-conn-state={connection.stateName()}
             // A live region announces its TEXT changing, never an aria-label changing, so the word
             // below is a real text node and carries no aria-hidden. It also stays visible at every
@@ -19,7 +25,7 @@ pub fn StatusIndicator(allocator: zx.Allocator) zx.Component {
             role="status"
         >
             <span class="conn-dot flex-none" aria-hidden="true"></span>
-            <span class="font-mono text-[0.66rem] leading-ui text-muted">{connection.statusWord()}</span>
+            <span class="font-mono text-[0.6rem] leading-none font-medium tracking-[0.12em] text-muted uppercase">{connection.statusWord()}</span>
         </div>
     );
 }

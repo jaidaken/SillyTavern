@@ -544,6 +544,15 @@ pub fn encodeUriComponent(alloc: Allocator, s: []const u8) Allocator.Error![]u8 
     return try out.toOwnedSlice(alloc);
 }
 
+/// "../<dir>/<encoded>": the user-data file itself rather than a thumbnail of it, for the one place
+/// that needs full resolution (the VN portrait stage renders at half the viewport, where a thumbnail
+/// is visibly soft). Same encoding discipline as thumbUrl. Owned result.
+pub fn fileUrl(alloc: Allocator, dir: []const u8, file: []const u8) []const u8 {
+    const enc = encodeUriComponent(alloc, file) catch return "";
+    defer alloc.free(enc);
+    return std.fmt.allocPrint(alloc, "../{s}/{s}", .{ dir, enc }) catch "";
+}
+
 /// "../thumbnail?type=<kind>&file=<encoded>" as the old glue built it. Owned result.
 pub fn thumbUrl(alloc: Allocator, kind: []const u8, file: []const u8) Allocator.Error![]u8 {
     const enc = try encodeUriComponent(alloc, file);

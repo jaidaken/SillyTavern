@@ -35,7 +35,7 @@ const log = std.log.scoped(.panels);
 /// reading state too (which sub-panel shows), keyed by CSS off the same attribute. Size and line
 /// height are NOT here: they are continuous numeric values (a slider each), so they ride their own
 /// keys like the measure drag does, not a preset attribute.
-pub const keys = [_][]const u8{ "measure", "justify", "indent", "paraindent", "font", "theme", "tab", "avatars", "focus" };
+pub const keys = [_][]const u8{ "measure", "justify", "indent", "paraindent", "font", "theme", "tab", "avatars", "avatarsize", "focus" };
 
 /// The pixel width the reading-width drag persists (the drag gesture lives in this module, driven by
 /// the pointer events the door delegates via patch-door D5). A measure PRESET click drops it, inline
@@ -70,6 +70,7 @@ fn defaultFor(comptime key: []const u8) []const u8 {
     if (std.mem.eql(u8, key, "theme")) return "dark";
     if (std.mem.eql(u8, key, "tab")) return "reading";
     if (std.mem.eql(u8, key, "avatars")) return "on";
+    if (std.mem.eql(u8, key, "avatarsize")) return "medium";
     if (std.mem.eql(u8, key, "focus")) return "off";
     return "";
 }
@@ -169,6 +170,7 @@ pub fn applyAll() void {
         defer alloc.free(s);
         if (std.fmt.parseFloat(f64, s)) |lh| setLineHeight(lh, false) else |_| {}
     }
+    applyVnSplit();
     // Focus mode owns runtime activity state, so its boot value is pushed into focus_mode rather than
     // read from the attribute the loop set above.
     {
@@ -371,6 +373,169 @@ pub fn onMeasureDblclick(_: zx.client.Event) void {
     clearMeasure();
 }
 
+// ---- the VN portrait split drag (avatar size = vn) --------------------------------------------
+
+/// How much of the chat cell the VN portrait stage takes, as a PERCENTAGE. A percentage, not pixels,
+/// because the split has to survive a window resize and a dock opening: the same 40% reads correctly
+/// at any cell height, where a stored pixel height would drift into "portrait fills the screen" on a
+/// short window. `.chat-cell`'s first grid row reads it.
+const vn_split_key = "st-reading-vnsplit";
+const vn_split_default: f64 = 50;
+const vn_split_min: f64 = 12;
+const vn_split_max: f64 = 80;
+
+/// Write the split to #chat-root as --vn-split. `persist` also stores it; the drag persists only on
+/// release so a gesture is one write, not one per pointer move.
+fn setVnSplit(pct: f64, persist: bool) void {
+    if (zx.platform.role != .client) return;
+    const root = chatRoot() orelse return;
+    defer root.deinit();
+    const v = std.math.clamp(pct, vn_split_min, vn_split_max);
+    const style = root.ref.get(js.Object, "style") catch return;
+    defer style.deinit();
+    var buf: [24]u8 = undefined;
+    const val = std.fmt.bufPrint(&buf, "{d:.2}%", .{v}) catch return;
+    style.call(void, "setProperty", .{ js.string("--vn-split"), js.string(val) }) catch {};
+    if (persist) {
+        var kb: [16]u8 = undefined;
+        const ks = std.fmt.bufPrint(&kb, "{d:.2}", .{v}) catch return;
+        setItem(vn_split_key, ks);
+    }
+}
+
+/// The stored split back onto #chat-root at boot. Absent leaves the property unset so the stylesheet's
+/// own 50% governs, which is also what a reset returns to.
+fn applyVnSplit() void {
+    const stored = getItem(alloc, vn_split_key) orelse return;
+    defer alloc.free(stored);
+    const pct = std.fmt.parseFloat(f64, stored) catch return;
+    setVnSplit(pct, false);
+}
+
+fn clearVnSplit() void {
+    if (zx.platform.role != .client) return;
+    const root = chatRoot() orelse return;
+    defer root.deinit();
+    const style = root.ref.get(js.Object, "style") catch return;
+    defer style.deinit();
+    const ret = style.call(?js.Value, "removeProperty", .{js.string("--vn-split")}) catch null;
+    if (ret) |r| r.deinit();
+    removeItem(vn_split_key);
+}
+
+var vn_drag: ?js.Object = null;
+
+/// The cell the split is measured against. The handle sits inside the stage, so the geometry has to
+/// come from the stage's PARENT: dragging is "what fraction of the whole chat cell is portrait".
+fn vnCell(handle: js.Object) ?js.Object {
+    return (handle.call(?js.Object, "closest", .{js.string(".chat-cell")}) catch return null) orelse null;
+}
+
+pub fn onVnSplitDown(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    defer target.deinit();
+    const handle = (target.call(?js.Object, "closest", .{js.string(".vn-resize")}) catch return) orelse return;
+    ev.preventDefault();
+    vn_drag = handle;
+    dom_event.addClass(handle, "is-dragging");
+    if (dom_event.eventNum(ev, "pointerId")) |pid| handle.call(void, "setPointerCapture", .{pid}) catch {};
+    dom_event.setBodyUserSelect(true);
+    dom_event.setPtrDrag(true);
+}
+
+/// The pointer's Y as a fraction of the cell: the split follows the cursor exactly, so the boundary
+/// lands where the pointer is rather than accumulating a delta that drifts over a long gesture.
+pub fn onVnSplitMove(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const handle = vn_drag orelse return;
+    const cy = dom_event.eventNum(ev, "clientY") orelse return;
+    const cell = vnCell(handle) orelse return;
+    defer cell.deinit();
+    const geo = dom_event.rectTopHeight(cell) orelse return;
+    if (geo.height <= 0) return;
+    setVnSplit((cy - geo.top) / geo.height * 100, false);
+}
+
+pub fn onVnSplitUp(ev: zx.client.Event) void {
+    endVnDrag(ev);
+}
+
+pub fn onVnSplitCancel(ev: zx.client.Event) void {
+    endVnDrag(ev);
+}
+
+/// Release: persist where the boundary actually landed, read back off the stage rather than off the
+/// last pointer position, so a clamped drag stores the clamped value.
+fn endVnDrag(_: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const handle = vn_drag orelse return;
+    vn_drag = null;
+    defer handle.deinit();
+    if (vnCell(handle)) |cell| {
+        defer cell.deinit();
+        const cell_geo = dom_event.rectTopHeight(cell);
+        const stage = (handle.call(?js.Object, "closest", .{js.string(".vn-stage")}) catch null);
+        if (stage) |s| {
+            defer s.deinit();
+            if (dom_event.rectTopHeight(s)) |sg| {
+                if (cell_geo) |cg| {
+                    if (cg.height > 0) setVnSplit(sg.height / cg.height * 100, true);
+                }
+            }
+        }
+    }
+    dom_event.removeClass(handle, "is-dragging");
+    dom_event.setBodyUserSelect(false);
+    dom_event.setPtrDrag(false);
+    scheduleSave();
+    log.debug("vn split set", .{});
+}
+
+/// Keyboard on the focusable separator (WCAG 2.1.1): arrows move the split 2 points, Home resets.
+pub fn onVnSplitKey(ev: zx.client.Event) void {
+    if (zx.platform.role != .client) return;
+    const target = dom_event.plainTarget(ev) orelse return;
+    defer target.deinit();
+    const handle = (target.call(?js.Object, "closest", .{js.string(".vn-resize")}) catch return) orelse return;
+    defer handle.deinit();
+    const key = ev.key() orelse return;
+    defer zx.allocator.free(key);
+    if (std.mem.eql(u8, key, "Home")) {
+        clearVnSplit();
+        scheduleSave();
+        ev.preventDefault();
+        return;
+    }
+    const step: f64 = if (std.mem.eql(u8, key, "ArrowDown") or std.mem.eql(u8, key, "ArrowRight"))
+        2
+    else if (std.mem.eql(u8, key, "ArrowUp") or std.mem.eql(u8, key, "ArrowLeft"))
+        -2
+    else
+        return;
+    var cur = vn_split_default;
+    if (vnCell(handle)) |cell| {
+        defer cell.deinit();
+        if (handle.call(?js.Object, "closest", .{js.string(".vn-stage")}) catch null) |s| {
+            defer s.deinit();
+            if (dom_event.rectTopHeight(s)) |sg| {
+                if (dom_event.rectTopHeight(cell)) |cg| {
+                    if (cg.height > 0) cur = sg.height / cg.height * 100;
+                }
+            }
+        }
+    }
+    setVnSplit(cur + step, true);
+    scheduleSave();
+    ev.preventDefault();
+}
+
+/// Dblclick on the separator returns the portrait to the stylesheet's half.
+pub fn onVnSplitDblclick(_: zx.client.Event) void {
+    clearVnSplit();
+    scheduleSave();
+}
+
 // ---- the numeric size + line-height sliders (client-only) -------------------------------------
 
 /// Set the inline --reading-size override on #chat-root (rem), clamped to the slider range. `persist`
@@ -558,6 +723,7 @@ fn mergedSettings(settings_str: []const u8) ![]u8 {
     if (getItem(a, measure_px_key)) |px| try prefs.put(a, "measurepx", .{ .string = px });
     if (getItem(a, size_val_key)) |v| try prefs.put(a, "sizeval", .{ .string = v });
     if (getItem(a, lh_val_key)) |v| try prefs.put(a, "lhval", .{ .string = v });
+    if (getItem(a, vn_split_key)) |v| try prefs.put(a, "vnsplit", .{ .string = v });
 
     try root.object.put(a, "clientReadingPrefs", .{ .object = prefs });
 
