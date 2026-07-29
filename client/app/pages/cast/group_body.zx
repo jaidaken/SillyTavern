@@ -86,7 +86,7 @@ fn listView(ctx: *zx.ComponentCtx(void)) zx.Component {
                                 data-group-edit={i}
                                 aria-label={editor.label(ctx.allocator, "Edit group ", g.name)}
                                 onclick={onRowEdit}
-                            ><span class="group-row-dot"></span></button>
+                            ><span class="icon group-row-dot"></span></button>
                         </div>
                     )}
                 </div>

@@ -19,7 +19,7 @@ pub fn Page(ctx: zx.PageContext) !zx.Component {
         <div
             @allocator={ctx.arena}
             id="chat-root"
-            class="grid h-[100dvh] grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden max-[768px]:grid-cols-[0_minmax(0,1fr)_0] max-[768px]:overflow-x-clip max-[640px]:[--reading-measure:100%]"
+            class="app-frame"
         >
             <Shell @rendering={.client} />
             <MessageLog @rendering={.client} />

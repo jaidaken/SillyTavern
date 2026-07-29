@@ -21,7 +21,7 @@ pub fn UndoVersions(allocator: zx.Allocator) zx.Component {
                 <h3 class="undo-ver-title">Earlier versions</h3>
                 <button
                     type="button"
-                    class="undo-ver-refresh"
+                    class="icon undo-ver-refresh"
                     data-icon="close"
                     data-undo-close="1"
                     aria-label="Close history"
@@ -36,7 +36,7 @@ pub fn UndoVersions(allocator: zx.Allocator) zx.Component {
                 <ul class="undo-ver-list">
                     { for (store.undo.versions.items) |v| (
                         <li class="undo-ver-row">
-                            <div class="undo-ver-preview">{v.mes}</div>
+                            <div class="undo-ver-preview font-serif">{v.mes}</div>
                             <div class="undo-ver-foot">
                                 <span class="undo-ver-time">{undo.fmtTs(allocator, v.backup_ts)}</span>
                                 <button
@@ -73,7 +73,7 @@ pub fn UndoSnapshots(allocator: zx.Allocator) zx.Component {
                     <h2 class="undo-snap-title">Chat snapshots</h2>
                     <button
                         type="button"
-                        class="undo-snap-refresh"
+                        class="icon undo-snap-refresh"
                         data-icon="close"
                         data-undo-close="1"
                         aria-label="Close snapshots"
@@ -89,7 +89,7 @@ pub fn UndoSnapshots(allocator: zx.Allocator) zx.Component {
                         <ul class="undo-snap-list">
                             { for (store.undo.snapshots.items) |s| (
                                 <li class="undo-snap-row">
-                                    <div class="undo-snap-preview">{s.last_mes_preview}</div>
+                                    <div class="undo-snap-preview font-serif">{s.last_mes_preview}</div>
                                     <div class="undo-snap-foot">
                                         <div class="undo-snap-meta">
                                             <span class="undo-ver-time">{undo.fmtTs(allocator, s.backup_ts)}</span>
@@ -124,11 +124,11 @@ pub fn UndoSnapshots(allocator: zx.Allocator) zx.Component {
 // while they leave. Literals so the tailwind scanner generates the animate-* utilities; store.undo
 // keeps `mode` through the fade so the mount survives until the timer commits.
 const versions_common = "undo-ver-btn";
-const versions_in = versions_common ++ " animate-drawer-in";
-const versions_out = versions_common ++ " animate-drawer-out pointer-events-none";
+const versions_in = versions_common ++ " chat-versions-in";
+const versions_out = versions_common ++ " chat-versions-out";
 const snaps_common = "undo-snap-btn";
-const snaps_in = snaps_common ++ " animate-drawer-in";
-const snaps_out = snaps_common ++ " animate-drawer-out pointer-events-none";
+const snaps_in = snaps_common ++ " chat-snaps-in";
+const snaps_out = snaps_common ++ " chat-snaps-out";
 
 const zx = @import("zx");
 const store = @import("../platform/store.zig");

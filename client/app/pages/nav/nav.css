@@ -3,11 +3,27 @@
    tokens that drive it (glue/css/tokens.css, glue/css/shared.css), because it is one movement two
    elements make together. */
 
+/* ---- Converted off the utility classes, 11 class attributes. Selectors, wrappers and
+   declarations are the ones utilities.css emitted; only the class NAME changed.
+   This block sits ABOVE the page's authored rules because that is where the utilities sat:
+   an authored rule is written to beat a utility at equal specificity (.composer-stop's
+   display:none over btn_base's grid), and appending would have handed the win back. ---- */
+.nav-list-in { animation:var(--animate-drawer-in) }
+.nav-list-out { animation:var(--animate-menu-out); pointer-events:none }
+.nav-tab-left { border-top-right-radius:var(--radius-md);border-bottom-right-radius:var(--radius-md); border-left-style:var(--tw-border-style);border-left-width:0 }
+.nav-tab-right { border-top-left-radius:var(--radius-md);border-bottom-left-radius:var(--radius-md); border-right-style:var(--tw-border-style);border-right-width:0 }
+.nav-frame-out { pointer-events:none }
+.nav-backdrop-out { animation:var(--animate-fade-out) }
+.nav-card-out { animation:var(--animate-palette-out) }
+.nav-row-off { color:var(--color-muted) }
+.nav-row-on { background-color:var(--color-tool-on); color:var(--color-text) }
+.nav-popover-in { animation:var(--animate-drawer-in) }
+.nav-popover-out { animation:var(--animate-drawer-out); pointer-events:none }
+
 /* ---- Converted off the utility classes, 51 class attributes. Selectors, wrappers and
    declarations are the ones utilities.css emitted; only the class NAME changed. ---- */
 .dd-anchor { position:relative; display:inline-block }
 .dd-face { text-overflow:ellipsis; white-space:nowrap; overflow:hidden }
-.dd-caret-icon:before { content:"";width:1.1rem;height:1.1rem;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;mask:var(--i) center / contain no-repeat;background:currentColor;display:block }
 .dd-caret-icon { flex-shrink:0 }
 .dd-dismiss { position:fixed; inset:0; z-index:30 }
 .dd-button { display:inline-flex; min-width:10rem; max-width:100%; cursor:pointer; align-items:center; justify-content:space-between; gap:calc(var(--spacing) * 2); border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-surface); padding-inline:calc(var(--spacing) * 3); padding-block:.4rem; font-family:var(--font-mono); font-size:var(--text-sm); color:var(--color-text); transition-property:color,background-color,border-color,outline-color,text-decoration-color,fill,stroke,--tw-gradient-from,--tw-gradient-via,--tw-gradient-to;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
@@ -23,7 +39,6 @@
 .dd-demo-line { font-family:var(--font-mono); font-size:var(--text-xs); color:var(--color-faint) }
 .dd-demo-value { color:var(--color-accent) }
 .edgetabs-mount { display:contents }
-.edge-tab:before { content:"";width:1.1rem;height:1.1rem;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;mask:var(--i) center / contain no-repeat;background:currentColor;display:block }
 .edge-tab { position:fixed; top:calc(var(--topbar-h) + .5rem); z-index:40; display:grid; width:2.4rem;height:2.4rem; cursor:pointer; place-items:center; border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-border); background-color:var(--color-surface-2); transition-property:opacity;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.2s;transition-duration:.2s; --tw-ease:ease;transition-timing-function:ease }
 @media (hover:hover) { .edge-tab:hover { color:var(--color-accent) } }
 .edge-tab:focus-visible { pointer-events:auto; opacity:1 }
@@ -69,13 +84,11 @@
 .sysmenu-look { display:flex; flex-direction:column; gap:calc(var(--spacing) * 3) }
 .sysmenu-group { display:flex; flex-direction:column; gap:var(--spacing) }
 .sysmenu-seg-row { display:flex; gap:var(--spacing) }
-.sysmenu-gear:before { content:"";width:1.1rem;height:1.1rem;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;mask:var(--i) center / contain no-repeat;background:currentColor;display:block }
 .sysmenu-gear { display:grid; width:2.2rem;height:2.2rem; flex:none; cursor:pointer; place-items:center; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-surface); color:var(--color-muted); transition-property:color,background-color,border-color,outline-color,text-decoration-color,fill,stroke,--tw-gradient-from,--tw-gradient-via,--tw-gradient-to;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
 @media (hover:hover) { .sysmenu-gear:hover { background-color:var(--color-surface-2); color:var(--color-accent) } }
 @media (pointer:coarse) { .sysmenu-gear { width:calc(var(--spacing) * 11);height:calc(var(--spacing) * 11) } }
 .sysmenu-popover { position:fixed; top:calc(var(--topbar-h) + .3rem); right:calc(var(--spacing) * 2); z-index:70; display:flex; max-height:min(28rem, calc(100dvh - var(--topbar-h) - 1rem)); width:min(29rem,100vw - 1rem); flex-direction:column; overflow:hidden; border-radius:var(--radius-lg); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-border); background-color:var(--color-surface) }
 .sysmenu-heading { font-family:var(--font-mono); font-size:var(--text-xs); --tw-font-weight:var(--font-weight-medium);font-weight:var(--font-weight-medium); --tw-tracking:.1em;letter-spacing:.1em; color:var(--color-muted); text-transform:uppercase }
-.sysmenu-close:before { content:"";width:1.1rem;height:1.1rem;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;mask:var(--i) center / contain no-repeat;background:currentColor;display:block }
 .sysmenu-close { display:grid; width:1.6rem;height:1.6rem; flex:none; cursor:pointer; place-items:center; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:0; background-color:#0000; color:var(--color-muted) }
 @media (hover:hover) { .sysmenu-close:hover { background-color:var(--color-surface-2); color:var(--color-text) } }
 .sysmenu-body { flex:1; overflow-y:auto; padding-inline:calc(var(--spacing) * 3); padding-block:calc(var(--spacing) * 3); scrollbar-width:thin }

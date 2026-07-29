@@ -10,6 +10,7 @@ backgrounds-body
 before:right-[5px]
 bg-tile
 bg-tile-action
+bg-tile-delete
 bg-upload-file
 bg-upload-row
 cfg-reset
@@ -82,6 +83,7 @@ group-panel
 group-quick
 group-quick-empty
 group-roster
+group-row-dot
 group-row-edit
 group-row-wrap
 group/row
@@ -127,6 +129,8 @@ setting-note
 setting-row
 settings-body
 settings-tabs
+setup-wi-disable-text-4
+setup-wi-recursive-hint-text-8
 tpl-preset-retry
 wi-body
 wi-books

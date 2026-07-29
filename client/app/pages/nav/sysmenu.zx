@@ -92,7 +92,7 @@ pub fn SysPopover(allocator: zx.Allocator) zx.Component {
 
 // The bell's twin, at the bar's far right. It grows to the 44px tap minimum on a coarse pointer,
 // which is what --topbar-h yields 3rem for on mobile: a 2.6rem bar could not hold one (WD35).
-const gear = "sysmenu-gear";
+const gear = "icon sysmenu-gear";
 
 // 464px wide and 28rem tall at most, dropped from under the bar's right edge. It was 336px, where
 // every reading row wrapped its label above its buttons and the four-button groups (Layout, Avatar
@@ -107,12 +107,12 @@ const gear = "sysmenu-gear";
 // bell card's animation rather than the `pop-in` it used when the gear sat in the bottom corner: a
 // card that rose from below a top-bar button read as coming from the wrong place.
 const popover_base = "sysmenu-popover";
-const popover_in = popover_base ++ " animate-drawer-in";
-const popover_out = popover_base ++ " animate-drawer-out pointer-events-none";
+const popover_in = popover_base ++ " nav-popover-in";
+const popover_out = popover_base ++ " nav-popover-out";
 
 const heading = "sysmenu-heading";
 
-const close_btn = "sysmenu-close";
+const close_btn = "icon sysmenu-close";
 
 // The one scrolling region. The card holds its size and this grows a scrollbar, which is what keeps
 // a full-size form from turning the card into the overlay it must not be. It carries data-sys-body,

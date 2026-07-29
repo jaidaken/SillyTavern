@@ -213,11 +213,11 @@ def main():
         for tok, p in sorted(used.items()):
             if tok in ALLOW or is_defined(tok):
                 continue
-            # a variant token compiles to an escaped selector carrying the WHOLE token, so look for
-            # the token itself first; only then fall back to the bare utility after the last colon.
-            # (an earlier version stripped [..] off the head, which silently matched top-[var(--x)]
-            # against any .top- rule and let a genuinely undefined utility through)
-            if is_defined(tok.rstrip("!")) or is_defined(tok.split(":")[-1].rstrip("!")):
+            # A variant token compiles to an escaped selector carrying the WHOLE token, so the
+            # token itself is the only thing worth looking for. Falling back to the bare utility
+            # after the last colon passed `max-[480px]:px-2` on the strength of an unrelated `.px-2`,
+            # and the chip kept its desktop padding on a phone with the build green.
+            if is_defined(tok.rstrip("!")):
                 continue
             undefined.append((tok, p))
         print(f"check 2 undefined: {len(undefined)} class(es) used in markup with no rule in the stylesheet")

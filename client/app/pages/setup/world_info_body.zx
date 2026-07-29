@@ -139,7 +139,7 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         <button class={ghost_btn} type="button" data-wi-back="1" onclick={onCloseBook}>Back</button>
                         <h3 class="setup-wi-disable-box-3">{openTitle()}</h3>
                         {if (!readOnly()) (
-                            <button class={row_action} type="button" data-icon="pencil" data-wi-rename="1" aria-label="Rename this lorebook" onclick={onRenameBook}><span class="setup-wi-disable-text-4"></span></button>
+                            <button class={row_action} type="button" data-icon="pencil" data-wi-rename="1" aria-label="Rename this lorebook" onclick={onRenameBook}><span class="icon setup-wi-disable-text-4"></span></button>
                         )}
                     </div>
                     {if (readOnly()) (
@@ -238,9 +238,9 @@ pub fn WorldInfoBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                                         <span class="setup-wi-recursive-hint-text-7">{m.name}</span>
                                     </button>
                                     <button class={row_action} type="button" data-icon="download" data-wi-export={m.file_id}
-                                        aria-label={label(ctx.allocator, "Export ", m.name)} onclick={onExportBook}><span class="setup-wi-recursive-hint-text-8"></span></button>
+                                        aria-label={label(ctx.allocator, "Export ", m.name)} onclick={onExportBook}><span class="icon setup-wi-recursive-hint-text-8"></span></button>
                                     <button class={row_action} type="button" data-icon="trash" data-wi-delete={m.file_id}
-                                        aria-label={label(ctx.allocator, "Delete ", m.name)} onclick={onDeleteBook}><span class="setup-wi-recursive-hint-text-8"></span></button>
+                                        aria-label={label(ctx.allocator, "Delete ", m.name)} onclick={onDeleteBook}><span class="icon setup-wi-recursive-hint-text-8"></span></button>
                                 </li>
                             )}
                         </ul>

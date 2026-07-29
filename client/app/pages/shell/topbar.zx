@@ -15,7 +15,7 @@ pub fn TopBar(allocator: zx.Allocator) zx.Component {
             class="topbar"
         >
             <h1
-                class="wordmark"
+                class="wordmark font-serif"
                 aria-label="SillyTavern beta"
             >
                 <span class="shell-topbar-part-2" aria-hidden="true">SillyTavern</span>

@@ -3,7 +3,7 @@
 // and then anchors over the top bar (WD36/WD37).
 pub fn Layout(ctx: zx.LayoutContext, children: zx.Component) zx.Component {
     return (
-        <html @allocator={ctx.arena} lang="en" class="h-full scheme-dark">
+        <html @allocator={ctx.arena} lang="en" class="app-html">
             <head>
                 <meta charset="UTF-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -19,9 +19,9 @@ pub fn Layout(ctx: zx.LayoutContext, children: zx.Component) zx.Component {
                 <link rel="stylesheet" href="/glue/app.css" />
             </head>
 
-            <body class="h-full bg-bg pl-[env(safe-area-inset-left)] font-serif text-base leading-ui text-text antialiased [text-rendering:optimizeLegibility] pr-[env(safe-area-inset-right)] max-[640px]:text-[0.92rem]">
+            <body class="app-body font-serif">
                 <a
-                    class="absolute -top-12 left-2 z-40 rounded-md border border-border bg-surface-2 px-3 py-2 text-text no-underline transition-[top] duration-120 ease-[ease] focus:top-2"
+                    class="skip-link"
                     href="#send_textarea"
                 >Skip to message input</a>
                 {children}

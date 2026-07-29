@@ -17,9 +17,9 @@
 // controls are real buttons with their own bound handlers.
 
 const read_label = "cast-read-label";
-const read_value = "cast-read-value";
-const read_empty = "cast-read-empty";
-const section_title = "cast-section-title";
+const read_value = "cast-read-value font-serif";
+const read_empty = "cast-read-empty font-serif";
+const section_title = "cast-section-title font-serif";
 const field_label = "setting-label cast-field-label";
 const field_hint = "setting-note cast-field-hint";
 const field_col = "setting-col cast-field-col";
@@ -34,7 +34,7 @@ const edit_btn = "char-page-edit " ++ action_btn;
 const greeting_btn = "cast-greeting-btn " ++ action_btn;
 // The header card actions. Delete wears the danger hover, matching character_actions.zx's row.
 const header_act = "cast-header-act";
-const header_danger = header_act ++ " hover:bg-danger-hover hover:outline-1 hover:outline-danger-ring";
+const header_danger = header_act ++ " cast-header-danger";
 const back_btn = "cast-back-btn";
 
 const section_list: []const character_page.Section = &character_page.sections;
@@ -61,7 +61,7 @@ pub fn CharacterPageBody(ctx: *zx.ComponentCtx(void)) zx.Component {
             <div class="card-page">
                 <button id="card-editor-back" type="button" class={back_btn} onclick={onBack}>Back</button>
                 {if (selected == null) (
-                    <span class="card-none-text">No character selected.</span>
+                    <span class="card-none-text font-serif">No character selected.</span>
                 ) else (
                     <div class="card-pick-row">
                         <img
@@ -73,7 +73,7 @@ pub fn CharacterPageBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                             height="48"
                         />
                         <div class="card-avatar-wrap">
-                            <h2 id="panel-heading" class="card-heading">{headerName(ctx.allocator)}</h2>
+                            <h2 id="panel-heading" class="card-heading font-serif">{headerName(ctx.allocator)}</h2>
                             {if (card_editor.value(.character_version).len > 0) (
                                 <p class="card-version">Version {card_editor.value(.character_version)}</p>
                             ) else (

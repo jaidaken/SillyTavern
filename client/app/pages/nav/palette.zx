@@ -87,18 +87,18 @@ pub fn Palette(ctx: *zx.ComponentCtx(void)) zx.Component {
 // shift under the query as rows drop out. Modest and centred, never full-bleed.
 const frame = "palette-frame";
 // While the card fades out the frame drops its pointer events so a click reaches the page behind it.
-const frame_out = frame ++ " pointer-events-none";
+const frame_out = frame ++ " nav-frame-out";
 
 // Close-only (WD24, see the component doc): the palette appears instantly, so backdrop and card carry
 // NO enter animation; they gain the exit utilities only while closing (literals so the scanner emits
 // them). The dimming backdrop fades out with the card.
 const backdrop = "palette-backdrop";
-const backdrop_out = backdrop ++ " animate-fade-out";
+const backdrop_out = backdrop ++ " nav-backdrop-out";
 
 // Depth on borders, no shadow: the house convention for this dark theme (WD16). The card zooms out a
 // touch on `palette-out` as a dialog leaving; no matching enter, per WD24.
 const card = "palette-card";
-const card_out = card ++ " animate-palette-out";
+const card_out = card ++ " nav-card-out";
 
 const title = "palette-title";
 
@@ -109,8 +109,8 @@ const list = "palette-list";
 // The highlighted row wears the same tool-on ground the section switcher's current control does, so
 // one look means "this is the one" across the whole app.
 const row_base = "palette-row";
-const row_off = row_base ++ " text-muted";
-const row_on = row_base ++ " bg-tool-on text-text";
+const row_off = row_base ++ " nav-row-off";
+const row_on = row_base ++ " nav-row-on";
 
 const group_cls = "palette-group";
 

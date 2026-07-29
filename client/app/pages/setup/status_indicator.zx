@@ -16,7 +16,7 @@ pub fn StatusIndicator(allocator: zx.Allocator) zx.Component {
             // so it takes no hover or focus treatment - matching those would promise a click.
             // The word echoes the wordmark's beta badge (mono, uppercase, wide tracking), which is the
             // bar's existing vocabulary for a small standing label.
-            class="max-[480px]:px-2 setup-conn-chip"
+            class="setup-conn-chip"
             data-conn-state={connection.stateName()}
             // A live region announces its TEXT changing, never an aria-label changing, so the word
             // below is a real text node and carries no aria-hidden. It also stays visible at every

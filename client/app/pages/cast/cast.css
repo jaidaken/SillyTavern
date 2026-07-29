@@ -1,5 +1,24 @@
 /* Cast: character-row actions. */
 
+/* ---- Converted off the utility classes, 4 class attributes. Selectors, wrappers and
+   declarations are the ones utilities.css emitted; only the class NAME changed.
+   This block sits ABOVE the page's authored rules because that is where the utilities sat:
+   an authored rule is written to beat a utility at equal specificity (.composer-stop's
+   display:none over btn_base's grid), and appending would have handed the win back. ---- */
+.cast-act { color:var(--color-muted) }
+@media (hover:hover) { .cast-act:hover { background-color:var(--color-surface-2); color:var(--color-text) } }
+.char-row-act-danger { color:var(--color-muted) }
+@media (hover:hover) { .char-row-act-danger:hover { background-color:var(--color-danger-hover); color:var(--color-text) } }
+@media (hover:hover) { .cast-header-danger:hover { background-color:var(--color-danger-hover); outline-style:var(--tw-outline-style);outline-width:1px; outline-color:var(--color-danger-ring) } }
+.cast-cand-name { min-width:0; flex:1 }
+
+/* ---- Converted off the utility classes, 1 class attributes. Selectors, wrappers and
+   declarations are the ones utilities.css emitted; only the class NAME changed.
+   This block sits ABOVE the page's authored rules because that is where the utilities sat:
+   an authored rule is written to beat a utility at equal specificity (.composer-stop's
+   display:none over btn_base's grid), and appending would have handed the win back. ---- */
+.char-pager { justify-content:space-between }
+
 /* ---- Converted off the utility classes, 132 class attributes. Selectors, wrappers and
    declarations are the ones utilities.css emitted; only the class NAME changed.
    This block sits ABOVE the page's authored rules because that is where the utilities sat:
@@ -41,7 +60,6 @@
 .cast-actions { pointer-events:none; position:absolute; top:50%; right:calc(var(--spacing) * 9); display:flex; --tw-translate-y:calc(calc(1 / 2 * 100%) * -1);translate:var(--tw-translate-x) var(--tw-translate-y); align-items:center; gap:1px; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-border); background-color:var(--color-surface); padding-inline:var(--spacing); padding-block:calc(var(--spacing) * .5); opacity:0; transition-property:opacity;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
 .cast-actions:is(:where(.group\/list)[data-view=grid] *) { top:auto; right:var(--spacing); bottom:1.75rem; left:var(--spacing); --tw-translate-y:0px;translate:var(--tw-translate-x) var(--tw-translate-y); justify-content:center }
 @media (hover:none) { .cast-actions { pointer-events:auto; opacity:1 } }
-.cast-act-2:before { content:"";width:1.1rem;height:1.1rem;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;mask:var(--i) center / contain no-repeat;background:currentColor;display:block }
 .cast-act-2 { display:grid; width:calc(var(--spacing) * 6);height:calc(var(--spacing) * 6); flex:none; cursor:pointer; place-items:center; border-radius:var(--radius-sm); border-style:var(--tw-border-style);border-width:0; background-color:#0000; transition-property:color,background-color,border-color,outline-color,text-decoration-color,fill,stroke,--tw-gradient-from,--tw-gradient-via,--tw-gradient-to;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
 .cast-act-2:focus-visible { outline-style:var(--tw-outline-style);outline-width:1px; outline-style:var(--tw-outline-style);outline-width:2px; outline-offset:1px; outline-color:var(--color-accent) }
 @media not all and (min-width:768px) { .cast-act-2 { width:calc(var(--spacing) * 9);height:calc(var(--spacing) * 9) } }
@@ -141,7 +159,6 @@
 .group-empty-hint { font-size:var(--text-sm); color:var(--color-muted) }
 .cast-group-list { display:flex; min-height:8rem; flex-direction:column; gap:2px }
 .group-row-wrap { position:relative }
-.group-row-dot:before { content:"";width:1.1rem;height:1.1rem;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;mask:var(--i) center / contain no-repeat;background:currentColor;display:block }
 .group-row-edit { position:absolute; top:50%; right:var(--spacing); display:grid; width:calc(var(--spacing) * 7);height:calc(var(--spacing) * 7); --tw-translate-y:calc(calc(1 / 2 * 100%) * -1);translate:var(--tw-translate-x) var(--tw-translate-y); cursor:pointer; place-items:center; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:#29231de6; color:var(--color-muted); opacity:0; transition-property:opacity;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
 @supports (color:color-mix(in lab, red, red)) { .group-row-edit { background-color:color-mix(in oklab, var(--color-surface-2) 90%, transparent) } }
 @media (hover:hover) { .group-row-edit:is(:where(.group\/grow):hover *) { opacity:1 } }

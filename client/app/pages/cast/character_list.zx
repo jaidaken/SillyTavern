@@ -18,7 +18,7 @@
 pub const row_class = "char-item group/row cast-row";
 pub const avatar_class = "char-avatar";
 pub const info_class = "cast-info";
-pub const name_class = "char-name";
+pub const name_class = "char-name font-serif";
 /// Kept for persona_list.zx, whose subtitle IS a description (user-authored, and the only thing a
 /// persona row has to say). The character row swapped its description for meta_class below.
 pub const desc_class = "cast-desc";
@@ -121,9 +121,9 @@ pub fn CharacterList(ctx: *zx.ComponentCtx(void)) zx.Component {
 // A pointer that cannot hover never gets the reveal (the C-CHAR stylesheet zone gates it), so on
 // touch the cluster is simply always up: the alternative there is no access at all.
 const actions_class = "char-row-actions cast-actions";
-const act_base = "char-row-act cast-act-2";
-const act_class = act_base ++ " text-muted hover:bg-surface-2 hover:text-text";
-const act_danger_class = act_base ++ " char-row-act-danger text-muted hover:bg-danger-hover hover:text-text";
+const act_base = "icon char-row-act cast-act-2";
+const act_class = act_base ++ " cast-act";
+const act_danger_class = act_base ++ " char-row-act-danger";
 
 /// Wall-clock epoch ms off `performance`, NOT `Date.now()`: jsz reads a property by walking a js
 /// VALUE, and a static method hanging off a function object (Date) does not resolve, so

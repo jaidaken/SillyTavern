@@ -17,7 +17,7 @@ pub fn GroupEditor(allocator: zx.Allocator, props: Props) zx.Component {
         <div @allocator={allocator} class="group-editor">
             <div class="group-editor-head">
                 <button class={act_btn} type="button" data-group-action="back" onclick={onBack}>Back</button>
-                <span class="group-editor-name">{g.name}</span>
+                <span class="group-editor-name font-serif">{g.name}</span>
                 <button class={act_btn} type="button" data-group-action="rename" onclick={onRename}>Rename</button>
             </div>
 
@@ -118,7 +118,7 @@ pub const act_btn = "group-act-btn " ++ act_base ++ " hover:bg-tool-hover disabl
 pub const act_danger = "group-act-btn group-act-danger " ++ act_base ++ " hover:bg-danger-hover hover:outline-1 hover:outline-danger-ring";
 const member_btn = "group-member-btn";
 const member_danger = "group-member-btn cast-member-danger";
-const cand_name = char_list.name_class ++ " min-w-0 flex-1";
+const cand_name = char_list.name_class ++ " cast-cand-name";
 
 const strategy_options_arr = [_]Dropdown_mod.Option{
     .{ .value = "natural", .label = "Natural order" },

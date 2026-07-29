@@ -64,7 +64,7 @@ fn selectedActions(ctx: *zx.ComponentCtx(void)) zx.Component {
     const p = p_opt.?;
     return (
         <div @allocator={ctx.allocator} class="persona-actions-selected">
-            <div class="persona-actions-name">{p.name}</div>
+            <div class="persona-actions-name font-serif">{p.name}</div>
             <div class="persona-actions-row">
                 <button class={act_btn} type="button" data-persona-action="rename" onclick={ctx.bind(onPersonaAction)}>Rename</button>
                 <button class={act_btn} type="button" data-persona-action="edit" onclick={ctx.bind(onPersonaAction)}>Edit description</button>

@@ -26,13 +26,13 @@ pub fn Home(ctx: *zx.ComponentCtx(void)) zx.Component {
                 <div class="home-inner">
                     <header class="home-header">
                         <p class="home-eyebrow">Welcome back</p>
-                        <h1 class="max-[640px]:text-2xl home-title">Pick up where you left off</h1>
+                        <h1 class="max-[640px]:text-2xl home-title font-serif">Pick up where you left off</h1>
                         <div class="home-actions">
                             <button
                                 type="button"
                                 id="home-resume"
                                 name="home-resume"
-                                class="home-resume-btn"
+                                class="home-resume-btn font-serif"
                                 onclick={ctx.bind(onResume)}
                                 aria-label="Resume the most recent conversation"
                             >Resume last conversation</button>
@@ -63,7 +63,7 @@ pub fn Home(ctx: *zx.ComponentCtx(void)) zx.Component {
                         </div>
                     ) else if (home.recentRows().len == 0) (
                         <div class="home-empty">
-                            <p class="home-empty-title">No conversations yet</p>
+                            <p class="home-empty-title font-serif">No conversations yet</p>
                             <p class="home-hint">Open a character from the sidebar and say hello to start your first one.</p>
                         </div>
                     ) else (
@@ -85,7 +85,7 @@ pub fn Home(ctx: *zx.ComponentCtx(void)) zx.Component {
                                         loading="lazy"
                                     />
                                     <div class="home-thread-text">
-                                        <div class="home-thread-name">{home.rowDisplayName(ctx.allocator, r)}</div>
+                                        <div class="home-thread-name font-serif">{home.rowDisplayName(ctx.allocator, r)}</div>
                                         <div class="home-thread-preview">{r.preview}</div>
                                     </div>
                                     <div class="home-thread-meta">

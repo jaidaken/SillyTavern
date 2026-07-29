@@ -79,7 +79,7 @@ pub fn CharacterToolbar(ctx: *zx.ComponentCtx(void)) zx.Component {
                     onclick={ctx.bind(onGridToggle)}
                 >Grid</button>
             </div>
-            <div class={row_class ++ " char-pager justify-between"} role="group" aria-label="Pagination">
+            <div class={row_class ++ " char-pager"} role="group" aria-label="Pagination">
                 <button type="button" class={tool_class} data-page="prev" aria-label="Previous page" onclick={ctx.bind(onPageStep)}>‹</button>
                 <span class="char-page-label" aria-live="polite">{pageLabel(ctx.allocator, view)}</span>
                 <button type="button" class={tool_class} data-page="next" aria-label="Next page" onclick={ctx.bind(onPageStep)}>›</button>

@@ -35,7 +35,10 @@ def main():
     # Belt and braces on top of the resolver: a token that appears ANYWHERE in the markup as literal
     # text is kept, whatever the resolver made of it. Deleting a rule the resolver failed to see would
     # not fail the class gate either, since the gate is blind to it in exactly the same way.
-    literal = "\n".join(p.read_text(encoding="utf-8") for p in cc.markup_files())
+    literal = set()
+    for p in cc.markup_files():
+        for lit in re.findall(r'"([^"]*)"', p.read_text(encoding="utf-8")):
+            literal.update(lit.split())
     text = UTILITIES.read_text(encoding="utf-8")
     kept, dropped = [], []
     for line in text.split("\n"):

@@ -18,7 +18,7 @@ pub fn PanelHead(allocator: zx.Allocator, props: HeadProps) zx.Component {
                 class="panel-heading"
             >{props.title}</h2>
             <button
-                class="panel-head-actions"
+                class="icon panel-head-actions"
                 data-icon="close"
                 data-side={props.side}
                 type="button"

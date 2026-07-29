@@ -15,7 +15,7 @@ pub fn MessageMenuTrigger(allocator: zx.Allocator, props: MenuTriggerProps) zx.C
         <button
             @allocator={allocator}
             type="button"
-            class="msg-menu-trigger chat-message-menu-part"
+            class="icon msg-menu-trigger chat-message-menu-part"
             data-icon="dots"
             data-msg-menu={props.abs}
             aria-label="Message actions"
@@ -56,8 +56,8 @@ pub fn MessageMenu(allocator: zx.Allocator) zx.Component {
 // opened often, so a slow dismiss drags, WD24), dropping its pointer events while it leaves. Literals
 // so the tailwind scanner generates the animate-* utilities.
 const menu_common = "msg-menu-item";
-const menu_in = menu_common ++ " animate-drawer-in";
-const menu_out = menu_common ++ " animate-menu-out pointer-events-none";
+const menu_in = menu_common ++ " chat-menu-in";
+const menu_out = menu_common ++ " chat-menu-out";
 
 const zx = @import("zx");
 const store = @import("../platform/store.zig");

@@ -17,7 +17,7 @@
 // permanent label about the backend inside the space you write in. The status is the topbar's now
 // (a dot and the model on the connections button, the full line in that panel), so the composer is
 // only the composer. C-CONN-DOT-6 fails if a connection readout reappears in here.
-const btn_base = "composer-btn";
+const btn_base = "icon composer-btn";
 
 pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
     instrument.bumpComposer();
@@ -37,7 +37,7 @@ pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
                 <div class="composer-row">
                     <button
                         type="button"
-                        class={btn_base ++ " bg-transparent text-muted hover:bg-surface-2 hover:text-text"}
+                        class={btn_base ++ " chat-composer-part"}
                         data-icon="menu"
                         aria-label="Chat snapshots"
                         aria-haspopup="dialog"
@@ -48,7 +48,7 @@ pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
                         id="send_textarea"
                         name="message"
                         autocomplete="off"
-                        class="composer-textarea"
+                        class="composer-textarea font-serif"
                         rows="1"
                         placeholder="Type a message..."
                         oninput={ctx.bind(onComposerInput)}
@@ -56,14 +56,14 @@ pub fn Composer(ctx: *zx.ComponentCtx(void)) zx.Component {
                     ></textarea>
                     <button
                         type="button"
-                        class={btn_base ++ " composer-send border-accent bg-accent text-on-accent hover:bg-accent hover:text-on-accent hover:brightness-[1.06]"}
+                        class={btn_base ++ " composer-send chat-send-textarea-part"}
                         data-icon="send"
                         aria-label="Send"
                         onclick={onSend}
                     ></button>
                     <button
                         type="button"
-                        class={btn_base ++ " composer-stop bg-surface-2 text-accent"}
+                        class={btn_base ++ " composer-stop chat-send-textarea-part-2"}
                         data-icon="stop"
                         aria-label="Stop"
                         onclick={onStop}

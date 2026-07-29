@@ -1,6 +1,31 @@
 /* Chat page chrome: everything around the reading surface itself.
    The reading surface lives in glue/css/reading.css (it is styled as one island). */
 
+/* ---- Converted off the utility classes, 7 class attributes. Selectors, wrappers and
+   declarations are the ones utilities.css emitted; only the class NAME changed.
+   This block sits ABOVE the page's authored rules because that is where the utilities sat:
+   an authored rule is written to beat a utility at equal specificity (.composer-stop's
+   display:none over btn_base's grid), and appending would have handed the win back. ---- */
+@media (hover:hover) { .chat-row-danger:hover { background-color:var(--color-danger-hover); outline-style:var(--tw-outline-style);outline-width:1px; outline-color:var(--color-danger-ring) } }
+.chat-menu-in { animation:var(--animate-drawer-in) }
+.chat-menu-out { animation:var(--animate-menu-out); pointer-events:none }
+.chat-versions-in { animation:var(--animate-drawer-in) }
+.chat-versions-out { animation:var(--animate-drawer-out); pointer-events:none }
+.chat-snaps-in { animation:var(--animate-drawer-in) }
+.chat-snaps-out { animation:var(--animate-drawer-out); pointer-events:none }
+
+/* ---- Converted off the utility classes, 4 class attributes. Selectors, wrappers and
+   declarations are the ones utilities.css emitted; only the class NAME changed.
+   This block sits ABOVE the page's authored rules because that is where the utilities sat:
+   an authored rule is written to beat a utility at equal specificity (.composer-stop's
+   display:none over btn_base's grid), and appending would have handed the win back. ---- */
+.chat-chatmgr-search-part { display:inline-flex; cursor:pointer; align-items:center }
+.chat-composer-part { background-color:#0000; color:var(--color-muted) }
+@media (hover:hover) { .chat-composer-part:hover { background-color:var(--color-surface-2); color:var(--color-text) } }
+.chat-send-textarea-part { border-color:var(--color-accent); background-color:var(--color-accent); color:var(--color-on-accent) }
+@media (hover:hover) { .chat-send-textarea-part:hover { background-color:var(--color-accent); color:var(--color-on-accent); --tw-brightness:brightness(1.06);filter:var(--tw-blur,) var(--tw-brightness,) var(--tw-contrast,) var(--tw-grayscale,) var(--tw-hue-rotate,) var(--tw-invert,) var(--tw-saturate,) var(--tw-sepia,) var(--tw-drop-shadow,) } }
+.chat-send-textarea-part-2 { background-color:var(--color-surface-2); color:var(--color-accent) }
+
 /* ---- Converted off the utility classes, 69 class attributes. Selectors, wrappers and
    declarations are the ones utilities.css emitted; only the class NAME changed.
    This block sits ABOVE the page's authored rules because that is where the utilities sat:
@@ -31,7 +56,6 @@
 .chatmgr-status { min-height:calc(var(--spacing) * 4); font-size:var(--text-xs); color:var(--color-muted) }
 .chatmgr-btn { flex:none; cursor:pointer; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-surface-2); padding-inline:calc(var(--spacing) * 3); padding-block:var(--spacing); font-family:var(--font-mono); font-size:var(--text-sm); color:var(--color-text) }
 @media (hover:hover) { .chatmgr-btn:hover { background-color:var(--color-tool-hover) } }
-.chatmgr-row-btn:before { content:"";width:1.1rem;height:1.1rem;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;mask:var(--i) center / contain no-repeat;background:currentColor;display:block }
 .chatmgr-row-btn { display:inline-flex; flex:none; align-items:center; gap:calc(var(--spacing) * 1.5); cursor:pointer; border-radius:.25rem; border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-surface-2); padding-inline:calc(var(--spacing) * 2); padding-block:var(--spacing); font-family:var(--font-mono); font-size:var(--text-xs); color:var(--color-text) }
 @media (hover:hover) { .chatmgr-row-btn:hover { background-color:var(--color-tool-hover) } }
 .chatmgr-row-btn:focus-visible { outline-style:var(--tw-outline-style);outline-width:2px; outline-color:var(--color-tool-ring) }
@@ -48,14 +72,12 @@
 .composer-textarea:focus { border-color:var(--color-accent) }
 .composer-textarea:focus:not(:focus-visible) { --tw-outline-style:none;outline-style:none }
 @media not all and (min-width:640px) { .composer-textarea { max-height:30vh; padding:calc(var(--spacing) * 2); font-size:16px } }
-.composer-btn:before { content:"";width:1.1rem;height:1.1rem;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;mask:var(--i) center / contain no-repeat;background:currentColor;display:block }
 .composer-btn { display:grid; width:2.7rem;height:2.7rem; flex:none; cursor:pointer; place-items:center; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); transition-property:background,color,filter,transform;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
 .composer-btn:active { transform:translateY(calc(var(--move) * 1px)) scale(calc(1 - var(--move) * .03)) }
 @media not all and (min-width:640px) { .composer-btn { width:calc(var(--spacing) * 11);height:calc(var(--spacing) * 11) } }
 @media not all and (min-width:640px) { .composer-btn:before { content:var(--tw-content);width:calc(var(--spacing) * 4);height:calc(var(--spacing) * 4) } }
 .chat-message-part { margin-top:.15em; flex:none; cursor:pointer; border-radius:4px; object-fit:cover }
 @media (hover:hover) { .chat-message-part:hover { --tw-brightness:brightness(110%);filter:var(--tw-blur,) var(--tw-brightness,) var(--tw-contrast,) var(--tw-grayscale,) var(--tw-hue-rotate,) var(--tw-invert,) var(--tw-saturate,) var(--tw-sepia,) var(--tw-drop-shadow,) } }
-.chat-message-menu-part:before { content:"";width:1.1rem;height:1.1rem;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;mask:var(--i) center / contain no-repeat;background:currentColor;display:block }
 .chat-message-menu-part { position:absolute; top:var(--spacing); right:var(--spacing); z-index:10; display:grid; width:calc(var(--spacing) * 7);height:calc(var(--spacing) * 7); place-items:center; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:0; background-color:#0000; color:var(--color-muted); opacity:0; transition-property:opacity,color,background;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
 @media (hover:hover) { .chat-message-menu-part:hover { background-color:var(--color-surface-2); color:var(--color-text) } }
 .chat-message-menu-part:focus-visible { opacity:1; outline-style:var(--tw-outline-style);outline-width:1px; outline-style:var(--tw-outline-style);outline-width:2px; outline-offset:1px; outline-color:var(--color-accent) }
@@ -77,7 +99,6 @@
 .chat-resize.is-dragging:before { content:var(--tw-content);opacity:1 }
 .undo-ver-head { display:flex; flex:none; align-items:center; justify-content:space-between; gap:calc(var(--spacing) * 2) }
 .undo-ver-title { font-family:var(--font-mono); font-size:var(--text-xs); --tw-font-weight:var(--font-weight-medium);font-weight:var(--font-weight-medium); --tw-tracking:.08em;letter-spacing:.08em; color:var(--color-muted); text-transform:uppercase }
-.undo-ver-refresh:before { content:"";width:1.1rem;height:1.1rem;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;mask:var(--i) center / contain no-repeat;background:currentColor;display:block }
 .undo-ver-refresh { display:grid; width:calc(var(--spacing) * 7);height:calc(var(--spacing) * 7); flex:none; place-items:center; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:0; background-color:#0000; color:var(--color-muted); transition-property:color,background-color,border-color,outline-color,text-decoration-color,fill,stroke,--tw-gradient-from,--tw-gradient-via,--tw-gradient-to;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
 @media (hover:hover) { .undo-ver-refresh:hover { background-color:var(--color-surface-2); color:var(--color-text) } }
 .undo-ver-refresh:focus-visible { outline-style:var(--tw-outline-style);outline-width:1px; outline-style:var(--tw-outline-style);outline-width:2px; outline-color:var(--color-accent) }
@@ -95,7 +116,6 @@
 @media not all and (min-width:640px) { .undo-snap-surface { padding:0 } }
 .undo-snap-head { display:flex; flex:none; align-items:center; justify-content:space-between; gap:calc(var(--spacing) * 2); border-bottom-style:var(--tw-border-style);border-bottom-width:1px; border-color:var(--color-border); padding:calc(var(--spacing) * 2); padding-left:calc(var(--spacing) * 4) }
 .undo-snap-title { font-family:var(--font-mono); font-size:var(--text-xs); --tw-font-weight:var(--font-weight-medium);font-weight:var(--font-weight-medium); --tw-tracking:.1em;letter-spacing:.1em; color:var(--color-muted); text-transform:uppercase }
-.undo-snap-refresh:before { content:"";width:1.1rem;height:1.1rem;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;mask:var(--i) center / contain no-repeat;background:currentColor;display:block }
 .undo-snap-refresh { display:grid; width:1.9rem;height:1.9rem; flex:none; place-items:center; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:0; background-color:#0000; color:var(--color-muted); transition-property:color,background-color,border-color,outline-color,text-decoration-color,fill,stroke,--tw-gradient-from,--tw-gradient-via,--tw-gradient-to;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
 @media (hover:hover) { .undo-snap-refresh:hover { background-color:var(--color-surface-2); color:var(--color-text) } }
 .undo-snap-refresh:focus-visible { outline-style:var(--tw-outline-style);outline-width:1px; outline-style:var(--tw-outline-style);outline-width:2px; outline-color:var(--color-accent) }

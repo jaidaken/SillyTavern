@@ -54,7 +54,7 @@ pub fn NotifyPopover(allocator: zx.Allocator) zx.Component {
                         >Notifications</h2>
                         <button
                             type="button"
-                            class="notify-popover-close"
+                            class="icon notify-popover-close"
                             data-icon="close"
                             aria-label="Close notifications"
                             onclick={state.onClose}
@@ -72,13 +72,13 @@ pub fn NotifyPopover(allocator: zx.Allocator) zx.Component {
 // The gear's twin, so the pair reads as one set of bar controls rather than two unrelated buttons.
 // `relative` anchors the count chip. It grows to the 44px tap minimum on a coarse pointer, which is
 // what --topbar-h yields 3rem for on mobile: a 2.6rem bar could not hold a 44px target (WD35).
-const bell_base = "notify-bell";
+const bell_base = "icon notify-bell";
 
 // Two literals rather than a computed string: the tailwind scanner reads .zx text, so a utility
 // assembled in Zig is never generated. Open takes the accent because the bell is then the close
 // affordance, exactly as an open side's tab is.
-const bell_idle = bell_base ++ " text-muted";
-const bell_open = bell_base ++ " text-accent";
+const bell_idle = bell_base ++ " notify-bell-idle";
+const bell_open = bell_base ++ " notify-bell-open";
 
 fn bellClass() []const u8 {
     return if (state.isOpen()) bell_open else bell_idle;
@@ -100,8 +100,8 @@ const count_chip = "notify-count-chip";
 // card drops in on `drawer-in` and lifts back out on `drawer-out`, dropping its pointer events while
 // it fades so a click reaches the page behind it.
 const popover_base = "notify-popover";
-const popover_in = popover_base ++ " animate-drawer-in";
-const popover_out = popover_base ++ " animate-drawer-out pointer-events-none";
+const popover_in = popover_base ++ " notify-popover-in";
+const popover_out = popover_base ++ " notify-popover-out";
 
 const zx = @import("zx");
 const state = @import("./notify_bell_state.zig");

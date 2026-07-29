@@ -132,9 +132,19 @@ def markers():
 
 CLASS_ATTR = re.compile(r'class="([^"]*)"')
 CLASS_CONST = re.compile(r'((?:pub\s+)?const\s+\w+\s*=\s*)"([^"]*)"')
+# `class={act_btn ++ " inline-flex cursor-pointer"}`: the literal is a fragment joined to a const, and
+# it carries utilities like any other class text.
+CLASS_EXPR = re.compile(r"class=\{([^}]*)\}")
+# `const bell_open = bell_base ++ " text-accent";`: the variant fragment trails the base it extends.
+CLASS_CONST_TAIL = re.compile(r'((?:pub\s+)?const\s+\w+\s*=\s*[\w.]+\s*\+\+\s*)"([^"]*)"')
 
 
 GENERIC = ("base", "class", "cls", "style", "styles")
+
+# Class names that must stay ON the element, whatever they also do as utilities. `icon` pairs with a
+# data-icon attribute and is selected as `.icon[data-icon="close"]`; `hidden` is the landing's state,
+# pinned by name in the interaction gate. Folding either into a semantic class removes a hook.
+NEVER_FOLD = {"icon", "hidden", "font-serif"}
 
 
 def semantic_name(tokens, marks, shared, page, used, hint, util):
@@ -215,8 +225,8 @@ def main():
         def rewrite(class_text, hint):
             nonlocal converted
             toks = class_text.split()
-            util = [t for t in toks if t in table]
-            keep = [t for t in toks if t not in table]
+            util = [t for t in toks if t in table and t not in NEVER_FOLD]
+            keep = [t for t in toks if t not in table or t in NEVER_FOLD]
             if not util:
                 return None
             key = frozenset(util)
@@ -263,8 +273,22 @@ def main():
             new = rewrite(m.group(2), ident.group(1).replace("_", "-") if ident else "cls")
             return m.group(0) if new is None else f'{m.group(1)}"{new}"'
 
+        def expr_sub(m):
+            if in_comment(m.start()):
+                return m.group(0)
+            above = re.findall(r'id="([\w-]+)"', text[:m.start()])
+            hint = f"{above[-1]}-part" if above else f"{f.stem}-part"
+
+            def lit_sub(lm):
+                new = rewrite(lm.group(1), hint)
+                return lm.group(0) if new is None else f'"{new}"'
+
+            return "class={" + re.sub(r'"([^"]*)"', lit_sub, m.group(1)) + "}"
+
         text = CLASS_ATTR.sub(attr_sub, text)
+        text = CLASS_EXPR.sub(expr_sub, text)
         text = CLASS_CONST.sub(const_sub, text)
+        text = CLASS_CONST_TAIL.sub(const_sub, text)
         if text != original and not a.dry_run:
             f.write_text(text, encoding="utf-8")
 

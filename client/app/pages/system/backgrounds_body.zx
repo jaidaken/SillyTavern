@@ -84,7 +84,7 @@ pub fn BackgroundsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                                     data-bg-rename={b.filename}
                                     aria-label={label(ctx.allocator, "Rename ", b.filename)}
                                     onclick={onRename}
-                                ><span class="bg-tile-delete"></span></button>
+                                ><span class="icon bg-tile-delete"></span></button>
                                 <button
                                     class={tile_action}
                                     type="button"
@@ -92,7 +92,7 @@ pub fn BackgroundsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                                     data-bg-delete={b.filename}
                                     aria-label={label(ctx.allocator, "Delete ", b.filename)}
                                     onclick={onDelete}
-                                ><span class="bg-tile-delete"></span></button>
+                                ><span class="icon bg-tile-delete"></span></button>
                             </div>
                         </div>
                     )}

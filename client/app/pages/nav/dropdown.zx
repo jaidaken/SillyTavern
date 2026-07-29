@@ -72,8 +72,8 @@ const button_cls = "dd-button";
 // closes often so a slow one drags, WD24) and drops its pointer events so the click behind lands. Both
 // literals so the tailwind scanner generates the animate-* utilities.
 const list_base = "dd-list";
-const list_in = list_base ++ " animate-drawer-in";
-const list_out = list_base ++ " animate-menu-out pointer-events-none";
+const list_in = list_base ++ " nav-list-in";
+const list_out = list_base ++ " nav-list-out";
 const option_cls = "dd-option";
 const option_active_cls = "dd-option-active";
 
@@ -109,7 +109,7 @@ pub fn Dropdown(allocator: zx.Allocator, props: Props) zx.Component {
                 class={button_cls}
             >
                 <span class="dd-face">{face}</span>
-                <span class="dd-caret dd-caret-icon" data-icon="chevron-down" aria-hidden="true"></span>
+                <span class="icon dd-caret dd-caret-icon" data-icon="chevron-down" aria-hidden="true"></span>
             </button>
             {if (open) (
                 <div data-dd-dismiss={props.name} aria-hidden="true" class="dd-dismiss"></div>

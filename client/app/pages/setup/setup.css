@@ -2,6 +2,20 @@
    the macro reference. These are the dock's Setup side, so they share the panel chrome in
    shell.css and add only what their own controls need. */
 
+/* ---- Converted off the utility classes, 1 class attributes. Selectors, wrappers and
+   declarations are the ones utilities.css emitted; only the class NAME changed.
+   This block sits ABOVE the page's authored rules because that is where the utilities sat:
+   an authored rule is written to beat a utility at equal specificity (.composer-stop's
+   display:none over btn_base's grid), and appending would have handed the win back. ---- */
+.setup-notice:empty { display:none }
+
+/* ---- Converted off the utility classes, 1 class attributes. Selectors, wrappers and
+   declarations are the ones utilities.css emitted; only the class NAME changed.
+   This block sits ABOVE the page's authored rules because that is where the utilities sat:
+   an authored rule is written to beat a utility at equal specificity (.composer-stop's
+   display:none over btn_base's grid), and appending would have handed the win back. ---- */
+.setup-preset-unreadable-part { grid-column:1/-1 }
+
 /* ---- Converted off the utility classes, 126 class attributes. Selectors, wrappers and
    declarations are the ones utilities.css emitted; only the class NAME changed.
    This block sits ABOVE the page's authored rules because that is where the utilities sat:
@@ -95,6 +109,9 @@
 @media (hover:hover) { .tpl-preset-retry:hover { color:var(--color-text) } }
 .setup-conn-chip { display:flex; height:2.2rem; flex:none; align-items:center; gap:calc(var(--spacing) * 2); border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-surface); padding-inline:calc(var(--spacing) * 2.5) }
 @media (pointer:coarse) { .setup-conn-chip { height:calc(var(--spacing) * 11) } }
+/* Tighter side padding on a phone. The utility the markup asked for was never in this
+   branch's extract, so the chip kept its desktop padding below 480px; rule taken from main. */
+@media not all and (min-width:480px) { .setup-conn-chip { padding-inline:calc(var(--spacing) * 2) } }
 .setup-conn-chip-dot { flex:none }
 .setup-conn-chip-word { font-family:var(--font-mono); font-size:.6rem; --tw-leading:1;line-height:1; --tw-font-weight:var(--font-weight-medium);font-weight:var(--font-weight-medium); --tw-tracking:.12em;letter-spacing:.12em; color:var(--color-muted); text-transform:uppercase }
 .wi-body { display:flex; flex-direction:column; gap:calc(var(--spacing) * 3) }
@@ -121,7 +138,6 @@
 .wi-entries { display:flex; flex-direction:column; gap:calc(var(--spacing) * 3) }
 .setup-wi-disable-box-2 { display:flex; align-items:center; gap:calc(var(--spacing) * 2) }
 .setup-wi-disable-box-3 { min-width:0; flex:1; text-overflow:ellipsis; white-space:nowrap; overflow:hidden; font-family:var(--font-mono); font-size:var(--text-sm); color:var(--color-text) }
-.setup-wi-disable-text-4:before { content:"";width:1.1rem;height:1.1rem;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;mask:var(--i) center / contain no-repeat;background:currentColor;display:block }
 .setup-wi-disable-row-5 { display:flex; align-items:center; justify-content:space-between; gap:calc(var(--spacing) * 3) }
 .setup-wi-disable-box-6 { display:flex; flex-direction:column; align-items:flex-start; gap:calc(var(--spacing) * 2); border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-bg); padding:calc(var(--spacing) * 3) }
 .setup-wi-disable-text-7 { font-size:var(--text-sm); color:var(--color-text) }
@@ -140,7 +156,6 @@
 .setup-wi-recursive-hint-box-5 { display:flex; list-style-type:none; flex-direction:column; gap:var(--spacing); padding:0 }
 .setup-wi-recursive-hint-box-6 { display:flex; align-items:center; gap:calc(var(--spacing) * 2) }
 .setup-wi-recursive-hint-text-7 { display:block; text-overflow:ellipsis; white-space:nowrap; overflow:hidden }
-.setup-wi-recursive-hint-text-8:before { content:"";width:1.1rem;height:1.1rem;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;-webkit-mask:var(--i) center / contain no-repeat;mask:var(--i) center / contain no-repeat;background:currentColor;display:block }
 .wi-list-actions { display:flex; flex-wrap:wrap; align-items:center; gap:calc(var(--spacing) * 2) }
 .wi-save-status { font-family:var(--font-mono); font-size:var(--text-xs); color:var(--color-muted) }
 .setup-input-2 { flex:1; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-bg); padding-inline:.7rem; padding-block:.45rem; font-family:var(--font-mono); font-size:var(--text-sm); color:var(--color-text); transition-property:border-color;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
