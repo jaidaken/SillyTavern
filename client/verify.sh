@@ -237,7 +237,11 @@ check "composer region present" "$(count 'id="composer"' "$DOM")" 1
 check   "quotes open and close balance" "$(count '<q' "$DOM")" "$(count '</q>' "$DOM")"
 check   "quotes wrapped" "$(count '<q' "$DOM")" 26
 atleast "blockquotes" "$(count '<blockquote>' "$DOM")" 1
-atleast "hard line breaks" "$(count '<br' "$DOM")" 1
+# A model's single newline is its PARAGRAPH break (measured 14:1 against blank lines in a real chat),
+# so narration.zig turns each one into a line element and consumes the <br>: a line is a block and
+# would otherwise leave a blank line after every break. The break still has to SURVIVE, which is what
+# this counts, just as a line rather than as a <br>.
+atleast "hard line breaks become lines" "$(count 'class="custom-line"' "$DOM")" 1
 atleast "emphasis" "$(count '<em>' "$DOM")" 1
 
 echo

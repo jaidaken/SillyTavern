@@ -77,12 +77,27 @@ pub fn SettingsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                         <button class={seg_btn} data-reading-set="justify" data-reading-val="off" type="button" onclick={onReadingClick}>Off</button>
                     </div>
                 </div>
+                // Unlike the deleted first Indent toggle (which restyled EVERY layout and made Chat
+                // identical to Novel), this one only lifts Novel's own first-line indent; the
+                // half-line paragraph gaps still separate Novel's paragraphs with it off, and Chat /
+                // Stage / VN never carry the attribute in any rule.
+                <div class={row}>
+                    <span class={label_text}>Indent</span>
+                    <div class={seg_group} role="group" aria-label="First-line paragraph indent in Novel layout">
+                        <button class={seg_btn} data-reading-set="paraindent" data-reading-val="on" type="button" onclick={onReadingClick}>On</button>
+                        <button class={seg_btn} data-reading-set="paraindent" data-reading-val="off" type="button" onclick={onReadingClick}>Off</button>
+                    </div>
+                </div>
                 <div class={row}>
                     <span class={label_text}>Layout</span>
+                    // Four layouts, each with a real basis (researched 2026-07-28, wiki topic
+                    // fiction-dialogue-typesetting): Chat = raw, imposes nothing. Novel = prose
+                    // convention. Stage / VN = script conventions. There is no speech-on-its-own-line
+                    // layout beyond the script pair, because that styling is block quotation and has
+                    // no prose-fiction convention behind it.
                     <div class={seg_group} role="group" aria-label="Message layout">
                         <button class={seg_btn} data-reading-set="indent" data-reading-val="chat" type="button" onclick={onReadingClick}>Chat</button>
                         <button class={seg_btn} data-reading-set="indent" data-reading-val="novel" type="button" onclick={onReadingClick}>Novel</button>
-                        <button class={seg_btn} data-reading-set="indent" data-reading-val="blockquote" type="button" onclick={onReadingClick}>Quoted</button>
                         <button class={seg_btn} data-reading-set="indent" data-reading-val="stage" type="button" onclick={onReadingClick}>Stage</button>
                         <button class={seg_btn} data-reading-set="indent" data-reading-val="vn" type="button" onclick={onReadingClick}>VN</button>
                     </div>

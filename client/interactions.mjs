@@ -973,6 +973,180 @@ async function main() {
             'A13 the reading Font control changes the .mes_text computed family (Atkinson/Literata/Newsreader)',
             `atkinson=${fAtk} literata=${fLit} newsreader=${fNws}`);
 
+        /* C-LAYOUT: the reading LAYOUTS, which had no coverage at all until every one of their
+           regressions landed on the operator's screen instead of here (2026-07-28). Each layout is
+           asserted on what it MEANS, from the typesetting research (wiki topic
+           fiction-dialogue-typesetting), not on a class name:
+             chat  - imposes NOTHING: no indent, keeps the paragraph gap, speech inline.
+             novel - prose convention: speech INLINE with its tag, first-line indent, gap 0.
+             stage/vn - script convention: speech and narration set as their own lines.
+           The load-bearing row is C-LAYOUT-2. An indent control that applied to every layout once made
+           chat byte-identical to novel, and nothing failed. */
+        console.log('== C-LAYOUT the reading layouts ==');
+        {
+            const layoutFacts = async (mode) => {
+                await page.eval(`(function(){document.getElementById('chat-root').setAttribute('data-reading-indent',${JSON.stringify(mode)});return 1})()`);
+                await sleep(120);
+                return page.eval(`(function(){
+                    var t = document.querySelector('#chat .mes_text');
+                    var p = t.querySelector('p');
+                    var q = t.querySelector('q.custom-q-turn');
+                    var n = t.querySelector('span.custom-narr');
+                    var cs = getComputedStyle(p);
+                    // The indent lives on the LINE (the model's paragraph), not on the <p>, so read it
+                    // there: reading the paragraph reported 0 and hid whether the indent worked at all.
+                    var lines = t.querySelectorAll('span.custom-line');
+                    var first = lines[0], later = lines[lines.length - 1];
+                    return { indent: first ? getComputedStyle(first).textIndent : null,
+                             lastLineIndent: later ? getComputedStyle(later).textIndent : null,
+                             lineDisplay: first ? getComputedStyle(first).display : null,
+                             gap: cs.marginBottom,
+                             speech: q ? getComputedStyle(q).display : null,
+                             narr: n ? getComputedStyle(n).display : null };
+                })()`);
+            };
+            const lChat = await layoutFacts('chat');
+            const lNovel = await layoutFacts('novel');
+            const lStage = await layoutFacts('stage');
+            const lVn = await layoutFacts('vn');
+
+            row('must', lChat.indent === '0px' && parseFloat(lChat.lastLineIndent) === 0
+                && parseFloat(lChat.gap) > 0 && lChat.speech === 'inline',
+                'C-LAYOUT-1 Chat imposes nothing: no indent, paragraph gap kept, speech inline',
+                JSON.stringify(lChat));
+
+            row('must', JSON.stringify(lChat) !== JSON.stringify(lNovel),
+                'C-LAYOUT-2 Chat and Novel are DIFFERENT layouts, not the same one twice',
+                `chat=${JSON.stringify(lChat)} novel=${JSON.stringify(lNovel)}`);
+
+            // The SINGLE-paragraph message, which is the commonest one a model writes and the exact
+            // case that rendered identically in both layouts when the first paragraph was set flush.
+            const oneParaFacts = async (mode) => {
+                await page.eval(`(function(){
+                    document.getElementById('chat-root').setAttribute('data-reading-indent',${JSON.stringify(mode)});
+                    var t=document.querySelector('#chat .mes_text');
+                    t.innerHTML='<p><span class="custom-line"><span class="custom-narr">One paragraph, no breaks at all, exactly as a model usually writes a turn.</span></span></p>';
+                    return 1})()`);
+                await sleep(120);
+                return page.eval(`(function(){var l=document.querySelector('#chat .mes_text span.custom-line');
+                    return { indent:getComputedStyle(l).textIndent };})()`);
+            };
+            const oneChat = await oneParaFacts('chat');
+            const oneNovel = await oneParaFacts('novel');
+            row('must', parseFloat(oneChat.indent) === 0 && parseFloat(oneNovel.indent) > 0,
+                'C-LAYOUT-2b a single-paragraph message still renders differently in Chat and Novel',
+                `chat=${JSON.stringify(oneChat)} novel=${JSON.stringify(oneNovel)}`);
+
+            // EVERY paragraph indents, the first included. A message is a continuation of one running
+            // scene, not a chapter opening, and the flush-first convention applied per message made a
+            // single-paragraph message (the commonest kind) render identically to Chat.
+            row('must', parseFloat(lNovel.indent) > 0 && parseFloat(lNovel.lastLineIndent) > 0
+                && parseFloat(lNovel.gap) === 0 && lNovel.speech === 'inline' && lNovel.lineDisplay === 'block',
+                'C-LAYOUT-3 Novel is the prose convention: speech inline, every paragraph indented, no gap',
+                JSON.stringify(lNovel));
+
+            row('must', lStage.speech === 'block' && lVn.speech === 'block'
+                && lStage.narr === 'block' && lVn.narr === 'block',
+                'C-LAYOUT-4 Stage and VN are the script convention: speech and narration each take their own line',
+                `stage=${JSON.stringify(lStage)} vn=${JSON.stringify(lVn)}`);
+
+            // The deleted speech-on-its-own-line layout must not come back as a fifth button, and a
+            // profile still holding its stored value has to land on novel rather than on no rule at all.
+            const offered = await page.eval(`[...document.querySelectorAll('[data-reading-set="indent"]')].map(function(b){return b.dataset.readingVal})`);
+            row('must', Array.isArray(offered) && offered.length === 4
+                && offered.join(',') === 'chat,novel,stage,vn',
+                'C-LAYOUT-5 exactly four layouts are offered, and blockquote is not one of them',
+                JSON.stringify(offered));
+
+            await page.eval(`(function(){localStorage.setItem('st-reading-indent','blockquote');return 1})()`);
+            await page.navigate(`${args.base}/?demo=1`);
+            await page.waitFor(hydrated, 15000);
+            const migrated = await page.eval(`(function(){return {attr:document.getElementById('chat-root').getAttribute('data-reading-indent'),stored:localStorage.getItem('st-reading-indent')}})()`);
+            row('must', migrated.attr === 'novel' && migrated.stored === 'novel',
+                'C-LAYOUT-6 a profile stored on the deleted blockquote layout migrates once to novel',
+                JSON.stringify(migrated));
+
+            // The structural invariant narration.zig exists for: every run of narration is an ELEMENT,
+            // never loose text, so a layout has something to attach a first-line indent to. Bare text
+            // among block siblings is the anonymous box that no selector and no indent can reach.
+            const bare = await page.eval(`(function(){
+                var out = [];
+                [...document.querySelectorAll('#chat .mes_text p')].forEach(function(p){
+                    [...p.childNodes].forEach(function(n){
+                        if (n.nodeType === 3 && n.nodeValue.trim()) out.push(n.nodeValue.trim().slice(0, 24));
+                    });
+                });
+                return { paragraphs: document.querySelectorAll('#chat .mes_text p').length, bare: out };
+            })()`);
+            row('must', bare.paragraphs > 0 && bare.bare.length === 0,
+                'C-LAYOUT-7 every narration run is an element, so no paragraph holds loose unstyleable text',
+                JSON.stringify(bare));
+
+            // THE ROW THAT PROVES NOVEL DOES SOMETHING. A model writes a turn as one unbroken block, so
+            // Novel has to INSERT the paragraph breaks; indenting one block only indents one line of
+            // it, which is why Chat and Novel looked identical on the operator's screen twice.
+            // Asserted on the RENDERED result: more vertical bands in Novel than in Chat.
+            const bandFacts = async (mode) => {
+                await page.eval(`(function(){
+                    document.getElementById('chat-root').setAttribute('data-reading-indent',${JSON.stringify(mode)});
+                    var t=document.querySelector('#chat .mes_text');
+                    // allow-raw-html-sink: driver-only literal, the exact markup narration.zig emits.
+                    t.innerHTML='<p><span class="custom-line">'
+                      + '<span class="custom-seg"><span class="custom-narr">She crossed the room and stopped at the glass. </span></span>'
+                      + '<span class="custom-seg"><q class="custom-q-turn">Stay.</q><span class="custom-narr"> he said, not turning.</span></span>'
+                      + '<span class="custom-seg"><span class="custom-narr"> The rain had not let up all evening.</span></span>'
+                      + '</span></p>';
+                    return 1})()`);
+                await sleep(120);
+                return page.eval(`(function(){
+                    // Scoped to the injected message: the demo chat's other messages carry segs too.
+                    var segs=[...document.querySelector('#chat .mes_text').querySelectorAll('span.custom-seg')];
+                    var tops=[...new Set(segs.map(function(s){return Math.round(s.getBoundingClientRect().top)}))];
+                    return { segs: segs.length, bands: tops.length,
+                             display: segs[0] ? getComputedStyle(segs[0]).display : null,
+                             indent: segs[1] ? getComputedStyle(segs[1]).textIndent : null };
+                })()`);
+            };
+            const bChat = await bandFacts('chat');
+            const bNovel = await bandFacts('novel');
+            row('must', bNovel.bands === 3 && bChat.bands === 1
+                && bNovel.display === 'block' && bChat.display === 'inline'
+                && parseFloat(bNovel.indent) > 0,
+                'C-LAYOUT-8 Novel breaks a run-together turn into paragraphs; Chat leaves it as one',
+                `chat=${JSON.stringify(bChat)} novel=${JSON.stringify(bNovel)}`);
+
+            // The Indent toggle lifts NOVEL'S first-line indent and nothing else. The first Indent
+            // toggle restyled every layout and made Chat identical to Novel; this row is the fence
+            // against that coming back: gaps must survive off, and Chat must not read the attribute.
+            const indentFacts = async (layout, para) => {
+                await page.eval(`(function(){
+                    var r=document.getElementById('chat-root');
+                    r.setAttribute('data-reading-indent',${JSON.stringify(layout)});
+                    r.setAttribute('data-reading-paraindent',${JSON.stringify(para)});
+                    return 1})()`);
+                await sleep(120);
+                return page.eval(`(function(){
+                    var s=document.querySelector('#chat .mes_text span.custom-seg');
+                    var cs=getComputedStyle(s);
+                    return { indent: cs.textIndent, mt: cs.marginTop, display: cs.display };})()`);
+            };
+            const piOn = await indentFacts('novel', 'on');
+            const piOff = await indentFacts('novel', 'off');
+            const piChat = await indentFacts('chat', 'off');
+            row('must', parseFloat(piOn.indent) > 0 && parseFloat(piOff.indent) === 0
+                && parseFloat(piOff.mt) > 0 && piOff.display === 'block'
+                && piChat.display === 'inline',
+                'C-LAYOUT-9 the Indent toggle lifts Novel first-line indent only: gaps stay, Chat unaffected',
+                `on=${JSON.stringify(piOn)} off=${JSON.stringify(piOff)} chat=${JSON.stringify(piChat)}`);
+
+            await page.eval(`(function(){var r=document.getElementById('chat-root');r.setAttribute('data-reading-indent','chat');r.setAttribute('data-reading-paraindent','on');return 1})()`);
+        }
+        /* C-LAYOUT END */
+
+        await openPanel('settings');
+        await page.click('.settings-tab[data-reading-val="reading"]');
+        await page.waitFor("document.getElementById('chat-root').getAttribute('data-reading-tab')==='reading'", 2500);
+
         // Numeric size persists through a reload: the slider writes localStorage, and applyAll re-applies
         // the inline --reading-size at boot before the first paint.
         await setSlider('reading-size-label', '1.15');
