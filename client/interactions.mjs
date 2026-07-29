@@ -865,21 +865,35 @@ async function main() {
             'C-MENU-OVER a top-bar card takes the click over an open dock, not just a higher z-index',
             `dockOpen=${menuDockOpen} ${JSON.stringify(overDock)}`);
 
-        // C-MENU-EXCL: the two cards drop from the same corner and each is wider than the gap between
-        // their buttons, so both open at once would overlap and the newer would eat the older's clicks.
-        // Opening either closes the other (topbar_menus.zig). Asserted BOTH ways: a one-way close
-        // would still leave the pair overlapping when opened in the other order.
+        // C-MENU-EXCL: the three cards drop from the same corner and each is wider than the gap
+        // between their buttons, so two open at once would overlap and the newer would eat the
+        // older's clicks. Opening any one closes the other two (topbar_menus.zig). Asserted from
+        // EVERY button: a close running in only one direction still leaves a pair overlapping.
+        const cards = () => page.eval(`({ notify: !!document.querySelector('#notify-popover'),
+                                          sys: !!document.querySelector('#sys-popover'),
+                                          api: !!document.querySelector('#api-popover') })`);
         await page.eval(`(function(){var g=document.querySelector('#sys-gear');if(g)g.click();return true})()`);
         await page.waitFor("document.querySelector('#sys-popover')", 4000);
         await sleep(350);
-        const gearWins = await page.eval("({ notify: !!document.querySelector('#notify-popover'), sys: !!document.querySelector('#sys-popover') })");
+        const gearWins = await cards();
         await page.eval(`(function(){var b=document.querySelector('#notify-bell');if(b)b.click();return true})()`);
         await page.waitFor("document.querySelector('#notify-popover')", 4000);
         await sleep(350);
-        const bellWins = await page.eval("({ notify: !!document.querySelector('#notify-popover'), sys: !!document.querySelector('#sys-popover') })");
-        row('must', gearWins.sys && !gearWins.notify && bellWins.notify && !bellWins.sys,
-            'C-MENU-EXCL the two top-bar cards are mutually exclusive, in both orders',
-            `gear=${JSON.stringify(gearWins)} bell=${JSON.stringify(bellWins)}`);
+        const bellWins = await cards();
+        await page.eval(`(function(){var c=document.querySelector('#conn-chip');if(c)c.click();return true})()`);
+        await page.waitFor("document.querySelector('#api-popover')", 4000);
+        await sleep(350);
+        const chipWins = await cards();
+        // Hand the bar on with the BELL card up, the state the palette row below starts from: it
+        // opens the palette expecting an already-open card to be closed for it.
+        await page.eval(`(function(){var b=document.querySelector('#notify-bell');if(b)b.click();return true})()`);
+        await page.waitFor("document.querySelector('#notify-popover') && !document.querySelector('#api-popover')", 4000);
+        await sleep(350);
+        row('must', gearWins.sys && !gearWins.notify && !gearWins.api
+            && bellWins.notify && !bellWins.sys && !bellWins.api
+            && chipWins.api && !chipWins.notify && !chipWins.sys,
+            'C-MENU-EXCL the three top-bar cards are mutually exclusive, from every button',
+            `gear=${JSON.stringify(gearWins)} bell=${JSON.stringify(bellWins)} chip=${JSON.stringify(chipWins)}`);
 
         // C-MENU-EXCL-2: the palette is the system card's SECOND door, and it opened the card without
         // going through the arbiter, so a bell card left open stayed open underneath it. Exclusivity
@@ -4662,7 +4676,7 @@ async function main() {
             // off a hardcoded string or a stale boot value as a probe result. The topbar button that
             // used to carry state + name in one aria-label is deleted; the two halves of that claim
             // now live on the panel's standing line and the panel's own heading.
-            row('must', statusMoved && after.state === 'connected' && after.model === 'Connected: mock-model'
+            row('must', statusMoved && after.state === 'connected' && after.model.startsWith('Connected to ') && after.model.endsWith(' - mock-model')
                 && after.heading === 'API Connections',
                 'W6-7 the backend readout tracks the backend it is reporting on',
                 `landed=${landed} before=${JSON.stringify(statusBefore)} ${JSON.stringify(after)}`);
@@ -4683,7 +4697,7 @@ async function main() {
             // Scoped to the composer and named by the vocabulary the old readout used, so a readout
             // reintroduced under any id or tag is caught, not just one called #send-status again.
             const phone = await page.eval(`(function(){
-                const words = ['Connected', 'Backend', 'No backend', 'unlock at silly'];
+                const words = ['Connected', 'No backend', 'No response from', 'not responding'];
                 const comp = document.getElementById('composer');
                 const bearers = [...comp.querySelectorAll('*')].filter(function (el) {
                     if (el.children.length > 0) return false;
@@ -5633,43 +5647,49 @@ async function main() {
             };
 
             const ok = await reloadWith('ok');
-            row('must', !!ok && ok.state === 'connected' && ok.words === 'Connected: mock-model' && ok.dotW > 0,
+            row('must', !!ok && ok.state === 'connected' && ok.words.startsWith('Connected to ') && ok.words.endsWith(' - mock-model') && ok.dotW > 0,
                 'C-CONN-DOT-1 a reachable backend shows connected, names the model, and says so in words',
                 JSON.stringify(ok));
 
-            const asleep = await reloadWith('asleep');
-            row('must', asleep.state === 'asleep' && asleep.words === 'Backend asleep - unlock at silly',
-                'C-CONN-DOT-2 a 502 at the edge reads as asleep, in the attribute and in the name',
-                JSON.stringify(asleep));
+            // The two failures are DIFFERENT MACHINES and the rows hold them apart: app_down is
+            // SillyTavern never reached, backend_down is SillyTavern reporting the model server
+            // silent. One message for both is the defect these rows exist to catch.
+            const appDown = await reloadWith('app_down');
+            row('must', appDown.state === 'app_down' && appDown.words.startsWith('SillyTavern is not responding')
+                && appDown.words.includes('502'),
+                'C-CONN-DOT-2 a 502 names SillyTavern as the thing that did not answer',
+                JSON.stringify(appDown));
 
-            // P1-D end to end on a real outcome site: the boot probe's asleep branch must reach the
+            // P1-D end to end on a real outcome site: the boot probe's failure branch must reach the
             // notification system, not just the dot. Each reloadWith navigates, so the history is
             // empty on arrival and this toast can only have come from THIS load's probe.
-            const asleepToast = await page.eval(`(function(){
+            const quietToast = await page.eval(`(function(){
                 const t = [...document.querySelectorAll('#notifications div[data-level]')]
                     .map(function (e) { return { level: e.getAttribute('data-level'), text: e.textContent }; });
                 const badge = document.querySelector('#notify-count');
                 return { toasts: t, badge: badge ? badge.textContent : null };
             })()`);
-            row('must', asleepToast.toasts.length === 0 && asleepToast.badge === null,
-                'C-CONN-DOT-8 an asleep backend raises NO toast: the dot beside it is the whole report',
-                JSON.stringify(asleepToast));
+            row('must', quietToast.toasts.length === 0 && quietToast.badge === null,
+                'C-CONN-DOT-8 an unreachable backend raises NO toast: the dot beside it is the whole report',
+                JSON.stringify(quietToast));
 
-            const offline = await reloadWith('offline');
-            row('must', offline.state === 'offline' && offline.words === 'Backend offline - unlock at silly',
-                'C-CONN-DOT-3 an online:false probe reads as offline, not as connected',
-                JSON.stringify(offline));
+            const unreachable = await reloadWith('backend_down');
+            row('must', unreachable.state === 'backend_down' && unreachable.words.startsWith('No response from')
+                && !unreachable.words.includes('SillyTavern is not responding'),
+                'C-CONN-DOT-3 an online:false probe blames the model server, and names its address',
+                JSON.stringify(unreachable));
 
             const errored = await reloadWith('error');
-            row('must', errored.state === 'err' && errored.words === 'Backend error 500',
-                'C-CONN-DOT-4 a 500 carries its status code into the readout',
+            row('must', errored.state === 'err' && errored.words.includes('HTTP 500')
+                && errored.words.includes('internal error'),
+                'C-CONN-DOT-4 a 500 carries its status code AND what to do about it into the readout',
                 JSON.stringify(errored));
 
             // Distinctness, not specific colours: the words are what carry meaning, so this only has
             // to prove the dot is not painting one colour for four different states.
-            const shades = [ok.dot, asleep.dot, errored.dot];
+            const shades = [ok.dot, appDown.dot, errored.dot];
             row('must', new Set(shades).size === 3 && shades.every((c) => c && c !== 'rgba(0, 0, 0, 0)'),
-                'C-CONN-DOT-5 connected, asleep and error paint three different dots',
+                'C-CONN-DOT-5 connected, app-down and error paint three different dots',
                 JSON.stringify(shades));
 
             await fetch(`${args.base}/dev/status-mode?m=ok`);
@@ -5679,7 +5699,7 @@ async function main() {
             // The relocation itself. Scoped to #composer and keyed on the readout's own vocabulary, so
             // a status line reintroduced under any id is caught, not only one called #send-status.
             const composerClean = await page.eval(`(function(){
-                const words = ['Connected', 'Backend', 'No backend', 'unlock at silly'];
+                const words = ['Connected', 'No backend', 'No response from', 'not responding'];
                 const comp = document.getElementById('composer');
                 const bearers = [...comp.querySelectorAll('*')].filter(function (el) {
                     if (el.children.length > 0) return false;
@@ -5704,7 +5724,7 @@ async function main() {
                          progressEmpty: (document.getElementById('conn-status').textContent || '').trim() === '' };
             })()`);
             await closePanel('connections');
-            row('must', standing.state === 'connected' && standing.text === 'Connected: mock-model'
+            row('must', standing.state === 'connected' && standing.text.startsWith('Connected to ') && standing.text.endsWith(' - mock-model')
                 && standing.progressEmpty,
                 'C-CONN-DOT-7 the panel shows the standing line, with Connect progress still its own',
                 JSON.stringify(standing));
@@ -5727,17 +5747,68 @@ async function main() {
                 'C-CONN-CHIP-1 the top-bar chip is a focusable button naming the live model',
                 JSON.stringify(chip));
 
-            // The click, from a shut dock, and then again to prove it is a toggle rather than a
-            // one-way door: a control that opens but cannot close strands the panel it opened.
+            // The click, and then again to prove it is a toggle rather than a one-way door: a
+            // control that opens but cannot close strands the card it opened.
             await closeSide('left');
             await page.click('#conn-chip');
             const opened = await page.waitFor(
-                `!!document.querySelector('#panel-view.panel-left nav button[data-section="connections"][aria-current="true"]')`, 6000);
+                `!!document.querySelector('#api-popover .setup-conn-standing')`, 6000);
+            const expandedOpen = await page.eval(`(document.getElementById('conn-chip')||{}).getAttribute && document.getElementById('conn-chip').getAttribute('aria-expanded')`);
             await page.click('#conn-chip');
-            const shut = await page.waitFor(`!document.querySelector('#panel-view.panel-left')`, 6000);
-            row('must', opened && shut,
-                'C-CONN-CHIP-2 clicking the chip opens API Connections, and clicking it again puts it away',
-                `opened=${opened} shut=${shut}`);
+            const shut = await page.waitFor(`!document.querySelector('#api-popover')`, 6000);
+            row('must', opened && shut && expandedOpen === 'true',
+                'C-CONN-CHIP-2 the chip opens the API card, says so on aria-expanded, and puts it away',
+                `opened=${opened} shut=${shut} expanded=${expandedOpen}`);
+
+            // C-CONN-CHIP-3: the card and the Setup dock's API section render the SAME body, and
+            // connections_body names its fields by element id (#llama-url, #conn-status) which
+            // connection.zig looks up. Two mounts would give Connect the dock's URL box and write its
+            // progress into the dock's status line, behind the card. Asserted in BOTH directions,
+            // because each is enforced at a different call site (topbar_menus.onChip / ui.yieldApiCard).
+            // Its own opener rather than openPanel: openPanel clicks the switcher the moment the dock
+            // settles, and a coordinate click that finds nothing THROWS, ending the run instead of
+            // failing one row.
+            const openLeftApi = async () => {
+                if (!(await page.eval(`!!document.querySelector('${dockSel('left')}')`))) {
+                    await page.click(SIDE_TAB.left);
+                }
+                if (!(await page.waitFor(`!!document.querySelector('${sectionSel('left', 'connections')}')`, 8000))) return false;
+                // The dock SLIDES in, so a control that exists is not yet where a coordinate click
+                // will land. openPanel waits for the same resting place for the same reason.
+                await page.waitFor(`(function(){var e=document.querySelector('${dockSel('left')}');return e && e.getBoundingClientRect().left > -1;})()`, 4000);
+                const current = `!!document.querySelector('${sectionSel('left', 'connections')}[aria-current="true"]')`;
+                for (let attempt = 1; attempt <= 3; attempt += 1) {
+                    try {
+                        await page.click(sectionSel('left', 'connections'));
+                    } catch {
+                        await sleep(250);
+                        continue;
+                    }
+                    if (await page.waitFor(current, 4000)) return true;
+                }
+                return false;
+            };
+
+            const dockUp = await openLeftApi();
+            await page.click('#conn-chip');
+            // The dock SLIDES out, staying mounted for its exit animation, so "one body" is a claim
+            // about the settled state. Both copies render the same field values while it leaves.
+            await page.waitFor(`!document.querySelector('${dockSel('left')}')`, 4000);
+            const cardWins = await page.eval(`({ urls: document.querySelectorAll('#llama-url').length,
+                                                 api: !!document.querySelector('#api-popover'),
+                                                 dock: !!document.querySelector('#panel-view.panel-left') })`);
+            // Back the other way: a dock arriving on the API section has to shut the card.
+            const dockBack = await openLeftApi();
+            await sleep(350);
+            const dockWins = await page.eval(`({ urls: document.querySelectorAll('#llama-url').length,
+                                                 api: !!document.querySelector('#api-popover'),
+                                                 dock: !!document.querySelector('#panel-view.panel-left') })`);
+            await closeSide('left');
+            row('must', dockUp && dockBack
+                && cardWins.urls === 1 && cardWins.api && !cardWins.dock
+                && dockWins.urls === 1 && !dockWins.api && dockWins.dock,
+                'C-CONN-CHIP-3 the API body is mounted once, whichever surface asks for it',
+                `dockUp=${dockUp} dockBack=${dockBack} card=${JSON.stringify(cardWins)} dock=${JSON.stringify(dockWins)}`);
         }
         /* C-CONN-DOT END */
 
@@ -5820,15 +5891,39 @@ async function main() {
                 'C-SSE-6 events missed while disconnected are replayed on the reconnect',
                 `openWhenEmitted=${awayOpen} missed=[${missedA},${missedB}] lastId=${afterResume.lastId} total=${beforeResume}->${afterResume.total}`);
 
-            // The beacon, posted by Zig through net.zig so it carries the csrf token.
+            // The beacon, posted by Zig through net.zig so it carries the csrf token. Matched on the
+            // HIDDEN one against the connection id live at the moment of posting: a reconnect issues
+            // a new id and its hello posts a beacon of its own, so neither the last entry nor an id
+            // captured earlier identifies the post this row made.
+            const beaconConn = await page.eval('window.__st_events_stat(2)');
             const beaconRet = await page.eval('window.__st_events_visibility(false)');
             await sleep(800);
             const stAfter = await devState();
-            const recorded = (stAfter.events_visibility || []).slice(-1)[0];
+            const recorded = (stAfter.events_visibility || []).filter((b) => b.visible === false).slice(-1)[0];
             row('must', beaconRet === 1 && !!recorded && recorded.visible === false
-                && recorded.id === afterResume.connId,
+                && recorded.id === beaconConn,
                 'C-SSE-7 the visibility beacon posts and the server records the right connection',
-                `ret=${beaconRet} recorded=${JSON.stringify(recorded)} connId=${afterResume.connId}`);
+                `ret=${beaconRet} recorded=${JSON.stringify(recorded)} connId=${beaconConn}`);
+
+            // C-SSE-8: the beacon has to go out on the HELLO. The server opens every connection
+            // hidden and probes the backend only while a handle has a visible one, so a tab opened
+            // and left in front announced nothing and no backend-status was ever pushed: a model
+            // started behind the page went unnoticed. visibilitychange cannot cover it.
+            const beaconsBefore = ((await devState()).events_visibility || []).length;
+            await page.navigate(`${args.base}/`);
+            await page.waitFor('window.__st_events_stat(2) > 0', 8000);
+            await sleep(800);
+            const afterLoad = await devState();
+            const beacons = afterLoad.events_visibility || [];
+            const onHello = beacons.slice(beaconsBefore);
+            const freshConn = await page.eval('window.__st_events_stat(2)');
+            // The beacon for the connection the page ENDED on. A load can hello more than once (the
+            // browser retries the stream), and each hello beacons for its own id, so the row asks
+            // that the live connection announced itself rather than that exactly one did.
+            const announced = onHello.some((b) => b.visible === true && b.id === freshConn);
+            row('must', announced,
+                'C-SSE-8 a tab announces itself as visible on the hello, with no visibilitychange',
+                `new=${JSON.stringify(onHello)} connId=${freshConn}`);
         }
         /* C-SSE END */
 
@@ -6017,11 +6112,11 @@ async function main() {
             await page.eval('window.__st_events_close()');
 
             // The dot must follow the backend with NOBODY reloading. Nothing below navigates.
-            await fetch(`${args.base}/dev/status-mode?m=asleep`);
+            await fetch(`${args.base}/dev/status-mode?m=app_down`);
             const flipped = await page.waitFor(
-                "document.getElementById('conn-standing').dataset.connState === 'asleep'", 10000);
+                "document.getElementById('conn-standing').dataset.connState === 'app_down'", 10000);
             const flippedLabel = await page.eval("document.getElementById('conn-standing-text').textContent.trim()");
-            row('must', flipped && flippedLabel === 'Backend asleep - unlock at silly',
+            row('must', flipped && flippedLabel.startsWith('SillyTavern is not responding'),
                 'C-POLL-1 the poll flips the dot when the backend changes, with no reload',
                 `flipped=${flipped} label=${JSON.stringify(flippedLabel)}`);
 
@@ -6134,7 +6229,7 @@ async function main() {
             // The AMBIENT probe is deliberately silent: the top bar's chip shows standing backend state
             // permanently, so a toast repeated it on every poll cadence. C-CONN-DOT-2/3/4 prove the
             // chip actually moves, which is what makes this silence safe rather than a dropped signal.
-            const bootOffline = await bootWith('offline');
+            const bootOffline = await bootWith('backend_down');
             row('must', bootOffline.length === 0,
                 'C-PUSH-1 an offline boot probe stays silent: the status chip owns standing state',
                 JSON.stringify(bootOffline));
@@ -6149,18 +6244,18 @@ async function main() {
                 'C-PUSH-3 a healthy boot pushes NOTHING, so every row below starts silent',
                 JSON.stringify(bootOk));
 
-            const probeAsleep = await connectWith('asleep', null);
-            row('must', only(probeAsleep, 'warning', 'Backend asleep - unlock at silly'),
-                'C-PUSH-4 interactive Connect against a 502 raises the asleep warning',
+            const probeAsleep = await connectWith('app_down', null);
+            row('must', only(probeAsleep, 'warning', 'SillyTavern did not respond - the connection was not checked'),
+                'C-PUSH-4 interactive Connect against a 502 says the app never answered, not that the address is wrong',
                 JSON.stringify(probeAsleep));
 
             const probeFailed = await connectWith('error', null);
-            row('must', only(probeFailed, 'err', 'Connect failed: 500'),
+            row('must', only(probeFailed, 'err', 'Connection check failed: HTTP 500'),
                 'C-PUSH-5 interactive Connect against a 500 says connect failed, with the code',
                 JSON.stringify(probeFailed));
 
-            const probeOffline = await connectWith('offline', null);
-            row('must', only(probeOffline, 'warning', 'Backend offline - unlock at silly'),
+            const probeOffline = await connectWith('backend_down', null);
+            row('must', only(probeOffline, 'warning', 'No response from the text-generation server'),
                 'C-PUSH-6 interactive Connect against online:false raises the offline warning',
                 JSON.stringify(probeOffline));
 
@@ -6346,7 +6441,7 @@ async function main() {
             // the state: the chip can say the backend is asleep, but not that the message just sent got
             // no reply, and the eye is on the conversation at that moment, not on the top bar.
             const streamAsleep = await settled(15000);
-            row('must', streamAsleep.some((t) => t.level === 'err' && t.text === 'Send failed - backend asleep, unlock at silly'),
+            row('must', streamAsleep.some((t) => t.level === 'err' && t.text === 'Send failed: SillyTavern did not respond. Your message was not delivered.'),
                 'C-PUSH-22 a send whose stream 502s at the edge says the SEND failed',
                 JSON.stringify(streamAsleep));
 

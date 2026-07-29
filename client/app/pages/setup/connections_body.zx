@@ -93,6 +93,18 @@ pub fn ConnectionsBody(ctx: *zx.ComponentCtx(void)) zx.Component {
                     <button type="button" class={btn_cls} onclick={onConnect}>Connect</button>
                     <span id="conn-status" role="status" aria-live="polite" class="setup-conn-status"></span>
                 </div>
+                <div class="setting-row setup-conn-auto-row">
+                    <label class={label_cls} for="conn-autoconnect">Connect automatically</label>
+                    <input
+                        id="conn-autoconnect"
+                        name="conn_autoconnect"
+                        type="checkbox"
+                        class="setup-check"
+                        checked={boolAttr(connection.autoConnect())}
+                        onchange={ctx.bind(onAutoConnect)}
+                    />
+                </div>
+                <p class="setting-note setup-conn-auto-note">On, the backend is picked up the moment it answers and named with the model it is running. Off, a live connection is still watched and a drop still shows here, but it is never reconnected for you.</p>
                 <p class="setting-note setup-conn-status-text">Saved to your SillyTavern settings and shared with the classic client.</p>
             </div>
         </div>
@@ -116,7 +128,7 @@ fn onBodyKey(ev: zx.client.Event) void {
 /// The standing readout: what the backend is, in words, whether or not you just pressed Connect.
 /// #conn-status below is the opposite thing, the transient progress of an interactive attempt.
 fn standingText(alloc: std.mem.Allocator) []const u8 {
-    var buf: [96]u8 = undefined;
+    var buf: [connection.status_words_len]u8 = undefined;
     return alloc.dupe(u8, connection.statusWords(&buf)) catch "";
 }
 
@@ -129,6 +141,19 @@ fn onUrlInput(e: *zx.client.Event.Stateful) void {
 
 fn onConnect(_: zx.client.Event) void {
     connection.connect();
+}
+
+/// The checkbox reports its own new value, so the handler reads the box rather than flipping a
+/// remembered bool: a stale copy would invert on the first render that arrived between two clicks.
+fn onAutoConnect(e: *zx.client.Event.Stateful) void {
+    if (zx.platform.role != .client) return;
+    const target = e.getEvent().ref.get(zx.client.js.Object, "target") catch return;
+    defer target.deinit();
+    connection.setAutoConnect(target.get(bool, "checked") catch return);
+}
+
+fn boolAttr(b: bool) []const u8 {
+    return if (b) "true" else "";
 }
 
 fn onSaveKey(_: zx.client.Event) void {

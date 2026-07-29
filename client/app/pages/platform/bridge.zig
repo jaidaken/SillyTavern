@@ -330,6 +330,28 @@ fn visibilityChanged(visible: u32) callconv(.c) u32 {
     return 1;
 }
 
+/// The stream just went live. Stand the client poll down, then STATE THE TAB'S VISIBILITY, which is
+/// the only moment it can be stated at all.
+///
+/// The server opens every connection as hidden and arms its backend probe only while a handle has a
+/// visible one, so a tab that is opened and simply left in front reported nothing: `visibilitychange`
+/// does not fire for a tab that never changed. The server therefore never probed the backend, never
+/// pushed `backend-status`, and the chip sat on whatever the boot probe found while a model started
+/// behind it. The hello is the first instant a beacon can be sent (it carries the connection id the
+/// server keys visibility by), so it is where the tab announces itself.
+fn onStreamUp() void {
+    connection.stopPoll();
+    _ = visibilityChanged(if (documentHidden()) 0 else 1);
+}
+
+fn documentHidden() bool {
+    if (zx.platform.role != .client) return false;
+    const js = zx.client.js;
+    const doc = js.global.get(js.Object, "document") catch return false;
+    defer doc.deinit();
+    return doc.get(bool, "hidden") catch false;
+}
+
 fn onVisibilityDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     _ = tag;
     _ = res;
@@ -388,7 +410,7 @@ fn wireLiveRoutes() void {
         .chat_append = char_api.applyRemoteAppend,
         .character = char_api.fetchCharacters,
         .backend_status = connection.applyServerStatus,
-        .stream_up = connection.stopPoll,
+        .stream_up = onStreamUp,
         .stream_down = connection.startPoll,
     });
 }

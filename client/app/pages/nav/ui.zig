@@ -17,6 +17,9 @@ const overlay_exit = @import("../platform/overlay_exit.zig");
 const palette_state = @import("./palette_state.zig");
 const notifications = @import("../notify/notifications.zig");
 const dock_metrics = @import("./dock_metrics.zig");
+// The API card's state. A one-way edge, like palette_state above: conn_menu_state imports nothing
+// from here, so the pair is not a cycle. See yieldApiCard below for the one thing this file asks it.
+const conn_menu = @import("../setup/conn_menu_state.zig");
 
 const log = std.log.scoped(.panels);
 
@@ -242,6 +245,18 @@ fn syncDocks() void {
     }
 }
 
+/// A dock has just arrived (or stayed) on the API section, so the card showing the SAME body has to
+/// go. connections_body.zx names its fields with element ids that connection.zig looks up by id
+/// (#llama-url, #conn-api-key, #conn-status); mounted in both surfaces at once, Connect would read
+/// the dock's URL box and write its progress into the dock's status line, behind the card. The other
+/// direction of the same rule lives in topbar_menus.onChip.
+///
+/// Called only from the reactive dock paths, never from the boot-time `*Quiet` ones: those run before
+/// the first paint, where no card can be open and a bumpShell is exactly what they exist to avoid.
+fn yieldApiCard() void {
+    if (ui.panels.openId(.left) == .connections) conn_menu.closeIfOpen();
+}
+
 // Mutations re-render only the Shell region so it reflects the new state.
 pub fn toggle(id: PanelId) void {
     const side = if (ui_state.panelFor(id)) |p| p.side else {
@@ -257,6 +272,7 @@ pub fn toggle(id: PanelId) void {
     // Opening the notifications drawer IS the read receipt, so the badge clears as the list is shown.
     // Closing it must not, or a toast arriving while the drawer is open would be marked read unseen.
     if (id == .notifications and ui.panels.isActive(.notifications)) notifications.markAllRead();
+    yieldApiCard();
     syncDocks();
     regions.bumpShell();
 }
@@ -300,6 +316,7 @@ pub fn toggleSide(side: Side) void {
     if (will_close) beginSideClose(side);
     ui.panels.toggleSide(side);
     if (!will_close) markSideOpen(side);
+    yieldApiCard();
     syncDocks();
     regions.bumpShell();
 }
@@ -311,6 +328,7 @@ pub fn selectSection(side: Side, id: PanelId) void {
     // A switcher swap keeps the dock open; keep the phase open so a stale close never fires under it.
     if (ui.panels.openId(side) != null) markSideOpen(side);
     storeSection(side, id);
+    yieldApiCard();
     syncDocks();
     regions.bumpShell();
 }

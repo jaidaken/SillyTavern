@@ -64,6 +64,9 @@
 .setup-conn-key-status-row { display:flex; align-items:center; gap:calc(var(--spacing) * 3) }
 .setup-conn-status { font-size:var(--text-sm); color:var(--color-muted) }
 .setup-conn-status:empty { display:none }
+.setup-conn-auto-row { display:flex; align-items:center; gap:calc(var(--spacing) * 3) }
+.setup-conn-auto-note { grid-column:1/-1; font-size:var(--text-sm); color:var(--color-muted) }
+@media not all and (min-width:768px) { .setup-conn-auto-note { font-size:.78rem } }
 .setup-conn-status-text { grid-column:1/-1; font-size:var(--text-sm); color:var(--color-muted) }
 @media not all and (min-width:768px) { .setup-conn-status-text { font-size:.78rem } }
 .setup-input { min-width:9rem; flex:1; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-control-border); background-color:var(--color-bg); padding-inline:.7rem; padding-block:.45rem; font-family:var(--font-mono); font-size:var(--text-sm); color:var(--color-text); transition-property:border-color;transition-timing-function:var(--tw-ease,var(--default-transition-timing-function));transition-duration:var(--tw-duration,var(--default-transition-duration)); --tw-duration:.12s;transition-duration:.12s; --tw-ease:ease;transition-timing-function:ease }
@@ -127,10 +130,50 @@
 .setup-conn-chip-word { font-family:var(--font-mono); font-size:.6rem; --tw-leading:1;line-height:1; --tw-font-weight:var(--font-weight-medium);font-weight:var(--font-weight-medium); --tw-tracking:.12em;letter-spacing:.12em; color:var(--color-muted); text-transform:uppercase }
 
 /* A model name is arbitrary length and this sits in a fixed bar, so it truncates rather than pushing
-   the bell and the gear off the edge. 10em holds a name like "mock-model" whole and clips only the
-   long quantised filenames, which stay readable from their first token. */
+   the bell and the gear off the edge. The cap is keyed to the STATE: every state word ("Offline",
+   "No backend") fits in 10em, and only a connected chip carries a model name, so only that one is
+   given the room a real name needs. The chip is content-sized, so the cap changing IS the expansion:
+   it opens as the connection lands and closes again when it drops.
+
+   40vw keeps the whole thing off the bell and the gear on a narrow window, where the cap binds
+   before the em value does. Past it a name still ellipses, readable from its first token. */
 .setup-conn-chip-word { max-width: 10em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-@media not all and (min-width:480px) { .setup-conn-chip-word { max-width: 5em } }
+.setup-conn-chip[data-conn-state="connected"] .setup-conn-chip-word { max-width: min(22em, 40vw); }
+@media not all and (min-width:480px) {
+    .setup-conn-chip-word { max-width: 5em }
+    .setup-conn-chip[data-conn-state="connected"] .setup-conn-chip-word { max-width: min(12em, 50vw) }
+}
+
+/* The open is the one moment this chip moves, so it is eased out rather than linear and kept under
+   the 300ms UI cap (WD18, WD20). Width is the property that has to move here: the chip is sized by
+   its own text, and no transform can make room in a flex row for text that was clipped.
+   Reduced motion drops the movement and keeps the outcome, which is the state arriving instantly. */
+.setup-conn-chip-word { transition: max-width 220ms cubic-bezier(0.23, 1, 0.32, 1); }
+@media (prefers-reduced-motion: reduce) {
+    .setup-conn-chip-word { transition: none }
+}
+
+/* The card the chip opens. Geometry copied from the gear's card (nav.css .sysmenu-popover) rather
+   than invented: three cards drop from one bar, and a fourth width would read as three unrelated
+   surfaces. Dropped from under the bar's RIGHT edge like its two siblings, even though the chip is
+   the leftmost of the three, because the card is wider than the whole control cluster and an edge is
+   the only anchor that holds at every chip width. z-70 clears both dock layers (z-40 desktop, z-50
+   mobile), which only holds because shell.zx mounts it outside #topbar's stacking context. No
+   shadow: depth in this theme is carried on borders (WD16). */
+.setup-api-mount { display:contents }
+.setup-api-popover { position:fixed; top:calc(var(--topbar-h) + .3rem); right:calc(var(--spacing) * 2); z-index:70; display:flex; max-height:min(28rem, calc(100dvh - var(--topbar-h) - 1rem)); width:min(29rem,100vw - 1rem); flex-direction:column; overflow:hidden; border-radius:var(--radius-lg); border-style:var(--tw-border-style);border-width:1px; border-color:var(--color-border); background-color:var(--color-surface) }
+.setup-api-popover-in { animation:var(--animate-drawer-in) }
+.setup-api-popover-out { animation:var(--animate-drawer-out); pointer-events:none }
+.setup-api-head { display:flex; flex:none; align-items:center; justify-content:space-between; gap:calc(var(--spacing) * 2); padding-inline:calc(var(--spacing) * 3); padding-top:calc(var(--spacing) * 3); padding-bottom:calc(var(--spacing) * 2) }
+.setup-api-heading { font-family:var(--font-mono); font-size:var(--text-xs); --tw-font-weight:var(--font-weight-medium);font-weight:var(--font-weight-medium); --tw-tracking:.1em;letter-spacing:.1em; color:var(--color-muted); text-transform:uppercase }
+.setup-api-close { display:grid; width:1.6rem;height:1.6rem; flex:none; cursor:pointer; place-items:center; border-radius:var(--radius-md); border-style:var(--tw-border-style);border-width:0; background-color:#0000; color:var(--color-muted) }
+@media (hover:hover) { .setup-api-close:hover { background-color:var(--color-surface-2); color:var(--color-text) } }
+
+/* The one scrolling region: the card holds its size and this grows a scrollbar, which is what keeps
+   a full-size form from turning a corner card into the overlay it must not be. It is also a QUERY
+   CONTAINER, the job .panel-scroll does for the dock, so the body's @container rules have something
+   to measure here too instead of silently falling back to their narrowest layout. */
+.setup-api-scroll { container-type:inline-size; min-height:0; flex:1; overflow-y:auto; padding-inline:calc(var(--spacing) * 3); padding-bottom:calc(var(--spacing) * 3); scrollbar-width:thin }
 .wi-body { display:flex; flex-direction:column; gap:calc(var(--spacing) * 3) }
 .wi-editor { display:grid; grid-template-columns:repeat(1,minmax(0,1fr)); align-items:flex-start; gap:calc(var(--spacing) * 3) }
 @container (min-width:36rem) { .wi-editor { grid-template-columns:repeat(2,minmax(0,1fr)) } }

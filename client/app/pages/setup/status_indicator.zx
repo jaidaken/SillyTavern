@@ -7,6 +7,11 @@
 // paint from one vocabulary. The word names the MODEL while the backend is up (connection.chipText)
 // and falls back to the state when there is no model to name; the panel's standing line is what
 // carries the remedy.
+//
+// LIKE THE BELL AND THE GEAR, this component is split in two: the button renders in the top bar, its
+// card renders as a sibling of the docks (shell.zx). #topbar carries z-20, which makes it a stacking
+// context, and a stacking context CAPS every descendant: a card nested there would paint under a
+// z-40 dock whatever z-index it asked for, and a click aimed at its middle would land on that dock.
 pub fn StatusIndicator(allocator: zx.Allocator) zx.Component {
     return (
         <button
@@ -15,16 +20,19 @@ pub fn StatusIndicator(allocator: zx.Allocator) zx.Component {
             type="button"
             // Built to sit in the same set as the bell and the gear beside it: same 2.2rem height,
             // same rounding, same control-border and surface tokens, so the three read as one row of
-            // chrome rather than a panel widget parked in a bar. Unlike those two it opens a DOCK
-            // rather than a card of its own, so it carries no aria-expanded: the panel it opens is
-            // not owned by this button and outlives a second click elsewhere.
+            // chrome rather than a panel widget parked in a bar.
             class="setup-conn-chip"
             data-conn-state={connection.stateName()}
             // The label names the DESTINATION, not the state. State reaches a screen reader through
             // the live region on the word below, which announces its text CHANGING; an aria-label
             // that changed would announce nothing, which is why the word is a real text node.
             aria-label="API connections"
-            onclick={onOpenApi}
+            aria-haspopup="dialog"
+            aria-expanded={state.expandedStr()}
+            // Only while the card exists: aria-controls pointing at an absent id is a broken
+            // reference, which is the bell's and the gear's rule too.
+            aria-controls={if (state.isMounted()) "api-popover" else ""}
+            onclick={menus.onChip}
         >
             <span class="conn-dot setup-conn-chip-dot" aria-hidden="true"></span>
             // Stays visible at every width: asleep and offline paint the same amber, so the word is
@@ -35,12 +43,49 @@ pub fn StatusIndicator(allocator: zx.Allocator) zx.Component {
     );
 }
 
-/// Open (or close) the API Connections panel. A toggle, like every other control that fronts a dock,
-/// so the button that showed you the panel is also the one that puts it away.
-fn onOpenApi(_: zx.client.Event) void {
-    ui.toggle(.connections);
+/// The card. Mounted by shell.zx OUTSIDE the top bar, for the stacking-context reason in the header.
+/// It carries the SAME body the Setup dock's API section shows, and the two are never mounted at
+/// once: conn_menu_state.zig's header spells out why, and names the two call sites that enforce it.
+pub fn ConnPopover(allocator: zx.Allocator) zx.Component {
+    return (
+        <div @allocator={allocator} class="setup-api-mount">
+            {if (state.isMounted()) (
+                <div
+                    id="api-popover"
+                    class={if (state.isClosing()) popover_out else popover_in}
+                    role="dialog"
+                    aria-labelledby="api-heading"
+                    tabindex="-1"
+                    onkeydown={state.onKey}
+                >
+                    <div class="setup-api-head">
+                        <h2 id="api-heading" class="setup-api-heading">API Connections</h2>
+                        <button
+                            type="button"
+                            class="icon setup-api-close"
+                            data-icon="close"
+                            aria-label="Close API connections"
+                            onclick={state.onClose}
+                        ></button>
+                    </div>
+                    <div class="setup-api-scroll">
+                        <ConnectionsBody />
+                    </div>
+                </div>
+            )}
+        </div>
+    );
 }
 
+// Two literals rather than a computed string: a class assembled in Zig is invisible to check-classes,
+// which reads this file's TEXT. The card arrives on the same drawer animation the bell's and the
+// gear's cards use, so all three cards on this bar drop from the bar the same way.
+const popover_base = "setup-api-popover";
+const popover_in = popover_base ++ " setup-api-popover-in";
+const popover_out = popover_base ++ " setup-api-popover-out";
+
 const zx = @import("zx");
-const ui = @import("../nav/ui.zig");
 const connection = @import("./connection.zig");
+const state = @import("./conn_menu_state.zig");
+const menus = @import("../shell/topbar_menus.zig");
+const ConnectionsBody = @import("./connections_body.zx").ConnectionsBody;

@@ -71,7 +71,20 @@ pub fn probedModel() []const u8 {
 /// the backend sets this and re-renders the Shell; none of them writes DOM text any more. The old
 /// design had six call sites poking `#send-status` directly, which is why the readout could only
 /// live in one place and why nothing else could ask what the state was.
-pub const ConnState = enum { none, configured, connected, asleep, offline, err };
+/// THE STATES NAME WHAT IS DOWN, because there are two different machines in this path and telling a
+/// user the wrong one sends them to fix something that is not broken. A request goes browser ->
+/// SillyTavern -> the text-generation server, so a failure is one of:
+///
+/// - `app_down`: SillyTavern itself did not answer (a 502/504 from whatever proxies it, or a dead
+///   socket). Nothing downstream was even asked. The page usually recovers on its own.
+/// - `backend_down`: SillyTavern answered, and reports that the text-generation server did not. That
+///   is the one a user fixes, by starting the server or correcting its URL.
+/// - `err`: SillyTavern answered with an HTTP error of its own. The code is the whole story and is
+///   kept in `state_code`.
+///
+/// These two were once called `asleep` and `offline`, which named neither machine, and both printed
+/// the same remedy for opposite problems.
+pub const ConnState = enum { none, configured, connected, backend_down, app_down, err };
 
 var state: ConnState = .none;
 var state_code: u16 = 0;
@@ -87,18 +100,52 @@ pub fn stateName() []const u8 {
 ///
 /// This is the LONG form, for the connections panel, where there is room to name the model and to
 /// say what to do about a bad state. The top bar's chip uses `statusWord` instead.
-pub fn statusWords(buf: *[96]u8) []const u8 {
+pub fn statusWords(buf: *[status_words_len]u8) []const u8 {
     return switch (state) {
-        .none => "No backend configured",
+        .none => "No backend configured. Enter a server URL below and press Connect.",
         .configured => blk: {
-            const c = conn orelse break :blk "No backend configured";
-            if (c.api_server.len == 0) break :blk "Backend not connected";
-            break :blk std.fmt.bufPrint(buf, "Backend: {s}", .{c.api_type}) catch "Backend configured";
+            const c = conn orelse break :blk "No backend configured. Enter a server URL below and press Connect.";
+            if (c.api_server.len == 0) {
+                break :blk std.fmt.bufPrint(buf, "No server URL set for {s}. Enter one below and press Connect.", .{c.api_type}) catch "No server URL set. Enter one below and press Connect.";
+            }
+            break :blk std.fmt.bufPrint(buf, "{s} at {s} - not checked yet. Press Connect.", .{ c.api_type, c.api_server }) catch "Configured, not checked yet. Press Connect.";
         },
-        .connected => std.fmt.bufPrint(buf, "Connected: {s}", .{statusModel()}) catch "Connected",
-        .asleep => "Backend asleep - unlock at silly",
-        .offline => "Backend offline - unlock at silly",
-        .err => std.fmt.bufPrint(buf, "Backend error {d}", .{state_code}) catch "Backend error",
+        .connected => blk: {
+            const c = conn orelse break :blk "Connected";
+            break :blk std.fmt.bufPrint(buf, "Connected to {s} - {s}", .{ c.api_type, statusModel() }) catch "Connected";
+        },
+        // Names the address, because "no response" is only actionable next to the thing that did not
+        // respond: a typo in the URL and a server that is not running look identical without it.
+        .backend_down => blk: {
+            const c = conn orelse break :blk "The text-generation server did not respond.";
+            break :blk std.fmt.bufPrint(buf, "No response from {s}. Check the server is running and that this address is reachable from SillyTavern.", .{c.api_server}) catch "The text-generation server did not respond. Check it is running.";
+        },
+        // The app itself, not the model behind it. The browser retries the live channel on its own,
+        // so the honest instruction is to wait rather than to go and fix something.
+        .app_down => blk: {
+            if (state_code == 0) break :blk "SillyTavern is not responding. It may be restarting - this page reconnects on its own.";
+            break :blk std.fmt.bufPrint(buf, "SillyTavern is not responding (HTTP {d}). It may be restarting - this page reconnects on its own.", .{state_code}) catch "SillyTavern is not responding. It may be restarting.";
+        },
+        .err => std.fmt.bufPrint(buf, "The connection check failed with HTTP {d}. {s}", .{ state_code, codeHint(state_code) }) catch "The connection check failed.",
+    };
+}
+
+/// Room for the longest line above with a server URL and a backend type interpolated into it. A
+/// bufPrint that does not fit falls back to the same sentence without the specifics, so an
+/// unusually long URL degrades the message rather than truncating it mid-word.
+pub const status_words_len = 256;
+
+/// What an HTTP code from the check actually tells the user to go and do. Only the codes with a
+/// distinct remedy are named; anything else gets the code alone, which is honest about knowing no
+/// more than that.
+fn codeHint(code: u16) []const u8 {
+    return switch (code) {
+        401, 403 => "The server rejected the credentials - check the API key.",
+        404 => "Nothing answered at that path - check the server URL.",
+        408, 504 => "The server took too long to answer.",
+        429 => "The server is rate limiting - try again shortly.",
+        500...503, 505...599 => "The server reported an internal error.",
+        else => "",
     };
 }
 
@@ -111,8 +158,10 @@ pub fn statusWord() []const u8 {
         .none => "No backend",
         .configured => "Not connected",
         .connected => "Online",
-        .asleep => "Asleep",
-        .offline => "Offline",
+        // Two words that name the machine, so the chip alone distinguishes "your model is not
+        // running" from "the app you are looking at is having a moment".
+        .backend_down => "No answer",
+        .app_down => "App down",
         .err => "Error",
     };
 }
@@ -120,9 +169,24 @@ pub fn statusWord() []const u8 {
 /// What the topbar prints beside the dot: the model the backend reported, falling back to the type
 /// so the button still names the backend before any probe has answered.
 pub fn statusModel() []const u8 {
-    if (pending_model_len > 0) return pending_model_buf[0..pending_model_len];
+    if (pending_model_len > 0) return displayModel(pending_model_buf[0..pending_model_len]);
     const c = conn orelse return "";
     return c.api_type;
+}
+
+/// The model id as a NAME. A backend reports the id it was launched with, which for llama.cpp is the
+/// absolute path of the weights file: `/mnt/data/AI/models/Wicked-Oblivion-12B.i1-Q4_K_M.gguf`. The
+/// directory says where a file sits on a machine that is not necessarily this one, and every id ends
+/// in the same format suffix, so neither answers "which model am I talking to" - they only push the
+/// part that does off the edge of the chip.
+///
+/// Display only. `probedModel` keeps the id whole, because the tokenizer resolver matches on it
+/// (char_api.zig:147) and a trimmed id would resolve to a different tokenizer, or to none.
+fn displayModel(raw: []const u8) []const u8 {
+    var name = raw;
+    if (std.mem.lastIndexOfAny(u8, name, "/\\")) |i| name = name[i + 1 ..];
+    if (std.mem.endsWith(u8, name, ".gguf")) name = name[0 .. name.len - ".gguf".len];
+    return if (name.len > 0) name else raw;
 }
 
 /// What the chip in the top bar reads. A working backend names the MODEL, because "Online" answers a
@@ -136,15 +200,37 @@ pub fn chipText() []const u8 {
 }
 
 fn setState(s: ConnState) void {
-    state = s;
-    state_code = 0;
-    regions.bumpShell();
+    setStateCode(s, 0);
 }
 
 fn setStateErr(code: u16) void {
-    state = .err;
+    setStateCode(.err, code);
+}
+
+/// The one place the state changes, and the one place it is logged. Logged on TRANSITION only: the
+/// poll re-probes every few seconds and a line per probe would bury the moment something changed
+/// under a hundred lines saying it had not. The line carries what a user would have to ask for next
+/// anyway - which backend, at which address, and the code that decided it.
+fn setStateCode(s: ConnState, code: u16) void {
+    const changed = state != s or state_code != code;
+    state = s;
     state_code = code;
+    if (changed) logState();
     regions.bumpShell();
+}
+
+fn logState() void {
+    const c = conn orelse {
+        log.info("backend {s}: none configured", .{@tagName(state)});
+        return;
+    };
+    switch (state) {
+        .connected => log.info("backend connected: {s} at {s}, model {s}", .{ c.api_type, c.api_server, statusModel() }),
+        .backend_down => log.warn("backend unreachable: {s} at {s} did not answer (SillyTavern reached it, the server did not reply)", .{ c.api_type, c.api_server }),
+        .app_down => log.warn("SillyTavern unreachable: HTTP {d} before the request reached it", .{state_code}),
+        .err => log.warn("backend check failed: HTTP {d} for {s} at {s}", .{ state_code, c.api_type, c.api_server }),
+        .configured, .none => log.info("backend {s}: {s} at {s}", .{ @tagName(state), c.api_type, c.api_server }),
+    }
 }
 
 /// Remember the model a status probe reported, so the topbar can name it. Shared by the boot
@@ -163,10 +249,32 @@ fn storeProbedModel(model: []const u8) void {
 const default_poll_ms: u32 = 20000;
 var poll_ms: u32 = default_poll_ms;
 
+/// The cadence while the backend is NOT answering. A backend that is down is the state a user is
+/// waiting to see END, so the probe that notices the recovery runs four times as often as the one
+/// that re-confirms a connection nobody is watching. Both yield to `?pollms=`, which the browser gate
+/// sets and which must stay the only cadence when it is present.
+const down_poll_ms: u32 = 5000;
+var poll_ms_forced: bool = false;
+
+/// The interval the NEXT tick waits. Read per tick rather than stored, so a state change takes effect
+/// on the following tick instead of needing the loop to be torn down and re-armed.
+fn currentPollMs() u32 {
+    if (poll_ms_forced) return poll_ms;
+    return if (state == .connected) poll_ms else down_poll_ms;
+}
+
 /// Armed, not a timer handle: ziex exposes setTimeout with NO clearTimeout, so a poll is stopped by
 /// refusing to reschedule (the reveal.zig/reading_prefs.zig pattern). The pending tick still fires
 /// once and returns without arming another, which is why stopPoll cannot leave a loop running.
 var poll_armed: bool = false;
+
+/// Whether there is any reason for the client to keep probing. Autoconnect off does NOT mean blind:
+/// a connection already established is still watched, so a backend that dies is reported the same
+/// either way. What off withholds is the RECONNECT, so once the probe finds it gone the poll stops
+/// and nothing hunts for its return until Connect is pressed.
+fn pollWanted() bool {
+    return autoConnect() or state == .connected;
+}
 
 /// Begin polling. Idempotent BY DESIGN: a second call while armed must not start a second timer, or
 /// every settings load would double the probe rate for the life of the page.
@@ -177,6 +285,7 @@ pub fn startPoll() void {
     if (server_events.streamLive()) return;
     if (poll_armed) return;
     if (conn == null) return;
+    if (!pollWanted()) return;
     poll_armed = true;
     schedulePoll();
 }
@@ -193,17 +302,87 @@ pub fn pollArmed() bool {
 
 /// The server pushed the backend's state, so nothing here probed for it. `{"status":"online"|
 /// "asleep"}`; an unrecognised status is left alone rather than guessed at.
+///
+/// The push is a STATE, not a connection: it carries no model name, so a chip resolved from this
+/// alone can only fall back to naming the backend type. With autoconnect on, an online push is
+/// therefore followed by one client probe, which is what turns "the backend is up" into "you are
+/// talking to mistral-7b" without anyone opening the panel.
 pub fn applyServerStatus(payload: []const u8) void {
     if (std.mem.indexOf(u8, payload, "\"online\"") != null) {
         setState(.connected);
+        if (autoConnect()) checkStatus();
     } else if (std.mem.indexOf(u8, payload, "\"asleep\"") != null) {
-        setState(.asleep);
+        // The server's own word for it is "asleep", but what it MEANS is that SillyTavern probed the
+        // text-generation server and got nothing. SillyTavern is plainly up - it just said so.
+        setState(.backend_down);
     }
+}
+
+// ---- autoconnect ------------------------------------------------------------------------------
+
+/// Whether the client finishes the connection ITSELF the moment the backend answers.
+///
+/// ON (the default): every status probe adopts what it finds, so a backend that comes up is named,
+/// with its model, in the chip with no interaction at all - and one that goes down and returns
+/// recovers on its own from asleep, offline or an error code.
+/// OFF: a LIVE connection is still watched, so a backend that dies is still reported; what never
+/// happens is the RECONNECT. Once it is gone the client stops hunting and waits for Connect.
+///
+/// It writes NO settings. The connection it adopts is the one already in the settings blob, so there
+/// is nothing to save; a URL typed into the panel and not submitted is never picked up by this path.
+const autoconnect_key = "st-conn-autoconnect";
+
+/// Null until the first read, which is what pulls the stored preference. Lazy for the same reason
+/// the system card's section is: most sessions never touch it, so it costs nothing until asked.
+var autoconnect: ?bool = null;
+
+pub fn autoConnect() bool {
+    if (autoconnect) |v| return v;
+    // Absent storage reads as ON: the feature is the behaviour a user expects from a status chip
+    // that watches the backend, and a stored "false" is the only thing that should switch it off.
+    const v = storedFlag(autoconnect_key) orelse true;
+    autoconnect = v;
+    return v;
+}
+
+/// The toggle's onchange. Turning it ON probes immediately rather than waiting for the next tick:
+/// the click means "connect now", and a five-second wait after it reads as the switch not working.
+pub fn setAutoConnect(v: bool) void {
+    autoconnect = v;
+    storeFlag(autoconnect_key, v);
+    if (v) {
+        checkStatus();
+        startPoll();
+    }
+    regions.bumpShell();
+}
+
+pub fn autoConnectAttr() []const u8 {
+    return if (autoConnect()) "true" else "";
+}
+
+fn storedFlag(key: []const u8) ?bool {
+    if (zx.platform.role != .client) return null;
+    const ls = js.global.get(js.Object, "localStorage") catch return null;
+    defer ls.deinit();
+    const raw = ls.callAlloc(?js.String, alloc, "getItem", .{js.string(key)}) catch return null;
+    const value = raw orelse return null;
+    defer alloc.free(value);
+    return std.mem.eql(u8, value, "1");
+}
+
+fn storeFlag(key: []const u8, v: bool) void {
+    if (zx.platform.role != .client) return;
+    const ls = js.global.get(js.Object, "localStorage") catch return;
+    defer ls.deinit();
+    ls.call(void, "setItem", .{ js.string(key), js.string(if (v) "1" else "0") }) catch {
+        log.warn("localStorage write refused: {s}", .{key});
+    };
 }
 
 fn schedulePoll() void {
     if (!poll_armed) return;
-    if (zx.client.setTimeout(pollTick, poll_ms) == null) {
+    if (zx.client.setTimeout(pollTick, currentPollMs()) == null) {
         // No timer slot. Disarm rather than report a poll that is not running.
         poll_armed = false;
         log.warn("no timer slot for the status poll: the dot will not refresh on its own", .{});
@@ -212,6 +391,13 @@ fn schedulePoll() void {
 
 fn pollTick() void {
     if (!poll_armed) return;
+    // The reason to poll went away since this tick was armed (autoconnect switched off, and the
+    // probe that fired meanwhile found the backend gone). Stop here rather than reschedule: there is
+    // no clearTimeout to cancel the pending tick with, so refusing to re-arm IS the stop.
+    if (!pollWanted()) {
+        poll_armed = false;
+        return;
+    }
     // A hidden tab probes NOTHING. Read at the tick rather than binding visibilitychange: the state
     // is only interesting at the moment a probe would fire.
     if (!documentHidden()) checkStatus();
@@ -235,19 +421,22 @@ fn readPollInterval() void {
     defer alloc.free(search);
     const raw = char_data.queryValue(search, "pollms") orelse return;
     const parsed = std.fmt.parseInt(u32, raw, 10) catch return;
-    if (parsed >= 100) poll_ms = parsed;
+    if (parsed >= 100) {
+        poll_ms = parsed;
+        poll_ms_forced = true;
+    }
 }
 
 /// A send stream came back 502/504, so the edge answered before SillyTavern was reached. Reported by
 /// stream_drive at the seal: the failure is the connection's to hold, not the streamer's to paint.
 ///
-/// This one DOES toast, where the ambient probe does not. The status chip can say the backend is
-/// asleep, but it cannot say that the message you just sent got no reply, and the eye is on the
+/// This one DOES toast, where the ambient probe does not. The status chip can say the app is not
+/// answering, but it cannot say that the message you just sent got no reply, and the eye is on the
 /// conversation at that moment, not on the top bar. So the toast names the SEND that failed rather
 /// than repeating the state the chip is already showing.
 pub fn onStreamUnreachable() void {
-    setState(.asleep);
-    notifications.push(.err, "Send failed - backend asleep, unlock at silly", notifications.error_ttl_ms);
+    setStateCode(.app_down, 502);
+    notifications.push(.err, "Send failed: SillyTavern did not respond. Your message was not delivered.", notifications.error_ttl_ms);
 }
 
 /// Mutate the live connection in place, for the config panel's samplers. Handed a pointer rather
@@ -360,8 +549,10 @@ fn checkStatus() void {
 fn onBootStatusDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     _ = tag;
     if (conn == null) return;
+    // A 502/504 comes from whatever sits in front of SillyTavern, and a 0 is a request that never
+    // completed at all: either way the app was not reached, so nothing was learned about the model.
     if (status == 0 or status == 502 or status == 504) {
-        setState(.asleep);
+        setStateCode(.app_down, status);
         return;
     }
     if (status >= 200 and status < 300) {
@@ -375,8 +566,10 @@ fn onBootStatusDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
                 if (parsed.value.result.len > 0) storeProbedModel(parsed.value.result);
             } else |_| {}
         }
+        // SillyTavern answered fine and reports the text-generation server did not: `{online:false}`
+        // is its deliberate way of saying "unreachable" without a 500 on every poll.
         if (offline) {
-            setState(.offline);
+            setState(.backend_down);
             return;
         }
         setState(.connected);
@@ -414,16 +607,18 @@ pub fn connect() void {
 fn onProbeDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     _ = tag;
     connecting = false;
+    // The press failed before SillyTavern was reached, so nothing was learned about the URL just
+    // typed. Saying so is the difference between "try again" and "your address is wrong".
     if (status == 0 or status == 502 or status == 504) {
-        setConnStatus("Backend asleep - unlock at silly");
-        setState(.asleep);
-        notifications.push(.warning, "Backend asleep - unlock at silly", notifications.error_ttl_ms);
+        setConnStatus("SillyTavern did not respond, so the address was never checked. Try again shortly.");
+        setStateCode(.app_down, status);
+        notifications.push(.warning, "SillyTavern did not respond - the connection was not checked", notifications.error_ttl_ms);
         return;
     }
     if (status < 200 or status >= 300) {
-        setConnStatusFmt("Connect failed: {d}", .{status});
+        setConnStatusFmt("Check failed with HTTP {d}. {s}", .{ status, codeHint(status) });
         setStateErr(status);
-        notifications.pushFmt(.err, notifications.error_ttl_ms, "Connect failed: {d}", .{status});
+        notifications.pushFmt(.err, notifications.error_ttl_ms, "Connection check failed: HTTP {d}", .{status});
         return;
     }
     var model_buf: [96]u8 = undefined;
@@ -438,10 +633,12 @@ fn onProbeDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
             model = model_buf[0..n];
         } else |_| {}
     }
+    // The address was reached and answered nothing: the one failure a user can act on, so it names
+    // the address rather than the state.
     if (offline) {
-        setConnStatus("Backend offline - unlock at silly");
-        setState(.offline);
-        notifications.push(.warning, "Backend offline - unlock at silly", notifications.error_ttl_ms);
+        setConnStatusFmt("No response from {s}. Check the server is running at that address.", .{pending_url});
+        setState(.backend_down);
+        notifications.push(.warning, "No response from the text-generation server", notifications.error_ttl_ms);
         return;
     }
     // Stash the model, then persist. "Connected" shows only once the save lands (onPersistDone), so a
@@ -767,7 +964,12 @@ fn setKeyStatusFmt(comptime fmt: []const u8, args: anytype) void {
 
 fn fmtInto(id: []const u8, comptime fmt: []const u8, args: anytype) void {
     if (zx.platform.role != .client) return;
-    var buf: [128]u8 = undefined;
-    const text = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    // Sized like the standing line, which these sentences now match in length: a message that did
+    // not fit used to be dropped in silence, leaving the panel claiming nothing had happened.
+    var buf: [status_words_len]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, fmt, args) catch {
+        log.warn("status line did not fit its buffer: {s}", .{fmt});
+        return;
+    };
     reflectText(id, text);
 }

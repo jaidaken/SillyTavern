@@ -1064,7 +1064,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if self.path.startswith("/dev/clear-fail-next"):
                 Handler.fail_next.clear()
                 return self.mock_json({"armed": None})
-            # P1-C: drive the connection probe's outcome (asleep / offline / error / ok).
+            # P1-C: drive the connection probe's outcome (app_down / backend_down / error / ok).
             if self.path.startswith("/dev/status-mode"):
                 mode = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("m") or ["ok"])[0]
                 Handler.status_mode = mode
@@ -1939,14 +1939,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.mock_json({"ok": True})
         if path == "/api/backends/text-completions/status":
             Handler.status_probe_count += 1
-            # P1-C: the probe answers whatever the gate armed, so the connection dot's asleep,
-            # offline and error states can be driven instead of asserted only in the happy shape.
+            # P1-C: the probe answers whatever the gate armed, so every failure the client
+            # distinguishes can be driven rather than asserted only in the happy shape. The mode
+            # names say which MACHINE fails: app_down is a proxy answering for a SillyTavern that
+            # was never reached, backend_down is SillyTavern reporting the model server silent.
             mode = Handler.status_mode
-            if mode == "asleep":
+            if mode == "app_down":
                 return self.mock_status(502, {"error": "bad gateway"})
             if mode == "error":
                 return self.mock_status(500, {"error": "boom"})
-            if mode == "offline":
+            if mode == "backend_down":
                 return self.mock_json({"result": "", "online": False})
             return self.mock_json({"result": "mock-model", "data": [{"id": "mock-model"}]})
         if path == "/api/settings/set-connection":

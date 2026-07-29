@@ -19,14 +19,17 @@
     box-shadow: 0 0 6px -1px currentcolor;
 }
 
+/* Two amber states, and they are different problems: `backend_down` is the text-generation server
+   not answering, `app_down` is SillyTavern itself. Both are warnings rather than errors because
+   neither is broken code, and the words beside the dot are what tells them apart. */
 #conn-chip[data-conn-state="connected"] .conn-dot { color: var(--color-status-success); }
-#conn-chip[data-conn-state="asleep"] .conn-dot,
-#conn-chip[data-conn-state="offline"] .conn-dot { color: var(--color-status-warning); }
+#conn-chip[data-conn-state="backend_down"] .conn-dot,
+#conn-chip[data-conn-state="app_down"] .conn-dot { color: var(--color-status-warning); }
 #conn-chip[data-conn-state="err"] .conn-dot { color: var(--color-status-error); }
 #conn-chip[data-conn-state="configured"] .conn-dot { color: var(--color-status-info); }
 [data-conn-state="connected"] .conn-dot { background: var(--color-status-success); }
-[data-conn-state="asleep"] .conn-dot { background: var(--color-status-warning); }
-[data-conn-state="offline"] .conn-dot { background: var(--color-status-warning); }
+[data-conn-state="backend_down"] .conn-dot { background: var(--color-status-warning); }
+[data-conn-state="app_down"] .conn-dot { background: var(--color-status-warning); }
 [data-conn-state="err"] .conn-dot { background: var(--color-status-error); }
 [data-conn-state="configured"] .conn-dot { background: var(--color-status-info); }
 
