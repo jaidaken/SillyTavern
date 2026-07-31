@@ -5,19 +5,17 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-# Eighteen of the twenty-four. Five are left out ON PURPOSE and none of the reasons is proven:
-#   03           the door, applied by patch-door.sh after the export. This one IS understood.
-#   07 08 09     excluded by this project since before the shared repository existed. The reason
-#                was never written down anywhere that survives, and a reviewer has since named a
-#                plausible one: 09 frees the per-dispatch jsz event handle after a handler returns,
-#                assuming every handler is synchronous. Do not re-enable without checking that.
-#   10 11        they patch ziex's tailwind plugin, which this project does not compile at all.
+# 21 of 24. Out on purpose: 03 (door, applied post-export by patch-door.sh), 10+11 (tailwind plugin, not compiled here).
+# 07-09 re-enabled 2026-07-31 (exclusion was accidental); 09's post-return event free verified safe: all app handlers synchronous, none retain the event.
 PATCHES=(
     01-vdom-text-pointer-uaf.patch
     02-commentmarker-handle-leak.patch
     04-render-releases-marker.patch
     05-concatrawtext-leak.patch
     06-reconcile-memo.patch
+    07-node-handle-leaks.patch
+    08-standalone-alloc-leaks.patch
+    09-client-handle-registry-event-leaks.patch
     12-placement-move-order-and-raw-html-misuse.patch
     13-render-reentrancy-stale-patch-list.patch
     14-jsz-callalloc-double-free.patch
