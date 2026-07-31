@@ -11,6 +11,11 @@ any more. `../setup-ziex.sh` names this project's applied list and hands it to t
 `ziex-patched` repository, which owns the patch files and the generic door edits, and which
 zomboid-manager consumes too.
 
+- [EXCLUSION-07-08-09](./EXCLUSION-07-08-09.md) - why 07, 08 and 09 are unapplied here. Settled
+  2026-07-31: it was an omission, not a decision. Commit 6d91a78f4 added all three patch files and
+  changed zero lines of `setup-ziex.sh`, while its own message says they are applied by it. Carries
+  the per-patch safety verdict and what is still owed before wiring them.
+
 **What this project applies is unchanged**: the same eighteen as before, `01 02 04 05 06` and
 `12` through `24`. Not 07, 08 or 09. Not 10 or 11. The list moved into `../setup-ziex.sh`, where a
 reader can see it without opening a second repository, but no patch was added or removed and the
