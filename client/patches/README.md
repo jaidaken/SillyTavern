@@ -1,29 +1,47 @@
-# ziex patches (against v0.1.0-dev.1259, commit 26f5945)
+---
+description: Superseded local copy of the ziex patch series; the live series is the shared ziex-patched repository.
+tags: [ziex, patches, superseded]
+date: 2026-07-31
+---
 
-Fixes for confirmed ziex defects, applied to the fetched ziex source before build.
-Each is proven; see the wiki note `wasm-zig-browser-ui/raw/notes/2026-07-09-ziex-three-defects.md`.
-All are candidates to upstream as PRs; drop the patch once merged.
+# Superseded
 
-Which patches actually apply is the explicit glob list in `setup-ziex.sh` (01 02 04 05 06 10 11 12 13 14 15 16),
-NOT this file and NOT the presence of a file in this directory: 03 is the door (applied post-export
-by `patch-door.sh` because the door ships prebuilt), and 07/08/09 exist but are deliberately unwired.
+These files are the old local copy of the ziex patch series. Nothing in this directory is applied
+any more. `../setup-ziex.sh` names this project's applied list and hands it to the shared
+`ziex-patched` repository, which owns the patch files and the generic door edits, and which
+zomboid-manager consumes too.
 
-WARNING for anyone adding a test to a patch: a test placed in `.ziex/src/**` NEVER RUNS. Zig only
-discovers tests reachable by file path from the compilation root and `zx` is a separate module, so
-`zig build test` reports all-pass with an `expect(false)` sitting in `.ziex/src/runtime/core/vdom.zig`
-(verified 2026-07-16). The tests patches 05 and 06 added there have therefore never run once. Put
-tests in `.ziex/test/**`, which `build.sh` now runs as its own suite.
+**What this project applies is unchanged**: the same eighteen as before, `01 02 04 05 06` and
+`12` through `24`. Not 07, 08 or 09. Not 10 or 11. The list moved into `../setup-ziex.sh`, where a
+reader can see it without opening a second repository, but no patch was added or removed and the
+resulting `dist/` is byte-identical to the last build made from this directory, `main.wasm`
+included.
 
-- 01 vdom text pointer use-after-free: the retained vtree re-pointed a text node only on change, so an unchanged node held a freed pointer. Hoist the re-point out of the `if`.
-- 02 findCommentMarker + CommentMarker handle leak: the marker walk never released its jsz object handles, and CommentMarker had no deinit, leaking handles every render. Release non-retained walk handles; add CommentMarker.deinit.
-- 03 readString cache stale-read + unbounded leak: the door cached decoded strings by pointer forever, returning stale text on address reuse and growing without bound. Remove the cache (source diff; the shipped tarball's compiled index.js needs the equivalent edit).
-- 04 render releases the marker: Client.render obtained a marker every render and dropped it; add `defer marker.deinit()`.
-- 05 concatRawText leak: the escaping-none diff built both sides' raw text and freed neither. (Its test is in `.ziex/src/**` and has never run; see the warning above.)
-- 06 reconcile memo fast path: an unchanged keyed component keeps its old vnode without being resolved or diffed, so a sealed message costs nothing per render. (Same: its test has never run.)
-- 10 tailwind oxide scanner: the plugin's class scanner dropped classes the app really uses.
-- 12 PLACEMENT/MOVE order + raw-html misuse: the two ordered the DOM by REFERENCE node but the vtree by INDEX, so the two disagreed (traced: a placeholder replaced by many rows leaves the DOM correct and the vtree REVERSED). Both now derive position from `reference_id` alone, and `PatchData.PLACEMENT.index` / `MOVE.new_index` are DELETED so a second source of position is unrepresentable rather than merely unused. Also: `createPlatformNodes`' escaping-none branch claimed non-text children "fall back to normal node creation below" and instead returned immediately, silently never creating them; it now reports the misuse. Regression test in `.ziex/test/core/vdom.zig`, proven red (`expected 16, found 64`) against the unpatched ordering rule.
-- 13 render re-entrancy -> stale patch list: a component fn runs DURING the diff (`resolveComponent` calls it), so a state mutation there re-entered `Client.render` for a component whose diff was already in flight. Both passes diffed the SAME vtree before either applied; the inner pass applied first and freed vnodes (`removed.deinit`) that the outer pass's already-computed list still named, so the outer pass asked the door to remove a freed node and `_rc` got `(0, 0)` (a freed VNode read back as zeros; id 0 is Shell's root and the id counter never reuses). Live symptom: select a character, then swap straight from `#d-characters` to `#d-card_editor`. New `RenderGate` (`runtime/core/render_gate.zig`, pure so it is testable natively) held across BOTH the diff and the apply: a re-entrant pass is refused before it can reach a vtree, recorded dirty, and rendered by the owning pass's drain against the tree that pass leaves behind. Tests in `.ziex/test/core/render_gate.zig`, proven red (4 rows `✗`, 458 -> 454) against an ungated `tryEnter`.
-- 14 jsz callAlloc/getAlloc double-free: `convertValue` frees the returned handle on every non-retaining path (`defer if (!info.retains) v.deinit()`), INCLUDING its own error returns, while `callAlloc` and `getAlloc` ALSO freed it via `errdefer v.deinit()`. So any type mismatch freed one jsz slot TWICE, pushing the same id into the JS free list twice (`zigjs.ts` `valueDeinit` has no dup guard); the next handles then alias one slot and a live object reads back `null` -> `Reflect.get called on non-object` thrown out through the wasm frames, which skips every Zig `defer` on the way out (including patch 13's RenderGate exit, latching the gate so the page never renders again). Reached by `call(void, ...)` against any helper returning something other than undefined: `void` is built only from null/undefined, so a SUCCESSFUL call to an `async` helper returns `error.InvalidType`. Fix gives `convertValue` sole ownership (`errdefer if (info.retains) v.deinit()` beside the existing defer; the two callers' errdefers deleted), so v is freed exactly once on all four paths and the double-free is unrepresentable rather than merely avoided. `new()`'s errdefer is untouched: it never calls convertValue. Measured red/green on a real background upload: 2 double-freed slots before, 0 after. The root is worth more than the call-site fixes it duplicates: with EVERY call site left broken, patch 14 alone takes the appearance panel's Reset button from 5 double-frees (jsz slot 378 pushed into the free list five times by one click, via `call(void, "removeProperty")`, which nobody had enumerated because the search pattern was `__st_`) down to 0. It retires the class at sites no list contains; the call-site fixes only retire the sites someone found. What it does NOT fix is the LIE: the catch branch still fires on success, so both layers are needed.
-- 15 render recover (`__zx_render_recover` + `_forgetNode`): patch 13's gate is held across the diff AND the apply by `defer render_gate.exit()`, and **a Zig `defer` does not survive a throw out through the wasm frames**. So one throw strands the gate on a pass that no longer exists, every later render is refused, and the page freezes with no error of its own. Measured (card avatar pick, patch 14 absent so the double-free still fires): ALL FOUR render counters frozen at `{shell:9,mv:50,log:3,composer:1}` forever, `#shell` still alive, **`uncaught exceptions: 0`** because the entrypoints are `WebAssembly.promising`-wrapped and the trap arrives as a REJECTION, which is why no instrument we had ever saw it. Clearing the gate alone is NOT enough: `diffWithComponent(self: *VDOMTree, ...)` reconciles IN PLACE before `applyPatches` runs, so a throw mid-apply leaves the vtree already describing a DOM that never happened, and the next diff compares vtree to vtree and never re-emits the lost patches. So recovery DROPS the throwing component's vtree, which sends the next render down the existing `existing_vtree == null` branch to rebuild it from the component itself: a rebuild from truth, not a recovery from garbage. The dirty set is kept, so renders refused while the gate was stuck still run. Returns 0/1/2 (gate not held / cleared / cleared+dropped) and the door reports each on the `[zx:dom]` ANOMALY channel, always on. **The `_forgetNode` half is not optional**: `document.zig:302` `clearContent` detaches the old tree with a RAW `removeChild` that the tracked glue never sees, so the rebuild stranded **178** registry entries (measured, attributed by control: 0 without E, 178 with E, 0 with the fix). That raw site was documented harmless because "clearContent runs only at hydration, where the nodes are SSR and untracked" - **E is what makes it run on tracked nodes**, so the dead code became live. Red/green: page dead -> page alive with the throw still firing, `orphanCount` 178 -> 0.
-- 16 jsz empty-string RangeError: `Value.init`'s String branch handed `x.ptr` to `valueStringCreate` unguarded, and **a zero-length slice's ptr is an undefined sentinel**. JS validates the byte OFFSET before the length, so `new Uint8ClampedArray(memory.buffer, -1, 0)` inside `loadString` throws `RangeError: Start offset -1 is outside the bounds of the buffer` **even though not one byte is read**. So `js.string(<empty slice>)` threw out through the wasm frames on every call. jsz already knew: `Value.string` (the READ side, `value.zig:203`) carries the guard AND the reason in a comment naming this exact RangeError; only the WRITE side went without. Fix passes a `""` literal's always-valid pointer when `len == 0`. **This was live and invisible for who knows how long: the door logged the rejection with a bare `console.error`, and the gate's filter is `line.includes('[zx:dom]')`, so `227 of 227` was green over it.** It surfaced only because patch 15's D3 prefixes the rejection onto the channel the gate watches. Localized from the STACK, not by reasoning: two candidates picked by inspection (`writeBytes2` in the KV imports, `valueStringCopy`) were BOTH wrong. Red/green: RangeError present and `226/227` before, **`227 of 227` + `58 of 58` and zero RangeError after**.
-- 11 tailwind dep-file use-after-free: the plugin duped each discovered dependency into a block-scoped arena that `deinit`s before `writeDepFile` reads them, so `writeDepFile`'s own buffer reused the freed pages and corrupted a dep path in `output.d`. zig then `openat`s the mangled path and the build fails `FileNotFound`. Length-sensitive (surfaces on the longer `SillyTavern/client` abs path, not shorter worktree paths). Dupe deps into the process-lifetime arena instead.
+The shared files are shared; the applied list is not. Only the files were ever the duplication
+problem.
+
+## The 07, 08, 09 exclusion is now written down as unexplained
+
+This tree excluded those three since before the shared repository existed, and the reason survives
+nowhere: not in the old notes here, not in the wiki note they cited (which does not exist), not in
+the section files. `ziex-patched/README.md` records that, records the one plausible mechanism a
+later reviewer named (patch 09 frees the per-dispatch jsz event handle after a handler returns,
+assuming every handler is synchronous), and states plainly that preserving an unexplained decision
+is its own defect rather than a safe default. Read that section before touching the list.
+
+## Door edits
+
+D1 through D6, D8 and D9 are generic ziex runtime correctness and moved to the shared repository.
+D7, D10, D11 and D12 are this application's features and stayed in `../patch-door.sh`, which runs
+immediately after the shared script against the same file. The resulting door is byte-identical to
+the one the single old script produced.
+
+## Patch 15
+
+Its `unregisterVElement` hunk carries two lines of leading context in the shared copy rather than
+three, so that one file applies both to this project's list and to a list containing 09. Nothing
+else about it changed, and the source it produces here is byte-identical to what this directory
+produced.
+
+This directory is kept only so the change can be read against what it replaced. Delete it once that
+is no longer useful.

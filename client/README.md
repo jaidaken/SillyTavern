@@ -21,13 +21,24 @@ stylesheet and minifies the shipped assets. The two vendored browser libraries a
 
 ## Build
 
-Run `./build.sh`, not bare `zig build`. ziex is used through a patch series, and only the wrapper
-applies all of it:
+Run `./build.sh`, not bare `zig build`. ziex is used through a patch series that lives in the shared
+`ziex-patched` repository, and only the wrapper applies it:
 
 ```sh
 ./build.sh              # OPT=ReleaseSmall by default
 OPT=ReleaseFast ./build.sh
 ```
+
+`setup-ziex.sh` here is a shim: it holds **this project's applied list**, eighteen patch filenames,
+and hands them to the shared `ziex-patched` repository, which owns the files. The list is in that
+script so one file tells you what this project applies. 07, 08 and 09 are excluded on purpose and
+the reason is not recorded anywhere; `ziex-patched/README.md` documents that gap and the one
+plausible mechanism a reviewer named for it. Read it before changing the list.
+
+`patch-door.sh` runs the shared door edits (D1 to D6, D8, D9) and then applies this application's
+own four (D7, D10, D11, D12) to the same file. Both scripts look for `../../ziex-patched` unless
+`ZIEX_PATCHED` names another path, and fail with the path they looked for rather than building an
+unpatched ziex.
 
 `build.sh` runs `setup-ziex.sh` (materialises the patched ziex into `.ziex`), then `zig build check`
 and `zig build test` as gates, then `zig build` and `zig build export`, then `patch-door.sh`,
@@ -126,8 +137,8 @@ every `data:` URI whose mediatype is not an image, including `image/svg+xml`.
 build.zig                 ziex.init wiring: jsglue_href, esbuild css bundle, export step
 build.zig.zon             ziex, pinned as a path dep (.ziex)
 build.sh                  the real build: setup-ziex, gates, build, export, patch, minify, prune
-setup-ziex.sh             materialise the patched ziex into .ziex
-patch-door.sh             edit ziex's exported door in place, post-export
+setup-ziex.sh             shim: delegates to the shared ziex-patched to materialise .ziex
+patch-door.sh             the shared door edits, then this app's own four, post-export
 verify.sh                 the browser gate against dist/
 devserve.py               static server + API reverse proxy
 app/main.zig              ziex app entry
