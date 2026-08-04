@@ -312,15 +312,14 @@ async function newPage() {
 
 // ---- probe: dump enough to nail selectors --------------------------------------------------------
 async function probe(which) {
-    const url = which === 'new' ? `http://127.0.0.1:${PORTS.NEW}/` : `http://127.0.0.1:${PORTS.OLD}/`;
+    const url = which === 'new' ? `http://127.0.0.1:${PORTS.NEW}/?showtabs=1` : `http://127.0.0.1:${PORTS.OLD}/`;
     const { page, child } = await newPage();
     await page.navigate(url);
     await sleep(6000);
     if (which === 'new') {
-        const hasDrawer = await page.eval("!!document.querySelector('#d-characters')");
-        if (hasDrawer) { try { await page.click('#d-characters'); } catch (e) { process.stdout.write(`drawer click err: ${e.message}\n`); } await sleep(1500); }
+        try { await openCastCharacters(page); } catch (e) { process.stdout.write(`cast open err: ${e.message}\n`); }
         const drawerInfo = await page.eval(`JSON.stringify({
-            dChars: !!document.querySelector('#d-characters'),
+            castDock: !!document.querySelector('#panel-view.panel-right'),
             charItems: document.querySelectorAll('#chat-root .char-item').length,
             charNames: [...document.querySelectorAll('#chat-root .char-item .char-name')].map(n=>n.textContent.trim()).slice(0,6),
             homeResume: !!document.querySelector('#home-resume'),
@@ -404,12 +403,28 @@ async function driveOld(display) {
     } finally { try { process.kill(-child.pid, 'SIGKILL'); } catch (_) { /* */ } }
 }
 
+// The UI rework deleted the topbar, so #d-characters is gone; the Cast dock opens from an edge tab that
+// ?showtabs=1 pins. Mirrors interactions.mjs openPanel: the click retries because the dock arrives on a slide.
+const CAST_SECTION = '#panel-view.panel-right nav button[data-section="characters"]';
+async function openCastCharacters(page) {
+    if (!await page.waitFor("document.querySelector('#chat-root.hydrated')", 20000)) throw new Error('new: never hydrated');
+    if (!await page.eval("!!document.querySelector('#panel-view.panel-right')")) {
+        await page.click('#tab-cast');
+        if (!await page.waitFor("document.querySelector('#panel-view.panel-right')", 8000)) throw new Error('new: cast dock never opened');
+    }
+    await page.waitFor("(function(){var e=document.querySelector('#panel-view.panel-right');return e && e.getBoundingClientRect().right < innerWidth + 1;})()", 4000);
+    for (let attempt = 1; ; attempt++) {
+        await page.click(CAST_SECTION);
+        if (await page.waitFor(`document.querySelector('${CAST_SECTION}[aria-current="true"]')`, 4000)) break;
+        if (attempt === 3) throw new Error('new: characters never became the current section');
+    }
+}
+
 async function driveNew(display) {
     const { page, child } = await newPage();
     try {
-        await page.navigate(`http://127.0.0.1:${PORTS.NEW}/`);
-        if (!await page.waitFor("document.querySelector('#chat-root.hydrated')", 20000)) throw new Error('new: never hydrated');
-        await page.click('#d-characters');
+        await page.navigate(`http://127.0.0.1:${PORTS.NEW}/?showtabs=1`);
+        await openCastCharacters(page);
         if (!await page.waitFor("document.querySelectorAll('#chat-root .char-item').length >= 1", 12000)) throw new Error('new: no char list');
         await page.focus('.char-search');
         await page.insertText(display);
@@ -542,9 +557,8 @@ async function openFrontend(page, which, display) {
         if (!opened) throw new Error(`old: ${display} not in list`);
         if (!await page.waitFor("document.querySelectorAll('#chat .mes').length >= 1", 15000)) throw new Error('old: chat/greeting never loaded');
     } else {
-        await page.navigate(`http://127.0.0.1:${PORTS.NEW}/`);
-        if (!await page.waitFor("document.querySelector('#chat-root.hydrated')", 20000)) throw new Error('new: never hydrated');
-        await page.click('#d-characters');
+        await page.navigate(`http://127.0.0.1:${PORTS.NEW}/?showtabs=1`);
+        await openCastCharacters(page);
         if (!await page.waitFor("document.querySelectorAll('#chat-root .char-item').length >= 1", 12000)) throw new Error('new: no char list');
         await page.focus('.char-search');
         await page.insertText(display);
