@@ -378,7 +378,7 @@ async function driveOld(display) {
     try {
         await page.navigate(`http://127.0.0.1:${PORTS.OLD}/`);
         const connected = await page.waitFor(
-            "document.querySelector('.online_status_text') && document.querySelector('.online_status_text').textContent.trim().length>0 && !/no.?connection|not connected/i.test(document.querySelector('.online_status_text').textContent)", 25000);
+            "document.querySelector('.online_status_text') && document.querySelector('.online_status_text').textContent.trim().length>0 && !/no.?connection|not connected/i.test(document.querySelector('.online_status_text').textContent)", 60000);
         if (!connected) throw new Error('old: never connected');
         const opened = await page.eval(`(function(){
             const items=[...document.querySelectorAll('.character_select')];
@@ -552,7 +552,7 @@ async function seedTimed(data) {
 async function openFrontend(page, which, display) {
     if (which === 'old') {
         await page.navigate(`http://127.0.0.1:${PORTS.OLD}/`);
-        if (!await page.waitFor("document.querySelector('.online_status_text') && document.querySelector('.online_status_text').textContent.trim().length>0 && !/no.?connection|not connected/i.test(document.querySelector('.online_status_text').textContent)", 25000)) throw new Error('old: never connected');
+        if (!await page.waitFor("document.querySelector('.online_status_text') && document.querySelector('.online_status_text').textContent.trim().length>0 && !/no.?connection|not connected/i.test(document.querySelector('.online_status_text').textContent)", 60000)) throw new Error('old: never connected');
         const opened = await page.eval(`(function(){const items=[...document.querySelectorAll('.character_select')];const el=items.find(e=>{const n=e.querySelector('.ch_name');return n&&n.textContent.trim()===${JSON.stringify(display)};});if(!el) return false; el.click(); return true;})()`);
         if (!opened) throw new Error(`old: ${display} not in list`);
         if (!await page.waitFor("document.querySelectorAll('#chat .mes').length >= 1", 15000)) throw new Error('old: chat/greeting never loaded');
@@ -784,6 +784,9 @@ function makeCardPng(basePng, cardObj) {
     return writePng(kept);
 }
 
+// Retries per seed before a drive failure is scored. 18 of 74 seeds failed as "old: never connected"
+// during one loaded run, none of them real.
+const DRIVE_ATTEMPTS = 3;
 const FUZZ_CARD = 'ParityFuzz';
 const FUZZ_WORLD = 'ParityFuzz';
 
@@ -801,6 +804,12 @@ function genState(seed, basePng, baseSettings) {
     const pick = (arr) => arr[Math.floor(rng() * arr.length)];
     const chance = (p) => rng() < p;
     const rint = (lo, hi) => lo + Math.floor(rng() * (hi - lo + 1));
+    // Axes added after the first baseline draw from a SECOND stream: taking them from `rng` would shift
+    // every later draw and silently re-roll every existing scenario, so a seed would stop being comparable.
+    const rng2 = mulberry32(seed ^ 0x9e3779b9);
+    const pick2 = (arr) => arr[Math.floor(rng2() * arr.length)];
+    const chance2 = (p) => rng2() < p;
+    const rint2 = (lo, hi) => lo + Math.floor(rng2() * (hi - lo + 1));
     const markers = {};
     const axes = [];
     const mark = (feat) => { const t = `Z${feat.toUpperCase().replace(/[^A-Z]/g, '')}_${seed}Z`; markers[t] = feat; if (!axes.includes(feat)) axes.push(feat); return t; };
@@ -871,11 +880,16 @@ function genState(seed, basePng, baseSettings) {
         const personaDepth = rint(1, 4), personaRole = pick([0, 1, 2]);
         pu.personas = pu.personas || {}; pu.personas[avatar] = baseSettings.username || 'Tester';
         pu.persona_descriptions = pu.persona_descriptions || {};
-        pu.persona_descriptions[avatar] = { description: personaText, position: personaPos, depth: personaDepth, role: personaRole, lorebook: '' };
+        // The persona-bound lorebook is stock's FOURTH world-info source (getPersonaLore). It was pinned
+        // empty here, so that source was never exercised on either side.
+        const personaBook = (personaPos !== 9 && chance2(0.3)) ? FUZZ_WORLD : '';
+        pu.persona_descriptions[avatar] = { description: personaText, position: personaPos, depth: personaDepth, role: personaRole, lorebook: personaBook };
         pu.persona_description = personaText;
         pu.persona_description_position = personaPos;
         pu.persona_description_depth = personaDepth;
         pu.persona_description_role = personaRole;
+        pu.persona_description_lorebook = personaBook;
+        if (personaBook) axes.push('persona-lorebook');
 
         if (process.env.DUMP_SEED && seed === Number(process.env.DUMP_SEED)) {
             console.error('DUMP persona:', JSON.stringify({ pos: personaPos, depth: personaDepth, role: personaRole }));
@@ -898,6 +912,13 @@ function genState(seed, basePng, baseSettings) {
         } else {
             if (pu.instruct) { pu.instruct.wrap = chance(0.5); pu.instruct.names_behavior = pick(['none', 'force', 'always']); axes.push('instruct-template'); }
             if (pu.context) { pu.context.example_separator = pick(['***', '<START>', '---']); pu.context.chat_start = pick(['', '***']); axes.push('context-template'); }
+            // parity-seed.py forces instruct ON for every run, so the whole non-instruct path was untested:
+            // always_force_name2 and the classic `Name:` cue only exist there. Never disabled under --formats.
+            if (pu.instruct && chance2(0.25)) {
+                pu.instruct.enabled = false;
+                pu.always_force_name2 = chance2(0.5);
+                axes.push('instruct-off');
+            }
         }
 
         // power-user prompt-reaching settings (some drive the stop array)
@@ -908,6 +929,30 @@ function genState(seed, basePng, baseSettings) {
         pu.custom_stopping_strings_macro = chance(0.5);
         pu.names_as_stop_strings = chance(0.5);
         axes.push('power-user');
+
+        // Prompt-affecting settings the generator never varied before (measured 2026-08-04: 48 of 61
+        // prompt-path power_user keys unvaried). Each of these changes prompt bytes in stock.
+        pu.pin_examples = chance2(0.35);
+        pu.strip_examples = !pu.pin_examples && chance2(0.2);
+        pu.token_padding = pick2([0, 64, 256]);
+        pu.disable_group_trimming = chance2(0.5);
+        if (chance2(0.35)) {
+            pu.user_prompt_bias = `${mark('prompt-bias')} bias tail`;
+            pu.show_user_prompt_bias = true;
+        } else { pu.user_prompt_bias = ''; }
+        if (pu.pin_examples || pu.strip_examples) axes.push('example-mode');
+        if (pu.token_padding !== 64) axes.push('token-padding');
+
+        // WI globals were never set, so recursion never ran (stock default off) and the caps were dead.
+        // Both frontends read `world_info_settings ?? root` and the seed HAS it: a root write is ignored.
+        const ws = s.world_info_settings = s.world_info_settings || {};
+        ws.world_info_recursive = chance2(0.5);
+        ws.world_info_max_recursion_steps = ws.world_info_recursive ? pick2([0, 1, 2, 3]) : 0;
+        ws.world_info_budget_cap = pick2([0, 0, 50, 200]);
+        ws.world_info_budget = pick2([25, 50, 100]);
+        ws.world_info_depth = rint2(1, 4);
+        if (ws.world_info_recursive) axes.push('wi-recursive');
+        if (ws.world_info_budget_cap) axes.push('wi-budget-cap');
 
         // sysprompt stays enabled with a marked content (global system slot)
         pu.sysprompt = { enabled: true, name: 'Parity', content: `${mark('global-sysprompt')} Stay in character.` };
@@ -975,14 +1020,23 @@ async function runFuzz(args) {
             const state = genState(seed, basePng, baseSettings);
             process.stdout.write(`\n----- seed ${seed} axes:[${state.axes.join(',')}] hist:${state.messages.length - 1} -----\n`);
             let oldHit, newHit, error = null;
-            try {
-                applyFuzzState(state, baseSettings, basePng);
-                await resetChat(FUZZ_CARD);
-                const oldP = await driveMulti('old', FUZZ_CARD, state.messages, FUZZ_CARD);
-                resetChatToHeader(FUZZ_CARD);
-                const newP = await driveMulti('new', FUZZ_CARD, state.messages, FUZZ_CARD);
-                oldHit = oldP[oldP.length - 1]; newHit = newP[newP.length - 1];
-            } catch (e) { error = e.message; }
+            // Scoring the first drive failure as ERROR reports machine load as a result and loses the seed;
+            // a genuinely broken drive still fails every attempt.
+            for (let attempt = 1; attempt <= DRIVE_ATTEMPTS; attempt++) {
+                error = null;
+                try {
+                    applyFuzzState(state, baseSettings, basePng);
+                    await resetChat(FUZZ_CARD);
+                    const oldP = await driveMulti('old', FUZZ_CARD, state.messages, FUZZ_CARD);
+                    resetChatToHeader(FUZZ_CARD);
+                    const newP = await driveMulti('new', FUZZ_CARD, state.messages, FUZZ_CARD);
+                    oldHit = oldP[oldP.length - 1]; newHit = newP[newP.length - 1];
+                    break;
+                } catch (e) {
+                    error = e.message;
+                    if (attempt < DRIVE_ATTEMPTS) process.stdout.write(`  seed ${seed}: drive attempt ${attempt}/${DRIVE_ATTEMPTS} failed (${e.message}), retrying\n`);
+                }
+            }
             if (error) { process.stdout.write(`  seed ${seed}: DRIVE ERROR: ${error}\n`); results.push({ seed, error }); continue; }
             writeFileSync(join(args.data, `fz-${seed}-old.txt`), oldHit.prompt);
             writeFileSync(join(args.data, `fz-${seed}-new.txt`), newHit.prompt);
@@ -991,7 +1045,9 @@ async function runFuzz(args) {
             if (rep.equal && stopEqual) { process.stdout.write(`  seed ${seed}: MATCH (${rep.bytes} bytes)\n`); results.push({ seed, equal: true }); continue; }
             const feats = classifyDiff(rep.text, stopEqual, state.markers);
             for (const f of feats) (byFeature[f] = byFeature[f] || []).push(seed);
-            process.stdout.write(`  seed ${seed}: DIVERGENT feats:[${feats.join(',')}] stopEqual:${stopEqual}\n`);
+            // Axes reprinted here, not just in the header: the header prints before applySettings runs, so
+            // every axis chosen there (power-user, instruct-off, wi-*, prompt-bias) is missing from it.
+            process.stdout.write(`  seed ${seed}: DIVERGENT feats:[${feats.join(',')}] axes:[${state.axes.join(',')}] stopEqual:${stopEqual}\n`);
             if (!rep.equal) process.stdout.write(`--- old (public/)   +++ new (wasm)\n${rep.text}\n`);
             if (!stopEqual) process.stdout.write(`  STOP old=${JSON.stringify(oldHit.stop)}\n  STOP new=${JSON.stringify(newHit.stop)}\n`);
             results.push({ seed, equal: false, feats, stopEqual });
@@ -1143,7 +1199,7 @@ async function driveOldWithHook(display) {
     try {
         await page.navigate(`http://127.0.0.1:${PORTS.OLD}/`);
         const connected = await page.waitFor(
-            "document.querySelector('.online_status_text') && document.querySelector('.online_status_text').textContent.trim().length>0 && !/no.?connection|not connected/i.test(document.querySelector('.online_status_text').textContent)", 25000);
+            "document.querySelector('.online_status_text') && document.querySelector('.online_status_text').textContent.trim().length>0 && !/no.?connection|not connected/i.test(document.querySelector('.online_status_text').textContent)", 60000);
         if (!connected) throw new Error('old: never connected');
         const opened = await page.eval(`(function(){
             const items=[...document.querySelectorAll('.character_select')];
