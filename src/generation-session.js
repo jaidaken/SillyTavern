@@ -64,6 +64,8 @@ export class GenerationSession {
         // The request user is held for the whole generation: the completion write happens after the
         // starting request is gone, and it must still land in that user's own directories.
         this.user = null;
+        /// Prepended to the persisted turn: the prompt ended with this, so the model continued from it.
+        this.replyPrefix = '';
         this.text = '';
         this.thinking = '';
         /** @type {{id: number, data: string}[]} */

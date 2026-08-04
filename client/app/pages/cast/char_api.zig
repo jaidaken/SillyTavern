@@ -1735,7 +1735,17 @@ fn buildStartBody(generate_body: []const u8) ?[]u8 {
             .character_name = pend_char_name,
         }, .{}) catch return null;
     defer alloc.free(chat);
-    return std.fmt.allocPrint(alloc, "{{\"chat\":{s},\"generate\":{s}}}", .{ chat, generate_body }) catch null;
+    // The bias is the tail of the prompt, so the model continues FROM it and it belongs to the reply the
+    // server persists (stock prepends it in cleanUpMessage, script.js:6431, and hides it on display).
+    const bias_raw = pend_tpl.user_prompt_bias;
+    const bias: []const u8 = if (bias_raw.len > 0)
+        generate.substituteMacros(alloc, bias_raw, .{ .char = pend_char_name, .user = pend_user_name }) catch ""
+    else
+        "";
+    defer if (bias.len > 0) alloc.free(bias);
+    const prefix_json = std.json.Stringify.valueAlloc(alloc, bias, .{}) catch return null;
+    defer alloc.free(prefix_json);
+    return std.fmt.allocPrint(alloc, "{{\"chat\":{s},\"generate\":{s},\"reply_prefix\":{s}}}", .{ chat, generate_body, prefix_json }) catch null;
 }
 
 /// Trim on byte lengths against the char budget: the classic pre-token behavior and the fallback when a
@@ -1995,7 +2005,13 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
     // store-owned book memory; the async gap between send and this callback cannot dangle them).
     const wi_candidates: []const wi_store.Entry = wi_store.global.collectActive(alloc) catch &.{};
     defer alloc.free(wi_candidates);
-    const wi_budget_chars = (generate.promptCharBudget(conn) *| @as(usize, @intCast(wi_store.global.budget))) / 100;
+    // Percentage first, then stock's ABSOLUTE token ceiling clamps it (world-info.js:4624). The cap is
+    // in TOKENS and this budget is in chars, so convert it with the same ratio promptCharBudget uses.
+    var wi_budget_chars = (generate.promptCharBudget(conn) *| @as(usize, @intCast(wi_store.global.budget))) / 100;
+    if (wi_store.global.budget_cap > 0) {
+        const cap_chars = generate.tokensToChars(@intCast(wi_store.global.budget_cap));
+        if (wi_budget_chars > cap_chars) wi_budget_chars = cap_chars;
+    }
 
     // Persona TOP_AN / BOTTOM_AN attaches in generate.assemblePieces, OUTSIDE the WI an-anchors (stock
     // addPersonaDescriptionExtensionPrompt runs after the WI an-merge, script.js:3183 vs world-info.js:5149).
@@ -2053,6 +2069,7 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
         .wi_scan_depth = @intCast(@max(0, wi_store.global.scan_depth)),
         .wi_budget_chars = wi_budget_chars,
         .wi_recursive = wi_store.global.recursive,
+        .wi_max_recursion_steps = @intCast(@max(0, wi_store.global.max_recursion_steps)),
         .wi_case_sensitive = wi_store.global.case_sensitive,
         .wi_match_whole_words = wi_store.global.match_whole_words,
         .wi_min_activations = @intCast(@max(0, wi_store.global.min_activations)),

@@ -101,8 +101,10 @@ async function persistAssistantTurn(session) {
         is_user: false,
         is_system: false,
         send_date: Date.now(),
-        mes: session.text,
-        extra: { reasoning: session.thinking },
+        // The prompt ended with the user's bias, so the model continued FROM it and the bias is part of
+        // this turn. Stock prepends it before saving (script.js:6431) and hides it on display.
+        mes: (session.replyPrefix || '') + session.text,
+        extra: { reasoning: session.thinking, bias: session.replyPrefix || null },
     };
     try {
         const result = await appendChatMessages(session.user, session.target.ref, session.target.cardName, [message]);
@@ -287,6 +289,8 @@ router.post('/start', async function (request, response) {
 
         const session = createSession(handle, target);
         session.user = request.user;
+        // Bounded and type-checked: it is client-supplied text that lands in a saved chat file.
+        session.replyPrefix = typeof body.reply_prefix === 'string' ? body.reply_prefix.slice(0, 2048) : '';
         session.onExpire = (reason) => {
             finishGeneration(session, Status.error, reason).catch(error => log.net.error('Generation watchdog finish failed:', error));
         };

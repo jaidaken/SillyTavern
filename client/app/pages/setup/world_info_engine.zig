@@ -237,6 +237,9 @@ pub const Params = struct {
     scan_depth: usize = 2,
     budget_chars: usize = std.math.maxInt(usize),
     recursive: bool = false,
+    /// Stock world_info_max_recursion_steps: hard stop on scan-loop passes (world-info.js:4653). 0 = off.
+    /// Without it a recursive book keeps activating entries stock would never have reached.
+    max_recursion_steps: usize = 0,
     rng: ?std.Random = null,
     /// Stock world_info_case_sensitive: the default a null per-entry caseSensitive falls back to.
     case_sensitive: bool = false,
@@ -381,7 +384,12 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
     const ScanState = enum { none, initial, recursion, min_activations };
     var scan_state: ScanState = if (params.entries.len > 0) .initial else .none;
 
+    var scan_passes: usize = 0;
     while (scan_state != .none) {
+        // Stock checks the cap at the TOP of the loop against the count of completed passes
+        // (world-info.js:4653), so a cap of 1 allows exactly one pass.
+        if (params.max_recursion_steps > 0 and params.max_recursion_steps <= scan_passes) break;
+        scan_passes += 1;
         // getDepth() = world_info_depth + skew (:403); the skew widens the global window during a
         // min-activations sweep. The recurse buffer is excluded during that sweep (:324).
         const global_depth: i64 = @as(i64, @intCast(params.scan_depth)) + @as(i64, @intCast(skew));

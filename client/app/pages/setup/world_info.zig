@@ -314,6 +314,11 @@ pub const WorldInfoStore = struct {
     chat_world: []const u8 = "",
     /// Stock world_info_budget: percent of the prompt budget the WI slice may take (probe 3 delta).
     budget: i64 = 25,
+    /// Stock world_info_budget_cap: an ABSOLUTE token ceiling applied after the percentage
+    /// (world-info.js:4624). 0 = uncapped.
+    budget_cap: i64 = 0,
+    /// Stock world_info_max_recursion_steps: hard stop on scan-loop passes (0 = off).
+    max_recursion_steps: i64 = 0,
     /// Stock world_info_depth: how many newest messages the engine's key scan reads.
     scan_depth: i64 = 2,
     /// Stock world_info_recursive: activated content re-enters the key scan. Off by default.
@@ -678,6 +683,8 @@ pub const WorldInfoStore = struct {
             break :blk &root.object;
         };
         self.budget = std.math.clamp(getInt(ws, "world_info_budget", self.budget), 1, 100);
+        self.budget_cap = @max(0, getInt(ws, "world_info_budget_cap", self.budget_cap));
+        self.max_recursion_steps = @max(0, getInt(ws, "world_info_max_recursion_steps", self.max_recursion_steps));
         // 1000 = stock MAX_SCAN_DEPTH (world-info.js).
         self.scan_depth = std.math.clamp(getInt(ws, "world_info_depth", self.scan_depth), 0, 1000);
         self.recursive = getBool(ws, "world_info_recursive", self.recursive);

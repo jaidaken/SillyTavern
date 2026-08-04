@@ -183,6 +183,12 @@ const TOKEN_CHARS_DEN: usize = 2;
 /// Character budget for the whole prompt: the context size minus the response reserve, in chars.
 /// `max_context` is mined from the settings blob (the classic client writes the user's configured
 /// size there); a missing or non-positive value falls back to the classic 8192 default.
+/// A token count in the char currency the char-budget path works in, so a token-denominated setting
+/// (world_info_budget_cap) can clamp a char-denominated budget with one shared ratio.
+pub fn tokensToChars(tokens: usize) usize {
+    return (tokens *| TOKEN_CHARS_NUM) / TOKEN_CHARS_DEN;
+}
+
 pub fn promptCharBudget(conn: Connection) usize {
     const hist_tokens = budgetTokens(conn);
     return (hist_tokens *| TOKEN_CHARS_NUM) / TOKEN_CHARS_DEN;
@@ -220,6 +226,8 @@ pub const Shape = struct {
     wi_budget_chars: usize = std.math.maxInt(usize),
     /// Stock world_info_recursive: activated content re-enters the key scan.
     wi_recursive: bool = false,
+    /// Stock world_info_max_recursion_steps: hard stop on scan-loop passes (0 = off).
+    wi_max_recursion_steps: usize = 0,
     /// Stock world_info_case_sensitive: default for a null per-entry caseSensitive.
     wi_case_sensitive: bool = false,
     /// Stock world_info_match_whole_words: default for a null per-entry matchWholeWords.
@@ -657,6 +665,7 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
         .scan_depth = shape.wi_scan_depth,
         .budget_chars = shape.wi_budget_chars,
         .recursive = shape.wi_recursive,
+        .max_recursion_steps = shape.wi_max_recursion_steps,
         .case_sensitive = shape.wi_case_sensitive,
         .match_whole_words = shape.wi_match_whole_words,
         .min_activations = shape.wi_min_activations,
