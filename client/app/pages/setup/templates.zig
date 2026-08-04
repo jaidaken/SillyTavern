@@ -176,6 +176,9 @@ pub const Templates = struct {
     prefer_character_jailbreak: bool = true,
     /// power_user.single_line (global, stock default false): prepend '\n' to the stopping strings.
     single_line: bool = false,
+    /// power_user.user_prompt_bias: text appended after the final cue to steer the reply (stock
+    /// getBiasStrings, script.js:5794). A per-message bias wins over it; only this global is modelled.
+    user_prompt_bias: []const u8 = "",
     /// power_user.collapse_newlines (global, stock default false): collapse every run of newlines in
     /// the final assembled prompt to a single '\n' (script.js:5171, getCombinedPrompt).
     collapse_newlines: bool = false,
@@ -245,6 +248,7 @@ pub fn parseTemplates(arena: Allocator, settings_str: []const u8) Allocator.Erro
     out.prefer_character_prompt = boolField(power_user, "prefer_character_prompt", true);
     out.prefer_character_jailbreak = boolField(power_user, "prefer_character_jailbreak", true);
     out.single_line = boolField(power_user, "single_line", false);
+    out.user_prompt_bias = try strField(arena, power_user, "user_prompt_bias");
     out.collapse_newlines = boolField(power_user, "collapse_newlines", false);
     out.custom_stopping_strings = try strField(arena, power_user, "custom_stopping_strings");
     out.custom_stopping_strings_macro = boolField(power_user, "custom_stopping_strings_macro", true);
@@ -399,6 +403,7 @@ pub fn dupeTemplates(arena: Allocator, t: Templates) Allocator.Error!Templates {
         .sysprompt_post_history = try arena.dupe(u8, t.sysprompt_post_history),
         .prefer_character_jailbreak = t.prefer_character_jailbreak,
         .single_line = t.single_line,
+        .user_prompt_bias = try arena.dupe(u8, t.user_prompt_bias),
         .collapse_newlines = t.collapse_newlines,
         .custom_stopping_strings = try arena.dupe(u8, t.custom_stopping_strings),
         .custom_stopping_strings_macro = t.custom_stopping_strings_macro,
@@ -764,6 +769,12 @@ pub fn wrapStoryString(alloc: Allocator, tpl: Instruct, story: []const u8) Alloc
 /// The sequence that primes the model to answer in character: the output sequence (plus a name when
 /// the template asks for one), or the classic `Char:` prefix when instruct is off. Owned result.
 pub fn continuationPrefix(alloc: Allocator, tpl: Instruct, char_name: []const u8) Allocator.Error![]u8 {
+    return continuationPrefixBias(alloc, tpl, char_name, "");
+}
+
+/// `continuationPrefix` plus the prompt bias stock appends inside the same call (instruct-mode.js:648):
+/// with names it butts against the `Char:`, without them it rides its own separator, trimmed at the front.
+pub fn continuationPrefixBias(alloc: Allocator, tpl: Instruct, char_name: []const u8, bias: []const u8) Allocator.Error![]u8 {
     if (!tpl.enabled) return std.fmt.allocPrint(alloc, "{s}:", .{char_name});
 
     const last_set = tpl.last_output_set orelse (tpl.last_output_sequence.len > 0);
@@ -793,6 +804,16 @@ pub fn continuationPrefix(alloc: Allocator, tpl: Instruct, char_name: []const u8
         try text.appendSlice(alloc, filler);
         try text.appendSlice(alloc, char_name);
         try text.append(alloc, ':');
+    }
+
+    // Bias lands BEFORE the trimEnd, so a wrapping template still tightens the tail around it.
+    if (bias.len > 0) {
+        if (include_names) {
+            try text.appendSlice(alloc, bias);
+        } else {
+            try text.appendSlice(alloc, sep);
+            try text.appendSlice(alloc, std.mem.trimStart(u8, bias, &std.ascii.whitespace));
+        }
     }
 
     var out: std.ArrayList(u8) = .empty;
@@ -1223,6 +1244,29 @@ test "continuationPrefix on an empty output sequence is a bare separator when wr
     const out_flat = try continuationPrefix(testing.allocator, flat, "Rita");
     defer testing.allocator.free(out_flat);
     try testing.expectEqualStrings("", out_flat);
+}
+
+test "continuationPrefixBias appends the prompt bias the way stock places it" {
+    // Regression: the client dropped power_user.user_prompt_bias entirely, so a configured bias never
+    // reached the model. Stock appends it inside formatInstructModePrompt, before the wrap trimEnd.
+    const tpl = chatmlInstruct();
+    const plain = try continuationPrefixBias(testing.allocator, tpl, "Rita", "  steer this");
+    defer testing.allocator.free(plain);
+    try testing.expectEqualStrings("\n<|im_start|>assistant\nsteer this\n", plain);
+
+    // names=always butts the bias straight onto `Char:` and keeps its leading spaces (stock passes it raw).
+    var named = chatmlInstruct();
+    named.names_behavior = .always;
+    const with_name = try continuationPrefixBias(testing.allocator, named, "Rita", "  steer this");
+    defer testing.allocator.free(with_name);
+    try testing.expectEqualStrings("\n<|im_start|>assistant\nRita:  steer this", with_name);
+
+    // An empty bias must leave the cue byte-identical to the no-bias path.
+    const none = try continuationPrefixBias(testing.allocator, tpl, "Rita", "");
+    defer testing.allocator.free(none);
+    const base = try continuationPrefix(testing.allocator, tpl, "Rita");
+    defer testing.allocator.free(base);
+    try testing.expectEqualStrings(base, none);
 }
 
 test "continuationPrefix with a set-but-resolved-empty last sequence emits no cue" {

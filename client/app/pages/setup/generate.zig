@@ -828,7 +828,13 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
     } else try alloc.dupe(u8, "");
     errdefer alloc.free(alignment);
 
-    const prefix = try templates.continuationPrefix(alloc, instruct, ctx.char);
+    // The bias is macro-substituted before it lands (stock substituteParams in getBiasStrings).
+    const bias_sub: []const u8 = if (shape.tpl.user_prompt_bias.len > 0)
+        try substituteMacros(alloc, shape.tpl.user_prompt_bias, wctx)
+    else
+        "";
+    defer if (bias_sub.len > 0) alloc.free(bias_sub);
+    const prefix = try templates.continuationPrefixBias(alloc, instruct, ctx.char, bias_sub);
     errdefer alloc.free(prefix);
 
     // Stringify while wi_act's arena still backs the timed-effect keys (freed on scope exit).
