@@ -171,10 +171,13 @@ async function openWs(url) {
 
 // ---- service orchestration -----------------------------------------------------------------------
 const children = [];
+// Dependency lifetime: a backstop for a SIGKILLed harness, not a budget, so it must outlast the run. At
+// its old 1200s the services died ~20 min in and every later seed failed "old: never connected".
+const DEP_TTL = Number(process.env.PARITY_DEP_TTL || 21600);
 function spawnSvc(name, shellCmd) {
     // detached -> nix leads its own group so teardown's `kill -child.pid` reaps the tree; NO setsid
     // (it would orphan into a new group). `timeout` backstops a SIGKILL of this harness before teardown.
-    const child = spawn('nix', [...NIX, `timeout 1200 ${shellCmd}`], { cwd: REPO, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('nix', [...NIX, `timeout ${DEP_TTL} ${shellCmd}`], { cwd: REPO, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     child.svcName = name; child.out = '';
     child.stdout.on('data', (d) => { child.out += d; });
     child.stderr.on('data', (d) => { child.out += d; });
@@ -194,6 +197,22 @@ async function waitHttp(url, ms, expectOk = true) {
 }
 function teardown() {
     for (const c of children) { try { if (c.pid) process.kill(-c.pid, 'SIGKILL'); } catch (_) { /* gone */ } }
+}
+
+/// Which of the three services stopped answering. A dead dependency otherwise surfaces as a drive error
+/// blaming the wrong process, which is how a 20-minute service cap read as 18 parity failures.
+async function deadServices() {
+    const probes = [['fake-backend', `http://127.0.0.1:${PORTS.FAKE}/captured`], ['old-st', `http://127.0.0.1:${PORTS.OLD}/`], ['devserve', `http://127.0.0.1:${PORTS.NEW}/`]];
+    const down = [];
+    for (const [name, url] of probes) {
+        try {
+            const c = new AbortController();
+            const t = setTimeout(() => c.abort(), 4000);
+            await fetch(url, { signal: c.signal });
+            clearTimeout(t);
+        } catch (_) { down.push(name); }
+    }
+    return down;
 }
 
 async function fakeCaptured() { return await (await fetch(`http://127.0.0.1:${PORTS.FAKE}/captured`)).json(); }
@@ -1034,6 +1053,10 @@ async function runFuzz(args) {
                     break;
                 } catch (e) {
                     error = e.message;
+                    // Name a dead dependency instead of letting it masquerade as a parity failure: a dead
+                    // fake backend reports as "old: never connected", which points at the wrong process.
+                    const down = await deadServices();
+                    if (down.length) { error = `${e.message} [SERVICE DOWN: ${down.join(', ')}]`; break; }
                     if (attempt < DRIVE_ATTEMPTS) process.stdout.write(`  seed ${seed}: drive attempt ${attempt}/${DRIVE_ATTEMPTS} failed (${e.message}), retrying\n`);
                 }
             }
