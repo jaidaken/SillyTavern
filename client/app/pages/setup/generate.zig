@@ -424,6 +424,12 @@ pub const Pieces = struct {
     /// power_user.instruct.user_alignment_message wrapped as a first user turn ("" when none). Emitted at
     /// the front of the chat block unless the oldest chat-block element is a user turn; cost reserved in overhead.
     alignment: []u8,
+    /// The prompt bias when instruct is OFF: stock appends it to the assembled tail rather than to the
+    /// cue (script.js:5144), with a space inserted unless the tail already ends in whitespace.
+    tail_bias: []u8,
+    /// Instruct disabled. Stock strips the trailing newline off the LAST message in that mode
+    /// (script.js:4976) before the cue and the bias land, which is what puts the bias on the same line.
+    untemplated: bool,
     /// history[0] wrapped with first_output_sequence, non-null only when the oldest turn is an assistant
     /// turn and the template sets first_output_sequence and there is no deep injection to precede it.
     /// fitAndAssemble emits it in place of wrapped_history[0] when history[0] is the oldest surviving turn.
@@ -448,6 +454,7 @@ pub fn freePieces(alloc: Allocator, p: *Pieces) void {
     alloc.free(p.wrapped_history);
     alloc.free(p.history_is_user);
     alloc.free(p.alignment);
+    alloc.free(p.tail_bias);
     if (p.history0_first) |h| alloc.free(h);
     alloc.free(p.prefix);
     if (p.timed_json) |j| alloc.free(j);
@@ -587,12 +594,25 @@ pub fn fitAndAssemble(alloc: Allocator, pieces: Pieces, costs: CostTable, budget
     try appendAssembledInjectionsAt(alloc, &out, pieces.injections, window_len, window_len, first_inj);
     // Classic modifyLastPromptLine adds the cue only for a non-empty windowed history (script.js:4994):
     // a real history trimmed away entirely ships none; a no-history caller still primes the char.
+    // Untemplated mode strips the last message's own trailing newline before anything lands on the tail
+    // (script.js:4976); that is what puts the bias on the same line as the message rather than below it.
+    // Only when a message actually survived: stock strips arrMes[last], so a window trimmed to nothing
+    // leaves the story block's own trailing newline alone.
+    if (pieces.untemplated and window_len > 0 and out.items.len > 0 and out.items[out.items.len - 1] == '\n')
+        out.shrinkRetainingCapacity(out.items.len - 1);
     if (window_len > 0 or pieces.history_len == 0) {
         // The cue owns a leading separator, but stock adds only ONE newline before it: drop the cue's when
         // the body already ends in one (an Alpaca "\n\n" suffix keeps its run; a "</s>" suffix gains a break).
         var cue = pieces.prefix;
-        if (cue.len > 0 and cue[0] == '\n' and out.items.len > 0 and out.items[out.items.len - 1] == '\n') cue = cue[1..];
+        // An EMPTY tail counts as already separated: a leading newline there is a blank first line.
+        if (cue.len > 0 and cue[0] == '\n' and (out.items.len == 0 or out.items[out.items.len - 1] == '\n')) cue = cue[1..];
         try out.appendSlice(alloc, cue);
+    }
+    // Instruct-off bias rides the assembled tail, space-separated unless it already ends in whitespace
+    // (script.js:5145). It lands after the cue because stock appends it after modifyLastPromptLine.
+    if (pieces.tail_bias.len > 0) {
+        if (out.items.len > 0 and !std.ascii.isWhitespace(out.items[out.items.len - 1])) try out.append(alloc, ' ');
+        try out.appendSlice(alloc, pieces.tail_bias);
     }
 
     // Stock strips every CR from the assembled prompt (script.js:5075, .replace(/\r/gm, '')); card
@@ -729,7 +749,9 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
     defer alloc.free(wrapped_story);
     try overhead.appendSlice(alloc, wrapped_story);
 
-    try overhead.appendSlice(alloc, examples.section);
+    // strip_examples empties the SECTION only: it fires after storyStringParams is built (script.js:4709
+    // vs :4688), so {{mesExamples}} in the story string above keeps the content this drops here.
+    if (!shape.tpl.strip_examples) try overhead.appendSlice(alloc, examples.section);
     if (shape.tpl.context.chat_start.len > 0) {
         const start = try substituteMacros(alloc, shape.tpl.context.chat_start, wctx);
         defer alloc.free(start);
@@ -834,8 +856,13 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
     else
         "";
     defer if (bias_sub.len > 0) alloc.free(bias_sub);
-    const prefix = try templates.continuationPrefixBias(alloc, instruct, ctx.char, bias_sub);
+    // Instruct OFF puts the bias on the LAST MESSAGE instead of the cue (script.js:5144), so hand the cue
+    // an empty bias there and let fitAndAssemble append it; force_name2 also gates the cue itself.
+    const cue_bias: []const u8 = if (instruct.enabled) bias_sub else "";
+    const prefix = try templates.continuationPrefixFull(alloc, instruct, ctx.char, cue_bias, shape.tpl.always_force_name2);
     errdefer alloc.free(prefix);
+    const tail_bias = try alloc.dupe(u8, if (instruct.enabled) "" else std.mem.trimStart(u8, bias_sub, &std.ascii.whitespace));
+    errdefer alloc.free(tail_bias);
 
     // Stringify while wi_act's arena still backs the timed-effect keys (freed on scope exit).
     var timed_json: ?[]const u8 = null;
@@ -870,6 +897,8 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
         .alignment = alignment,
         .history0_first = history0_first,
         .prefix = prefix,
+        .tail_bias = tail_bias,
+        .untemplated = !instruct.enabled,
         .history_len = history.len,
         .collapse_newlines = shape.tpl.collapse_newlines,
         .timed_json = timed_json,
@@ -2349,6 +2378,58 @@ test "first_output_sequence primes the oldest assistant turn, not a user oldest 
     const out_u = try buildPrompt(testing.allocator, ctx, &user_first, shape);
     defer testing.allocator.free(out_u);
     try testing.expect(!std.mem.startsWith(u8, out_u, "<START>"));
+}
+
+test "strip_examples drops the example section but leaves the story string's copy" {
+    // Regression: strip_examples was unimplemented, so the client kept examples stock had removed. It
+    // fires AFTER storyStringParams is built (script.js:4709 vs :4688), so {{mesExamples}} still resolves.
+    const ctx = Ctx{ .char = "Rita", .user = "Jamie", .mes_example = "<START>\nJamie: hi\nRita: hello" };
+    var shape = Shape{ .tpl = .{ .context = .{ .story_string = "{{mesExamples}}" } } };
+
+    const kept = try buildPrompt(testing.allocator, ctx, &.{}, shape);
+    defer testing.allocator.free(kept);
+    try testing.expect(std.mem.indexOf(u8, kept, "hello") != null);
+
+    shape.tpl.strip_examples = true;
+    const stripped = try buildPrompt(testing.allocator, ctx, &.{}, shape);
+    defer testing.allocator.free(stripped);
+    // The story string still carries one copy; the appended SECTION is what disappears, so the example
+    // text occurs strictly fewer times than before.
+    try testing.expect(std.mem.count(u8, stripped, "hello") < std.mem.count(u8, kept, "hello"));
+    try testing.expect(std.mem.indexOf(u8, stripped, "hello") != null);
+}
+
+test "the untemplated char cue appears only when always_force_name2 is set" {
+    // Regression: the client always emitted `Char:` with instruct off; stock gates it on force_name2
+    // (script.js:5052), so a user who turned it off was getting a line stock never writes.
+    const ctx = Ctx{ .char = "Rita", .user = "Jamie" };
+    const history = [_]PromptMsg{.{ .name = "Jamie", .mes = "hi", .role = .user }};
+
+    var shape = Shape{ .tpl = .{ .context = .{ .story_string = "" }, .always_force_name2 = true } };
+    const with_cue = try buildPrompt(testing.allocator, ctx, &history, shape);
+    defer testing.allocator.free(with_cue);
+    try testing.expectEqualStrings("Jamie: hi\nRita:", with_cue);
+
+    shape.tpl.always_force_name2 = false;
+    const no_cue = try buildPrompt(testing.allocator, ctx, &history, shape);
+    defer testing.allocator.free(no_cue);
+    // No cue AND no trailing newline: untemplated mode strips the last message's own (script.js:4976).
+    try testing.expectEqualStrings("Jamie: hi", no_cue);
+}
+
+test "with instruct off the prompt bias rides the tail, space-separated" {
+    // Regression: stock appends the bias to the assembled tail there, not to the cue (script.js:5145),
+    // inserting a space only when the tail does not already end in whitespace.
+    const ctx = Ctx{ .char = "Rita", .user = "Jamie" };
+    const history = [_]PromptMsg{.{ .name = "Jamie", .mes = "hi", .role = .user }};
+    const shape = Shape{ .tpl = .{
+        .context = .{ .story_string = "" },
+        .always_force_name2 = true,
+        .user_prompt_bias = "  steer this",
+    } };
+    const out = try buildPrompt(testing.allocator, ctx, &history, shape);
+    defer testing.allocator.free(out);
+    try testing.expectEqualStrings("Jamie: hi\nRita: steer this", out);
 }
 
 test "an empty note between two wi an-anchors keeps stock's blank line" {

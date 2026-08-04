@@ -179,6 +179,14 @@ pub const Templates = struct {
     /// power_user.user_prompt_bias: text appended after the final cue to steer the reply (stock
     /// getBiasStrings, script.js:5794). A per-message bias wins over it; only this global is modelled.
     user_prompt_bias: []const u8 = "",
+    /// power_user.strip_examples: drop the example-dialogue SECTION (script.js:4709). It fires after
+    /// storyStringParams is built, so {{mesExamples}} in the story string keeps its content.
+    strip_examples: bool = false,
+    /// power_user.always_force_name2: with instruct OFF, append the `Char:` cue (script.js:4579 sets
+    /// force_name2, consumed at :5052). Instruct mode ignores it entirely. Defaults TRUE to match a real
+    /// install: power-user.js:125 initialises false, but the shipped settings and the checkbox default
+    /// (power-user.js:367) are both true, so every blob that omits the key came from a true world.
+    always_force_name2: bool = true,
     /// power_user.collapse_newlines (global, stock default false): collapse every run of newlines in
     /// the final assembled prompt to a single '\n' (script.js:5171, getCombinedPrompt).
     collapse_newlines: bool = false,
@@ -249,6 +257,8 @@ pub fn parseTemplates(arena: Allocator, settings_str: []const u8) Allocator.Erro
     out.prefer_character_jailbreak = boolField(power_user, "prefer_character_jailbreak", true);
     out.single_line = boolField(power_user, "single_line", false);
     out.user_prompt_bias = try strField(arena, power_user, "user_prompt_bias");
+    out.strip_examples = boolField(power_user, "strip_examples", false);
+    out.always_force_name2 = boolField(power_user, "always_force_name2", true);
     out.collapse_newlines = boolField(power_user, "collapse_newlines", false);
     out.custom_stopping_strings = try strField(arena, power_user, "custom_stopping_strings");
     out.custom_stopping_strings_macro = boolField(power_user, "custom_stopping_strings_macro", true);
@@ -404,6 +414,8 @@ pub fn dupeTemplates(arena: Allocator, t: Templates) Allocator.Error!Templates {
         .prefer_character_jailbreak = t.prefer_character_jailbreak,
         .single_line = t.single_line,
         .user_prompt_bias = try arena.dupe(u8, t.user_prompt_bias),
+        .strip_examples = t.strip_examples,
+        .always_force_name2 = t.always_force_name2,
         .collapse_newlines = t.collapse_newlines,
         .custom_stopping_strings = try arena.dupe(u8, t.custom_stopping_strings),
         .custom_stopping_strings_macro = t.custom_stopping_strings_macro,
@@ -690,8 +702,9 @@ fn appendSeqName(alloc: Allocator, out: *std.ArrayList(u8), seq: []const u8, nam
 /// builder appends into one buffer and allocates nothing per turn.
 pub fn appendWrapped(alloc: Allocator, out: *std.ArrayList(u8), tpl: Instruct, role: Role, name: []const u8, mes: []const u8) Allocator.Error!void {
     if (!tpl.enabled) {
-        // A narrator/system turn carries no name colon (formatMessageHistoryItem shouldPrependName).
-        if (role != .system) {
+        // No name colon for a narrator/system turn, nor for a NAMELESS one: stock gates the whole label
+        // on `chatItem?.name &&` (formatMessageHistoryItem), so an empty name emits no bare ": ".
+        if (role != .system and name.len > 0) {
             try out.appendSlice(alloc, name);
             try out.appendSlice(alloc, ": ");
         }
@@ -735,7 +748,7 @@ pub fn wrapMessage(alloc: Allocator, tpl: Instruct, role: Role, name: []const u8
 /// exact coupling invariant 2 exists to prevent. Keep this in step with wrapMessage; the test below
 /// asserts they agree for every role and both templates.
 pub fn wrapCost(tpl: Instruct, role: Role, name: []const u8, mes: []const u8) usize {
-    if (!tpl.enabled) return (if (role == .system) 0 else name.len + 2) + mes.len + 1;
+    if (!tpl.enabled) return (if (role == .system or name.len == 0) 0 else name.len + 2) + mes.len + 1;
 
     const prefix = prefixFor(tpl, role);
     var suffix = suffixFor(tpl, role);
@@ -775,7 +788,18 @@ pub fn continuationPrefix(alloc: Allocator, tpl: Instruct, char_name: []const u8
 /// `continuationPrefix` plus the prompt bias stock appends inside the same call (instruct-mode.js:648):
 /// with names it butts against the `Char:`, without them it rides its own separator, trimmed at the front.
 pub fn continuationPrefixBias(alloc: Allocator, tpl: Instruct, char_name: []const u8, bias: []const u8) Allocator.Error![]u8 {
-    if (!tpl.enabled) return std.fmt.allocPrint(alloc, "{s}:", .{char_name});
+    return continuationPrefixFull(alloc, tpl, char_name, bias, true);
+}
+
+/// Adds the instruct-OFF gate. Stock appends `Char:` there only when force_name2 is set (script.js:5052),
+/// which for a global bias means power_user.always_force_name2; the classic client emits no cue otherwise.
+pub fn continuationPrefixFull(alloc: Allocator, tpl: Instruct, char_name: []const u8, bias: []const u8, force_name2: bool) Allocator.Error![]u8 {
+    if (!tpl.enabled) {
+        // Leading newline because stock stripped the last message's own (script.js:4976) and puts one
+        // back here; fitAndAssemble drops it again if the tail already ends in one.
+        if (!force_name2) return alloc.dupe(u8, "");
+        return std.fmt.allocPrint(alloc, "\n{s}:", .{char_name});
+    }
 
     const last_set = tpl.last_output_set orelse (tpl.last_output_sequence.len > 0);
     const raw_seq = if (last_set) tpl.last_output_sequence else tpl.output_sequence;
@@ -1215,7 +1239,9 @@ test "continuationPrefix primes with the output sequence or the classic char col
 
     const off = try continuationPrefix(testing.allocator, .{ .enabled = false }, "Rita");
     defer testing.allocator.free(off);
-    try testing.expectEqualStrings("Rita:", off);
+    // Leading newline: stock strips the last message's own before adding this (script.js:4976), and
+    // fitAndAssemble drops it again when the tail still ends in one, so the net text is unchanged.
+    try testing.expectEqualStrings("\nRita:", off);
 
     var named = chatmlInstruct();
     named.names_behavior = .always;
