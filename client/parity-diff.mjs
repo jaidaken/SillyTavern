@@ -69,6 +69,7 @@ function parseArgs(argv) {
         else if (k === '--measurepick') { out.measurepick = true; i -= 1; }
         else if (k === '--mesraw') { out.mesraw = true; i -= 1; }
         else if (k === '--formats') { out.formats = true; i -= 1; }
+        else if (k === '--selfcheck') { out.selfcheck = true; i -= 1; }
         else throw new Error(`unknown arg: ${k}`);
     }
     if (!out.data) out.data = join(tmpdir(), 'parity-data');
@@ -1016,6 +1017,7 @@ function classifyDiff(diffText, stopEqual, markers) {
 }
 
 async function runFuzz(args) {
+    const startedAt = Date.now();
     const basePng = readFileSync(join(argsData, 'default-user', 'characters', 'default_Seraphina.png'));
     const settingsPath = join(argsData, 'default-user', 'settings.json');
     const baseSettings = JSON.parse(readFileSync(settingsPath, 'utf8'));
@@ -1097,6 +1099,29 @@ async function runFuzz(args) {
     }
     if (errs) process.stdout.write(`errors: ${results.filter((r) => r.error).map((r) => `${r.seed}(${r.error.slice(0, 60)})`).join('; ')}\n`);
     process.stdout.write(`\n(per-seed prompts at ${args.data}/fz-<seed>-{old,new}.txt; reproduce one with --fuzz --seed <N> --count 1)\n`);
+    await reportIntegrity(args.count, results.length, startedAt);
+}
+
+/// Says whether the numbers above can be believed. A run whose services were killed mid-way still prints
+/// a tidy summary, so this sets a non-zero exit code to stop a killed run reading as a pass.
+async function reportIntegrity(requested, scored, startedAt) {
+    const elapsed = Math.round((Date.now() - startedAt) / 1000);
+    const down = await deadServices();
+    const faults = [];
+    if (scored < requested) faults.push(`TRUNCATED: scored ${scored} of ${requested} seeds`);
+    if (down.length) faults.push(`SERVICE DOWN at end: ${down.join(', ')}`);
+    // The services die exactly at DEP_TTL, so a run that outlives it was scoring against corpses.
+    if (elapsed >= DEP_TTL) faults.push(`OUTLIVED the ${DEP_TTL}s service lifetime (ran ${elapsed}s); raise PARITY_DEP_TTL`);
+    process.stdout.write('\n########## RUN INTEGRITY ##########\n');
+    process.stdout.write(`elapsed ${elapsed}s of ${DEP_TTL}s service lifetime; seeds scored ${scored}/${requested}; services ${down.length ? `DOWN(${down.join(',')})` : 'all up'}\n`);
+    if (faults.length === 0) {
+        process.stdout.write('VERDICT: COMPLETE (every seed scored, services alive, inside the service lifetime)\n');
+        return true;
+    }
+    for (const f of faults) process.stdout.write(`  ${f}\n`);
+    process.stdout.write('VERDICT: NOT TRUSTWORTHY (the counts above are partial; do not cite them)\n');
+    process.exitCode = 2;
+    return false;
 }
 
 // ---- TRIM boundary battery: ONE deterministic scenario that FORCES token-budget trimming. A big
@@ -1370,6 +1395,44 @@ async function runMesRawBattery(args) {
     }
 }
 
+/// Proves the integrity checks FIRE, rather than trusting that they would: kills a real service and
+/// asserts the probe names it, then asserts a short run and an outlived lifetime are both refused.
+async function runSelfCheck(args) {
+    const checks = [];
+    const assert = (name, pass, detail) => { checks.push({ name, pass, detail }); process.stdout.write(`  ${pass ? 'PASS' : 'FAIL'}  ${name}${detail ? ` -- ${detail}` : ''}\n`); };
+    process.stdout.write('\n########## HARNESS SELF-CHECK ##########\n');
+
+    await bootRig(args);
+    const upAtBoot = await deadServices();
+    assert('all three services answer after boot', upAtBoot.length === 0, upAtBoot.length ? `down: ${upAtBoot.join(',')}` : '');
+
+    // Kill ONE service and confirm the probe names that one and not another.
+    const fake = children.find((c) => c.svcName === 'fake');
+    if (fake) { try { process.kill(-fake.pid, 'SIGKILL'); } catch (_) { /* gone */ } }
+    await sleep(1500);
+    const afterKill = await deadServices();
+    assert('a killed service is detected', afterKill.length > 0, `down: ${afterKill.join(',') || 'NONE (probe blind)'}`);
+    assert('the probe names the service that died', afterKill.includes('fake-backend'), `named: ${afterKill.join(',') || 'none'}`);
+
+    // The verdict must refuse a run that scored fewer seeds than asked for, and must set a failing exit.
+    const priorExit = process.exitCode;
+    process.exitCode = 0;
+    const verdict = await reportIntegrity(10, 4, Date.now() - 1000);
+    assert('a short run is called NOT TRUSTWORTHY', verdict === false);
+    assert('an untrustworthy run sets a failing exit code', process.exitCode === 2, `exitCode=${process.exitCode}`);
+    process.exitCode = priorExit;
+
+    // Outliving the service lifetime must be caught even when every seed was scored.
+    process.exitCode = 0;
+    const outlived = await reportIntegrity(1, 1, Date.now() - (DEP_TTL + 5) * 1000);
+    assert('outliving the service lifetime is caught', outlived === false);
+    process.exitCode = priorExit;
+
+    const failed = checks.filter((c) => !c.pass);
+    process.stdout.write(`\nSELF-CHECK: ${checks.length - failed.length}/${checks.length} passed\n`);
+    if (failed.length) { process.stdout.write('the integrity checks CANNOT be trusted; fix them before citing any sweep\n'); process.exitCode = 3; }
+}
+
 async function main() {
     const args = parseArgs(process.argv.slice(2));
     if (args.worker) {
@@ -1380,6 +1443,7 @@ async function main() {
     argsData = args.data;
     process.on('SIGINT', () => { teardown(); process.exit(130); });
     try {
+        if (args.selfcheck) { await runSelfCheck(args); return; }
         await bootRig(args);
         if (args.probe) { await probe(args.probe); return; }
         if (args.timed) { await runTimedBattery(args); return; }
