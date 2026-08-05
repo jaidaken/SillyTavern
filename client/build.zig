@@ -33,6 +33,20 @@ pub fn build(b: *std.Build) !void {
     // for the wasm build (init.zig:518). wasm gets malloc/free from libc_shim, native from the exe.
     app_exe.root_module.link_libc = true;
 
+    // The prompt builder's second host: the same pure Zig, compiled for a Node loader instead of the
+    // browser. Its own target, since the app target is whatever the caller asked for.
+    const service_exe = b.addExecutable(.{
+        .name = "prompt_service",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("app/prompt_service.zig"),
+            .target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding }),
+            .optimize = optimize,
+        }),
+    });
+    service_exe.entry = .disabled;
+    service_exe.rdynamic = true;
+    b.getInstallStep().dependOn(&b.addInstallArtifact(service_exe, .{}).step);
+
     const install_glue = b.addInstallDirectory(.{
         .source_dir = b.path("glue"),
         .install_dir = .prefix,
@@ -85,6 +99,15 @@ pub fn build(b: *std.Build) !void {
     });
     shim_test_mod.link_libc = true;
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = shim_test_mod })).step);
+
+    // Same reason as the shim above: prompt_service is the root of its own artifact, so the app
+    // aggregator cannot import it (it sits outside that module's path) and it needs its own test run.
+    const prompt_service_test_mod = b.createModule(.{
+        .root_source_file = b.path("app/prompt_service.zig"),
+        .target = target,
+        .optimize = .Debug,
+    });
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = prompt_service_test_mod })).step);
 
     // H1 boundary suite: named modules because a module rooted in .ziex/test cannot file-import
     // outside its own root directory.
