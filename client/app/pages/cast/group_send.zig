@@ -48,6 +48,13 @@ pub fn isActive() bool {
     return rot != null;
 }
 
+/// Which member of the rotation is speaking this turn, or 0 in solo mode. The server cannot derive
+/// this: the queue and its cursor live here, so a server-side prompt build has to be told.
+pub fn rotationIndex() usize {
+    const r = rot orelse return 0;
+    return r.idx;
+}
+
 /// The append/window target while a rotation runs; null in solo mode.
 pub fn chatId() ?[]const u8 {
     if (chat_id_buf.len == 0) return null;

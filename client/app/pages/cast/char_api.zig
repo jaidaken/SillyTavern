@@ -635,6 +635,27 @@ fn charaFilename(avatar: []const u8) []const u8 {
     return avatar[0..dot];
 }
 
+/// Minutes EAST of UTC for the user's own timezone. getTimezoneOffset reports minutes west, so it
+/// negates. A Date INSTANCE is fine here where the Date.now STATIC is not: jsz can call a method on a
+/// constructed object, it just cannot read a static off the constructor.
+pub fn tzOffsetMinutes() i32 {
+    if (zx.platform.role != .client) return 0;
+    const d = js.global.get(js.Object, "Date") catch return 0;
+    defer d.deinit();
+    const inst = d.new(.{}) catch return 0;
+    defer inst.deinit();
+    const west = inst.call(f64, "getTimezoneOffset", .{}) catch return 0;
+    return -@as(i32, @intFromFloat(west));
+}
+
+/// The viewport class {{isMobile}} reports. Stock reads a user-agent test; a width probe is the same
+/// answer for the thing a card actually asks about and needs no UA sniffing.
+pub fn isMobileViewport() bool {
+    if (zx.platform.role != .client) return false;
+    const w = js.global.get(f64, "innerWidth") catch return false;
+    return w > 0 and w < 768;
+}
+
 pub fn nowMs() f64 { // w3-grp: pub for group_send's append timestamps
     // Off `performance`, NOT `Date.now()`: jsz walks a js VALUE to read a property, and a static on a
     // function object (Date) does not resolve, so `Date.now()` answered error.InvalidType and this
@@ -1793,10 +1814,22 @@ fn buildStartBody(generate_body: []const u8) ?[]u8 {
     defer if (bias.len > 0) alloc.free(bias);
     const prefix_json = std.json.Stringify.valueAlloc(alloc, bias, .{}) catch return null;
     defer alloc.free(prefix_json);
+    // The state the SERVER cannot read for itself, so a server-side prompt assembly has everything it
+    // needs (phase 0 survey): the composer text, the user's timezone, the viewport class and which
+    // group member is speaking. `generation_type` is a placeholder while swipe and regenerate do not
+    // exist as send paths here; the trigger is hardcoded "normal" at the Shape too.
+    const browser = std.json.Stringify.valueAlloc(alloc, .{
+        .input = pend_user_text,
+        .utc_offset_minutes = tzOffsetMinutes(),
+        .is_mobile = isMobileViewport(),
+        .generation_type = "normal",
+        .rotation_index = group_send.rotationIndex(),
+    }, .{}) catch return null;
+    defer alloc.free(browser);
     return std.fmt.allocPrint(
         alloc,
-        "{{\"chat\":{s},\"generate\":{s},\"reply_prefix\":{s},\"trim_sentences\":{},\"trim_spaces\":{}}}",
-        .{ chat, generate_body, prefix_json, pend_tpl.trim_sentences, pend_tpl.trim_spaces },
+        "{{\"chat\":{s},\"generate\":{s},\"reply_prefix\":{s},\"trim_sentences\":{},\"trim_spaces\":{},\"browser\":{s}}}",
+        .{ chat, generate_body, prefix_json, pend_tpl.trim_sentences, pend_tpl.trim_spaces, browser },
     ) catch null;
 }
 
@@ -2276,14 +2309,7 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
     };
     // The clock the time macros read. getTimezoneOffset is minutes WEST of UTC, so it negates.
     const now_ms_f = nowMs();
-    const tz_offset: i32 = blk: {
-        const d = js.global.get(js.Object, "Date") catch break :blk 0;
-        defer d.deinit();
-        const inst = d.new(.{}) catch break :blk 0;
-        defer inst.deinit();
-        const west = inst.call(f64, "getTimezoneOffset", .{}) catch break :blk 0;
-        break :blk -@as(i32, @intFromFloat(west));
-    };
+    const tz_offset = tzOffsetMinutes();
     // {{idleDuration}} measures from the newest USER turn. char_data's parse drops send_date, so the
     // gap is not knowable here and the macro reads zero rather than inventing an interval.
     const last_user_ms: f64 = 0;
