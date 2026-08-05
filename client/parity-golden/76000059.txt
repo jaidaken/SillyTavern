@@ -1,0 +1,25 @@
+<|im_start|>system
+ZCARDSYSTEM_76000059Z CARD SYS ZGLOBALSYSPROMPT_76000059Z Stay in character.
+ZCARDDESCRIPTION_76000059Z a warded glade of beasts and old magic. two Tester/ParityFuzz [[roll:8]] [[rnd:beta]]  Tester|ParityFuzz|ParityFuzz sp[   ] nn rv[anaL]
+ZCARDPERSONALITY_76000059Z calm, watchful, precise
+ZCARDSCENARIO_76000059Z dusk over the glade<|im_end|>
+<START>
+<|im_start|>user
+Tester: ZCARDEXAMPLE_76000059Z hi<|im_end|>
+<|im_start|>assistant
+ParityFuzz: hello there<|im_end|>
+***
+<|im_start|>assistant
+ParityFuzz: ZWORLDINFO_76000059Z-9301 lore entry 9301<|im_end|>
+<|im_start|>user
+Tester: ZPERSONA_76000059Z the traveller, weary
+ZWORLDINFO_76000059Z-9300 lore entry 9300
+ZAUTHORSNOTE_76000059Z the wind rises<|im_end|>
+<|im_start|>assistant
+ParityFuzz: ZCARDGREETING_76000059Z Hello Tester, I am ParityFuzz. three Tester/ParityFuzz [[roll:1]] [[rnd:alpha]]  Tester|ParityFuzz|ParityFuzz sp[   ] nn rv[anaL]<|im_end|>
+<|im_start|>user
+Tester: Tell me what you see in the glade with beasts and magic.<|im_end|>
+<|im_start|>system
+ZWORLDINFO_76000059Z-9302 lore entry 9302<|im_end|>
+<|im_start|>assistant
+ParityFuzz:

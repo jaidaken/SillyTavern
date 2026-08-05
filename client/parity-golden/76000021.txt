@@ -1,0 +1,18 @@
+ZCARDSYSTEM_76000021Z CARD SYS ZGLOBALSYSPROMPT_76000021Z Stay in character.
+ZCARDDESCRIPTION_76000021Z a warded glade of beasts and old magic.
+ZCARDPERSONALITY_76000021Z calm, watchful, precise
+ZCARDSCENARIO_76000021Z dusk over the glade
+<START>
+Tester: ZCARDEXAMPLE_76000021Z hi
+ParityFuzz: hello there
+ParityFuzz: ZCARDGREETING_76000021Z Hello Tester, I am ParityFuzz.
+Tester: turn 0: more about the glade and its beasts and magic
+ParityFuzz: ZPROMPTBIAS_
+Tester: turn 1: more about the glade and its beasts and magic
+ZPERSONA_76000021Z the traveller, weary
+ParityFuzz: ZPROMPTBIAS_
+Tester: turn 2: more about the glade and its beasts and magic
+ParityFuzz: ZPROMPTBIAS_
+Tester: Tell me what you see in the glade with beasts and magic.
+Tester: ZCARDDEPTHPROMPT_76000021Z lamp flickers
+ZCARDJAILBREAK_76000021Z JB ZPROMPTBIAS_76000021Z bias tail

@@ -1,0 +1,12 @@
+<|im_start|>systemZCARDSYSTEM_76000010Z CARD SYS ZGLOBALSYSPROMPT_76000010Z Stay in character.
+ZCARDDESCRIPTION_76000010Z a warded glade of beasts and old magic.
+ZCARDPERSONALITY_76000010Z calm, watchful, precise
+ZCARDSCENARIO_76000010Z dusk over the glade
+ZPERSONA_76000010Z the traveller, weary<|im_end|>
+***
+<|im_start|>userTester: ZCARDEXAMPLE_76000010Z hi<|im_end|>
+<|im_start|>assistanthello there<|im_end|>
+<|im_start|>assistantZCARDGREETING_76000010Z Hello Tester, I am ParityFuzz.<|im_end|>
+<|im_start|>userTell me what you see in the glade with beasts and magic.<|im_end|>
+<|im_start|>userZCARDJAILBREAK_76000010Z JB <|im_end|>
+<|im_start|>assistant

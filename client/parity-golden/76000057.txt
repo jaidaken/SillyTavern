@@ -1,0 +1,19 @@
+<|im_start|>systemZGLOBALSYSPROMPT_76000057Z Stay in character.
+ZCARDDESCRIPTION_76000057Z a warded glade of beasts and old magic.
+ZCARDPERSONALITY_76000057Z calm, watchful, precise
+ZCARDSCENARIO_76000057Z dusk over the glade<|im_end|>
+***
+<|im_start|>userTester: ZCARDEXAMPLE_76000057Z hi<|im_end|>
+<|im_start|>assistantParityFuzz: hello there<|im_end|>
+***
+<|im_start|>assistantParityFuzz: ZCARDGREETING_76000057Z Hello Tester, I am ParityFuzz.<|im_end|>
+<|im_start|>userTester: turn 0: more about the glade and its beasts and magic<|im_end|>
+<|im_start|>assistantParityFuzz: ok<|im_end|>
+<|im_start|>userTester: turn 1: more about the glade and its beasts and magic<|im_end|>
+<|im_start|>systemZWORLDINFO_76000057Z-9300 lore entry 9300<|im_end|>
+<|im_start|>assistantParityFuzz: ok<|im_end|>
+<|im_start|>userTester: turn 2: more about the glade and its beasts and magic<|im_end|>
+<|im_start|>assistantParityFuzz: ZCARDDEPTHPROMPT_76000057Z lamp flickers<|im_end|>
+<|im_start|>assistantParityFuzz: ok<|im_end|>
+<|im_start|>userTester: Tell me what you see in the glade with beasts and magic.<|im_end|>
+<|im_start|>assistantParityFuzz:

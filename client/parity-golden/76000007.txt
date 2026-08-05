@@ -1,0 +1,8 @@
+ZGLOBALSYSPROMPT_76000007Z Stay in character.
+ZCARDDESCRIPTION_76000007Z a warded glade of beasts and old magic.
+ZCARDPERSONALITY_76000007Z calm, watchful, precise
+ZCARDSCENARIO_76000007Z dusk over the glade
+***
+ZPERSONA_76000007Z the traveller, weary
+ParityFuzz: ZCARDGREETING_76000007Z Hello Tester, I am ParityFuzz. one Tester/ParityFuzz [[roll:1]] [[rnd:alpha]]  Tester|ParityFuzz|ParityFuzz sp[   ] nn rv[anaL]
+Tester: Tell me what you see in the glade with beasts and magic. ZPROMPTBIAS_76000007Z bias tail

@@ -1,0 +1,13 @@
+<|im_start|>system
+ZGLOBALSYSPROMPT_76000023Z Stay in character.
+ZCARDDESCRIPTION_76000023Z a warded glade of beasts and old magic. two Tester/ParityFuzz [[roll:9]] [[rnd:alpha]]  Tester|ParityFuzz|ParityFuzz sp[   ] nn rv[anaL]
+ZCARDPERSONALITY_76000023Z calm, watchful, precise
+ZCARDSCENARIO_76000023Z dusk over the glade
+ZAUTHORSNOTE_76000023Z the wind rises one Tester/ParityFuzz [[roll:8]] [[rnd:beta]]  Tester|ParityFuzz|ParityFuzz sp[   ] nn rv[anaL]
+ZPERSONA_76000023Z the traveller, weary one Tester/ParityFuzz [[roll:10]] [[rnd:alpha]]  Tester|ParityFuzz|ParityFuzz sp[   ] nn rv[anaL]<|im_end|>
+<|im_start|>assistant
+ParityFuzz: ZCARDGREETING_76000023Z Hello Tester, I am ParityFuzz.<|im_end|>
+<|im_start|>user
+Tester: Tell me what you see in the glade with beasts and magic.<|im_end|>
+<|im_start|>assistant
+ParityFuzz:ZPROMPTBIAS_76000023Z bias tail

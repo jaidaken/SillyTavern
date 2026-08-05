@@ -71,6 +71,8 @@ function parseArgs(argv) {
         else if (k === '--formats') { out.formats = true; i -= 1; }
         else if (k === '--selfcheck') { out.selfcheck = true; i -= 1; }
         else if (k === '--describe') { out.describe = true; i -= 1; }
+        else if (k === '--audit') { out.audit = true; i -= 1; }
+        else if (k === '--update-golden') { out.updateGolden = true; i -= 1; }
         else throw new Error(`unknown arg: ${k}`);
     }
     if (!out.data) out.data = join(tmpdir(), 'parity-data');
@@ -604,6 +606,33 @@ function chatMessageCount(fileKey) {
     return total;
 }
 
+// The new client only appends to an EXISTING chat file, so an audit that never runs the old frontend
+// has to lay the header down itself. Same shape the old drive would have left behind.
+function seedChatFile(fileKey, charName, userName, chatName, note) {
+    const dir = join(argsData, 'default-user', 'chats', fileKey);
+    mkdirSync(dir, { recursive: true });
+    const existing = readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
+    // The card's own `chat` field names the file the client opens; anything else and the client opens
+    // a chat whose file is not there, then every append 404s.
+    const file = chatName ? `${chatName}.jsonl` : (existing.length ? existing[0] : `${charName} - audit.jsonl`);
+    // A real chat carries the author's note in its own metadata (the old frontend seeds it from the
+    // default when it creates the chat), so a bare header would make the note look dropped.
+    const metadata = note && note.default ? {
+        note_prompt: note.default,
+        note_interval: note.defaultInterval,
+        note_position: note.defaultPosition,
+        note_depth: note.defaultDepth,
+        note_role: note.defaultRole,
+    } : {};
+    const header = {
+        user_name: userName,
+        character_name: charName,
+        create_date: '2026-01-01@00h00m00s',
+        chat_metadata: metadata,
+    };
+    writeFileSync(join(dir, file), JSON.stringify(header) + '\n');
+}
+
 // The new client only /appends to an EXISTING chat file (never creates one). The old drive creates it;
 // this strips it to a clean header so the new drive reuses the SAME chat from the identical start.
 function resetChatToHeader(fileKey) {
@@ -992,7 +1021,7 @@ function genState(seed, basePng, baseSettings) {
         console.error('DUMP depth_prompt:', JSON.stringify(card.data?.extensions?.depth_prompt));
         console.error('DUMP world:', JSON.stringify(Object.values(world?.entries || {}).map((e) => ({ uid: e.uid, role: e.role, position: e.position, depth: e.depth }))));
     }
-    return { card, world, applySettings, messages, markers, axes, format };
+    return { seed, card, world, applySettings, messages, markers, axes, format };
 }
 
 function applyFuzzState(state, baseSettings, basePng) {
@@ -1004,6 +1033,9 @@ function applyFuzzState(state, baseSettings, basePng) {
     const s = JSON.parse(JSON.stringify(baseSettings));
     state.applySettings(s);
     writeFileSync(join(argsData, 'default-user', 'settings.json'), JSON.stringify(s, null, 4));
+    // Handed back, never recomputed: applySettings DRAWS from the scenario's PRNG, so calling it a
+    // second time to "see" the settings produces a different scenario than the one on disk.
+    return s;
 }
 
 // Attribute a divergence to feature buckets: a marker token inside a +/- hunk -> that feature; a stop
@@ -1015,6 +1047,113 @@ function classifyDiff(diffText, stopEqual, markers) {
     if (!stopEqual) buckets.add('stop-strings');
     if (hunks.length && buckets.size === (stopEqual ? 0 : 1)) buckets.add('structure/order/format');
     return [...buckets];
+}
+
+// ---- the audit: judge OUR prompt on its own terms ------------------------------------------------
+//
+// The differential fuzz above asks "is this byte-identical to the old frontend". That answers whether
+// we match, never whether we are RIGHT, and it turns every deliberate improvement red. The audit asks
+// the question the operator actually cares about: is anything MISSING, and is anything MANGLED. The
+// old frontend stays a defect detector (--fuzz); it stops being the definition of correct.
+
+/// The marker tokens whose feature must appear exactly once when it appears at all. A repeat means a
+/// block was emitted twice, which costs context and confuses the model.
+const SINGLETON_FEATURES = new Set([
+    'card-description', 'card-personality', 'card-scenario', 'card-creatornotes',
+    'card-system', 'card-jailbreak', 'card-depthprompt', 'persona', 'authors-note', 'global-sysprompt',
+]);
+
+/// Which marker features the settings say MUST be in the prompt. Derived from the scenario, never from
+/// the other frontend: a field that rides the story string is only expected when the chosen context
+/// template actually has a slot for it, so a template without {{personality}} is not a missing field.
+function expectedFeatures(state, s) {
+    const pu = s.power_user || {};
+    const story = String(pu.context?.story_string || '');
+    const card = state.card.data || {};
+    const has = (v) => typeof v === 'string' && v.length > 0;
+    const want = new Set();
+
+    if (has(card.description) && story.includes('{{description}}')) want.add('card-description');
+    if (has(card.personality) && story.includes('{{personality}}')) want.add('card-personality');
+    if (has(card.scenario) && story.includes('{{scenario}}')) want.add('card-scenario');
+    // The greeting is the chat's first message, so it rides the history rather than the story string.
+    if (has(card.first_mes)) want.add('card-greeting');
+    if (has(card.mes_example) && !pu.strip_examples) want.add('card-example');
+    if (has(card.system_prompt) && pu.prefer_character_prompt !== false) want.add('card-system');
+    if (has(card.post_history_instructions) && pu.prefer_character_jailbreak !== false) want.add('card-jailbreak');
+    if (has(card.extensions?.depth_prompt?.prompt)) want.add('card-depthprompt');
+    // The card's own system prompt carries {{original}}, which pulls the global one in behind it, so
+    // the global marker is expected either way once sysprompt is on.
+    if (pu.sysprompt?.enabled) want.add('global-sysprompt');
+
+    const persona = pu.persona_description ?? '';
+    const pos = pu.persona_description_position;
+    // IN_PROMPT (0) rides the story string's {{persona}} slot; every other position injects on its own.
+    if (has(persona) && pos !== 9 && (pos !== 0 || story.includes('{{persona}}'))) want.add('persona');
+
+    if (has(s.extension_settings?.note?.default || '')) want.add('authors-note');
+    if (has(pu.user_prompt_bias)) want.add('prompt-bias');
+
+    // World info only when an entry needs no keyword match AND no absolute cap can starve it. A cap is
+    // the one setting that legitimately drops lore, and re-deriving which entry survives would just be
+    // the prompt builder written twice.
+    const entries = Object.values(state.world?.entries || {});
+    const capped = Number(s.world_info_settings?.world_info_budget_cap || 0) > 0;
+    if (!capped && entries.some((e) => e.constant)) want.add('world-info');
+    return want;
+}
+
+/// Everything wrong with one prompt, as findings. Empty = the prompt carries every field the scenario
+/// asked for, in one piece, with nothing left unrendered.
+function auditPrompt(prompt, state, s) {
+    const findings = [];
+    const seed = String(state.seed);
+    const featureOf = state.markers;
+    const add = (check, detail) => findings.push({ check, detail });
+
+    if (!prompt || !prompt.trim()) {
+        add('empty-prompt', 'the assembled prompt is empty');
+        return findings;
+    }
+
+    // MISSING: a field the settings put in the prompt that did not arrive.
+    const want = expectedFeatures(state, s);
+    const present = new Set();
+    for (const [token, feat] of Object.entries(featureOf)) if (prompt.includes(token)) present.add(feat);
+    for (const feat of want) if (!present.has(feat)) add('missing-field', feat);
+
+    // MANGLED: a marker that starts and does not finish. A trim, a bad slice or an off-by-one shows up
+    // here first; this is the exact shape of the trim_sentences fault the differential run found.
+    // trim_sentences deliberately cuts a reply at its last sentence end, and the markers carry '_',
+    // which stock counts as one. With it on, a cut marker is the setting working.
+    if (!s.power_user?.trim_sentences) {
+        for (const m of prompt.matchAll(/Z[A-Z]+_/g)) {
+            const tail = prompt.slice(m.index, m.index + m[0].length + seed.length + 1);
+            if (!tail.endsWith(`${seed}Z`)) add('truncated-marker', `${m[0]}... at offset ${m.index}`);
+        }
+    }
+
+    // UNRENDERED: macro syntax that reached the model. A macro we do not implement lands here verbatim,
+    // which is worse than useless: the model reads the braces as content.
+    for (const m of prompt.matchAll(/\{\{[^}\n]{0,60}\}\}/g)) add('unresolved-macro', m[0]);
+    for (const tag of ['<USER>', '<BOT>', '<CHAR>']) if (prompt.includes(tag)) add('unresolved-macro', tag);
+
+    // DUPLICATED: one block emitted twice spends context on nothing.
+    for (const [token, feat] of Object.entries(featureOf)) {
+        if (!SINGLETON_FEATURES.has(feat)) continue;
+        const n = prompt.split(token).length - 1;
+        if (n > 1) add('duplicate-block', `${feat} appears ${n} times`);
+    }
+
+    // BARE LABEL: a speaker cue with no line behind it, the shape of the nameless-label fault.
+    for (const line of prompt.split('\n')) {
+        if (/^\s*:\s*$/.test(line)) add('bare-label', 'a line is nothing but a colon');
+    }
+
+    // DROPPED TURN: every message the user actually sent has to be in the window.
+    for (const msg of state.messages) if (!prompt.includes(msg)) add('missing-turn', msg.slice(0, 40));
+
+    return findings;
 }
 
 // Prints the scenario a seed generates without booting anything. A divergent seed is read here first:
@@ -1034,6 +1173,150 @@ function describeSeeds(args) {
         process.stdout.write(`power_user: ${JSON.stringify(s.power_user, null, 1)}\n`);
         process.stdout.write(`depth_prompt: ${JSON.stringify(state.card.data?.extensions?.depth_prompt)}\n`);
     }
+}
+
+/// Proves every audit check can FAIL. A checker that has never rejected anything is indistinguishable
+/// from one that cannot, so each check is fed a prompt broken in exactly its way and must name it.
+function auditSelfCheck() {
+    const seed = 99000001;
+    const mk = (feat) => `Z${feat.toUpperCase().replace(/[^A-Z]/g, '')}_${seed}Z`;
+    const markers = {
+        [mk('card-description')]: 'card-description',
+        [mk('persona')]: 'persona',
+        [mk('authors-note')]: 'authors-note',
+        [mk('card-greeting')]: 'card-greeting',
+    };
+    const state = {
+        seed,
+        markers,
+        messages: ['tell me about the glade'],
+        card: { data: { description: 'a glade', first_mes: 'hello' } },
+        world: null,
+    };
+    const settings = {
+        power_user: {
+            context: { story_string: '{{description}}\n{{persona}}' },
+            sysprompt: { enabled: false },
+            persona_description: 'the traveller',
+            persona_description_position: 0,
+            trim_sentences: false,
+        },
+        extension_settings: { note: { default: 'the wind rises' } },
+    };
+    const whole = [
+        mk('card-description'),
+        mk('persona'),
+        mk('authors-note'),
+        mk('card-greeting'),
+        'tell me about the glade',
+    ].join('\n');
+
+    const cases = [
+        ['empty-prompt', ''],
+        ['missing-field', whole.replace(mk('persona'), '')],
+        ['truncated-marker', whole.replace(mk('persona'), 'ZPERSONA_')],
+        ['unresolved-macro', `${whole}\n{{time}}`],
+        ['unresolved-macro', `${whole}\n<USER> stands there`],
+        ['duplicate-block', `${whole}\n${mk('card-description')}`],
+        ['bare-label', `${whole}\n:`],
+        ['missing-turn', whole.replace('tell me about the glade', 'something else entirely')],
+    ];
+
+    let passed = 0;
+    process.stdout.write('\n########## AUDIT SELF-CHECK ##########\n');
+    for (const [check, prompt] of cases) {
+        const found = auditPrompt(prompt, state, settings).map((f) => f.check);
+        const ok = found.includes(check);
+        process.stdout.write(`  ${ok ? 'PASS' : 'FAIL'}  ${check} is caught${ok ? '' : ` (got [${found.join(', ')}])`}\n`);
+        if (ok) passed += 1;
+    }
+    // And the clean prompt must be reported clean, or every run above is a false alarm.
+    const cleanFindings = auditPrompt(whole, state, settings);
+    const cleanOk = cleanFindings.length === 0;
+    process.stdout.write(`  ${cleanOk ? 'PASS' : 'FAIL'}  a correct prompt raises nothing${cleanOk ? '' : ` (got ${JSON.stringify(cleanFindings)})`}\n`);
+    if (cleanOk) passed += 1;
+
+    const total = cases.length + 1;
+    process.stdout.write(`\nAUDIT SELF-CHECK: ${passed}/${total} passed\n`);
+    if (passed !== total) process.exitCode = 2;
+}
+
+/// Where an approved prompt lives. Committed beside the harness so a change to the assembled prompt
+/// shows up as a diff someone signed off on, not as drift nobody noticed.
+const GOLDEN_DIR = new URL('./parity-golden/', import.meta.url).pathname;
+
+async function runAudit(args) {
+    const startedAt = Date.now();
+    const basePng = readFileSync(join(argsData, 'default-user', 'characters', 'default_Seraphina.png'));
+    const settingsPath = join(argsData, 'default-user', 'settings.json');
+    const baseSettings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    ROTATE_FORMATS = args.formats;
+    if (args.updateGolden && !existsSync(GOLDEN_DIR)) mkdirSync(GOLDEN_DIR, { recursive: true });
+
+    process.stdout.write(`\n########## AUDIT: worker ${args.worker}, seeds ${args.seed}..${args.seed + args.count - 1} ##########\n`);
+    process.stdout.write('judging OUR prompt: every field the settings asked for, in one piece, nothing left unrendered.\n');
+    const results = [];
+    const byCheck = {};
+    try {
+        for (let i = 0; i < args.count; i++) {
+            const seed = args.worker * 1000000 + args.seed + i;
+            const state = genState(seed, basePng, baseSettings);
+            let applied = null;
+            let hit, error = null;
+            for (let attempt = 1; attempt <= DRIVE_ATTEMPTS; attempt++) {
+                error = null;
+                try {
+                    applied = applyFuzzState(state, baseSettings, basePng);
+                    await resetChat(FUZZ_CARD);
+                    seedChatFile(FUZZ_CARD, FUZZ_CARD, baseSettings.username || 'Tester', state.card.chat, applied.extension_settings?.note);
+                    const p = await driveMulti('new', FUZZ_CARD, state.messages, FUZZ_CARD);
+                    hit = p[p.length - 1];
+                    break;
+                } catch (e) {
+                    error = e.message;
+                    const down = await deadServices();
+                    if (down.length) { error = `${e.message} [SERVICE DOWN: ${down.join(', ')}]`; break; }
+                }
+            }
+            if (error) { process.stdout.write(`  seed ${seed}: DRIVE ERROR: ${error}\n`); results.push({ seed, error }); continue; }
+
+            const findings = auditPrompt(hit.prompt, state, applied);
+            const goldenPath = join(GOLDEN_DIR, `${seed}.txt`);
+            let drift = null;
+            if (args.updateGolden) {
+                writeFileSync(goldenPath, hit.prompt);
+            } else if (existsSync(goldenPath)) {
+                const approved = readFileSync(goldenPath, 'utf8');
+                if (approved !== hit.prompt) drift = diffReport(approved, hit.prompt);
+            }
+            for (const f of findings) (byCheck[f.check] = byCheck[f.check] || []).push(seed);
+            if (!findings.length && !drift) { process.stdout.write(`  seed ${seed}: CLEAN (${hit.prompt.length} bytes)\n`); results.push({ seed, clean: true }); continue; }
+            process.stdout.write(`  seed ${seed}: ${findings.length} finding(s) axes:[${state.axes.join(',')}]\n`);
+            for (const f of findings.slice(0, 12)) process.stdout.write(`      ${f.check}: ${f.detail}\n`);
+            if (findings.length > 12) process.stdout.write(`      ... ${findings.length - 12} more\n`);
+            if (drift) {
+                process.stdout.write(`      unapproved-change: the prompt differs from the approved snapshot\n--- approved   +++ now\n${drift.text}\n`);
+                (byCheck['unapproved-change'] = byCheck['unapproved-change'] || []).push(seed);
+            }
+            writeFileSync(join(args.data, `au-${seed}.txt`), hit.prompt);
+            results.push({ seed, clean: false, findings: findings.length, drift: Boolean(drift) });
+        }
+    } finally {
+        writeFileSync(settingsPath, JSON.stringify(baseSettings, null, 4));
+        for (const p of [join(argsData, 'default-user', 'characters', `${FUZZ_CARD}.png`), join(argsData, 'default-user', 'worlds', `${FUZZ_WORLD}.json`)]) if (existsSync(p)) rmSync(p, { force: true });
+    }
+
+    const clean = results.filter((r) => r.clean).length;
+    const errs = results.filter((r) => r.error).length;
+    const dirty = results.filter((r) => r.clean === false).length;
+    process.stdout.write(`\n########## AUDIT SUMMARY (worker ${args.worker}) ##########\n`);
+    process.stdout.write(`seeds ${results.length}: ${clean} CLEAN, ${dirty} WITH FINDINGS, ${errs} ERROR\n`);
+    for (const [check, seeds] of Object.entries(byCheck).sort((a, b) => b[1].length - a[1].length)) {
+        process.stdout.write(`  ${check}: ${seeds.length} seed(s)  [${seeds.slice(0, 6).join(', ')}${seeds.length > 6 ? ', ...' : ''}]\n`);
+    }
+    if (args.updateGolden) process.stdout.write(`\napproved snapshots written to ${GOLDEN_DIR}\n`);
+    process.stdout.write(`\n(per-seed prompts at ${args.data}/au-<seed>.txt)\n`);
+    await reportIntegrity(args.count, results.length, startedAt);
 }
 
 async function runFuzz(args) {
@@ -1463,6 +1746,7 @@ async function main() {
     argsData = args.data;
     process.on('SIGINT', () => { teardown(); process.exit(130); });
     try {
+        if (args.selfcheck && args.audit) { auditSelfCheck(); return; }
         if (args.selfcheck) { await runSelfCheck(args); return; }
         if (args.describe) { describeSeeds(args); return; }
         await bootRig(args);
@@ -1472,6 +1756,7 @@ async function main() {
         if (args.trim) { await runTrimBattery(args); return; }
         if (args.measurepick) { await runMeasurePick(args); return; }
         if (args.mesraw) { await runMesRawBattery(args); return; }
+        if (args.audit) { await runAudit(args); return; }
         if (args.fuzz) { await runFuzz(args); return; }
         await runBattery(args);
     } finally {
