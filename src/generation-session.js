@@ -66,6 +66,10 @@ export class GenerationSession {
         this.user = null;
         /// Prepended to the persisted turn: the prompt ended with this, so the model continued from it.
         this.replyPrefix = '';
+        // power_user.trim_sentences / trim_spaces: the tail of the classic cleanUpMessage, applied
+        // where the turn is written now that the server owns it.
+        this.trimSentences = false;
+        this.trimSpaces = true;
         this.text = '';
         this.thinking = '';
         /** @type {{id: number, data: string}[]} */

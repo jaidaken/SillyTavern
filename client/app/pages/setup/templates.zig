@@ -187,6 +187,12 @@ pub const Templates = struct {
     /// install: power-user.js:125 initialises false, but the shipped settings and the checkbox default
     /// (power-user.js:367) are both true, so every blob that omits the key came from a true world.
     always_force_name2: bool = true,
+    /// power_user.trim_sentences (stock default false): drop a trailing incomplete sentence from the
+    /// finished reply (cleanUpMessage, script.js:6555 -> utils.js trimToEndSentence).
+    trim_sentences: bool = false,
+    /// power_user.trim_spaces (stock default true): trim the finished reply's outer whitespace
+    /// (script.js:6559).
+    trim_spaces: bool = true,
     /// power_user.collapse_newlines (global, stock default false): collapse every run of newlines in
     /// the final assembled prompt to a single '\n' (script.js:5171, getCombinedPrompt).
     collapse_newlines: bool = false,
@@ -259,6 +265,8 @@ pub fn parseTemplates(arena: Allocator, settings_str: []const u8) Allocator.Erro
     out.user_prompt_bias = try strField(arena, power_user, "user_prompt_bias");
     out.strip_examples = boolField(power_user, "strip_examples", false);
     out.always_force_name2 = boolField(power_user, "always_force_name2", true);
+    out.trim_sentences = boolField(power_user, "trim_sentences", false);
+    out.trim_spaces = boolField(power_user, "trim_spaces", true);
     out.collapse_newlines = boolField(power_user, "collapse_newlines", false);
     out.custom_stopping_strings = try strField(arena, power_user, "custom_stopping_strings");
     out.custom_stopping_strings_macro = boolField(power_user, "custom_stopping_strings_macro", true);
@@ -416,6 +424,8 @@ pub fn dupeTemplates(arena: Allocator, t: Templates) Allocator.Error!Templates {
         .user_prompt_bias = try arena.dupe(u8, t.user_prompt_bias),
         .strip_examples = t.strip_examples,
         .always_force_name2 = t.always_force_name2,
+        .trim_sentences = t.trim_sentences,
+        .trim_spaces = t.trim_spaces,
         .collapse_newlines = t.collapse_newlines,
         .custom_stopping_strings = try arena.dupe(u8, t.custom_stopping_strings),
         .custom_stopping_strings_macro = t.custom_stopping_strings_macro,

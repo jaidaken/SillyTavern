@@ -70,6 +70,7 @@ function parseArgs(argv) {
         else if (k === '--mesraw') { out.mesraw = true; i -= 1; }
         else if (k === '--formats') { out.formats = true; i -= 1; }
         else if (k === '--selfcheck') { out.selfcheck = true; i -= 1; }
+        else if (k === '--describe') { out.describe = true; i -= 1; }
         else throw new Error(`unknown arg: ${k}`);
     }
     if (!out.data) out.data = join(tmpdir(), 'parity-data');
@@ -1016,6 +1017,25 @@ function classifyDiff(diffText, stopEqual, markers) {
     return [...buckets];
 }
 
+// Prints the scenario a seed generates without booting anything. A divergent seed is read here first:
+// which world entries exist with which fields, and which settings the patch wrote. Needs only a data
+// dir a prior run left behind (the card png + the base settings.json).
+function describeSeeds(args) {
+    const basePng = readFileSync(join(argsData, 'default-user', 'characters', 'default_Seraphina.png'));
+    const baseSettings = JSON.parse(readFileSync(join(argsData, 'default-user', 'settings.json'), 'utf8'));
+    for (let i = 0; i < args.count; i++) {
+        const seed = args.worker * 1000000 + args.seed + i;
+        const state = genState(seed, basePng, baseSettings);
+        const s = JSON.parse(JSON.stringify(baseSettings));
+        state.applySettings(s);
+        process.stdout.write(`\n===== seed ${seed} axes:[${state.axes.join(',')}] fmt:${state.format} hist:${state.messages.length - 1} =====\n`);
+        process.stdout.write(`world: ${JSON.stringify(Object.values(state.world?.entries || {}), null, 1)}\n`);
+        process.stdout.write(`world_info_settings: ${JSON.stringify(s.world_info_settings, null, 1)}\n`);
+        process.stdout.write(`power_user: ${JSON.stringify(s.power_user, null, 1)}\n`);
+        process.stdout.write(`depth_prompt: ${JSON.stringify(state.card.data?.extensions?.depth_prompt)}\n`);
+    }
+}
+
 async function runFuzz(args) {
     const startedAt = Date.now();
     const basePng = readFileSync(join(argsData, 'default-user', 'characters', 'default_Seraphina.png'));
@@ -1444,6 +1464,7 @@ async function main() {
     process.on('SIGINT', () => { teardown(); process.exit(130); });
     try {
         if (args.selfcheck) { await runSelfCheck(args); return; }
+        if (args.describe) { describeSeeds(args); return; }
         await bootRig(args);
         if (args.probe) { await probe(args.probe); return; }
         if (args.timed) { await runTimedBattery(args); return; }

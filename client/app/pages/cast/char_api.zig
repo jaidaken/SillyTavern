@@ -909,6 +909,7 @@ pub fn applyRemoteAppend(payload: []const u8) void {
     // server's copy too would show the same reply twice.
     if (stream_drive.renderedGeneration(jsonStrField(obj, "generation_id"))) {
         chars_log.debug("live: skipping the append for a generation this page streamed", .{});
+        adoptServerReply(msgs);
         return;
     }
 
@@ -950,6 +951,29 @@ pub fn applyRemoteAppend(payload: []const u8) void {
     if (added == 0) return;
     chars_log.info("live: appended {d} turn(s) from another client", .{added});
     regions.bumpMessageLog();
+}
+
+/// The server composes the saved reply after the stream ends (prompt bias in front, then the
+/// trim_sentences / trim_spaces settings), so the text this page rendered token by token can differ
+/// from the text on disk. The streaming tab takes the server's copy for that one message rather than
+/// leaving a body that a reload would silently change.
+fn adoptServerReply(msgs: std.json.Array) void {
+    if (msgs.items.len != 1) return;
+    const obj = switch (msgs.items[0]) {
+        .object => |o| o,
+        else => return,
+    };
+    const mes = jsonStrField(obj, "mes");
+    const st = &store.global;
+    if (st.messages.items.len == 0) return;
+    const last = st.messages.items.len - 1;
+    if (std.mem.eql(u8, st.messages.items[last].body, mes)) return;
+    // The swap re-lays out the last message, and a shorter body leaves a reader that was following
+    // the reply parked above the new bottom. Re-settle only if it was at the bottom to begin with.
+    const following = reader.nearBottomNow();
+    st.replaceBody(last, mes) catch return;
+    regions.bumpMessageLog();
+    if (following) reader.scrollBottom();
 }
 
 /// Whether a chat-appended event names the chat this page has open. The identity is the card and
@@ -1745,7 +1769,11 @@ fn buildStartBody(generate_body: []const u8) ?[]u8 {
     defer if (bias.len > 0) alloc.free(bias);
     const prefix_json = std.json.Stringify.valueAlloc(alloc, bias, .{}) catch return null;
     defer alloc.free(prefix_json);
-    return std.fmt.allocPrint(alloc, "{{\"chat\":{s},\"generate\":{s},\"reply_prefix\":{s}}}", .{ chat, generate_body, prefix_json }) catch null;
+    return std.fmt.allocPrint(
+        alloc,
+        "{{\"chat\":{s},\"generate\":{s},\"reply_prefix\":{s},\"trim_sentences\":{},\"trim_spaces\":{}}}",
+        .{ chat, generate_body, prefix_json, pend_tpl.trim_sentences, pend_tpl.trim_spaces },
+    ) catch null;
 }
 
 /// Trim on byte lengths against the char budget: the classic pre-token behavior and the fallback when a

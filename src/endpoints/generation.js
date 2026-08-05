@@ -15,6 +15,7 @@ import { TEXTGEN_TYPES } from '../constants.js';
 import { log } from '../log.js';
 import { emitToUser } from '../client-events.js';
 import { createSession, getSession, findActiveForChat, listActive, MAX_ACTIVE_PER_HANDLE, Status, DONE_PAYLOAD } from '../generation-session.js';
+import { composeReply } from '../reply-cleanup.js';
 import { buildUpstreamRequest } from './backends/text-completions.js';
 import { ChatRef, appendChatMessages } from './chats.js';
 
@@ -103,7 +104,12 @@ async function persistAssistantTurn(session) {
         send_date: Date.now(),
         // The prompt ended with the user's bias, so the model continued FROM it and the bias is part of
         // this turn. Stock prepends it before saving (script.js:6431) and hides it on display.
-        mes: (session.replyPrefix || '') + session.text,
+        mes: composeReply({
+            prefix: session.replyPrefix,
+            text: session.text,
+            trimSentences: session.trimSentences,
+            trimSpaces: session.trimSpaces,
+        }),
         extra: { reasoning: session.thinking, bias: session.replyPrefix || null },
     };
     try {
@@ -291,6 +297,8 @@ router.post('/start', async function (request, response) {
         session.user = request.user;
         // Bounded and type-checked: it is client-supplied text that lands in a saved chat file.
         session.replyPrefix = typeof body.reply_prefix === 'string' ? body.reply_prefix.slice(0, 2048) : '';
+        session.trimSentences = body.trim_sentences === true;
+        session.trimSpaces = body.trim_spaces !== false;
         session.onExpire = (reason) => {
             finishGeneration(session, Status.error, reason).catch(error => log.net.error('Generation watchdog finish failed:', error));
         };

@@ -200,6 +200,19 @@ pub const Store = struct {
         self.seal(&self.reasoning_tail, &msg.reasoning, &msg.reasoning_owned);
     }
 
+    /// Replaces a sealed message's body with `bytes` (copied). The server post-processes a finished
+    /// reply (prompt bias, trim settings) after the tokens have already been rendered, so the tab
+    /// that streamed it adopts the authoritative text instead of keeping its own composition.
+    pub fn replaceBody(self: *Store, index: usize, bytes: []const u8) Allocator.Error!void {
+        if (index >= self.messages.items.len) return;
+        if (self.stream_index != null and self.stream_index.? == index) return;
+        const copy = try self.allocator.dupe(u8, bytes);
+        const msg = &self.messages.items[index];
+        if (msg.body_owned) |old| self.allocator.free(old);
+        msg.body = copy;
+        msg.body_owned = copy;
+    }
+
     fn seal(self: *Store, buf: *std.ArrayList(u8), text: *[]const u8, owned: *?[]u8) void {
         if (buf.items.len == 0) {
             buf.deinit(self.allocator);
@@ -1659,4 +1672,49 @@ test "clear_store_collapses_every_reasoning_block" {
     try testing.expect(reasoningOpenFor(2));
     clearStore();
     try testing.expect(!reasoningOpenFor(2));
+}
+
+test "replaceBody_swaps_a_sealed_body_for_the_servers_own_text" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+    try s.beginStream(try testing.allocator.dupe(u8, "Seraphina"), try testing.allocator.dupe(u8, ""));
+    try s.appendTail("streamed text");
+    s.endStream();
+    try s.replaceBody(0, "Bias: streamed");
+    try testing.expectEqualStrings("Bias: streamed", s.slice()[0].body);
+    // The replacement owns its bytes: a later append must not disturb it.
+    try s.appendCopy("You", "next", "");
+    try testing.expectEqualStrings("Bias: streamed", s.slice()[0].body);
+}
+
+test "replaceBody_leaves_a_still_streaming_message_and_a_missing_index_alone" {
+    var s = Store.init(testing.allocator);
+    defer s.deinit();
+    try s.beginStream(try testing.allocator.dupe(u8, "Seraphina"), try testing.allocator.dupe(u8, ""));
+    try s.appendTail("live");
+    try s.replaceBody(0, "server copy");
+    try testing.expectEqualStrings("live", s.slice()[0].body);
+    try s.replaceBody(7, "nowhere");
+    try testing.expectEqual(@as(usize, 1), s.slice().len);
+}
+
+test "replaceBody_releases_everything_on_any_allocation_failure" {
+    try testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn run(a: std.mem.Allocator) !void {
+            var s = Store.init(a);
+            defer s.deinit();
+            {
+                // beginStream adopts these only on success; the block scopes the errdefers to the
+                // window where they are still the caller's to free.
+                const name = try a.dupe(u8, "Seraphina");
+                errdefer a.free(name);
+                const avatar = try a.dupe(u8, "");
+                errdefer a.free(avatar);
+                try s.beginStream(name, avatar);
+            }
+            try s.appendTail("streamed text");
+            s.endStream();
+            try s.replaceBody(0, "Bias: streamed");
+        }
+    }.run, .{});
 }

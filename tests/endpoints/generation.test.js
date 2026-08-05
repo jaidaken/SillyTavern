@@ -212,6 +212,9 @@ async function startGeneration(client, upstreamUrl, options = {}) {
     const response = await client.postJson('/api/generation/start', {
         chat: { avatar_url: `${CARD}.png`, file_name: options.fileName ?? CHAT_FILE, character_name: CARD },
         generate: { api_type: 'generic', api_server: upstreamUrl, model: 'mock', prompt: options.prompt ?? 'hi', max_tokens: 64 },
+        ...(options.replyPrefix === undefined ? {} : { reply_prefix: options.replyPrefix }),
+        ...(options.trimSentences === undefined ? {} : { trim_sentences: options.trimSentences }),
+        ...(options.trimSpaces === undefined ? {} : { trim_spaces: options.trimSpaces }),
     });
     return { status: response.status, body: await response.json() };
 }
@@ -279,6 +282,38 @@ describe('server-owned generation', () => {
         await server?.stop();
     });
 
+    test('the saved turn carries the prompt bias and the trim settings the start body named', async () => {
+        seedChat(server);
+        const upstream = new ScriptedUpstream();
+        await upstream.start();
+        const client = await loggedInClient(server);
+
+        // The prompt ended with the bias, so the model continued FROM it: the saved turn owns it, and
+        // trim_sentences drops whatever follows the last sentence end (here the '_' in the bias).
+        const started = await startGeneration(client, upstream.baseUrl, {
+            replyPrefix: 'BIAS_',
+            trimSentences: true,
+        });
+        expect(started.status).toBe(200);
+
+        const viewer = await openViewer(server, client, started.body.generation_id, 0);
+        await until(() => upstream.live !== null, 'the upstream request');
+        upstream.emit(3);
+        await viewer.waitForFrameCount(3);
+        upstream.finish();
+        await viewer.waitForEnd();
+
+        await until(() => readChatLines(chatPath(server)).length === 3, 'the assistant turn to land');
+        const appended = readChatLines(chatPath(server))[2];
+        expect(appended.mes).toBe('BIAS_');
+        expect(appended.extra.bias).toBe('BIAS_');
+        // The stream itself is untouched: only the persisted composition applies the settings.
+        expect(textOf(viewer)).toBe(upstream.sent.join(''));
+
+        await viewer.close();
+        await upstream.stop();
+    }, CASE_TIMEOUT_MS);
+
     test('a completed generation appends exactly one assistant turn', async () => {
         seedChat(server);
         const upstream = new ScriptedUpstream();
@@ -305,14 +340,16 @@ describe('server-owned generation', () => {
         const appended = after[after.length - 1];
         expect(appended.is_user).toBe(false);
         expect(appended.name).toBe(CARD);
-        expect(appended.mes).toBe(expectedText);
+        // The saved turn is composed (src/reply-cleanup.js): trim_spaces defaults on, as it does in
+        // the classic client, so the persisted text is the stream trimmed. The frames stay raw.
+        expect(appended.mes).toBe(expectedText.trim());
         expect(textOf(viewer)).toBe(expectedText);
 
         // The double-append guard: nothing else may land after the writer is done, and every earlier
         // line must be byte-identical to what was there before the generation ran.
         expect(after.slice(0, before.length).map(line => JSON.stringify(line)))
             .toEqual(before.map(line => JSON.stringify(line)));
-        expect(after.filter(line => line.mes === expectedText).length).toBe(1);
+        expect(after.filter(line => line.mes === expectedText.trim()).length).toBe(1);
 
         await viewer.close();
         await upstream.stop();
@@ -352,7 +389,7 @@ describe('server-owned generation', () => {
 
         await until(() => readChatLines(chatPath(server)).length === 3, 'the assistant turn to land');
         const appended = readChatLines(chatPath(server))[2];
-        expect(appended.mes).toBe(upstream.sent.join(''));
+        expect(appended.mes).toBe(upstream.sent.join('').trim());
 
         await second.close();
         await upstream.stop();
@@ -393,9 +430,9 @@ describe('server-owned generation', () => {
         const appended = readChatLines(chatPath(server))[2];
         // The truncation guard: the file holds every token, including the six that streamed before
         // the reload, not just what arrived after it.
-        expect(appended.mes).toBe(wholeText);
+        expect(appended.mes).toBe(wholeText.trim());
         expect(appended.mes.startsWith('tok0 ')).toBe(true);
-        expect(appended.mes.endsWith('tok9 ')).toBe(true);
+        expect(appended.mes.endsWith('tok9')).toBe(true);
 
         await viewer.close();
         await upstream.stop();
@@ -426,7 +463,7 @@ describe('server-owned generation', () => {
         expect((await activeResponse.json()).active).toBe(false);
 
         await until(() => readChatLines(chatPath(server)).length === 3, 'the partial turn to land');
-        expect(readChatLines(chatPath(server))[2].mes).toBe(upstream.sent.join(''));
+        expect(readChatLines(chatPath(server))[2].mes).toBe(upstream.sent.join('').trim());
 
         await viewer.close();
         await upstream.stop();
@@ -450,7 +487,7 @@ describe('server-owned generation', () => {
         upstream.finish();
 
         await until(() => readChatLines(chatPath(server)).length === 3, 'the assistant turn to land');
-        expect(readChatLines(chatPath(server))[2].mes).toBe(upstream.sent.join(''));
+        expect(readChatLines(chatPath(server))[2].mes).toBe(upstream.sent.join('').trim());
 
         await upstream.stop();
     }, CASE_TIMEOUT_MS);

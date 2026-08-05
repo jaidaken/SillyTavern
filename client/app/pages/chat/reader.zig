@@ -53,7 +53,7 @@ fn nearBottomEl(chat: js.Object) bool {
     return (sh - st - ch) < BOTTOM_SLOP;
 }
 
-fn nearBottomNow() bool {
+pub fn nearBottomNow() bool {
     const chat = chatEl() orelse return true;
     defer chat.deinit();
     return nearBottomEl(chat);
