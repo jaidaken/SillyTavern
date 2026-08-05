@@ -15,6 +15,7 @@ const js = zx.client.js;
 const net = @import("../platform/net.zig");
 const uploads = @import("../platform/uploads.zig");
 const data = @import("./char_data.zig");
+const macro_chat = @import("../setup/macro_chat.zig");
 const generate = @import("../setup/generate.zig");
 const tokenizer = @import("../setup/tokenizer.zig");
 const templates = @import("../setup/templates.zig");
@@ -635,10 +636,16 @@ fn charaFilename(avatar: []const u8) []const u8 {
 }
 
 pub fn nowMs() f64 { // w3-grp: pub for group_send's append timestamps
+    // Off `performance`, NOT `Date.now()`: jsz walks a js VALUE to read a property, and a static on a
+    // function object (Date) does not resolve, so `Date.now()` answered error.InvalidType and this
+    // returned 0 to every caller. timeOrigin + now() is the same instant (character_list.zx says the
+    // same; datetime.zig:5 documents the trap).
     if (zx.platform.role != .client) return 0;
-    const date_ctor = js.global.get(js.Object, "Date") catch return 0;
-    defer date_ctor.deinit();
-    return date_ctor.call(f64, "now", .{}) catch 0;
+    const perf = js.global.get(js.Object, "performance") catch return 0;
+    defer perf.deinit();
+    const origin = perf.get(f64, "timeOrigin") catch return 0;
+    const since = perf.call(f64, "now", .{}) catch return 0;
+    return origin + since;
 }
 
 fn onChatDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
@@ -2254,7 +2261,46 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
     const anchors = noteAnchors(eff_note);
     // Effective system prompt: the card's own system_prompt wins over the global (generate.effectiveSystem).
     const effective_system = generate.effectiveSystem(pend_tpl.sysprompt_enabled, pend_tpl.prefer_character_prompt, pend_system_prompt, pend_tpl.system_prompt);
+    // Chat-state macros ({{lastMessage}}, {{lastUserMessage}}, the ids) read the window we just built.
+    // SWIPES ARE NOT MODELLED on this path: char_data's turn parse carries no swipes array, so every
+    // message reports a single swipe and {{lastSwipeId}}/{{currentSwipeId}} read 1.
+    var chat_msgs: std.ArrayList(macro_chat.Msg) = .empty;
+    defer chat_msgs.deinit(alloc);
+    if (page) |p| for (p.messages) |m| {
+        chat_msgs.append(alloc, .{
+            .name = m.name,
+            .mes = m.mes,
+            .is_user = m.is_user,
+            .is_system = m.is_system,
+        }) catch break;
+    };
+    // The clock the time macros read. getTimezoneOffset is minutes WEST of UTC, so it negates.
+    const now_ms_f = nowMs();
+    const tz_offset: i32 = blk: {
+        const d = js.global.get(js.Object, "Date") catch break :blk 0;
+        defer d.deinit();
+        const inst = d.new(.{}) catch break :blk 0;
+        defer inst.deinit();
+        const west = inst.call(f64, "getTimezoneOffset", .{}) catch break :blk 0;
+        break :blk -@as(i32, @intFromFloat(west));
+    };
+    // {{idleDuration}} measures from the newest USER turn. char_data's parse drops send_date, so the
+    // gap is not knowable here and the macro reads zero rather than inventing an interval.
+    const last_user_ms: f64 = 0;
     var ctx = generate.Ctx{
+        .chat = .{ .messages = chat_msgs.items },
+        .now_ms = @intFromFloat(now_ms_f),
+        .utc_offset_minutes = tz_offset,
+        .idle_ms = if (last_user_ms > 0) @intFromFloat(now_ms_f - last_user_ms) else 0,
+        .env = .{
+            .model = conn.model,
+            .system_prompt = effective_system,
+            .input = pend_user_text,
+            .max_context = @intCast(@max(0, conn.max_context)),
+            .max_prompt = generate.promptTokenBudget(conn),
+            .max_response = @intCast(@max(0, conn.max_tokens)),
+            .last_generation_type = "normal",
+        },
         .char = pend_char_name,
         .user = pend_user_name,
         .persona = pend_persona_desc,

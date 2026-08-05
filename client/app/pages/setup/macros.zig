@@ -9,6 +9,10 @@
 
 const std = @import("std");
 
+const macro_chat = @import("./macro_chat.zig");
+const macro_env = @import("./macro_env.zig");
+const macro_time = @import("./macro_time.zig");
+
 const rng = @import("../platform/rng.zig");
 
 const Allocator = std.mem.Allocator;
@@ -65,6 +69,17 @@ pub const Ctx = struct {
     /// Entropy for the genuinely-random `{{roll}}`/`{{random}}`. Null draws deterministically (0.0),
     /// mirroring the world-info engine's null-rng fallback (world_info_engine.zig:414).
     rng: ?std.Random = null,
+    /// The environment scalars ({{model}}, {{maxContext}}, {{input}}, the group names, {{if}}/{{else}}).
+    env: macro_env.Env = .{},
+    /// The clock the time macros read: epoch milliseconds and the local UTC offset, plus how long
+    /// since the last user message for {{idleDuration}}. Zero `now_ms` leaves the time macros unresolved
+    /// rather than rendering the epoch, so a caller that cannot read a clock does not lie about the date.
+    now_ms: i64 = 0,
+    utc_offset_minutes: i32 = 0,
+    idle_ms: i64 = 0,
+    /// The open chat, for the chat-state macros ({{lastMessage}}, swipe ids, {{allChatRange}}).
+    /// Empty by default so a card-field pass with no chat behind it renders them as stock does.
+    chat: macro_chat.State = .{},
     /// Card-field macros resolve to values only when set (stock replaceCharacterCard, MacroEnvBuilder.js:96);
     /// renderStoryString's template passes set it, every baseChatReplace-equivalent pass leaves it false.
     replace_character_card: bool = false,
@@ -219,6 +234,27 @@ pub fn substituteMacros(alloc: Allocator, text: []const u8, ctx: Ctx) Allocator.
                     continue;
                 }
                 const bare = std.mem.trim(u8, if (std.mem.indexOfScalar(u8, inner, ':')) |c| inner[0..c] else inner, " \t");
+                // Chat-state macros allocate (they format ids and copy message text), so they cannot
+                // ride the pure name-to-value `resolve` below.
+                // Env macros take their own `::` arguments, so they see the whole inner body.
+                if (try macro_env.resolve(alloc, inner, ctx.env)) |owned| {
+                    defer alloc.free(owned);
+                    try out.appendSlice(alloc, owned);
+                    i = close + 2;
+                    continue;
+                }
+                if (try macro_time.resolve(alloc, inner, .{ .now_ms = ctx.now_ms, .utc_offset_minutes = ctx.utc_offset_minutes, .idle_ms = ctx.idle_ms })) |owned| {
+                    defer alloc.free(owned);
+                    try out.appendSlice(alloc, owned);
+                    i = close + 2;
+                    continue;
+                }
+                if (try macro_chat.resolve(alloc, bare, ctx.chat)) |owned| {
+                    defer alloc.free(owned);
+                    try out.appendSlice(alloc, owned);
+                    i = close + 2;
+                    continue;
+                }
                 if (resolve(bare, ctx)) |val| {
                     try out.appendSlice(alloc, val);
                 } else {

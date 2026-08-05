@@ -73,6 +73,7 @@ function parseArgs(argv) {
         else if (k === '--describe') { out.describe = true; i -= 1; }
         else if (k === '--audit') { out.audit = true; i -= 1; }
         else if (k === '--update-golden') { out.updateGolden = true; i -= 1; }
+        else if (k === '--macros') { out.macros = true; i -= 1; }
         else throw new Error(`unknown arg: ${k}`);
     }
     if (!out.data) out.data = join(tmpdir(), 'parity-data');
@@ -837,6 +838,31 @@ function makeCardPng(basePng, cardObj) {
 // Retries per seed before a drive failure is scored. 18 of 74 seeds failed as "old: never connected"
 // during one loaded run, none of them real.
 const DRIVE_ATTEMPTS = 3;
+// Every macro the old frontend registers, by tier. The probe block below puts them in a card field so
+// the audit's unresolved-macro check names the ones we do not implement, one line per macro.
+const MACRO_PROBE_TIERS = {
+    chat: ['lastMessage', 'lastMessageId', 'lastUserMessage', 'lastCharMessage', 'firstIncludedMessageId', 'firstDisplayedMessageId', 'lastSwipeId', 'currentSwipeId', 'allChatRange'],
+    core: ['trim', 'input', 'maxPrompt', 'maxContext', 'maxResponse', 'banned::x', 'if::a::b::c', 'else::d'],
+    env: ['group', 'groupNotMuted', 'notChar', 'model', 'isMobile'],
+    instruct: ['systemPrompt'],
+    state: ['lastGenerationType', 'hasExtension::none'],
+    time: ['time', 'date', 'weekday', 'isotime', 'isodate', 'datetimeformat::MM-DD', 'idleDuration', 'timeDiff::now::now'],
+    variable: ['getvar::v', 'hasvar::v', 'getglobalvar::g', 'hasglobalvar::g'],
+};
+
+/// Set by --macros. Off by default so the differential run stays comparable: several of these resolve
+/// to a clock or to chat state and would differ between two drives seconds apart.
+let MACRO_PROBE = false;
+
+/// One line per macro, each tagged so an unresolved one is identifiable by name in the finding.
+function macroProbeBlock() {
+    const lines = [];
+    for (const [tier, names] of Object.entries(MACRO_PROBE_TIERS)) {
+        for (const name of names) lines.push(`M[${tier}:${name.split('::')[0]}]={{${name}}}`);
+    }
+    return lines.join('\n');
+}
+
 const FUZZ_CARD = 'ParityFuzz';
 const FUZZ_WORLD = 'ParityFuzz';
 
@@ -884,6 +910,9 @@ function genState(seed, basePng, baseSettings) {
     card.data.scenario = `${mark('card-scenario')} dusk over the glade`;
     card.data.first_mes = `${mark('card-greeting')} Hello {{user}}, I am {{char}}.${macroSalad()}`; // never empty (old needs a greeting)
     card.data.creator_notes = `${mark('card-creatornotes')} fuzz notes`;
+    // The macro probe rides the DESCRIPTION: every shipped context template has a {{description}} slot,
+    // so the block reaches the prompt whichever template the seed picked.
+    if (MACRO_PROBE) { card.data.description += `\n${macroProbeBlock()}`; axes.push('macro-probe'); }
     card.data.mes_example = chance(0.5) ? `<START>\n{{user}}: ${mark('card-example')} hi\n{{char}}: hello there\n` : '';
     if (chance(0.5)) card.data.system_prompt = `${mark('card-system')} CARD SYS {{original}}`; else card.data.system_prompt = '';
     if (chance(0.5)) card.data.post_history_instructions = `${mark('card-jailbreak')} JB {{original}}`; else card.data.post_history_instructions = '';
@@ -1139,10 +1168,14 @@ function auditPrompt(prompt, state, s) {
     for (const tag of ['<USER>', '<BOT>', '<CHAR>']) if (prompt.includes(tag)) add('unresolved-macro', tag);
 
     // DUPLICATED: one block emitted twice spends context on nothing.
+    // A card system prompt or jailbreak containing {{original}} pulls the global one in behind it, so
+    // both markers legitimately appear twice. Only a THIRD copy is a duplicated block.
+    const nests = /\{\{original\}\}/.test(String(state.card.data?.system_prompt || '') + String(state.card.data?.post_history_instructions || ''));
     for (const [token, feat] of Object.entries(featureOf)) {
         if (!SINGLETON_FEATURES.has(feat)) continue;
+        const allowed = (nests && (feat === 'card-system' || feat === 'global-sysprompt' || feat === 'card-jailbreak')) ? 2 : 1;
         const n = prompt.split(token).length - 1;
-        if (n > 1) add('duplicate-block', `${feat} appears ${n} times`);
+        if (n > allowed) add('duplicate-block', `${feat} appears ${n} times`);
     }
 
     // BARE LABEL: a speaker cue with no line behind it, the shape of the nameless-label fault.
@@ -1251,6 +1284,7 @@ async function runAudit(args) {
     const settingsPath = join(argsData, 'default-user', 'settings.json');
     const baseSettings = JSON.parse(readFileSync(settingsPath, 'utf8'));
     ROTATE_FORMATS = args.formats;
+    MACRO_PROBE = Boolean(args.macros);
     if (args.updateGolden && !existsSync(GOLDEN_DIR)) mkdirSync(GOLDEN_DIR, { recursive: true });
 
     process.stdout.write(`\n########## AUDIT: worker ${args.worker}, seeds ${args.seed}..${args.seed + args.count - 1} ##########\n`);
@@ -1286,17 +1320,27 @@ async function runAudit(args) {
             if (args.updateGolden) {
                 writeFileSync(goldenPath, hit.prompt);
             } else if (existsSync(goldenPath)) {
+                // Masked, like the differential: {{roll}} and {{random}} are genuinely random per send,
+                // so a raw compare would report every run as drift and the check would mean nothing.
                 const approved = readFileSync(goldenPath, 'utf8');
-                if (approved !== hit.prompt) drift = diffReport(approved, hit.prompt);
+                const a = maskFuzz(approved);
+                const b = maskFuzz(hit.prompt);
+                if (a !== b) drift = diffReport(a, b);
             }
-            for (const f of findings) (byCheck[f.check] = byCheck[f.check] || []).push(seed);
+            for (const f of findings) {
+                const b = byCheck[f.check] = byCheck[f.check] || { seeds: new Set(), details: new Set() };
+                b.seeds.add(seed);
+                b.details.add(f.detail);
+            }
             if (!findings.length && !drift) { process.stdout.write(`  seed ${seed}: CLEAN (${hit.prompt.length} bytes)\n`); results.push({ seed, clean: true }); continue; }
             process.stdout.write(`  seed ${seed}: ${findings.length} finding(s) axes:[${state.axes.join(',')}]\n`);
             for (const f of findings.slice(0, 12)) process.stdout.write(`      ${f.check}: ${f.detail}\n`);
             if (findings.length > 12) process.stdout.write(`      ... ${findings.length - 12} more\n`);
             if (drift) {
                 process.stdout.write(`      unapproved-change: the prompt differs from the approved snapshot\n--- approved   +++ now\n${drift.text}\n`);
-                (byCheck['unapproved-change'] = byCheck['unapproved-change'] || []).push(seed);
+                const b = byCheck['unapproved-change'] = byCheck['unapproved-change'] || { seeds: new Set(), details: new Set() };
+                b.seeds.add(seed);
+                b.details.add('the prompt differs from the approved snapshot');
             }
             writeFileSync(join(args.data, `au-${seed}.txt`), hit.prompt);
             results.push({ seed, clean: false, findings: findings.length, drift: Boolean(drift) });
@@ -1311,8 +1355,12 @@ async function runAudit(args) {
     const dirty = results.filter((r) => r.clean === false).length;
     process.stdout.write(`\n########## AUDIT SUMMARY (worker ${args.worker}) ##########\n`);
     process.stdout.write(`seeds ${results.length}: ${clean} CLEAN, ${dirty} WITH FINDINGS, ${errs} ERROR\n`);
-    for (const [check, seeds] of Object.entries(byCheck).sort((a, b) => b[1].length - a[1].length)) {
-        process.stdout.write(`  ${check}: ${seeds.length} seed(s)  [${seeds.slice(0, 6).join(', ')}${seeds.length > 6 ? ', ...' : ''}]\n`);
+    // Distinct details, not a seed tally: 30 seeds all missing the same macro is ONE thing to fix, and
+    // the per-seed lines above truncate. This is the list to work from.
+    for (const [check, b] of Object.entries(byCheck).sort((a, b2) => b2[1].seeds.size - a[1].seeds.size)) {
+        const seeds = [...b.seeds];
+        process.stdout.write(`  ${check}: ${b.details.size} distinct in ${seeds.length} seed(s)  [${seeds.slice(0, 4).join(', ')}${seeds.length > 4 ? ', ...' : ''}]\n`);
+        for (const d of [...b.details].sort()) process.stdout.write(`      ${d}\n`);
     }
     if (args.updateGolden) process.stdout.write(`\napproved snapshots written to ${GOLDEN_DIR}\n`);
     process.stdout.write(`\n(per-seed prompts at ${args.data}/au-<seed>.txt)\n`);
