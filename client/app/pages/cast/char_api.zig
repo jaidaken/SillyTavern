@@ -106,6 +106,9 @@ var pend_timed_persist: bool = false;
 // net has no per-request ctx: the send context is stashed OWNED and consumed by onPromptWindowDone.
 var pend_active: bool = false;
 var pend_conn: ?generate.Connection = null;
+/// The solo avatar / group id the pending prompt-window fetch is for, held across the world-info warm.
+var pend_window_avatar: []u8 = &.{};
+var pend_group_window_id: []u8 = &.{};
 var pend_char_name: []u8 = &.{};
 var pend_char_avatar: []u8 = &.{};
 var pend_user_name: []u8 = &.{};
@@ -215,6 +218,10 @@ fn freePending() void {
         f.* = &.{};
     }
     freeAltGreetings(&pend_alt_greetings);
+    inline for (.{ &pend_window_avatar, &pend_group_window_id }) |f| {
+        if (f.len > 0) alloc.free(f.*);
+        f.* = &.{};
+    }
     pend_active = false;
 }
 
@@ -1528,12 +1535,22 @@ pub fn sendMessage() void {
         chars_log.err("send: could not stash the send context", .{});
         return;
     }
+    // The WI entry token counts are warmed first so activation can spend a token budget; the window
+    // fetch is what its completion continues into.
+    setOwned(&pend_window_avatar, c.avatar);
+    beginWiWarm(&launchSoloPromptWindow);
+}
+
+/// Fetch the prompt window for the stashed solo send. Runs after the world-info warm, never before.
+fn launchSoloPromptWindow() void {
+    // A send cancelled during the warm has nothing left to fetch a window for.
+    if (!pend_active) return;
     // No file yet: degrade to greeting + user turn (a null page) rather than fetch a malformed body.
     if (send_file.len == 0) {
         onPromptWindowDone(0, 0, null);
         return;
     }
-    const ref = data.ChatRef{ .solo = .{ .avatar = c.avatar, .file = send_file } }; // w3-chatref: one page-body path
+    const ref = data.ChatRef{ .solo = .{ .avatar = pend_window_avatar, .file = send_file } }; // w3-chatref: one page-body path
     const win_body = data.pageBody(alloc, ref, .{ .limit = pager.PROMPT_LIMIT }) catch {
         freePending();
         return;
@@ -1957,6 +1974,183 @@ fn startupFail(built: usize) void {
     finishByteFallback();
 }
 
+// ---- world-info entry token costs -------------------------------------------------------------
+//
+// Stock counts each candidate entry with the real tokenizer before spending the WI budget on it. The
+// counts are warmed into `tok_cache` BEFORE the prompt-window fetch, so activation itself stays a pure
+// synchronous pass over already-known costs.
+
+const WI_WARM_CONCURRENCY: usize = 4;
+
+var wi_warm_epoch_seq: u64 = 0;
+
+const WiWarmJob = struct {
+    active: bool = false,
+    epoch: u64 = 0,
+    /// Owned "<content>\n" strings, the exact text whose count the budget spends.
+    texts: [][]u8 = &.{},
+    q_next: usize = 0,
+    inflight: usize = 0,
+    remaining: usize = 0,
+    disc: u64 = 0,
+    encode_path: []const u8 = "",
+    remote: bool = false,
+    next: ?*const fn () void = null,
+};
+var wi_warm: WiWarmJob = .{};
+
+/// The text whose token count a WI entry spends: its content plus the newline stock joins entries
+/// with, so the count already carries the separator.
+fn wiCostText(content: []const u8) std.mem.Allocator.Error![]u8 {
+    return std.fmt.allocPrint(alloc, "{s}\n", .{content});
+}
+
+/// Per-candidate token costs, or an empty slice when any of them is not in the cache (a lore edit
+/// during the warm, a failed fetch, no tokenizer). Empty means the send costs WI by bytes instead.
+fn wiEntryCosts(entries: []const wi_store.Entry) []usize {
+    if (entries.len == 0) return &.{};
+    const conn = pend_conn orelse return &.{};
+    const kind = tokenizer.bestMatch(conn.api_type, conn.model, conn.api_server.len > 0, false);
+    const disc = tokenizer.cacheDisc(kind, conn.model);
+    const out = alloc.alloc(usize, entries.len) catch return &.{};
+    for (entries, 0..) |e, i| {
+        const text = wiCostText(e.content) catch {
+            alloc.free(out);
+            return &.{};
+        };
+        defer alloc.free(text);
+        out[i] = tok_cache.get(text, disc) orelse {
+            alloc.free(out);
+            return &.{};
+        };
+    }
+    return out;
+}
+
+fn freeWiWarm() void {
+    for (wi_warm.texts) |t| alloc.free(t);
+    if (wi_warm.texts.len > 0) alloc.free(wi_warm.texts);
+    wi_warm = .{};
+}
+
+/// Runs `next` once every candidate entry has a cached token count. Any failure still runs it: the
+/// send then costs WI by bytes rather than not happening at all.
+fn beginWiWarm(next: *const fn () void) void {
+    freeWiWarm();
+    const conn = pend_conn orelse return next();
+    const entries: []const wi_store.Entry = wi_store.global.collectActive(alloc) catch return next();
+    defer alloc.free(entries);
+    if (entries.len == 0) return next();
+    const kind = tokenizer.bestMatch(conn.api_type, conn.model, conn.api_server.len > 0, false);
+    const remote = kind == .remote_textgen;
+    const disc = tokenizer.cacheDisc(kind, conn.model);
+
+    var texts: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (texts.items) |t| alloc.free(t);
+        texts.deinit(alloc);
+    }
+    for (entries) |e| {
+        const text = wiCostText(e.content) catch {
+            for (texts.items) |t| alloc.free(t);
+            texts.deinit(alloc);
+            return next();
+        };
+        if (tok_cache.get(text, disc) != null) {
+            alloc.free(text);
+            continue;
+        }
+        texts.append(alloc, text) catch {
+            alloc.free(text);
+            for (texts.items) |t| alloc.free(t);
+            texts.deinit(alloc);
+            return next();
+        };
+    }
+    const owned = texts.toOwnedSlice(alloc) catch {
+        for (texts.items) |t| alloc.free(t);
+        texts.deinit(alloc);
+        return next();
+    };
+    if (owned.len == 0) {
+        alloc.free(owned);
+        return next();
+    }
+    wi_warm_epoch_seq +%= 1;
+    wi_warm = .{
+        .active = true,
+        .epoch = wi_warm_epoch_seq,
+        .texts = owned,
+        .remaining = owned.len,
+        .disc = disc,
+        .encode_path = if (remote) tokenizer.remote_encode_path else tokenizer.localEncodePath(kind),
+        .remote = remote,
+        .next = next,
+    };
+    fireNextWiWarmFetch();
+}
+
+/// Ends the warm and continues the send. Called once, whether every count landed or one failed.
+fn finishWiWarm() void {
+    const next = wi_warm.next;
+    freeWiWarm();
+    if (next) |f| f();
+}
+
+fn wiWarmBody(index: usize) std.mem.Allocator.Error![]u8 {
+    const conn = pend_conn.?;
+    if (wi_warm.remote) {
+        return std.json.Stringify.valueAlloc(alloc, .{
+            .text = wi_warm.texts[index],
+            .url = conn.api_server,
+            .model = conn.model,
+            .api_type = conn.api_type,
+        }, .{});
+    }
+    return std.json.Stringify.valueAlloc(alloc, .{ .text = wi_warm.texts[index] }, .{});
+}
+
+fn fireNextWiWarmFetch() void {
+    // net.request can complete synchronously on slot exhaustion, tearing the job down mid-loop.
+    while (wi_warm.active and wi_warm.inflight < WI_WARM_CONCURRENCY and wi_warm.q_next < wi_warm.texts.len) {
+        const index = wi_warm.q_next;
+        wi_warm.q_next += 1;
+        const body = wiWarmBody(index) catch return finishWiWarm();
+        wi_warm.inflight += 1;
+        net.request(wi_warm.encode_path, body, (wi_warm.epoch << TOK_INDEX_BITS) | @as(u64, index), onWiWarmDone, .{});
+        alloc.free(body);
+    }
+}
+
+fn onWiWarmDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
+    if (!wi_warm.active or (tag >> TOK_INDEX_BITS) != wi_warm.epoch) return;
+    wi_warm.inflight -|= 1;
+    const index: usize = @intCast(tag & TOK_INDEX_MASK);
+    var count: ?usize = null;
+    if (res != null and status >= 200 and status < 300) {
+        if (res.?.json(struct { count: ?i64 = null, @"error": ?bool = null })) |parsed| {
+            defer parsed.deinit();
+            if ((parsed.value.@"error" orelse false) == false) {
+                if (parsed.value.count) |c| if (c >= 0) {
+                    count = @intCast(c);
+                };
+            }
+        } else |_| {}
+    }
+    const c = count orelse {
+        net_log.warn("send: world-info token count failed ({d}) - costing lore by bytes", .{status});
+        finishWiWarm();
+        return;
+    };
+    tok_cache.put(alloc, wi_warm.texts[index], wi_warm.disc, c);
+    wi_warm.remaining -= 1;
+    if (wi_warm.remaining == 0) {
+        finishWiWarm();
+        return;
+    }
+    fireNextWiWarmFetch();
+}
+
 /// Prompt-window fetch completion: parse the spine page (a failure degrades to a null page), then
 /// assemble and dispatch the generate. The pending state is freed by the send's terminal (endSend),
 /// not here, because the token-count round-trip outlives this callback.
@@ -2033,13 +2227,24 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
     // store-owned book memory; the async gap between send and this callback cannot dangle them).
     const wi_candidates: []const wi_store.Entry = wi_store.global.collectActive(alloc) catch &.{};
     defer alloc.free(wi_candidates);
-    // Percentage first, then stock's ABSOLUTE token ceiling clamps it (world-info.js:4624). The cap is
-    // in TOKENS and this budget is in chars, so convert it with the same ratio promptCharBudget uses.
-    var wi_budget_chars = (generate.promptCharBudget(conn) *| @as(usize, @intCast(wi_store.global.budget))) / 100;
-    if (wi_store.global.budget_cap > 0) {
-        const cap_chars = generate.tokensToChars(@intCast(wi_store.global.budget_cap));
-        if (wi_budget_chars > cap_chars) wi_budget_chars = cap_chars;
-    }
+    // Stock's budget is TOKENS on both halves (world-info.js:4622 percentage, :4624 absolute cap) and it
+    // counts each entry with the real tokenizer (:4940). wiEntryCosts hands back per-entry token counts
+    // when the warm pass has them all; without them the whole budget degrades to bytes together, since
+    // mixing a token budget with byte costs would be worse than either.
+    const wi_costs = wiEntryCosts(wi_candidates);
+    defer if (wi_costs.len > 0) alloc.free(wi_costs);
+    const wi_budget = blk: {
+        const total = if (wi_costs.len > 0) generate.promptTokenBudget(conn) else generate.promptCharBudget(conn);
+        var b = (total *| @as(usize, @intCast(wi_store.global.budget))) / 100;
+        if (wi_store.global.budget_cap > 0) {
+            const cap = if (wi_costs.len > 0)
+                @as(usize, @intCast(wi_store.global.budget_cap))
+            else
+                generate.tokensToChars(@intCast(wi_store.global.budget_cap));
+            if (b > cap) b = cap;
+        }
+        break :blk b;
+    };
 
     // Persona TOP_AN / BOTTOM_AN attaches in generate.assemblePieces, OUTSIDE the WI an-anchors (stock
     // addPersonaDescriptionExtensionPrompt runs after the WI an-merge, script.js:3183 vs world-info.js:5149).
@@ -2095,7 +2300,8 @@ fn dispatchGenerate(page: ?data.ChatPage) !void {
         .jailbreak = jb_resolved,
         .wi_entries = wi_candidates,
         .wi_scan_depth = @intCast(@max(0, wi_store.global.scan_depth)),
-        .wi_budget_chars = wi_budget_chars,
+        .wi_budget = wi_budget,
+        .wi_entry_costs = wi_costs,
         .wi_recursive = wi_store.global.recursive,
         .wi_max_recursion_steps = @intCast(@max(0, wi_store.global.max_recursion_steps)),
         .wi_case_sensitive = wi_store.global.case_sensitive,
@@ -2333,14 +2539,21 @@ pub fn launchGroupMember(m: @import("./group_rotation.zig").Member) bool {
     // group window already carries every persisted turn, including the user's.
     setOwned(&pend_first_mes, "");
     setOwned(&pend_user_text, "");
-    const ref = data.ChatRef{ .group = .{ .id = gid } }; // w3-chatref: one page-body path
+    setOwned(&pend_group_window_id, gid);
+    beginWiWarm(&launchGroupPromptWindow);
+    return true;
+}
+
+/// Fetch the group prompt window for the stashed member launch. Runs after the world-info warm.
+fn launchGroupPromptWindow() void {
+    if (!pend_active) return;
+    const ref = data.ChatRef{ .group = .{ .id = pend_group_window_id } }; // w3-chatref: one page-body path
     const win_body = data.pageBody(alloc, ref, .{ .limit = pager.PROMPT_LIMIT }) catch {
         freePending();
-        return false;
+        return;
     };
     defer alloc.free(win_body);
     net.request(ref.url(), win_body, 0, onPromptWindowDone, .{});
-    return true;
 }
 
 // w3-grp

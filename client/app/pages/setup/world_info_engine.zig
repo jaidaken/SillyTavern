@@ -22,6 +22,14 @@ const log = std.log.scoped(.wi);
 
 pub const Entry = wi.Entry;
 
+/// What entry `i` costs against the budget. Stock counts the tokens of the entry plus its joining
+/// newline (world-info.js:4939), so a supplied cost already includes that newline; the byte fallback
+/// adds one for it.
+fn entryCost(params: Params, i: usize) usize {
+    if (i < params.entry_costs.len) return params.entry_costs[i];
+    return params.entries[i].content.len + 1;
+}
+
 /// One persisted timed effect (stock WITimedEffect). `hash` identifies the entry the effect
 /// belongs to (an entry whose content changed no longer matches and the effect expires); `start`
 /// / `end` bound it in message counts; `protected` keeps it alive on the message it was created.
@@ -235,7 +243,11 @@ pub fn readTimedFromJson(a: Allocator, json: []const u8) TimedState {
 pub const Params = struct {
     entries: []const Entry = &.{},
     scan_depth: usize = 2,
-    budget_chars: usize = std.math.maxInt(usize),
+    /// The budget the WI slice may spend, in the same unit as `entry_costs`. Tokens when the caller
+    /// resolved a tokenizer (stock counts tokens, world-info.js:4940), bytes when it could not.
+    budget: usize = std.math.maxInt(usize),
+    /// Per-entry cost, parallel to `entries`, in the budget's unit. Empty = cost by content bytes.
+    entry_costs: []const usize = &.{},
     recursive: bool = false,
     /// Stock world_info_max_recursion_steps: hard stop on scan-loop passes (world-info.js:4653). 0 = off.
     /// Without it a recursive book keeps activating entries stock would never have reached.
@@ -481,12 +493,13 @@ pub fn activate(gpa: Allocator, params: Params, history: []const []const u8) All
                 }
             }
             // Stock reaching the budget exactly also overflows (world-info.js:4940, `>=`).
-            if (!e.ignore_budget and used_chars +| e.content.len +| 1 >= params.budget_chars) {
+            const cost = entryCost(params, i);
+            if (!e.ignore_budget and used_chars +| cost >= params.budget) {
                 overflow = true;
-                log.debug("wi budget {d} reached, activation stopped", .{params.budget_chars});
+                log.debug("wi budget {d} reached, activation stopped", .{params.budget});
                 continue;
             }
-            used_chars += e.content.len + 1;
+            used_chars += cost;
             flags[i] = .active;
             try activated.append(a, i);
         }
@@ -1101,10 +1114,10 @@ test "the budget cap drops the lowest-priority entries first and stops activatio
     drop.constant = true;
     drop.order = 10;
     const entries = [_]Entry{ keep1, keep2, drop };
-    var act = try activate(testing.allocator, .{ .entries = &entries, .budget_chars = 25 }, &.{});
+    var act = try activate(testing.allocator, .{ .entries = &entries, .budget = 25 }, &.{});
     defer act.deinit();
     try testing.expectEqualStrings("BBBBBBBBBB\nAAAAAAAAAA", act.before);
-    var roomy = try activate(testing.allocator, .{ .entries = &entries, .budget_chars = 1000 }, &.{});
+    var roomy = try activate(testing.allocator, .{ .entries = &entries, .budget = 1000 }, &.{});
     defer roomy.deinit();
     try testing.expectEqualStrings("CCCCCCCCCC\nBBBBBBBBBB\nAAAAAAAAAA", roomy.before);
 }
@@ -1113,10 +1126,10 @@ test "reaching the budget exactly overflows, one char under it does not" {
     var e = te(0, &.{}, "12345");
     e.constant = true;
     const entries = [_]Entry{e};
-    var exact = try activate(testing.allocator, .{ .entries = &entries, .budget_chars = 6 }, &.{});
+    var exact = try activate(testing.allocator, .{ .entries = &entries, .budget = 6 }, &.{});
     defer exact.deinit();
     try testing.expectEqualStrings("", exact.before);
-    var under = try activate(testing.allocator, .{ .entries = &entries, .budget_chars = 7 }, &.{});
+    var under = try activate(testing.allocator, .{ .entries = &entries, .budget = 7 }, &.{});
     defer under.deinit();
     try testing.expectEqualStrings("12345", under.before);
 }
@@ -1366,7 +1379,7 @@ test "an ignoreBudget entry activates past an overflowed budget" {
     ignored.order = 50;
     const entries = [_]Entry{ big, ignored };
     // The 10-char entry overflows a 5-char budget; the ignoreBudget entry still lands.
-    var act = try activate(testing.allocator, .{ .entries = &entries, .budget_chars = 5 }, &.{});
+    var act = try activate(testing.allocator, .{ .entries = &entries, .budget = 5 }, &.{});
     defer act.deinit();
     try testing.expectEqualStrings("KEEP", act.before);
 }
@@ -1954,6 +1967,83 @@ test "chunk-4 features clean up on every allocation failure" {
                 .use_group_scoring = true,
                 .rng = prng.random(),
             }, &.{"a secret"});
+            act.deinit();
+        }
+    }.run, .{});
+}
+
+test "supplied entry costs spend the budget instead of the content bytes" {
+    // Token-dense lore: 10 bytes that the real tokenizer charges 28 for. A byte budget of 50 takes
+    // both entries; the same budget in tokens takes one, which is what stock does (world-info.js:4940).
+    var first = te(0, &.{}, "AAAAAAAAAA");
+    first.constant = true;
+    first.order = 90;
+    var second = te(1, &.{}, "BBBBBBBBBB");
+    second.constant = true;
+    second.order = 50;
+    const entries = [_]Entry{ first, second };
+    const costs = [_]usize{ 28, 28 };
+
+    var by_bytes = try activate(testing.allocator, .{ .entries = &entries, .budget = 50 }, &.{});
+    defer by_bytes.deinit();
+    try testing.expectEqualStrings("BBBBBBBBBB\nAAAAAAAAAA", by_bytes.before);
+
+    var by_tokens = try activate(testing.allocator, .{ .entries = &entries, .budget = 50, .entry_costs = &costs }, &.{});
+    defer by_tokens.deinit();
+    try testing.expectEqualStrings("AAAAAAAAAA", by_tokens.before);
+}
+
+test "an entry cost reaching the budget exactly overflows, one under it does not" {
+    var e = te(0, &.{}, "hi");
+    e.constant = true;
+    const entries = [_]Entry{e};
+    const costs = [_]usize{7};
+    var exact = try activate(testing.allocator, .{ .entries = &entries, .budget = 7, .entry_costs = &costs }, &.{});
+    defer exact.deinit();
+    try testing.expectEqualStrings("", exact.before);
+    var under = try activate(testing.allocator, .{ .entries = &entries, .budget = 8, .entry_costs = &costs }, &.{});
+    defer under.deinit();
+    try testing.expectEqualStrings("hi", under.before);
+}
+
+test "ignoreBudget still admits an entry whose token cost is past the budget" {
+    var big = te(0, &.{}, "AAAA");
+    big.constant = true;
+    big.order = 90;
+    var free_pass = te(1, &.{}, "BBBB");
+    free_pass.constant = true;
+    free_pass.order = 10;
+    free_pass.ignore_budget = true;
+    const entries = [_]Entry{ big, free_pass };
+    const costs = [_]usize{ 40, 40 };
+    var act = try activate(testing.allocator, .{ .entries = &entries, .budget = 50, .entry_costs = &costs }, &.{});
+    defer act.deinit();
+    try testing.expectEqualStrings("BBBB\nAAAA", act.before);
+}
+
+test "a short cost list falls back to bytes for the entries it does not cover" {
+    var first = te(0, &.{}, "AAAAAAAAAA");
+    first.constant = true;
+    first.order = 90;
+    var second = te(1, &.{}, "BB");
+    second.constant = true;
+    second.order = 50;
+    const entries = [_]Entry{ first, second };
+    const costs = [_]usize{40};
+    var act = try activate(testing.allocator, .{ .entries = &entries, .budget = 50, .entry_costs = &costs }, &.{});
+    defer act.deinit();
+    // 40 for the first, then 3 bytes for the uncovered second: both fit under 50.
+    try testing.expectEqualStrings("BB\nAAAAAAAAAA", act.before);
+}
+
+test "token-costed activation releases everything on any allocation failure" {
+    try testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn run(a: std.mem.Allocator) !void {
+            var e = te(0, &.{}, "AAAA");
+            e.constant = true;
+            const entries = [_]Entry{e};
+            const costs = [_]usize{4};
+            var act = try activate(a, .{ .entries = &entries, .budget = 50, .entry_costs = &costs }, &.{});
             act.deinit();
         }
     }.run, .{});

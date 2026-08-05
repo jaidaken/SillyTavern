@@ -223,7 +223,11 @@ pub const Shape = struct {
     /// Stock world_info_depth: how many newest PROMPT-window messages the key scan reads.
     wi_scan_depth: usize = 2,
     /// Engine-side cap on the WI slice alone (probe#3 delta 2); the story string stays uncapped.
-    wi_budget_chars: usize = std.math.maxInt(usize),
+    /// The WI slice's budget, in the same unit as `wi_entry_costs` (tokens when the send resolved a
+    /// tokenizer, bytes otherwise).
+    wi_budget: usize = std.math.maxInt(usize),
+    /// Per-candidate cost parallel to `wi_entries`, in the budget's unit. Empty = cost by bytes.
+    wi_entry_costs: []const usize = &.{},
     /// Stock world_info_recursive: activated content re-enters the key scan.
     wi_recursive: bool = false,
     /// Stock world_info_max_recursion_steps: hard stop on scan-loop passes (0 = off).
@@ -283,7 +287,7 @@ pub fn buildPrompt(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, shape
 ///   6. the continuation prefix that primes the model to answer
 ///
 /// World info activates first (scan over the full window at wi_scan_depth, capped by its own
-/// wi_budget_chars) and rides the story string's wi slots, the example section, the note anchors,
+/// wi_budget) and rides the story string's wi slots, the example section, the note anchors,
 /// or the injection list per entry position. The system block is built in full first (it is
 /// per-card and small) and the injections are reserved out of the budget BEFORE the history walk,
 /// so neither can be silently trimmed: they are control instructions, and losing one would change
@@ -663,7 +667,8 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
     var wi_act = try wi_engine.activate(alloc, .{
         .entries = shape.wi_entries,
         .scan_depth = shape.wi_scan_depth,
-        .budget_chars = shape.wi_budget_chars,
+        .budget = shape.wi_budget,
+        .entry_costs = shape.wi_entry_costs,
         .recursive = shape.wi_recursive,
         .max_recursion_steps = shape.wi_max_recursion_steps,
         .case_sensitive = shape.wi_case_sensitive,
@@ -2321,7 +2326,7 @@ test "the wi budget caps the wi slice while the story string stays uncapped" {
     const shape = Shape{
         .tpl = .{ .context = .{ .story_string = templates.default_story_string } },
         .wi_entries = &entries,
-        .wi_budget_chars = 20,
+        .wi_budget = 20,
     };
     const out = try buildPrompt(testing.allocator, ctx, &.{}, shape);
     defer testing.allocator.free(out);
