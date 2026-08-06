@@ -229,6 +229,12 @@ fn fitBody(a: Allocator, input: []const u8) RequestError![]u8 {
 
     var root: std.json.ObjectMap = .empty;
     try root.put(a, "prompt", .{ .string = prompt });
+    // Stops ride the FIT answer too: without them a model runs past the end of its own turn and
+    // writes the user's next line.
+    var stops = std.json.Array.init(a);
+    for (built.stop) |s| try stops.append(.{ .string = s });
+    try root.put(a, "stop", .{ .array = stops });
+    try root.put(a, "reply_prefix", .{ .string = built.pieces.prefix });
     if (try dirtyStoreValue(a, built.vars.chat)) |v| try root.put(a, "variables", v);
     if (try dirtyStoreValue(a, built.vars.global)) |v| try root.put(a, "global_variables", v);
     return std.json.Stringify.valueAlloc(a, Value{ .object = root }, .{});
@@ -839,6 +845,43 @@ test "a_setvar_during_the_build_is_reported_back_for_the_host_to_persist" {
     try testing.expectEqualStrings("seven", parsed.value.variables.?.lamp);
     try testing.expect(parsed.value.global_variables == null);
 }
+
+test "fit_answers_with_the_stop_set_and_the_reply_prefix_not_only_the_prompt" {
+    const with_costs =
+        \\{ "costs": [4, 0, 2, 8],
+    ++ chatml_request[1..];
+
+    const out = try fitJson(testing.allocator, with_costs);
+    defer testing.allocator.free(out);
+
+    const Out = struct { prompt: []const u8, stop: [][]const u8, reply_prefix: []const u8 };
+    const parsed = try std.json.parseFromSlice(Out, testing.allocator, out, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    // fit is the call a host makes to get a finished send; a prompt alone is not one.
+    var has_end = false;
+    for (parsed.value.stop) |s| {
+        if (std.mem.indexOf(u8, s, "<|im_end|>") != null) has_end = true;
+    }
+    try testing.expect(has_end);
+    try testing.expect(parsed.value.prompt.len > 0);
+}
+
+/// The same scenario under an instruct template, so the stop set is not empty by construction.
+const chatml_request =
+    \\{
+    \\ "settings": { "main_api": "textgenerationwebui", "textgenerationwebui_settings": { "type": "ooba", "max_length": 4096, "genamt": 256 },
+    \\               "power_user": { "instruct": { "enabled": "true", "name": "ChatML", "input_sequence": "<|im_start|>user",
+    \\                 "output_sequence": "<|im_start|>assistant", "system_sequence": "<|im_start|>system", "stop_sequence": "<|im_end|>",
+    \\                 "input_suffix": "<|im_end|>\n", "output_suffix": "<|im_end|>\n", "system_suffix": "<|im_end|>\n", "wrap": true, "macro": true } } },
+    \\ "card": { "name": "Aria", "description": "Aria is a lighthouse keeper.", "first_mes": "The lamp is lit." },
+    \\ "messages": [ { "name": "Jamie", "mes": "is the lamp still lit", "is_user": true, "is_system": false } ],
+    \\ "chat_metadata": { "note_prompt": "" },
+    \\ "world": { "entries": {} },
+    \\ "chat": { "avatar_url": "aria.png", "file_name": "aria - 2026-08-06", "group_id": "" },
+    \\ "browser": { "input": "is the lamp still lit", "utc_offset_minutes": 60, "is_mobile": false, "generation_type": "normal", "rotation_index": 0 }
+    \\}
+;
 
 test "fit_rejects_a_costs_array_that_does_not_match_the_pieces" {
     const short =

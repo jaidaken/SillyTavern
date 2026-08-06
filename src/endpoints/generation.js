@@ -356,7 +356,10 @@ router.post('/start', async function (request, response) {
                 );
                 params.prompt = built.prompt;
                 if (Array.isArray(built.stop) && built.stop.length > 0) {
+                    // Both spellings, because the backends disagree: llama.cpp and the OpenAI-shaped
+                    // servers read `stop`, ooba and kobold read `stopping_strings`.
                     params.stop = built.stop;
+                    params.stopping_strings = built.stop;
                 }
                 if (!body.reply_prefix && built.replyPrefix) {
                     body.reply_prefix = built.replyPrefix;
