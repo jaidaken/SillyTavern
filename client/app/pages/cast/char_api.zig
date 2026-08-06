@@ -100,7 +100,6 @@ var send_file: []u8 = &.{};
 /// it mid-generation, so the seal-time assistant append checks it and skips a now-stale target.
 var send_seq: u32 = 0;
 /// wi-timed: this send touched a live timed window, so the seal persists the state to the chat header.
-var pend_timed_persist: bool = false;
 
 // ---- pending send (invariant 2) -------------------------------------------------------------
 
@@ -1751,12 +1750,6 @@ fn buildStartBody(generate_body: []const u8) ?[]u8 {
 pub fn onStreamSealed() void {
     if (zx.platform.role != .client) return;
     group_send.sealCurrent();
-    // wi-timed: the reply is on disk by the time the server's chat-appended lands, so the timed
-    // window is persisted off the seal rather than chained behind an append this client no longer does.
-    if (pend_timed_persist) {
-        pend_timed_persist = false;
-        persistTimedMetadata();
-    }
 }
 
 /// The user turn this client is trying to persist, held so a rejected append can be re-issued against
@@ -1865,40 +1858,6 @@ fn abandonWaitingSend(why: []const u8) void {
     pend_send_on_append = false;
     net_log.warn("send abandoned: {s}", .{why});
     endSend();
-}
-
-/// Write the chat's live timed-effect state to the header via /api/chats/metadata (the timedWorldInfo
-/// key the fork's allowlist accepts). Fire-and-adopt like the note/link writes: a 409 just means the
-/// write missed this seal, and the next send re-persists the full in-memory state, so it self-heals.
-fn persistTimedMetadata() void {
-    if (zx.platform.role != .client) return;
-    if (send_file.len == 0 or send_avatar.len == 0) return;
-    var body_arena = std.heap.ArenaAllocator.init(alloc);
-    defer body_arena.deinit();
-    const ba = body_arena.allocator();
-    var obj: std.json.ObjectMap = .empty;
-    obj.put(ba, "avatar_url", .{ .string = send_avatar }) catch return;
-    obj.put(ba, "file_name", .{ .string = send_file }) catch return;
-    obj.put(ba, "change_token", .{ .string = pager.currentToken() }) catch return;
-    obj.put(ba, "timedWorldInfo", wi_timed.toValue(ba) catch return) catch return;
-    const body = std.json.Stringify.valueAlloc(alloc, std.json.Value{ .object = obj }, .{}) catch return;
-    defer alloc.free(body);
-    net.request("/api/chats/metadata", body, 0, onTimedMetaDone, .{});
-}
-
-fn onTimedMetaDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
-    _ = tag;
-    if (status < 200 or status >= 300) {
-        chars_log.debug("timed world-info persist skipped ({d}); re-persists next send", .{status});
-        return;
-    }
-    // Adopt the post-write token so the next append/link is not left holding a stale copy.
-    if (res) |r| {
-        if (r.json(struct { change_token: []const u8 = "" })) |parsed| {
-            defer parsed.deinit();
-            if (parsed.value.change_token.len > 0) pager.adoptToken(parsed.value.change_token);
-        } else |_| {}
-    }
 }
 
 /// Abort the in-flight reply and seal what arrived. The JS pump cancels the SSE reader, which runs

@@ -209,14 +209,24 @@ export class GenerationSession {
         try {
             const parsed = JSON.parse(data);
             const choice = parsed?.choices?.[0];
-            if (!choice) {
+            if (choice) {
+                if (typeof choice.text === 'string') {
+                    this.text += choice.text;
+                }
+                if (typeof choice.thinking === 'string') {
+                    this.thinking += choice.thinking;
+                }
                 return;
             }
-            if (typeof choice.text === 'string') {
-                this.text += choice.text;
+            // llama.cpp's own /completion stream carries the token as a bare `content`, with no
+            // `choices` wrapper. Reading only the OpenAI shape left this.text empty for that backend,
+            // so the reply streamed to the tab and was then dropped: persistAssistantTurn takes an
+            // empty text as nothing to save, and says nothing about it.
+            if (typeof parsed?.content === 'string') {
+                this.text += parsed.content;
             }
-            if (typeof choice.thinking === 'string') {
-                this.thinking += choice.thinking;
+            if (typeof parsed?.reasoning_content === 'string') {
+                this.thinking += parsed.reasoning_content;
             }
         } catch {
             // Keepalives and non-JSON control payloads still belong in the frame log, but carry no text.

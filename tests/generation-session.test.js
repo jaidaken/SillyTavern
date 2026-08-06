@@ -144,6 +144,35 @@ describe('generation watchdog', () => {
         expect(session.controller.signal.aborted).toBe(false);
     });
 
+    test('a llama.cpp frame carries its token in `content`, and that still reaches the saved text', () => {
+        const session = createSession(HANDLE, target('/chats/native.jsonl'));
+
+        // llama.cpp's own /completion stream has no `choices` wrapper. Reading only the OpenAI shape
+        // left the text empty, so the reply streamed to the tab and was then never written to the chat.
+        session.pushFrame(JSON.stringify({ index: 0, content: 'Pine', tokens: [1080], stop: false }));
+        session.pushFrame(JSON.stringify({ index: 0, content: 'apple.', tokens: [63614], stop: false }));
+
+        expect(session.text).toBe('Pineapple.');
+    });
+
+    test('a reasoning token on a llama.cpp frame lands in the thinking, not the reply', () => {
+        const session = createSession(HANDLE, target('/chats/native-think.jsonl'));
+
+        session.pushFrame(JSON.stringify({ index: 0, reasoning_content: 'weighing it up' }));
+        session.pushFrame(JSON.stringify({ index: 0, content: 'Yes.' }));
+
+        expect(session.thinking).toBe('weighing it up');
+        expect(session.text).toBe('Yes.');
+    });
+
+    test('the OpenAI frame shape still wins where both could be read', () => {
+        const session = createSession(HANDLE, target('/chats/openai.jsonl'));
+
+        session.pushFrame(JSON.stringify({ choices: [{ text: 'from choices' }], content: 'from content' }));
+
+        expect(session.text).toBe('from choices');
+    });
+
     test('the active count is scoped per handle rather than globally', () => {
         for (let i = 0; i < MAX_ACTIVE_PER_HANDLE; i++) {
             createSession(HANDLE, target(`/chats/mine-${i}.jsonl`));

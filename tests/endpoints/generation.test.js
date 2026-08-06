@@ -712,6 +712,62 @@ describe('server-owned generation', () => {
         }
     }, CASE_TIMEOUT_MS);
 
+    test('a sticky lore entry that fires has its window written back to the chat', async () => {
+        const settingsPath = path.join(server.userDirectory(), 'settings.json');
+        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        settings.main_api = 'textgenerationwebui';
+        settings.textgenerationwebui_settings = { ...(settings.textgenerationwebui_settings ?? {}), type: 'ooba' };
+        settings.world_info_settings = { world_info: { globalSelect: ['stickybook'] } };
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 4), 'utf8');
+
+        const worldsDir = path.join(server.userDirectory(), 'worlds');
+        fs.mkdirSync(worldsDir, { recursive: true });
+        fs.writeFileSync(path.join(worldsDir, 'stickybook.json'), JSON.stringify({
+            name: 'Sticky Book',
+            entries: {
+                0: {
+                    uid: 0, key: ['lantern'], keysecondary: [], comment: '', content: 'THE LANTERN BURNS',
+                    constant: false, selective: false, selectiveLogic: 0, order: 100, position: 0,
+                    disable: false, probability: 100, useProbability: true, depth: 4, sticky: 3,
+                },
+            },
+        }), 'utf8');
+
+        const filePath = path.join(server.userDirectory(), 'chats', 'default_Seraphina', 'sticky.jsonl');
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, [
+            JSON.stringify({ user_name: 'You', character_name: 'Seraphina', chat_metadata: {} }),
+            JSON.stringify({ name: 'You', is_user: true, is_system: false, mes: 'the lantern is lit', send_date: 1700000000000, extra: {} }),
+        ].join('\n'), 'utf8');
+
+        const upstream = new ScriptedUpstream();
+        await upstream.start();
+        try {
+            const client = await loggedInClient(server);
+            const started = await client.postJson('/api/generation/start', {
+                chat: { avatar_url: 'default_Seraphina.png', file_name: 'sticky', character_name: 'Seraphina' },
+                generate: { api_type: 'generic', api_server: upstream.baseUrl, model: 'mock', max_tokens: 64 },
+                browser: { input: 'the lantern is lit', utc_offset_minutes: 0, is_mobile: false, generation_type: 'normal', rotation_index: 0 },
+            });
+            expect(started.status).toBe(200);
+            await until(() => upstream.bodies.length > 0, 'the upstream request body');
+            expect(upstream.bodies[0]?.prompt).toContain('THE LANTERN BURNS');
+
+            // The window has to reach the chat file, or the entry stays sticky forever: nothing else
+            // advances it now that the browser no longer activates lore.
+            await until(() => Object.keys(readChatLines(filePath)[0]?.chat_metadata?.timedWorldInfo?.sticky ?? {}).length > 0,
+                'the sticky window on disk');
+            const sticky = readChatLines(filePath)[0].chat_metadata.timedWorldInfo.sticky;
+            const window = Object.values(sticky)[0];
+            // A window with an end ahead of its start is what keeps the entry active over later sends.
+            expect(window.end).toBeGreaterThan(window.start);
+
+            upstream.finish();
+        } finally {
+            await upstream.stop();
+        }
+    }, CASE_TIMEOUT_MS);
+
     test('a start that sends its own prompt keeps it, so a caller assembling for itself is untouched', async () => {
         seedChat(server, 'own-prompt');
         const upstream = new ScriptedUpstream();

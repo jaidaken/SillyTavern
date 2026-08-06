@@ -140,7 +140,7 @@ export function readWorld(worldsPath, names) {
  * @param {string} params.chatFilePath Resolved chat file.
  * @param {any} params.chat Chat descriptor, passed through to the builder.
  * @param {object} [params.browser] The four values only a browser knows.
- * @returns {Promise<object>} The request the wasm service parses.
+ * @returns {Promise<any>} The request the wasm service parses.
  */
 export async function buildPromptRequest({ charactersPath, worldsPath, settingsPath, chatFilePath, chat, browser = {} }) {
     const settings = readSettings(settingsPath);

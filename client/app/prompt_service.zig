@@ -238,6 +238,10 @@ fn fitBody(a: Allocator, input: []const u8) RequestError![]u8 {
     // not, depending on the template), while what a host needs back is the text the saved reply opens
     // with. Emitting the cue here had the route seeding replies with "\nAria:".
     try root.put(a, "bias", .{ .string = built.pieces.bias });
+    // The advanced sticky/cooldown windows. `pieces` reports them too, but `fit` is the call a host
+    // makes for a finished send, and without them here nothing ever writes the new state back: a
+    // sticky entry would never expire and a cooldown would never count down.
+    try root.put(a, "timed", try timedValue(a, built.pieces.timed_json));
     if (try dirtyStoreValue(a, built.vars.chat)) |v| try root.put(a, "variables", v);
     if (try dirtyStoreValue(a, built.vars.global)) |v| try root.put(a, "global_variables", v);
     return std.json.Stringify.valueAlloc(a, Value{ .object = root }, .{});

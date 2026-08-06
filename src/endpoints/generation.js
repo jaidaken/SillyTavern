@@ -265,19 +265,28 @@ async function runUpstream(session, url, args, apiType) {
 }
 
 /**
- * Writes the variables a build set: chat variables into the chat's own header metadata, globals into
- * the settings blob, each only when that store was actually written to. A failure here is logged and
- * swallowed: the generation is already running, and losing a variable is not worth failing a reply.
+ * Writes what the build changed: chat variables and the advanced sticky/cooldown windows into the
+ * chat's own header metadata, global variables into the settings blob, each only when it actually
+ * moved. A failure here is logged and swallowed: the generation is already running, and losing a
+ * variable is not worth failing a reply.
  * @param {import('express').Request} request The request being served.
  * @param {any} target Resolved chat target.
  * @param {object|null} variables Chat variables, or null when none were set.
  * @param {object|null} globalVariables Global variables, or null when none were set.
+ * @param {object|null} timed Advanced timed world-info state, or null when it did not change.
  * @returns {Promise<void>}
  */
-async function commitVariables(request, target, variables, globalVariables) {
+async function commitAssemblyWrites(request, target, variables, globalVariables, timed) {
     try {
+        const patch = {};
         if (variables) {
-            await updateChatMetadata(target.ref, { variables });
+            patch.variables = variables;
+        }
+        if (timed) {
+            patch.timedWorldInfo = timed;
+        }
+        if (Object.keys(patch).length > 0) {
+            await updateChatMetadata(target.ref, patch);
         }
         if (globalVariables) {
             const settingsPath = path.join(request.user.directories.root, SETTINGS_FILE);
@@ -289,6 +298,22 @@ async function commitVariables(request, target, variables, globalVariables) {
     } catch (/** @type {any} */ error) {
         log.net.error('Persisting prompt variables failed:', error?.message ?? error);
     }
+}
+
+/**
+ * The advanced timed state when it differs from what the chat already held, null otherwise. Compared
+ * by value: a send that activates no timed lore must not rewrite the chat file every time.
+ * @param {any} before The chat's stored timedWorldInfo.
+ * @param {any} after What the build produced.
+ * @returns {object|null} The state to write, or null.
+ */
+function timedIfChanged(before, after) {
+    const next = after && typeof after === 'object' ? after : null;
+    const had = before && typeof before === 'object' ? before : null;
+    if (!next && !had) {
+        return null;
+    }
+    return JSON.stringify(next ?? {}) === JSON.stringify(had ?? {}) ? null : (next ?? {});
 }
 
 router.post('/start', async function (request, response) {
@@ -329,21 +354,24 @@ router.post('/start', async function (request, response) {
         let pendingVariables = null;
         /** @type {object|null} */
         let pendingGlobalVariables = null;
+        /** @type {object|null} */
+        let pendingTimed = null;
         // ASSEMBLY IS THE SERVER'S when the caller does not supply a prompt. The builder is the same
         // code the browser runs, proven byte-identical against it over the scenario set, so this is a
         // re-hosting rather than a second implementation. A caller that DOES send a prompt keeps the
         // old path, which is what lets the client move over without a flag day.
         if (typeof params.prompt !== 'string' || params.prompt.length === 0) {
             try {
+                const assemblyRequest = await buildPromptRequest({
+                    charactersPath: request.user.directories.characters,
+                    worldsPath: request.user.directories.worlds,
+                    settingsPath: path.join(request.user.directories.root, SETTINGS_FILE),
+                    chatFilePath: target.filePath,
+                    chat: body.chat,
+                    browser: body.browser ?? {},
+                });
                 const built = await assemblePrompt(
-                    await buildPromptRequest({
-                        charactersPath: request.user.directories.characters,
-                        worldsPath: request.user.directories.worlds,
-                        settingsPath: path.join(request.user.directories.root, SETTINGS_FILE),
-                        chatFilePath: target.filePath,
-                        chat: body.chat,
-                        browser: body.browser ?? {},
-                    }),
+                    assemblyRequest,
                     {
                         countTokens: createTokenCounter({
                             directories: request.user.directories,
@@ -370,6 +398,10 @@ router.post('/start', async function (request, response) {
                 // for actually starts, so a refused or unbuildable send leaves the variables alone.
                 pendingVariables = built.variables;
                 pendingGlobalVariables = built.globalVariables;
+                // Sticky and cooldown windows advance on every send, so the new state has to go back
+                // to the chat file or a sticky entry never expires. Written only when it actually
+                // moved, so a chat with no timed lore is never rewritten for nothing.
+                pendingTimed = timedIfChanged(assemblyRequest.chat_metadata?.timedWorldInfo, built.timed);
             } catch (error) {
                 log.net.error('Server-side prompt assembly failed:', error);
                 return response.status(500).send({ error: 'prompt_assembly_failed' });
@@ -392,7 +424,7 @@ router.post('/start', async function (request, response) {
         runUpstream(session, url, args, apiType).catch(error => log.net.error('Generation start failed:', error));
 
         // The generation is under way, so the staged variable writes are now owed.
-        await commitVariables(request, target, pendingVariables, pendingGlobalVariables);
+        await commitAssemblyWrites(request, target, pendingVariables, pendingGlobalVariables, pendingTimed);
 
         return response.send({ generation_id: session.id, last_event_id: session.lastEventId });
     } catch (/** @type {any} */ error) {
