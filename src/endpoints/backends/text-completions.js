@@ -291,7 +291,7 @@ router.post('/props', async function (request, response) {
  * @param {import('express').Request} request Express request, used only for the additional-headers lookup.
  * @param {any} params The generation parameters.
  * @param {AbortSignal} signal Abort signal for the upstream fetch.
- * @returns {Promise<{url: string, args: any, apiType: string, baseUrl: string}>}
+ * @returns {Promise<{url: string, args: any, apiType: string, baseUrl: string, params: any}>}
  */
 export async function buildUpstreamRequest(request, params, signal) {
     if (typeof params.api_server === 'string' && params.api_server.indexOf('localhost') !== -1) {

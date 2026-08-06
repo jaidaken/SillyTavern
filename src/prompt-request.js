@@ -15,7 +15,7 @@ import { parse as parseCard } from './character-card-parser.js';
  * A character card as JSON, read from its png.
  * @param {string} charactersPath The user's characters directory.
  * @param {string} avatarUrl Card file name, with or without the png extension.
- * @returns {Promise<object>} The parsed card, or an empty object when it cannot be read.
+ * @returns {Promise<any>} The parsed card, or an empty object when it cannot be read.
  */
 export async function readCard(charactersPath, avatarUrl) {
     const file = String(avatarUrl || '').endsWith('.png') ? String(avatarUrl) : `${avatarUrl}.png`;
@@ -48,7 +48,7 @@ export async function readChatForPrompt(filePath) {
     const messages = [];
     let chat_metadata = {};
     for (const [index, line] of lines.entries()) {
-        let row = null;
+        let row;
         try {
             row = JSON.parse(line);
         } catch {
@@ -75,7 +75,7 @@ export async function readChatForPrompt(filePath) {
  * The user's settings blob. Returned as an object so a missing or corrupt file degrades to defaults
  * rather than failing a send.
  * @param {string} settingsPath Path to settings.json.
- * @returns {object} Parsed settings, or an empty object.
+ * @returns {any} Parsed settings, or an empty object.
  */
 export function readSettings(settingsPath) {
     try {
@@ -121,7 +121,7 @@ export function readWorld(worldsPath, names) {
  * @param {string} params.worldsPath User's worlds directory.
  * @param {string} params.settingsPath User's settings.json.
  * @param {string} params.chatFilePath Resolved chat file.
- * @param {object} params.chat Chat descriptor, passed through to the builder.
+ * @param {any} params.chat Chat descriptor, passed through to the builder.
  * @param {object} [params.browser] The four values only a browser knows.
  * @returns {Promise<object>} The request the wasm service parses.
  */

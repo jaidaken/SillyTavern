@@ -66,13 +66,13 @@ async function instantiate(wasmPath) {
     let bytes;
     try {
         bytes = await fs.promises.readFile(wasmPath);
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
         throw new Error(`Prompt wasm could not be read at ${wasmPath}: ${error?.message ?? error}`, { cause: error });
     }
     let instance;
     try {
         ({ instance } = await WebAssembly.instantiate(bytes, {}));
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
         throw new Error(`Prompt wasm at ${wasmPath} failed to instantiate: ${error?.message ?? error}`, { cause: error });
     }
     return assertAbi(instance.exports, wasmPath);
@@ -104,7 +104,7 @@ function unpack(packed, call) {
     let value;
     try {
         value = BigInt(/** @type {any} */(packed)) & 0xffffffffffffffffn;
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
         throw new Error(`Prompt wasm ${call} returned a non-integer result: ${String(packed)}`, { cause: error });
     }
     return { ptr: Number(value >> 32n), len: Number(value & 0xffffffffn) };
@@ -127,13 +127,13 @@ function readResult(exports, ptr, len, call) {
     let text;
     try {
         text = decoder.decode(memory.subarray(ptr, ptr + len));
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
         throw new Error(`Prompt wasm ${call} returned bytes that are not valid utf8.`, { cause: error });
     }
     let parsed;
     try {
         parsed = JSON.parse(text);
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
         throw new Error(`Prompt wasm ${call} returned text that is not JSON: ${text.slice(0, 200)}`, { cause: error });
     }
     if (parsed?.error) {
@@ -193,9 +193,9 @@ function pieceText(piece, index) {
  * pieces returns every candidate piece of the prompt, each piece is costed with the injected
  * counter, and fit is handed the same request plus a `costs` array parallel to those pieces. A
  * failure at any step throws; this never returns a half-built prompt.
- * @param {object} request Assembly request, passed through unchanged.
+ * @param {any} request Assembly request, passed through unchanged.
  * @param {object} options Host wiring.
- * @param {(text: string) => number|Promise<number>} options.countTokens Local token counter. Injected, so no HTTP is involved.
+ * @param {(text: string) => number|Promise<number>} [options.countTokens] Local token counter. Injected, so no HTTP is involved.
  * @param {any} [options.module] Already-instantiated exports. Takes precedence over wasmPath.
  * @param {string} [options.wasmPath] Module path, used when no module is supplied.
  * @returns {Promise<{prompt: string, stop: any[], timed: any, replyPrefix: string}>}

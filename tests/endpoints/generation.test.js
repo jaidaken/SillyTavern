@@ -7,7 +7,7 @@ import { describe, test, expect, beforeAll, afterAll } from '@jest/globals';
 import yaml from 'yaml';
 import { spawn } from 'node:child_process';
 
-import { SillyTavernServer, DEFAULT_HANDLE, allocatePort, SERVER_ROOT } from '../util/st-server.js';
+import { DEFAULT_HANDLE, allocatePort, SERVER_ROOT } from '../util/st-server.js';
 import { SillyTavernClient } from '../util/st-client.js';
 import { SseStream } from '../util/sse-stream.js';
 
@@ -42,6 +42,8 @@ class ScriptedUpstream {
         this.refuseWith = refuseWith;
         /** @type {import('http').IncomingHttpHeaders[]} Headers of every upstream request received. */
         this.received = [];
+        /** @type {any[]} Parsed body of every upstream request received. */
+        this.bodies = [];
     }
 
     get baseUrl() {
@@ -53,6 +55,15 @@ class ScriptedUpstream {
         this.server = http.createServer((req, res) => {
             this.requests += 1;
             this.received.push(req.headers);
+            const chunks = [];
+            req.on('data', chunk => chunks.push(chunk));
+            req.on('end', () => {
+                try {
+                    this.bodies.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+                } catch {
+                    this.bodies.push(null);
+                }
+            });
             if (this.refuseWith) {
                 res.writeHead(this.refuseWith.status, { 'Content-Type': 'application/json' });
                 res.end(this.refuseWith.body);
@@ -553,6 +564,72 @@ describe('server-owned generation', () => {
 
         upstream.finish();
         await upstream.stop();
+    }, CASE_TIMEOUT_MS);
+
+    test('a start that sends no prompt has the server assemble one from the card, the chat and the input', async () => {
+        // The shipped card, under the name the default content installs it as, so the assembly has a
+        // real character to read rather than the empty card a missing file degrades to.
+        const filePath = path.join(server.userDirectory(), 'chats', 'default_Seraphina', 'assembled.jsonl');
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, [
+            JSON.stringify({ user_name: 'You', character_name: 'Seraphina', chat_metadata: {} }),
+            JSON.stringify({ name: 'You', is_user: true, is_system: false, mes: 'a turn from earlier', send_date: 1700000000000, extra: {} }),
+        ].join('\n'), 'utf8');
+
+        // The builder assembles for a text-completion backend, which is what the settings blob has to
+        // say for the send to be one it can build.
+        const settingsPath = path.join(server.userDirectory(), 'settings.json');
+        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        settings.main_api = 'textgenerationwebui';
+        settings.textgenerationwebui_settings = { ...(settings.textgenerationwebui_settings ?? {}), type: 'ooba' };
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 4), 'utf8');
+
+        const upstream = new ScriptedUpstream();
+        await upstream.start();
+        try {
+            const client = await loggedInClient(server);
+
+            const response = await client.postJson('/api/generation/start', {
+                chat: { avatar_url: 'default_Seraphina.png', file_name: 'assembled', character_name: 'Seraphina' },
+                generate: { api_type: 'generic', api_server: upstream.baseUrl, model: 'mock', max_tokens: 64 },
+                browser: { input: 'what keeps the lamp lit', utc_offset_minutes: 0, is_mobile: false, generation_type: 'normal', rotation_index: 0 },
+            });
+            expect(response.status).toBe(200);
+
+            await until(() => upstream.bodies.length > 0, 'the upstream request body');
+            const prompt = upstream.bodies[0]?.prompt;
+
+            expect(typeof prompt).toBe('string');
+            // The card came off disk, the history came out of the chat file, and the turn the caller
+            // is replying to is in there once rather than twice.
+            expect(prompt).toContain('guardian of this forest');
+            expect(prompt).toContain('a turn from earlier');
+            expect(prompt.split('a turn from earlier')).toHaveLength(2);
+
+            upstream.finish();
+        } finally {
+            await upstream.stop();
+        }
+    }, CASE_TIMEOUT_MS);
+
+    test('a start that sends its own prompt keeps it, so a caller assembling for itself is untouched', async () => {
+        seedChat(server, 'own-prompt');
+        const upstream = new ScriptedUpstream();
+        await upstream.start();
+        try {
+            const client = await loggedInClient(server);
+
+            const started = await startGeneration(client, upstream.baseUrl, { fileName: 'own-prompt', prompt: 'a prompt the caller built' });
+            expect(started.status).toBe(200);
+
+            await until(() => upstream.bodies.length > 0, 'the upstream request body');
+
+            expect(upstream.bodies[0]?.prompt).toBe('a prompt the caller built');
+
+            upstream.finish();
+        } finally {
+            await upstream.stop();
+        }
     }, CASE_TIMEOUT_MS);
 
     test('a start whose chat target escapes the user root is refused', async () => {

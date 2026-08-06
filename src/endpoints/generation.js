@@ -9,13 +9,17 @@
 import express from 'express';
 import fetch from 'node-fetch';
 import fs from 'node:fs';
+import path from 'node:path';
 import { Readable } from 'node:stream';
 
-import { TEXTGEN_TYPES } from '../constants.js';
+import { SETTINGS_FILE, TEXTGEN_TYPES } from '../constants.js';
 import { log } from '../log.js';
 import { emitToUser } from '../client-events.js';
 import { createSession, getSession, findActiveForChat, listActive, MAX_ACTIVE_PER_HANDLE, Status, DONE_PAYLOAD } from '../generation-session.js';
 import { composeReply } from '../reply-cleanup.js';
+import { assemblePrompt } from '../prompt-builder.js';
+import { buildPromptRequest } from '../prompt-request.js';
+import { createTokenCounter } from '../token-count.js';
 import { buildUpstreamRequest } from './backends/text-completions.js';
 import { ChatRef, appendChatMessages } from './chats.js';
 
@@ -129,7 +133,7 @@ async function persistAssistantTurn(session) {
             messages: [message],
             change_token: result.change_token,
         });
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
         session.persisted = false;
         log.chat.error(`Generation ${session.id}: assistant turn write failed:`, error);
     }
@@ -242,7 +246,7 @@ async function runUpstream(session, url, args, apiType) {
     let upstream;
     try {
         upstream = await fetch(url, args);
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
         await finishGeneration(session, Status.error, `upstream unreachable: ${error?.message ?? error}`);
         return;
     }
@@ -293,6 +297,44 @@ router.post('/start', async function (request, response) {
             return response.status(429).send({ error: 'too_many_generations', limit: MAX_ACTIVE_PER_HANDLE });
         }
 
+        // ASSEMBLY IS THE SERVER'S when the caller does not supply a prompt. The builder is the same
+        // code the browser runs, proven byte-identical against it over the scenario set, so this is a
+        // re-hosting rather than a second implementation. A caller that DOES send a prompt keeps the
+        // old path, which is what lets the client move over without a flag day.
+        if (typeof params.prompt !== 'string' || params.prompt.length === 0) {
+            try {
+                const built = await assemblePrompt(
+                    await buildPromptRequest({
+                        charactersPath: request.user.directories.characters,
+                        worldsPath: request.user.directories.worlds,
+                        settingsPath: path.join(request.user.directories.root, SETTINGS_FILE),
+                        chatFilePath: target.filePath,
+                        chat: body.chat,
+                        browser: body.browser ?? {},
+                    }),
+                    {
+                        countTokens: createTokenCounter({
+                            directories: request.user.directories,
+                            apiType: params.api_type,
+                            model: params.model,
+                            apiServer: params.api_server,
+                            secretId: params.secret_id ?? null,
+                        }),
+                    },
+                );
+                params.prompt = built.prompt;
+                if (Array.isArray(built.stop) && built.stop.length > 0) {
+                    params.stop = built.stop;
+                }
+                if (!body.reply_prefix && built.replyPrefix) {
+                    body.reply_prefix = built.replyPrefix;
+                }
+            } catch (error) {
+                log.net.error('Server-side prompt assembly failed:', error);
+                return response.status(500).send({ error: 'prompt_assembly_failed' });
+            }
+        }
+
         const session = createSession(handle, target);
         session.user = request.user;
         // Bounded and type-checked: it is client-supplied text that lands in a saved chat file.
@@ -309,7 +351,7 @@ router.post('/start', async function (request, response) {
         runUpstream(session, url, args, apiType).catch(error => log.net.error('Generation start failed:', error));
 
         return response.send({ generation_id: session.id, last_event_id: session.lastEventId });
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
         log.net.error('Generation start error:', error);
         if (!response.headersSent) {
             return response.sendStatus(500);
@@ -357,7 +399,7 @@ router.get('/:id/stream', function (request, response) {
             if (typeof response.flush === 'function') {
                 response.flush();
             }
-        } catch (error) {
+        } catch (/** @type {any} */ error) {
             log.net.warn('Generation stream write failed:', error);
             return false;
         }
@@ -406,7 +448,7 @@ router.post('/:id/stop', async function (request, response) {
         }
         await finishGeneration(session, Status.stopped, '');
         return response.send({ ok: true, status: session.status });
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
         log.net.error('Generation stop error:', error);
         if (!response.headersSent) {
             return response.sendStatus(500);
@@ -435,7 +477,7 @@ router.get('/active', function (request, response) {
             last_event_id: session.lastEventId,
             character_name: session.target.characterName,
         });
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
         log.net.error('Generation active lookup error:', error);
         return response.sendStatus(500);
     }

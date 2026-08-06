@@ -44,6 +44,7 @@ export const Status = Object.freeze({
 
 /**
  * @typedef {object} GenerationTarget
+ * @property {any} ref The ChatRef the completion write appends through.
  * @property {string} filePath Resolved chat file path, derived server-side from the request user.
  * @property {string} cardName Card name or group id, used for backups and cache busting.
  * @property {string|null} fileName Solo chat file name without extension, null for a group.
@@ -77,6 +78,7 @@ export class GenerationSession {
         this.frameBytes = 0;
         this.replayComplete = true;
         this.nextFrameId = 0;
+        /** @type {string} One of Status; widened so a terminal status can replace the initial one. */
         this.status = Status.running;
         this.controller = new AbortController();
         this.startedAt = Date.now();
