@@ -99,14 +99,20 @@ export function readSettings(settingsPath) {
 }
 
 /**
- * The world-info book a card links, merged with the globally-selected ones, in the single-book shape
- * the builder parses. Entries keep their own ids so activation order is the file's.
+ * Every linked book merged into the single-book shape the builder parses.
+ *
+ * Entries are RENUMBERED as they are collected. A book's entry keys are its own, and every book on
+ * disk numbers from zero, so keying the merged set by them makes the second book's entry 0 collide
+ * with the first's. The collision is silent: that lore simply never reaches the prompt. The new keys
+ * run sequentially in load order, which is also the priority order, and each entry object is left
+ * untouched so its own uid still identifies it to anything tracking entries across sends.
  * @param {string} worldsPath The user's worlds directory.
  * @param {string[]} names Book names to load, in priority order.
  * @returns {object} `{ entries }`, empty when nothing loads.
  */
 export function readWorld(worldsPath, names) {
     const entries = {};
+    let next = 0;
     for (const name of names ?? []) {
         const file = path.join(worldsPath, `${name}.json`);
         if (!fs.existsSync(file)) {
@@ -114,11 +120,9 @@ export function readWorld(worldsPath, names) {
         }
         try {
             const book = JSON.parse(fs.readFileSync(file, 'utf8'));
-            for (const [key, value] of Object.entries(book?.entries ?? {})) {
-                // A later book never overwrites an earlier one: the caller's order IS the priority.
-                if (!(key in entries)) {
-                    entries[key] = value;
-                }
+            for (const value of Object.values(book?.entries ?? {})) {
+                entries[next] = value;
+                next += 1;
             }
         } catch {
             continue;

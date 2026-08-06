@@ -1480,11 +1480,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     @classmethod
     def assembly_world(cls):
+        # Renumbered, not merged by key: every book numbers its entries from zero, so keying the
+        # merged set by them drops the second book's lore without a word (the server does the same).
         entries = {}
         for _fid, book in sorted(cls.worldinfo_books().items()):
-            for key, value in (book.get("entries") or {}).items():
-                if key not in entries:
-                    entries[key] = value
+            for value in (book.get("entries") or {}).values():
+                entries[str(len(entries))] = value
         return {"entries": entries}
 
     @classmethod

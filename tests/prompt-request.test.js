@@ -39,14 +39,27 @@ describe('readSettings', () => {
 });
 
 describe('readWorld', () => {
-    test('merges books in the order given, and the first book wins a shared id', () => {
-        fs.writeFileSync(path.join(root, 'worlds', 'card.json'), JSON.stringify({ entries: { 1: { uid: 1, content: 'from card' } } }));
-        fs.writeFileSync(path.join(root, 'worlds', 'global.json'), JSON.stringify({ entries: { 1: { uid: 1, content: 'from global' }, 2: { uid: 2, content: 'only global' } } }));
+    test('keeps every entry of every book, even where two books number an entry the same', () => {
+        // Every book on disk numbers its entries from zero, so a merge keyed by those numbers drops
+        // the second book's lore silently. This asserted that loss until 2026-08-06.
+        fs.writeFileSync(path.join(root, 'worlds', 'card.json'), JSON.stringify({ entries: { 0: { uid: 0, content: 'from card' } } }));
+        fs.writeFileSync(path.join(root, 'worlds', 'global.json'), JSON.stringify({ entries: { 0: { uid: 0, content: 'from global' }, 1: { uid: 1, content: 'only global' } } }));
 
         const world = readWorld(path.join(root, 'worlds'), ['card', 'global']);
 
-        expect(world.entries[1].content).toBe('from card');
-        expect(world.entries[2].content).toBe('only global');
+        expect(Object.values(world.entries).map(e => e.content)).toEqual(['from card', 'from global', 'only global']);
+    });
+
+    test('renumbers in load order, so the first book named is the first lore offered', () => {
+        fs.writeFileSync(path.join(root, 'worlds', 'a.json'), JSON.stringify({ entries: { 5: { uid: 5, content: 'first book' } } }));
+        fs.writeFileSync(path.join(root, 'worlds', 'b.json'), JSON.stringify({ entries: { 2: { uid: 2, content: 'second book' } } }));
+
+        const world = readWorld(path.join(root, 'worlds'), ['a', 'b']);
+
+        expect(Object.keys(world.entries)).toEqual(['0', '1']);
+        expect(world.entries[0].content).toBe('first book');
+        // The entry keeps its own uid: only the key it is filed under is rewritten.
+        expect(world.entries[0].uid).toBe(5);
     });
 
     test('skips a book that is missing or unparseable instead of losing the rest', () => {
@@ -55,7 +68,7 @@ describe('readWorld', () => {
 
         const world = readWorld(path.join(root, 'worlds'), ['broken', 'absent', 'good']);
 
-        expect(Object.keys(world.entries)).toEqual(['7']);
+        expect(Object.values(world.entries).map(e => e.content)).toEqual(['kept']);
     });
 
     test('no books at all is an empty entry set, not a throw', () => {
@@ -116,7 +129,7 @@ describe('buildPromptRequest', () => {
         });
 
         expect(request.settings.max_context).toBe(4096);
-        expect(request.world.entries[3].content).toBe('a glade');
+        expect(Object.values(request.world.entries).map(e => e.content)).toEqual(['a glade']);
         expect(request.messages).toHaveLength(1);
         expect(request.chat.avatar_url).toBe('Ada.png');
         expect(request.browser.input).toBe('hi');
@@ -143,8 +156,9 @@ describe('buildPromptRequest', () => {
             chat: { avatar_url: 'Ada.png', file_name: 'Ada', group_id: null },
         });
 
-        expect(request.world.entries[1].content).toBe('from the chat link');
-        expect(request.world.entries[2].content).toBe('only global');
+        // Load order IS priority order, and nothing is dropped on the way.
+        expect(Object.values(request.world.entries).map(e => e.content))
+            .toEqual(['from the chat link', 'from global', 'only global']);
     });
 
     test('a card linking its own book puts that book ahead of the global selection', async () => {
@@ -163,7 +177,7 @@ describe('buildPromptRequest', () => {
             chat: { avatar_url: 'Ada.png', file_name: 'Ada', group_id: null },
         });
         // No readable card here, so the link cannot come from it; the global selection still loads.
-        expect(request.world.entries[1].content).toBe('global wins nothing');
+        expect(Object.values(request.world.entries).map(e => e.content)).toEqual(['global wins nothing']);
         expect(request.browser).toEqual({});
     });
 });
