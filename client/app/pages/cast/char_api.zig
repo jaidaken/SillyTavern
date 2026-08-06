@@ -1723,16 +1723,10 @@ fn buildStartBody(generate_body: []const u8) ?[]u8 {
             .character_name = pend_char_name,
         }, .{}) catch return null;
     defer alloc.free(chat);
-    // The bias is the tail of the prompt, so the model continues FROM it and it belongs to the reply the
-    // server persists (stock prepends it in cleanUpMessage, script.js:6431, and hides it on display).
-    const bias_raw = pend_tpl.user_prompt_bias;
-    const bias: []const u8 = if (bias_raw.len > 0)
-        generate.substituteMacros(alloc, bias_raw, .{ .char = pend_char_name, .user = pend_user_name }) catch ""
-    else
-        "";
-    defer if (bias.len > 0) alloc.free(bias);
-    const prefix_json = std.json.Stringify.valueAlloc(alloc, bias, .{}) catch return null;
-    defer alloc.free(prefix_json);
+    // NO reply_prefix. The bias is the tail of the prompt, so it belongs to whoever builds the prompt,
+    // and that is the server: it expands the bias against the FULL macro environment (variables, the
+    // clock, chat state), where this file could only ever offer {{char}} and {{user}}. A bias reading
+    // "{{getvar::mood}}" resolved everywhere except in the bias itself while this sent its own.
     // The state the SERVER cannot read for itself, so a server-side prompt assembly has everything it
     // needs (phase 0 survey): the composer text, the user's timezone, the viewport class and which
     // group member is speaking. `generation_type` is a placeholder while swipe and regenerate do not
@@ -1747,8 +1741,8 @@ fn buildStartBody(generate_body: []const u8) ?[]u8 {
     defer alloc.free(browser);
     return std.fmt.allocPrint(
         alloc,
-        "{{\"chat\":{s},\"generate\":{s},\"reply_prefix\":{s},\"trim_sentences\":{},\"trim_spaces\":{},\"browser\":{s}}}",
-        .{ chat, generate_body, prefix_json, pend_tpl.trim_sentences, pend_tpl.trim_spaces, browser },
+        "{{\"chat\":{s},\"generate\":{s},\"trim_sentences\":{},\"trim_spaces\":{},\"browser\":{s}}}",
+        .{ chat, generate_body, pend_tpl.trim_sentences, pend_tpl.trim_spaces, browser },
     ) catch null;
 }
 

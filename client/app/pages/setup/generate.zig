@@ -447,6 +447,11 @@ pub const Pieces = struct {
     /// fitAndAssemble emits it in place of wrapped_history[0] when history[0] is the oldest surviving turn.
     history0_first: ?[]u8,
     prefix: []u8,
+    /// The macro-substituted user prompt bias, on its own. `prefix` and `tail_bias` carry it INTO the
+    /// prompt in whichever place the template calls for; this is the value a host needs separately,
+    /// because the reply the model writes is saved starting with it (stock cleanUpMessage prepends it
+    /// and hides it on display). Empty when no bias is configured.
+    bias: []u8,
     history_len: usize,
     /// power_user.collapse_newlines: fitAndAssemble collapses the joined prompt's newline runs to one
     /// (script.js:5171). A scalar, so freePieces ignores it.
@@ -469,6 +474,7 @@ pub fn freePieces(alloc: Allocator, p: *Pieces) void {
     alloc.free(p.tail_bias);
     if (p.history0_first) |h| alloc.free(h);
     alloc.free(p.prefix);
+    alloc.free(p.bias);
     if (p.timed_json) |j| alloc.free(j);
 }
 
@@ -877,6 +883,9 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
     errdefer alloc.free(prefix);
     const tail_bias = try alloc.dupe(u8, if (instruct.enabled) "" else std.mem.trimStart(u8, bias_sub, &std.ascii.whitespace));
     errdefer alloc.free(tail_bias);
+    // Its own copy: bias_sub dies with this scope, and the piece outlives it.
+    const bias_owned = try alloc.dupe(u8, bias_sub);
+    errdefer alloc.free(bias_owned);
 
     // Stringify while wi_act's arena still backs the timed-effect keys (freed on scope exit).
     var timed_json: ?[]const u8 = null;
@@ -911,6 +920,7 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
         .alignment = alignment,
         .history0_first = history0_first,
         .prefix = prefix,
+        .bias = bias_owned,
         .tail_bias = tail_bias,
         .untemplated = !instruct.enabled,
         .history_len = history.len,

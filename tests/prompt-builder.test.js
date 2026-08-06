@@ -64,7 +64,7 @@ const REQUEST = Object.freeze({
 });
 
 const THREE_PIECES = { pieces: [{ text: 'system prompt' }, { text: 'first message' }, 'raw string piece'] };
-const FIT_RESULT = { prompt: 'assembled prompt', stop: ['\nAda:'], timed: { sticky: [3] }, reply_prefix: 'Ada:' };
+const FIT_RESULT = { prompt: 'assembled prompt', stop: ['\nAda:'], timed: { sticky: [3] }, bias: ' [steer]' };
 
 describe('assemblePrompt', () => {
     beforeEach(() => resetPromptWasmCache());
@@ -79,7 +79,8 @@ describe('assemblePrompt', () => {
             prompt: 'assembled prompt',
             stop: ['\nAda:'],
             timed: { sticky: [3] },
-            replyPrefix: 'Ada:',
+            // The bias the reply is saved starting with, passed through from fit.
+            bias: ' [steer]',
             // A build that set no variables reports none, so the caller writes nothing back.
             variables: null,
             globalVariables: null,
@@ -216,12 +217,12 @@ describe('assemblePrompt', () => {
             .rejects.toThrow('assemblePrompt requires a request object.');
     });
 
-    test('defaults stop and replyPrefix when fit omits them', async () => {
+    test('defaults stop and bias when fit omits them', async () => {
         const { module } = createStub({ pieces: THREE_PIECES, fit: { prompt: 'bare' } });
 
         const result = await assemblePrompt(REQUEST, { countTokens: () => 1, module });
 
-        expect(result).toEqual({ prompt: 'bare', stop: [], timed: null, replyPrefix: '', variables: null, globalVariables: null });
+        expect(result).toEqual({ prompt: 'bare', stop: [], timed: null, bias: '', variables: null, globalVariables: null });
     });
 });
 

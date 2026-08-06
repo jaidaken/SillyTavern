@@ -234,7 +234,10 @@ fn fitBody(a: Allocator, input: []const u8) RequestError![]u8 {
     var stops = std.json.Array.init(a);
     for (built.stop) |s| try stops.append(.{ .string = s });
     try root.put(a, "stop", .{ .array = stops });
-    try root.put(a, "reply_prefix", .{ .string = built.pieces.prefix });
+    // The BIAS, not `pieces.prefix`: the prefix is the prompt's trailing cue (it may carry the bias, or
+    // not, depending on the template), while what a host needs back is the text the saved reply opens
+    // with. Emitting the cue here had the route seeding replies with "\nAria:".
+    try root.put(a, "bias", .{ .string = built.pieces.bias });
     if (try dirtyStoreValue(a, built.vars.chat)) |v| try root.put(a, "variables", v);
     if (try dirtyStoreValue(a, built.vars.global)) |v| try root.put(a, "global_variables", v);
     return std.json.Stringify.valueAlloc(a, Value{ .object = root }, .{});
@@ -846,6 +849,36 @@ test "a_setvar_during_the_build_is_reported_back_for_the_host_to_persist" {
     try testing.expect(parsed.value.global_variables == null);
 }
 
+test "fit_answers_with_the_bias_resolved_against_the_variable_store" {
+    const with_costs =
+        \\{ "costs": [4, 0, 2, 8],
+    ++ bias_request[1..];
+
+    const out = try fitJson(testing.allocator, with_costs);
+    defer testing.allocator.free(out);
+
+    const parsed = try std.json.parseFromSlice(struct { prompt: []const u8, bias: []const u8 }, testing.allocator, out, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    // The bias is what the saved reply opens with, so it comes back resolved, not as a template.
+    try testing.expectEqualStrings(" [mood: wary]", parsed.value.bias);
+    try testing.expect(std.mem.endsWith(u8, parsed.value.prompt, " [mood: wary]"));
+}
+
+/// A configured prompt bias that reads a chat variable, the case the client could never expand.
+const bias_request =
+    \\{
+    \\ "settings": { "main_api": "textgenerationwebui", "textgenerationwebui_settings": { "type": "ooba", "max_length": 4096, "genamt": 256 },
+    \\               "power_user": { "user_prompt_bias": " [mood: {{getvar::mood}}]" } },
+    \\ "card": { "name": "Aria", "description": "Aria is a lighthouse keeper.", "first_mes": "The lamp is lit." },
+    \\ "messages": [ { "name": "Jamie", "mes": "is the lamp still lit", "is_user": true, "is_system": false } ],
+    \\ "chat_metadata": { "note_prompt": "", "variables": { "mood": "wary" } },
+    \\ "world": { "entries": {} },
+    \\ "chat": { "avatar_url": "aria.png", "file_name": "aria - 2026-08-06", "group_id": "" },
+    \\ "browser": { "input": "is the lamp still lit", "utc_offset_minutes": 60, "is_mobile": false, "generation_type": "normal", "rotation_index": 0 }
+    \\}
+;
+
 test "fit_answers_with_the_stop_set_and_the_reply_prefix_not_only_the_prompt" {
     const with_costs =
         \\{ "costs": [4, 0, 2, 8],
@@ -854,7 +887,7 @@ test "fit_answers_with_the_stop_set_and_the_reply_prefix_not_only_the_prompt" {
     const out = try fitJson(testing.allocator, with_costs);
     defer testing.allocator.free(out);
 
-    const Out = struct { prompt: []const u8, stop: [][]const u8, reply_prefix: []const u8 };
+    const Out = struct { prompt: []const u8, stop: [][]const u8 };
     const parsed = try std.json.parseFromSlice(Out, testing.allocator, out, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 

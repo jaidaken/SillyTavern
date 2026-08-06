@@ -361,8 +361,10 @@ router.post('/start', async function (request, response) {
                     params.stop = built.stop;
                     params.stopping_strings = built.stop;
                 }
-                if (!body.reply_prefix && built.replyPrefix) {
-                    body.reply_prefix = built.replyPrefix;
+                // The bias the builder resolved, which is what the saved reply opens with. Only when
+                // the caller sent none: a caller supplying its own prompt supplies its own bias too.
+                if (!body.reply_prefix && built.bias) {
+                    body.reply_prefix = built.bias;
                 }
                 // Staged, not written: a {{setvar}} takes effect only if the generation it was built
                 // for actually starts, so a refused or unbuildable send leaves the variables alone.

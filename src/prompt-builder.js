@@ -206,7 +206,7 @@ function isPlainObject(value) {
  * @param {(text: string) => number|Promise<number>} [options.countTokens] Local token counter. Injected, so no HTTP is involved.
  * @param {any} [options.module] Already-instantiated exports. Takes precedence over wasmPath.
  * @param {string} [options.wasmPath] Module path, used when no module is supplied.
- * @returns {Promise<{prompt: string, stop: any[], timed: any, replyPrefix: string, variables: object|null, globalVariables: object|null}>}
+ * @returns {Promise<{prompt: string, stop: any[], timed: any, bias: string, variables: object|null, globalVariables: object|null}>}
  */
 export async function assemblePrompt(request, { countTokens, module = null, wasmPath = DEFAULT_WASM_PATH } = {}) {
     if (!request || typeof request !== 'object') {
@@ -262,12 +262,14 @@ export async function assemblePrompt(request, { countTokens, module = null, wasm
     if (typeof fitted?.prompt !== 'string') {
         throw new Error(`Prompt wasm fit returned no prompt string (got ${typeof fitted?.prompt}).`);
     }
-    const replyPrefix = fitted.replyPrefix ?? fitted.reply_prefix ?? '';
+    // `bias` is what a saved reply opens with; the wasm's own `reply_prefix` is the prompt's trailing
+    // cue, which is a different thing and belongs inside the prompt, not on the reply.
+    const bias = fitted.bias ?? '';
     return {
         prompt: fitted.prompt,
         stop: Array.isArray(fitted.stop) ? fitted.stop : [],
         timed: fitted.timed ?? null,
-        replyPrefix: typeof replyPrefix === 'string' ? replyPrefix : '',
+        bias: typeof bias === 'string' ? bias : '',
         // Present only when a {{setvar}} fired, so a build that merely read variables leaves the
         // caller nothing to write back.
         variables: isPlainObject(fitted.variables) ? fitted.variables : null,

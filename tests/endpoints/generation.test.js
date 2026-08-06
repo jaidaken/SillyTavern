@@ -665,6 +665,53 @@ describe('server-owned generation', () => {
         }
     }, CASE_TIMEOUT_MS);
 
+    test('a prompt bias reading a variable is resolved, and the saved reply opens with it', async () => {
+        const settingsPath = path.join(server.userDirectory(), 'settings.json');
+        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        settings.main_api = 'textgenerationwebui';
+        settings.textgenerationwebui_settings = { ...(settings.textgenerationwebui_settings ?? {}), type: 'ooba' };
+        settings.power_user = { ...(settings.power_user ?? {}), user_prompt_bias: ' [mood: {{getvar::mood}}]' };
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 4), 'utf8');
+
+        const filePath = path.join(server.userDirectory(), 'chats', 'default_Seraphina', 'biasvar.jsonl');
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, [
+            JSON.stringify({ user_name: 'You', character_name: 'Seraphina', chat_metadata: { variables: { mood: 'wary' } } }),
+            JSON.stringify({ name: 'You', is_user: true, is_system: false, mes: 'how do you feel', send_date: 1700000000000, extra: {} }),
+        ].join('\n'), 'utf8');
+
+        const upstream = new ScriptedUpstream();
+        await upstream.start();
+        try {
+            const client = await loggedInClient(server);
+            const started = await client.postJson('/api/generation/start', {
+                chat: { avatar_url: 'default_Seraphina.png', file_name: 'biasvar', character_name: 'Seraphina' },
+                generate: { api_type: 'generic', api_server: upstream.baseUrl, model: 'mock', max_tokens: 64 },
+                browser: { input: 'how do you feel', utc_offset_minutes: 0, is_mobile: false, generation_type: 'normal', rotation_index: 0 },
+            });
+            expect(started.status).toBe(200);
+            const body = await started.json();
+
+            const viewer = await openViewer(server, client, body.generation_id, 0);
+            await until(() => upstream.live !== null, 'the upstream request');
+            upstream.emit(1);
+            upstream.finish();
+            await until(() => readChatLines(filePath).length >= 3, 'the assistant turn');
+
+            // The bias only expands where the variable store lives, which is here: the client cannot
+            // read one. It reaches the prompt AND the saved turn, resolved either way.
+            expect(upstream.bodies[0]?.prompt).toContain('[mood: wary]');
+            const appended = readChatLines(filePath)[2];
+            // trim_spaces is on by default, so the saved turn opens with the bias minus its leading space.
+            expect(appended.mes.startsWith('[mood: wary]')).toBe(true);
+            expect(appended.extra.bias).toBe(' [mood: wary]');
+
+            await viewer.close();
+        } finally {
+            await upstream.stop();
+        }
+    }, CASE_TIMEOUT_MS);
+
     test('a start that sends its own prompt keeps it, so a caller assembling for itself is untouched', async () => {
         seedChat(server, 'own-prompt');
         const upstream = new ScriptedUpstream();
