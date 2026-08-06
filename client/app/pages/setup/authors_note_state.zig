@@ -170,6 +170,32 @@ pub fn isDirty() bool {
     return dirty;
 }
 
+/// Whoever is waiting for the note to be on the server before it acts.
+var flush_waiter: ?*const fn () void = null;
+
+/// Runs `next` once an edited note has reached the chat file.
+///
+/// The note only persists when the panel's Save is pressed, and the SERVER now builds the prompt from
+/// that file. A note typed and used straight away applied instantly while the browser did the
+/// assembling, so a send has to carry the edit over itself or the note the user just wrote is the one
+/// thing missing from the prompt. A clean note runs `next` immediately.
+pub fn flushThen(next: *const fn () void) void {
+    if (zx.platform.role != .client) return next();
+    if (!dirty and !saving) return next();
+    // A second waiter would strand the first; the send path is the only caller and refuses overlap.
+    if (flush_waiter != null) return next();
+    flush_waiter = next;
+    if (!saving) save();
+    // save() no-ops with no chat open, and then nothing is coming: release rather than hang the send.
+    if (!saving) releaseFlushWaiter();
+}
+
+fn releaseFlushWaiter() void {
+    const waiter = flush_waiter orelse return;
+    flush_waiter = null;
+    waiter();
+}
+
 // ---- the save ---------------------------------------------------------------------------------
 
 /// Persist the note into the chat file's metadata. A no-op with no chat open (nothing to key it to)
@@ -213,6 +239,8 @@ pub fn save() void {
 fn onSaveDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     _ = tag;
     saving = false;
+    // Released on every outcome: a note that could not be saved must not hold a send forever.
+    defer releaseFlushWaiter();
     if (status == 409) {
         // Another writer moved the file. Adopt the token the server returned so the next save lands
         // rather than looping on a stale one, and say so instead of silently dropping the edit.

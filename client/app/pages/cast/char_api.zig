@@ -1571,7 +1571,7 @@ pub fn sendMessage() void {
     if (awaiting_append) {
         pend_send_on_append = true;
     } else {
-        reading_prefs.flushThen(&launchServerSend);
+        flushThenSend();
     }
 }
 
@@ -1579,6 +1579,17 @@ pub fn sendMessage() void {
 /// the stop set: an absent prompt is what tells /api/generation/start to build one, and it answers
 /// with the stop sequences the template implies. Every input it needs that only a browser knows rides
 /// the `browser` object in the start body.
+/// The two files the server reads have to be current first: the settings blob, then the chat's own
+/// header where the author's note lives. Chained rather than parallel so each flush sees a settled
+/// state, and each runs straight through when its side is clean.
+fn flushThenSend() void {
+    reading_prefs.flushThen(&flushNoteThenSend);
+}
+
+fn flushNoteThenSend() void {
+    an_state.flushThen(&launchServerSend);
+}
+
 fn launchServerSend() void {
     defer endSend();
     const conn = pend_conn orelse return;
@@ -1849,7 +1860,7 @@ fn onAppendDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     // The user's turn is in the file, so the prompt the server builds will contain it.
     if (tag != 0 and pend_send_on_append) {
         pend_send_on_append = false;
-        reading_prefs.flushThen(&launchServerSend);
+        flushThenSend();
     }
 }
 
@@ -1942,7 +1953,7 @@ pub fn launchGroupMember(m: @import("./group_rotation.zig").Member) bool {
     setOwned(&pend_user_text, "");
     // The rotation driver persisted the user's turn before any member launched, so this one has
     // nothing to wait for.
-    reading_prefs.flushThen(&launchServerSend);
+    flushThenSend();
     return true;
 }
 

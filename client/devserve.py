@@ -1479,12 +1479,33 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return cls.deep_card(str(avatar_url or "char"))
 
     @classmethod
-    def assembly_world(cls):
-        # Renumbered, not merged by key: every book numbers its entries from zero, so keying the
-        # merged set by them drops the second book's lore without a word (the server does the same).
+    def assembly_world(cls, chat, meta):
+        """The books a send actually loads, chosen the way buildPromptRequest chooses them.
+
+        Merging every book on disk would put an UNLINKED book's lore in the prompt, which is the one
+        thing unlinking has to stop. Renumbered rather than keyed by each book's own entry ids: every
+        book numbers from zero, so a keyed merge drops the second book's lore without a word.
+        """
+        card = cls.deep_card(str((chat or {}).get("avatar_url") or "char"))
+        names = []
+        chat_link = (meta or {}).get("world_info")
+        if isinstance(chat_link, str) and chat_link:
+            names.append(chat_link)
+        card_link = ((card.get("data") or {}).get("extensions") or {}).get("world")
+        if isinstance(card_link, str) and card_link:
+            names.append(card_link)
+        wis = (cls.settings_blob().get("world_info_settings") or {}).get("world_info") or {}
+        for n in wis.get("globalSelect") or []:
+            if isinstance(n, str) and n:
+                names.append(n)
+        books = cls.worldinfo_books()
         entries = {}
-        for _fid, book in sorted(cls.worldinfo_books().items()):
-            for value in (book.get("entries") or {}).values():
+        seen = set()
+        for name in names:
+            if name in seen or name not in books:
+                continue
+            seen.add(name)
+            for value in (books[name].get("entries") or {}).values():
                 entries[str(len(entries))] = value
         return {"entries": entries}
 
@@ -1510,7 +1531,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             ],
             "settings": cls.settings_blob(),
             "chat_metadata": meta,
-            "world": cls.assembly_world(),
+            "world": cls.assembly_world(chat, meta),
             "chat": chat,
             "at_head": True,
             "browser": req.get("browser") or {},
