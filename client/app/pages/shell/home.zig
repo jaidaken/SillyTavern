@@ -16,6 +16,7 @@ const datetime = @import("../platform/datetime.zig");
 const char_store = @import("../cast/character_store.zig");
 const store = @import("../platform/store.zig");
 const char_api = @import("../cast/char_api.zig");
+const chat_names = @import("../chat/chat_names.zig");
 const regions = @import("./regions.zig");
 // w3-grp
 const group_store = @import("../cast/group_store.zig");
@@ -236,8 +237,10 @@ pub fn rowAvatarUrl(arena: std.mem.Allocator, r: RecentRow) []const u8 {
 
 // ---- row actions ----------------------------------------------------------------------------
 
-/// Open the chat for the recent row at `index`: match its avatar to a loaded character and open that
-/// character's chat (char_api owns the load). A row whose character is not in the store (deleted, or
+/// Open the conversation the recent row at `index` names: match its avatar to a loaded character,
+/// then open THAT row's chat file rather than the character's active one. A row is one conversation
+/// and shows that conversation's preview, so a character with three chats has three rows and each has
+/// to land where its preview points. A row whose character is not in the store (deleted, or
 /// characters not yet loaded) logs and stands down.
 pub fn openRow(index: usize) void {
     if (index >= rows.len) return;
@@ -252,8 +255,16 @@ pub fn openRow(index: usize) void {
         log.warn("open recent: no loaded character for avatar {s}", .{avatar});
         return;
     };
-    log.info("open recent row {d}: character index {d}", .{ index, ci });
-    char_api.loadCharacterChat(ci);
+    // /recent names files WITH the extension (getChatInfo -> parsedPath.base); loadChatByName takes
+    // the stem, same as the chat manager's switch. A nameless row falls back to the card default.
+    const stem = chat_names.stemOf(rows[index].file_name);
+    if (stem.len == 0) {
+        log.info("open recent row {d}: character index {d}, card default", .{ index, ci });
+        char_api.loadCharacterChat(ci);
+        return;
+    }
+    log.info("open recent row {d}: character index {d}, chat {s}", .{ index, ci, stem });
+    char_api.loadChatByName(ci, stem);
 }
 
 /// Resume the most recent conversation: the explicit home action that replaces the old silent

@@ -184,8 +184,14 @@ class Page {
     }
     // Center of the element's VISIBLE portion: a full-height handle's raw center sits far below the
     // viewport, and a click there hits nothing.
+    // A control can be MOMENTARILY rectangle-less while the UI swaps it: the composer shows Stop
+    // while a stream runs, so a send fired the instant the message-busy flag clears can measure Send
+    // before it is back. Throwing on the first empty rect aborted the WHOLE run mid-suite (three times
+    // in one day), so an empty rect is polled out to CENTER_SETTLE_MS before it counts as a failure.
+    // A genuinely hidden element still fails, one settle window later.
     async center(selector) {
-        const box = await this.eval(`(function(){
+        const CENTER_SETTLE_MS = 2000;
+        const measure = () => this.eval(`(function(){
             const el = document.querySelector(${JSON.stringify(selector)});
             if (!el) return null;
             el.scrollIntoView({ block: 'center' });
@@ -195,8 +201,14 @@ class Page {
             if (x1 <= x0 || y1 <= y0) return { x: -1, y: -1 };
             return { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
         })()`);
+        let box = await measure();
+        const deadline = Date.now() + CENTER_SETTLE_MS;
+        while ((!box || box.x < 0) && Date.now() < deadline) {
+            await sleep(100);
+            box = await measure();
+        }
         if (!box) throw new Error(`no element: ${selector}`);
-        if (box.x < 0) throw new Error(`element not visible in viewport: ${selector}`);
+        if (box.x < 0) throw new Error(`element not visible in viewport after ${CENTER_SETTLE_MS}ms: ${selector}`);
         return box;
     }
     // Real mouse click: Chrome synthesizes the pointer events and the bubble path the ziex body
@@ -2545,24 +2557,25 @@ async function main() {
         // ===== C-HOME (append-only): recent-chats home landing (list-first) =====
         console.log('== home: recent-chats landing ==');
         await page.navigate(`${args.base}/`);
-        // Boot shows the landing (no auto-open) with the recent list: three character chats plus the
+        // Boot shows the landing (no auto-open) with the recent list: four character chats plus the
         // group chat (w3-grp: group rows list and open; the v1 filter is gone). The group row's name
         // falls back to the file stem ("Party") while the roster holds no such group.
         row('must', await page.waitFor(
-            `${hydrated} && document.querySelector('#chat-home:not(.hidden)') && document.querySelectorAll('#chat-home .home-thread').length === 4`, 15000),
-            'HOME-1 boot shows the home landing with all four recent chats (group row included)');
+            `${hydrated} && document.querySelector('#chat-home:not(.hidden)') && document.querySelectorAll('#chat-home .home-thread').length === 5`, 15000),
+            'HOME-1 boot shows the home landing with all five recent chats (group row included)');
         const grpRowName = await page.eval(
             "(function(){var rows=document.querySelectorAll('#chat-home .home-thread');var last=rows[rows.length-1];return last?last.textContent:'';})()");
         row('must', grpRowName.includes('Party'),
             'HOME-6 the group recent row renders with a name, not blank (w3-grp)',
             `text=${JSON.stringify(grpRowName.slice(0, 60))}`);
 
-        // The fixture's chats are 5 minutes, 3 hours and 4 days old, so "recently" is the NaN fallback
-        // rather than a date, and a list whose parse fails for every row still looks populated.
+        // The fixture's chats are 5 minutes, 3 hours, 4 days, 5 days and 6 days old, so "recently" is
+        // the NaN fallback rather than a date, and a list whose parse fails for every row still looks
+        // populated.
         const whenTexts = await page.eval(
             "JSON.stringify(Array.from(document.querySelectorAll('#chat-home .home-thread time')).map(function(t){return t.textContent.trim();}))");
         const whens = JSON.parse(whenTexts);
-        const datesReal = whens.length === 4 && whens.every((w) => /^(just now|\d+[mhd] ago|\d{4}-\d{2}-\d{2})$/.test(w));
+        const datesReal = whens.length === 5 && whens.every((w) => /^(just now|\d+[mhd] ago|\d{4}-\d{2}-\d{2})$/.test(w));
         row('must', datesReal, 'HOME-5 a recent row dates the chat instead of falling back to "recently"',
             `when=${whenTexts}`);
 
@@ -2602,6 +2615,29 @@ async function main() {
             return false;
         })();
         row('must', resumed, 'HOME-4 the resume-last action opens the most recent chat');
+
+        // HOME-7 (regression): a row names ONE conversation, so clicking it opens THAT file, not the
+        // character's active one. char07's card default is the "default thread"; its "old adventure"
+        // row must land in the peppermint transcript. Before the fix openRow called loadCharacterChat,
+        // which clears the chat-file override, so this row opened the default thread every time.
+        // Asserted on the transcript rather than a console line: the message text is the observable.
+        await fetch(`${args.base}/dev/disarm-recent-empty`).catch(() => {});
+        await page.navigate(`${args.base}/`);
+        await page.waitFor(`${hydrated} && document.querySelectorAll('#chat-home .home-thread').length === 5`, 15000);
+        const clickedOwnRow = await page.eval(`(function(){
+            var rows = document.querySelectorAll('#chat-home .home-thread');
+            for (var i = 0; i < rows.length; i++) {
+                if (rows[i].textContent.includes('peppermint dragon')) { rows[i].click(); return true; }
+            }
+            return false;
+        })()`);
+        const ownChatOpened = await page.waitFor(
+            "document.getElementById('chat').textContent.includes('The peppermint dragon sleeps in the candy caves')", 6000);
+        const notTheDefault = await page.eval(
+            "!document.getElementById('chat').textContent.includes('The default thread continues')");
+        row('must', clickedOwnRow && ownChatOpened && notTheDefault,
+            'HOME-7 a recent row opens ITS OWN conversation, not the character default',
+            `clicked=${clickedOwnRow} own=${ownChatOpened} notDefault=${notTheDefault}`);
 
         // ===== C-DROP (append-only) =====
         // The styled dropdown proven in isolation via its dev harness (?dropdemo=1 mounts a fixed island

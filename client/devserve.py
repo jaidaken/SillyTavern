@@ -471,6 +471,13 @@ def _mock_recent():
         {"file_name": "Char 06 Vex - 2026-07-10.jsonl", "avatar": "char06.png",
          "mes": "[The chat is empty]", "last_mes": epoch_ms(4 * 24 * 60 * 60 * 1000),
          "file_size": "0 kB", "chat_items": 0},
+        # HOME-7: a SECOND conversation for a character whose card default is a different file
+        # (char07's card chat is MGR_DEFAULT). Opening this row has to land in "old adventure", so a
+        # row that opens the character instead of its own file is visible as the wrong transcript.
+        # Sits before the group row: HOME-6 pins the group row as the last one.
+        {"file_name": "old adventure.jsonl", "avatar": MGR_AVATAR,
+         "mes": "Tell me about the peppermint dragon.", "last_mes": iso(5 * 24 * 60 * 60 * 1000),
+         "file_size": "1 kB", "chat_items": 2},
         {"file_name": "Party - 2026-07-09.jsonl", "group": "grp1",
          "mes": "We should make camp here before nightfall.", "last_mes": iso(6 * 24 * 60 * 60 * 1000),
          "file_size": "3 kB", "chat_items": 8},
@@ -1156,6 +1163,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if self.path.startswith("/dev/arm-recent-empty"):
                 Handler.recent_empty = True
                 return self.mock_json({"armed": True})
+            # The arm above is otherwise one-way, so every row after it sees an empty recent list.
+            if self.path.startswith("/dev/disarm-recent-empty"):
+                Handler.recent_empty = False
+                return self.mock_json({"armed": False})
             # w3-grp: the T0 snapshot the group rows compare before/after the create/edit/delete cycle.
             if self.path.startswith("/dev/grp-t0"):
                 return self.mock_json(Handler.grp_t0_state())
