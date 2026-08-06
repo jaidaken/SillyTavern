@@ -62,4 +62,12 @@ echo "css -> dist/glue/app.css: $(wc -c < dist/glue/app.css) bytes (esbuild, via
 printf 'User-agent: *\nDisallow: /\n' > dist/robots.txt
 ./prune-dist.sh dist
 
+# The prompt builder has two hosts from one Zig source. zig-out is untracked and the server's deploy
+# is a checkout of this repo, so the module is a committed artifact; syncing it here means a change to
+# app/prompt_service.zig lands as a dirty ../src/prompt.wasm in the same build that compiled it.
+if ! cmp -s zig-out/bin/prompt_service.wasm ../src/prompt.wasm 2>/dev/null; then
+    cp zig-out/bin/prompt_service.wasm ../src/prompt.wasm
+    echo "prompt wasm -> ../src/prompt.wasm: $(wc -c < ../src/prompt.wasm) bytes (CHANGED, commit it)"
+fi
+
 echo "build.sh: done (opt=$OPT). Run ./verify.sh for the browser gate."

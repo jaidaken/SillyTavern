@@ -75,6 +75,7 @@ function parseArgs(argv) {
         else if (k === '--update-golden') { out.updateGolden = true; i -= 1; }
         else if (k === '--macros') { out.macros = true; i -= 1; }
         else if (k === '--equiv') { out.equiv = true; i -= 1; }
+        else if (k === '--server') { out.server = true; i -= 1; }
         else throw new Error(`unknown arg: ${k}`);
     }
     if (!out.data) out.data = join(tmpdir(), 'parity-data');
@@ -1054,13 +1055,19 @@ function genState(seed, basePng, baseSettings) {
     return { seed, card, world, applySettings, messages, markers, axes, format };
 }
 
-function applyFuzzState(state, baseSettings, basePng) {
+function applyFuzzState(state, baseSettings, basePng, write = true) {
+    const s = JSON.parse(JSON.stringify(baseSettings));
+    if (!write) {
+        // The server-seam audit hands the scenario to the builder as data, so nothing needs to be on
+        // disk for a frontend to read. Still draws from the same PRNG, in the same order.
+        state.applySettings(s);
+        return s;
+    }
     const chars = join(argsData, 'default-user', 'characters');
     writeFileSync(join(chars, `${FUZZ_CARD}.png`), makeCardPng(basePng, state.card));
     const wf = join(argsData, 'default-user', 'worlds', `${FUZZ_WORLD}.json`);
     if (state.world) writeFileSync(wf, JSON.stringify(state.world, null, 4));
     else if (existsSync(wf)) rmSync(wf, { force: true });
-    const s = JSON.parse(JSON.stringify(baseSettings));
     state.applySettings(s);
     writeFileSync(join(argsData, 'default-user', 'settings.json'), JSON.stringify(s, null, 4));
     // Handed back, never recomputed: applySettings DRAWS from the scenario's PRNG, so calling it a
@@ -1322,6 +1329,61 @@ function chatMessagesOnDisk(fileKey) {
     return lastUser >= 0 ? out.slice(0, lastUser + 1) : out;
 }
 
+/// The scenario base a serviceless run starts from: the shipped default settings with the same
+/// controlled overlay parity-seed.py applies to a booted data dir. Kept here rather than read from a
+/// seeded dir so the gate depends on the repo alone; the approved snapshots are what prove it right.
+function seededBaseSettings(repoRoot, username = 'Tester') {
+    const shipped = (...p) => join(repoRoot, 'default', 'content', ...p);
+    const s = JSON.parse(readFileSync(shipped('settings.json'), 'utf8'));
+    const pu = s.power_user = s.power_user ?? {};
+    s.firstRun = false;
+    pu.auto_connect = true;
+    s.main_api = 'textgenerationwebui';
+    const tgw = s.textgenerationwebui_settings = s.textgenerationwebui_settings ?? {};
+    tgw.type = 'ooba';
+    (tgw.server_urls = tgw.server_urls ?? {}).ooba = 'http://127.0.0.1:8125';
+    const instruct = JSON.parse(readFileSync(shipped('presets', 'instruct', 'ChatML.json'), 'utf8'));
+    instruct.enabled = true;
+    pu.instruct = instruct;
+    pu.context = JSON.parse(readFileSync(shipped('presets', 'context', 'ChatML.json'), 'utf8'));
+    const avatar = 'parity-user.png';
+    s.username = username;
+    s.user_avatar = avatar;
+    pu.personas = { [avatar]: username };
+    pu.persona_descriptions = { [avatar]: { description: '', position: 0, depth: 4, role: 0, lorebook: '' } };
+    pu.persona_description = '';
+    pu.persona_description_position = 0;
+    pu.sysprompt = { enabled: true, name: 'Parity', content: 'You are participating in a fictional roleplay. Stay in character.' };
+    pu.prefer_character_prompt = true;
+    pu.prefer_character_jailbreak = true;
+    return s;
+}
+
+/// The chat rows a golden was built from, recorded beside it. An approved prompt is only meaningful
+/// with the input that produced it, and recording that input is what lets the audit run with no
+/// browser: the rows are a fixture, not something to re-derive.
+function goldenChatPath(seed) {
+    return join(GOLDEN_DIR, `${seed}.chat.json`);
+}
+
+/// The chat the drive WOULD have left behind, without running one. Each send persists the user turn
+/// and then the reply, and the fake backend always answers "ok". Used only when no rows were recorded
+/// for the seed; a real drive's reply can be cut by a stop string, which this cannot know.
+function synthChatRows(state, applied) {
+    const userName = applied.username || 'Tester';
+    // A configured prompt bias is written into the prompt as the reply's opening, so the model
+    // continues FROM it and the saved turn owns it. A reply row without it is a different chat.
+    const bias = applied.power_user?.user_prompt_bias || '';
+    const rows = [];
+    for (let i = 0; i < state.messages.length; i++) {
+        rows.push({ name: userName, mes: state.messages[i], is_user: true, is_system: false });
+        if (i < state.messages.length - 1) {
+            rows.push({ name: FUZZ_CARD, mes: `${bias}ok`, is_user: false, is_system: false });
+        }
+    }
+    return rows;
+}
+
 /// The request the server will hand the builder, rebuilt from the scenario the seed generates.
 function equivRequest(state, applied, messages) {
     return {
@@ -1364,11 +1426,57 @@ async function equivAssemble(args, request) {
     return equiv_state.assemblePrompt(request, { countTokens: equiv_state.countTokens, wasmPath: equiv_state.wasmPath });
 }
 
+/// The approved snapshot for a seed, compared masked: {{roll}} and {{random}} are genuinely random per
+/// send, so a raw compare would report every run as drift and the check would mean nothing.
+function compareGolden(args, seed, prompt) {
+    const goldenPath = join(GOLDEN_DIR, `${seed}.txt`);
+    if (args.updateGolden) {
+        writeFileSync(goldenPath, prompt);
+        return null;
+    }
+    if (!existsSync(goldenPath)) return null;
+    const a = maskFuzz(readFileSync(goldenPath, 'utf8'));
+    const b = maskFuzz(prompt);
+    return a === b ? null : diffReport(a, b);
+}
+
+/// One seed's verdict: the findings and any drift, printed and tallied.
+function recordSeed({ args, seed, state, hit, findings, drift, byCheck, results }) {
+    for (const f of findings) {
+        const b = byCheck[f.check] = byCheck[f.check] || { seeds: new Set(), details: new Set() };
+        b.seeds.add(seed);
+        b.details.add(f.detail);
+    }
+    if (!findings.length && !drift) {
+        process.stdout.write(`  seed ${seed}: CLEAN (${hit.prompt.length} bytes)\n`);
+        results.push({ seed, clean: true });
+        return;
+    }
+    process.stdout.write(`  seed ${seed}: ${findings.length} finding(s) axes:[${state.axes.join(',')}]\n`);
+    for (const f of findings.slice(0, 12)) process.stdout.write(`      ${f.check}: ${f.detail}\n`);
+    if (findings.length > 12) process.stdout.write(`      ... ${findings.length - 12} more\n`);
+    if (drift) {
+        process.stdout.write(`      unapproved-change: the prompt differs from the approved snapshot\n--- approved   +++ now\n${drift.text}\n`);
+        const b = byCheck['unapproved-change'] = byCheck['unapproved-change'] || { seeds: new Set(), details: new Set() };
+        b.seeds.add(seed);
+        b.details.add('the prompt differs from the approved snapshot');
+    }
+    writeFileSync(join(args.data, `au-${seed}.txt`), hit.prompt);
+    results.push({ seed, clean: false, findings: findings.length, drift: Boolean(drift) });
+}
+
 async function runAudit(args) {
     const startedAt = Date.now();
-    const basePng = readFileSync(join(argsData, 'default-user', 'characters', 'default_Seraphina.png'));
+    // A serviceless run has no seeded data dir to read the scenario base from, so it falls back to the
+    // shipped defaults that dir was itself seeded from. Same bytes, hence the same scenarios.
+    const seededPng = join(argsData, 'default-user', 'characters', 'default_Seraphina.png');
     const settingsPath = join(argsData, 'default-user', 'settings.json');
-    const baseSettings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    const shipped = (name) => join(REPO, 'default', 'content', name);
+    const basePng = readFileSync(existsSync(seededPng) ? seededPng : shipped('default_Seraphina.png'));
+    const baseSettings = existsSync(settingsPath)
+        ? JSON.parse(readFileSync(settingsPath, 'utf8'))
+        : seededBaseSettings(REPO);
+    if (args.server) mkdirSync(args.data, { recursive: true });
     ROTATE_FORMATS = args.formats;
     MACRO_PROBE = Boolean(args.macros);
     if (args.updateGolden && !existsSync(GOLDEN_DIR)) mkdirSync(GOLDEN_DIR, { recursive: true });
@@ -1383,6 +1491,23 @@ async function runAudit(args) {
             const state = genState(seed, basePng, baseSettings);
             let applied = null;
             let hit, error = null;
+            if (args.server) {
+                applied = applyFuzzState(state, baseSettings, basePng, false);
+                const rows = existsSync(goldenChatPath(seed))
+                    ? JSON.parse(readFileSync(goldenChatPath(seed), 'utf8'))
+                    : synthChatRows(state, applied);
+                try {
+                    const built = await equivAssemble(args, equivRequest(state, applied, rows));
+                    hit = { prompt: built.prompt, stop: built.stop };
+                } catch (e) {
+                    error = e.message;
+                }
+                if (error) { process.stdout.write(`  seed ${seed}: BUILD ERROR: ${error}\n`); results.push({ seed, error }); continue; }
+                const findings = auditPrompt(hit.prompt, state, applied);
+                const drift = compareGolden(args, seed, hit.prompt);
+                recordSeed({ args, seed, state, hit, findings, drift, byCheck, results });
+                continue;
+            }
             for (let attempt = 1; attempt <= DRIVE_ATTEMPTS; attempt++) {
                 error = null;
                 try {
@@ -1419,40 +1544,21 @@ async function runAudit(args) {
                     b.details.add('the server builder disagrees with the browser');
                 }
             }
+            // Recorded from the drive, not synthesised: the rows are half of the approved fixture. Also
+            // written when a golden has none yet, so recording them costs no extra rig run.
+            if (args.updateGolden || !existsSync(goldenChatPath(seed))) {
+                writeFileSync(goldenChatPath(seed), JSON.stringify(chatMessagesOnDisk(FUZZ_CARD), null, 4));
+            }
             const findings = auditPrompt(hit.prompt, state, applied);
-            const goldenPath = join(GOLDEN_DIR, `${seed}.txt`);
-            let drift = null;
-            if (args.updateGolden) {
-                writeFileSync(goldenPath, hit.prompt);
-            } else if (existsSync(goldenPath)) {
-                // Masked, like the differential: {{roll}} and {{random}} are genuinely random per send,
-                // so a raw compare would report every run as drift and the check would mean nothing.
-                const approved = readFileSync(goldenPath, 'utf8');
-                const a = maskFuzz(approved);
-                const b = maskFuzz(hit.prompt);
-                if (a !== b) drift = diffReport(a, b);
-            }
-            for (const f of findings) {
-                const b = byCheck[f.check] = byCheck[f.check] || { seeds: new Set(), details: new Set() };
-                b.seeds.add(seed);
-                b.details.add(f.detail);
-            }
-            if (!findings.length && !drift) { process.stdout.write(`  seed ${seed}: CLEAN (${hit.prompt.length} bytes)\n`); results.push({ seed, clean: true }); continue; }
-            process.stdout.write(`  seed ${seed}: ${findings.length} finding(s) axes:[${state.axes.join(',')}]\n`);
-            for (const f of findings.slice(0, 12)) process.stdout.write(`      ${f.check}: ${f.detail}\n`);
-            if (findings.length > 12) process.stdout.write(`      ... ${findings.length - 12} more\n`);
-            if (drift) {
-                process.stdout.write(`      unapproved-change: the prompt differs from the approved snapshot\n--- approved   +++ now\n${drift.text}\n`);
-                const b = byCheck['unapproved-change'] = byCheck['unapproved-change'] || { seeds: new Set(), details: new Set() };
-                b.seeds.add(seed);
-                b.details.add('the prompt differs from the approved snapshot');
-            }
-            writeFileSync(join(args.data, `au-${seed}.txt`), hit.prompt);
-            results.push({ seed, clean: false, findings: findings.length, drift: Boolean(drift) });
+            const drift = compareGolden(args, seed, hit.prompt);
+            recordSeed({ args, seed, state, hit, findings, drift, byCheck, results });
         }
     } finally {
-        writeFileSync(settingsPath, JSON.stringify(baseSettings, null, 4));
-        for (const p of [join(argsData, 'default-user', 'characters', `${FUZZ_CARD}.png`), join(argsData, 'default-user', 'worlds', `${FUZZ_WORLD}.json`)]) if (existsSync(p)) rmSync(p, { force: true });
+        // The server seam wrote nothing to the data dir, so there is nothing to restore or remove.
+        if (!args.server) {
+            writeFileSync(settingsPath, JSON.stringify(baseSettings, null, 4));
+            for (const p of [join(argsData, 'default-user', 'characters', `${FUZZ_CARD}.png`), join(argsData, 'default-user', 'worlds', `${FUZZ_WORLD}.json`)]) if (existsSync(p)) rmSync(p, { force: true });
+        }
     }
 
     const clean = results.filter((r) => r.clean).length;
@@ -1469,7 +1575,7 @@ async function runAudit(args) {
     }
     if (args.updateGolden) process.stdout.write(`\napproved snapshots written to ${GOLDEN_DIR}\n`);
     process.stdout.write(`\n(per-seed prompts at ${args.data}/au-<seed>.txt)\n`);
-    await reportIntegrity(args.count, results.length, startedAt);
+    await reportIntegrity(args.count, results.length, startedAt, Boolean(args.server));
 }
 
 async function runFuzz(args) {
@@ -1560,16 +1666,19 @@ async function runFuzz(args) {
 
 /// Says whether the numbers above can be believed. A run whose services were killed mid-way still prints
 /// a tidy summary, so this sets a non-zero exit code to stop a killed run reading as a pass.
-async function reportIntegrity(requested, scored, startedAt) {
+async function reportIntegrity(requested, scored, startedAt, serviceless = false) {
     const elapsed = Math.round((Date.now() - startedAt) / 1000);
-    const down = await deadServices();
+    // A serviceless run has no rig to outlive and no corpses to score against; the only thing that
+    // can make its numbers partial is a seed it never reached.
+    const down = serviceless ? [] : await deadServices();
     const faults = [];
     if (scored < requested) faults.push(`TRUNCATED: scored ${scored} of ${requested} seeds`);
     if (down.length) faults.push(`SERVICE DOWN at end: ${down.join(', ')}`);
-    // The services die exactly at DEP_TTL, so a run that outlives it was scoring against corpses.
-    if (elapsed >= DEP_TTL) faults.push(`OUTLIVED the ${DEP_TTL}s service lifetime (ran ${elapsed}s); raise PARITY_DEP_TTL`);
+    if (!serviceless && elapsed >= DEP_TTL) faults.push(`OUTLIVED the ${DEP_TTL}s service lifetime (ran ${elapsed}s); raise PARITY_DEP_TTL`);
     process.stdout.write('\n########## RUN INTEGRITY ##########\n');
-    process.stdout.write(`elapsed ${elapsed}s of ${DEP_TTL}s service lifetime; seeds scored ${scored}/${requested}; services ${down.length ? `DOWN(${down.join(',')})` : 'all up'}\n`);
+    process.stdout.write(serviceless
+        ? `elapsed ${elapsed}s; seeds scored ${scored}/${requested}; no services (built through the server seam)\n`
+        : `elapsed ${elapsed}s of ${DEP_TTL}s service lifetime; seeds scored ${scored}/${requested}; services ${down.length ? `DOWN(${down.join(',')})` : 'all up'}\n`);
     if (faults.length === 0) {
         process.stdout.write('VERDICT: COMPLETE (every seed scored, services alive, inside the service lifetime)\n');
         return true;
@@ -1902,6 +2011,9 @@ async function main() {
         if (args.selfcheck && args.audit) { auditSelfCheck(); return; }
         if (args.selfcheck) { await runSelfCheck(args); return; }
         if (args.describe) { describeSeeds(args); return; }
+        // The server seam takes the scenario as data and answers in process: no frontend, no chrome,
+        // no fake backend, nothing to boot.
+        if (args.server && args.audit) { await runAudit(args); return; }
         await bootRig(args);
         if (args.probe) { await probe(args.probe); return; }
         if (args.timed) { await runTimedBattery(args); return; }

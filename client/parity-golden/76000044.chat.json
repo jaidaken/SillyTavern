@@ -1,0 +1,32 @@
+[
+    {
+        "name": "Tester",
+        "mes": "turn 0: more about the glade and its beasts and magic",
+        "is_user": true,
+        "is_system": false
+    },
+    {
+        "name": "ParityFuzz",
+        "mes": "ok",
+        "is_user": false,
+        "is_system": false
+    },
+    {
+        "name": "Tester",
+        "mes": "turn 1: more about the glade and its beasts and magic",
+        "is_user": true,
+        "is_system": false
+    },
+    {
+        "name": "ParityFuzz",
+        "mes": "ok",
+        "is_user": false,
+        "is_system": false
+    },
+    {
+        "name": "Tester",
+        "mes": "Tell me what you see in the glade with beasts and magic.",
+        "is_user": true,
+        "is_system": false
+    }
+]
