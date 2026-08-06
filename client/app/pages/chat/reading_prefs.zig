@@ -665,11 +665,40 @@ fn onSaveTimeout() void {
     saveNow();
 }
 
+/// Whoever is waiting for the settings to be on the server before it acts.
+var flush_waiter: ?*const fn () void = null;
+/// Whether a save is in flight, so a flush can wait for it instead of starting a second one.
+var save_in_flight: bool = false;
+
+/// Runs `next` once every queued settings change has reached the server.
+///
+/// The debounce is three seconds, and the SERVER now builds the prompt from the settings file, so a
+/// send fired inside that window would be built from the settings as they were BEFORE the change. A
+/// template picked and used immediately is the ordinary case, not a corner one. Nothing pending runs
+/// `next` straight away, so a send with clean settings costs nothing.
+pub fn flushThen(next: *const fn () void) void {
+    if (zx.platform.role != .client) return next();
+    if (pending_saves == 0 and !save_in_flight) return next();
+    // A second waiter would strand the first; the send path is the only caller and refuses overlap.
+    if (flush_waiter != null) return next();
+    flush_waiter = next;
+    // The queued timers still fire and find pending_saves at zero, which is a no-op by design.
+    pending_saves = 0;
+    if (!save_in_flight) saveNow();
+}
+
+fn releaseFlushWaiter() void {
+    const waiter = flush_waiter orelse return;
+    flush_waiter = null;
+    waiter();
+}
+
 /// Read-modify-write against the account settings: /api/settings/get, merge clientReadingPrefs into
 /// whatever is there, /api/settings/save. Merging (not replacing) is the point - the settings blob
 /// holds everything else the app owns.
 fn saveNow() void {
     if (zx.platform.role != .client) return;
+    save_in_flight = true;
     net.request("/api/settings/get", "{}", 0, onSettingsFetched, .{});
 }
 
@@ -677,15 +706,21 @@ fn onSettingsFetched(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     _ = tag;
     if (res == null or status < 200 or status >= 300) {
         log.warn("reading prefs save: settings fetch returned {d}", .{status});
+        save_in_flight = false;
+        releaseFlushWaiter();
         return;
     }
     const parsed = res.?.json(data.SettingsJson) catch {
         log.warn("reading prefs save: settings response is not an object", .{});
+        save_in_flight = false;
+        releaseFlushWaiter();
         return;
     };
     defer parsed.deinit();
     const body = mergedSettings(parsed.value.settings orelse "{}") catch |err| {
         log.err("reading prefs save: merge failed: {s}", .{@errorName(err)});
+        save_in_flight = false;
+        releaseFlushWaiter();
         return;
     };
     defer alloc.free(body);
@@ -695,6 +730,8 @@ fn onSettingsFetched(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
 fn onSettingsSaved(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     _ = tag;
     _ = res;
+    save_in_flight = false;
+    defer releaseFlushWaiter();
     if (status < 200 or status >= 300) {
         log.warn("reading prefs save failed: {d}", .{status});
         return;

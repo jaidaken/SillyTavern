@@ -33,6 +33,7 @@ const wi_actions = @import("../setup/world_info_actions.zig"); // w3-wi
 const wi_store = @import("../setup/world_info.zig"); // w3-wi-engine
 const wi_timed = @import("../setup/world_info_timed.zig"); // wi-timed: the chat's sticky/cooldown state
 const pager = @import("../chat/pager.zig");
+const reading_prefs = @import("../chat/reading_prefs.zig");
 const group_send = @import("./group_send.zig"); // w3-grp
 const stream_drive = @import("../platform/stream_drive.zig"); // C2: Zig-owned SSE lifecycle
 const group_store = @import("./group_store.zig"); // w3-chatref
@@ -1563,12 +1564,14 @@ pub fn sendMessage() void {
         chars_log.err("send: could not stash the send context", .{});
         return;
     }
-    // The SERVER assembles the prompt now, and it assembles from the chat FILE, so the user's turn has
-    // to be in that file before the send goes out. The append's own callback is what says it is.
+    // The SERVER assembles the prompt now, from the chat FILE and the settings FILE, so both have to
+    // be current before the send goes out: the user's turn via the append's own callback, and any
+    // queued settings change via the saver's flush (its debounce is three seconds, long enough that a
+    // template picked and used immediately would otherwise build with the previous one).
     if (awaiting_append) {
         pend_send_on_append = true;
     } else {
-        launchServerSend();
+        reading_prefs.flushThen(&launchServerSend);
     }
 }
 
@@ -1846,7 +1849,7 @@ fn onAppendDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
     // The user's turn is in the file, so the prompt the server builds will contain it.
     if (tag != 0 and pend_send_on_append) {
         pend_send_on_append = false;
-        launchServerSend();
+        reading_prefs.flushThen(&launchServerSend);
     }
 }
 
@@ -1939,7 +1942,7 @@ pub fn launchGroupMember(m: @import("./group_rotation.zig").Member) bool {
     setOwned(&pend_user_text, "");
     // The rotation driver persisted the user's turn before any member launched, so this one has
     // nothing to wait for.
-    launchServerSend();
+    reading_prefs.flushThen(&launchServerSend);
     return true;
 }
 
