@@ -631,8 +631,22 @@ fn cardDepthPrompt(obj: *const std.json.ObjectMap) DepthPrompt {
     if (dp != .object) return out;
     out.prompt = strOf(dp.object.get("prompt"));
     out.depth = intOf(dp.object.get("depth"), authors_note.default_depth);
-    out.role = authors_note.Role.fromInt(intOf(dp.object.get("role"), 0)) orelse .system;
+    // A card writes this role as a NAME ("assistant"), not an ordinal. Reading it as an integer only
+    // silently made every card note a system note, which puts it in a different bucket at the same
+    // depth and reorders the injection against world info (char_api.zig:1339 does both).
+    if (dp.object.get("role")) |v| out.role = switch (v) {
+        .integer => |i| authors_note.Role.fromInt(i) orelse .system,
+        .float => |f| authors_note.Role.fromInt(@intFromFloat(f)) orelse .system,
+        .string => |name| roleFromName(name),
+        else => .system,
+    };
     return out;
+}
+
+fn roleFromName(s: []const u8) authors_note.Role {
+    if (std.ascii.eqlIgnoreCase(s, "user")) return .user;
+    if (std.ascii.eqlIgnoreCase(s, "assistant")) return .assistant;
+    return .system;
 }
 
 fn cardAltGreetings(a: Allocator, obj: *const std.json.ObjectMap) Allocator.Error![]const []const u8 {
