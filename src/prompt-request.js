@@ -44,7 +44,7 @@ export const PROMPT_WINDOW = 300;
  * decides from `at_head`.
  * @param {string} filePath Resolved chat file path.
  * @param {number} [limit] Keep at most this many trailing turns.
- * @returns {Promise<{messages: object[], chat_metadata: object, at_head: boolean}>}
+ * @returns {Promise<{messages: object[], chat_metadata: any, at_head: boolean}>}
  */
 export async function readChatForPrompt(filePath, limit = PROMPT_WINDOW) {
     if (!filePath || !fs.existsSync(filePath)) {
@@ -142,6 +142,11 @@ export async function buildPromptRequest({ charactersPath, worldsPath, settingsP
     const settings = readSettings(settingsPath);
     const card = await readCard(charactersPath, chat?.avatar_url ?? '');
     const { messages, chat_metadata, at_head } = await readChatForPrompt(chatFilePath);
+    // Three ways a book reaches a send, and all three have to be here: the chat's own link (written
+    // into its metadata by the world-info panel), the card's, and the global selection.
+    const chatLinked = typeof chat_metadata?.world_info === 'string' && chat_metadata.world_info
+        ? [chat_metadata.world_info]
+        : [];
     const linked = card?.data?.extensions?.world ? [card.data.extensions.world] : [];
     const globals = settings?.world_info_settings?.world_info?.globalSelect ?? [];
     return {
@@ -149,7 +154,7 @@ export async function buildPromptRequest({ charactersPath, worldsPath, settingsP
         messages,
         settings,
         chat_metadata,
-        world: readWorld(worldsPath, [...linked, ...globals]),
+        world: readWorld(worldsPath, [...chatLinked, ...linked, ...globals]),
         chat,
         at_head,
         browser,

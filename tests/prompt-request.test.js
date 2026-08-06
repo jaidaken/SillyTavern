@@ -125,6 +125,28 @@ describe('buildPromptRequest', () => {
         expect(request.card).toEqual({});
     });
 
+    test('a book linked to the chat itself loads, ahead of the global selection', async () => {
+        fs.writeFileSync(path.join(root, 'settings.json'), JSON.stringify({
+            world_info_settings: { world_info: { globalSelect: ['global'] } },
+        }));
+        fs.writeFileSync(path.join(root, 'worlds', 'global.json'), JSON.stringify({ entries: { 1: { uid: 1, content: 'from global' }, 2: { uid: 2, content: 'only global' } } }));
+        fs.writeFileSync(path.join(root, 'worlds', 'chatbook.json'), JSON.stringify({ entries: { 1: { uid: 1, content: 'from the chat link' } } }));
+        // The world-info panel writes a chat-scope link here; without reading it, a book attached to
+        // this conversation never reaches the prompt at all.
+        const chatFilePath = writeChat('Ada', { chat_metadata: { world_info: 'chatbook' } }, []);
+
+        const request = await buildPromptRequest({
+            charactersPath: path.join(root, 'characters'),
+            worldsPath: path.join(root, 'worlds'),
+            settingsPath: path.join(root, 'settings.json'),
+            chatFilePath,
+            chat: { avatar_url: 'Ada.png', file_name: 'Ada', group_id: null },
+        });
+
+        expect(request.world.entries[1].content).toBe('from the chat link');
+        expect(request.world.entries[2].content).toBe('only global');
+    });
+
     test('a card linking its own book puts that book ahead of the global selection', async () => {
         fs.writeFileSync(path.join(root, 'settings.json'), JSON.stringify({
             world_info_settings: { world_info: { globalSelect: ['global'] } },
