@@ -14,9 +14,9 @@ const decoder = new TextDecoder();
  * @param {object} script What each entry point answers with.
  * @returns {object} The stub and its call log.
  */
-function createStub({ pieces, fit, piecesRaw = null, fitRaw = null }) {
+function createStub({ pieces, fit, entries = { entries: [] }, piecesRaw = null, fitRaw = null, entriesRaw = null }) {
     const memory = new WebAssembly.Memory({ initial: 1 });
-    const calls = { alloc: [], free: [], pieces: [], fit: [] };
+    const calls = { alloc: [], free: [], entries: [], pieces: [], fit: [] };
     let next = 16;
 
     const alloc = (len) => {
@@ -37,6 +37,10 @@ function createStub({ pieces, fit, piecesRaw = null, fitRaw = null }) {
         memory,
         alloc,
         free: (ptr, len) => calls.free.push({ ptr, len }),
+        entries: (ptr, len) => {
+            calls.entries.push(readInput(ptr, len));
+            return entriesRaw !== null ? entriesRaw : writeResult(entries);
+        },
         pieces: (ptr, len) => {
             calls.pieces.push(readInput(ptr, len));
             return piecesRaw !== null ? piecesRaw : writeResult(pieces);
@@ -89,8 +93,16 @@ describe('assemblePrompt', () => {
         await assemblePrompt(REQUEST, { countTokens: text => text.length, module });
 
         expect(calls.fit[0].costs).toEqual(['system prompt'.length, 'first message'.length, 'raw string piece'.length]);
-        expect(calls.fit[0].browser).toEqual(REQUEST.browser);
-        expect(calls.pieces[0]).toEqual(REQUEST);
+        // The host stamps its own clock and dice seed onto browser; everything the caller sent survives.
+        for (const [key, value] of Object.entries(REQUEST.browser)) {
+            expect(calls.fit[0].browser[key]).toEqual(value);
+        }
+        expect(typeof calls.fit[0].browser.now_ms).toBe('number');
+        expect(typeof calls.fit[0].browser.seed).toBe('number');
+        // pieces sees the caller's request plus the lore costs and the stamped browser keys, never `costs`.
+        expect(calls.pieces[0].card).toEqual(REQUEST.card);
+        expect(calls.pieces[0].messages).toEqual(REQUEST.messages);
+        expect(calls.pieces[0].wi_entry_costs).toEqual([]);
         expect(calls.pieces[0].costs).toBeUndefined();
     });
 
@@ -110,7 +122,8 @@ describe('assemblePrompt', () => {
 
         await assemblePrompt(REQUEST, { countTokens: text => text.length, module });
 
-        expect(calls.alloc.length).toBe(4);
+        // Three calls now: entries, pieces, fit. Two allocations each, the input and the result.
+        expect(calls.alloc.length).toBe(6);
         expect(calls.free).toEqual(expect.arrayContaining(calls.alloc));
         expect(calls.free).toHaveLength(calls.alloc.length);
     });
@@ -133,7 +146,7 @@ describe('assemblePrompt', () => {
 
     test('rejects a module missing every required export, naming each one', async () => {
         await expect(assemblePrompt(REQUEST, { countTokens: () => 1, module: {} }))
-            .rejects.toThrow('Prompt wasm (supplied module) is missing required export(s): alloc, free, pieces, fit, memory');
+            .rejects.toThrow('Prompt wasm (supplied module) is missing required export(s): alloc, free, entries, pieces, fit, memory');
     });
 
     test('rejects a module missing only fit', async () => {
@@ -236,7 +249,7 @@ describe('loadPromptWasm', () => {
         await fs.promises.writeFile(empty, Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]));
 
         await expect(loadPromptWasm(empty))
-            .rejects.toThrow(`Prompt wasm (${empty}) is missing required export(s): alloc, free, pieces, fit, memory`);
+            .rejects.toThrow(`Prompt wasm (${empty}) is missing required export(s): alloc, free, entries, pieces, fit, memory`);
     });
 
     test('does not cache a failure, so a fixed module loads on the next call', async () => {

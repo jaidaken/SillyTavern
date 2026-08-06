@@ -18,9 +18,10 @@
  */
 
 import fs from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-const REQUIRED_EXPORTS = ['alloc', 'free', 'pieces', 'fit'];
+const REQUIRED_EXPORTS = ['alloc', 'free', 'entries', 'pieces', 'fit'];
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -208,7 +209,34 @@ export async function assemblePrompt(request, { countTokens, module = null, wasm
     }
     const exports = module ? assertAbi(module, 'supplied module') : await loadPromptWasm(wasmPath);
 
-    const listed = callEntry(exports, 'pieces', request);
+    // The clock and the dice seed are the HOST's to supply, not the browser's. A stateless service
+    // cannot read a clock without the two build calls disagreeing, and a seed derived from the request
+    // would make a swipe reroll identically when a re-draw per send is the intended behaviour. One
+    // seed per assembly, shared by every call below, is deterministic within a send and fresh between.
+    const seeded = {
+        ...request,
+        browser: {
+            ...(request.browser ?? {}),
+            now_ms: request.browser?.now_ms ?? Date.now(),
+            seed: request.browser?.seed ?? Number(randomBytes(6).readUIntBE(0, 6)),
+        },
+    };
+
+    // Lore is budgeted in tokens, so its candidate texts are counted before assembly decides which
+    // entries fit. Without this the service falls back to counting bytes for the whole budget.
+    const listedEntries = callEntry(exports, 'entries', seeded);
+    const entryTexts = Array.isArray(listedEntries?.entries) ? listedEntries.entries : [];
+    const wiEntryCosts = [];
+    for (let index = 0; index < entryTexts.length; index++) {
+        const cost = await countTokens(String(entryTexts[index]));
+        if (!Number.isFinite(cost)) {
+            throw new Error(`countTokens returned a non-numeric cost for lore entry ${index}: ${String(cost)}`);
+        }
+        wiEntryCosts.push(cost);
+    }
+    const withLore = { ...seeded, wi_entry_costs: wiEntryCosts };
+
+    const listed = callEntry(exports, 'pieces', withLore);
     const pieces = listed?.pieces;
     if (!Array.isArray(pieces)) {
         throw new Error(`Prompt wasm pieces returned no pieces array (got ${typeof pieces}).`);
@@ -222,7 +250,7 @@ export async function assemblePrompt(request, { countTokens, module = null, wasm
         costs.push(cost);
     }
 
-    const fitted = callEntry(exports, 'fit', { ...request, costs });
+    const fitted = callEntry(exports, 'fit', { ...withLore, costs });
     if (typeof fitted?.prompt !== 'string') {
         throw new Error(`Prompt wasm fit returned no prompt string (got ${typeof fitted?.prompt}).`);
     }

@@ -73,6 +73,13 @@ export fn pieces(ptr: [*]const u8, len: usize) u64 {
     return pack(out);
 }
 
+/// The lore texts the budget will spend, so the host can count their tokens and hand them back on the
+/// `pieces` call. Same packed shape as every other entry point.
+export fn entries(ptr: [*]const u8, len: usize) u64 {
+    const out = entriesJson(host_gpa, ptr[0..len]) catch return packConst(oom_json);
+    return pack(out);
+}
+
 /// Walk the budget over the same request plus a `costs` array parallel to the pieces, and return
 /// `{prompt}` packed as pointer+length.
 export fn fit(ptr: [*]const u8, len: usize) u64 {
@@ -124,6 +131,56 @@ pub fn fitJson(gpa: Allocator, input: []const u8) Allocator.Error![]u8 {
 
 fn errorJson(gpa: Allocator, name: []const u8) Allocator.Error![]u8 {
     return std.json.Stringify.valueAlloc(gpa, .{ .@"error" = name }, .{});
+}
+
+/// The world-info store for a request, hydrated the same way for every entry point so `entries` and
+/// `pieces` can never disagree about which lore is in play.
+fn loadStore(a: Allocator, doc: std.json.ObjectMap, settings_str: []const u8) RequestError!wi.WorldInfoStore {
+    var store = wi.WorldInfoStore.init(a);
+    store.setFromSettings(settings_str);
+    if (doc.get("world")) |world| if (world == .object) {
+        const book = try std.json.Stringify.valueAlloc(a, world, .{});
+        // A book the request could not express (no `entries` object) yields no lore rather than
+        // failing the whole send, matching how the browser degrades a bad book file.
+        store.loadBookFromJson(request_book_id, book) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => {},
+        };
+        _ = store.toggleGlobal(request_book_id) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+    };
+    return store;
+}
+
+/// The candidate lore for a request, in the order the budget will spend it.
+fn candidates(a: Allocator, doc: std.json.ObjectMap) RequestError![]const wi.Entry {
+    const settings_str = try jsonText(a, doc.get("settings"));
+    var store = try loadStore(a, doc, settings_str);
+    return store.collectActive(a);
+}
+
+pub fn entriesJson(gpa: Allocator, input: []const u8) Allocator.Error![]u8 {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const body = entriesBody(a, input) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return errorJson(gpa, @errorName(err)),
+    };
+    return gpa.dupe(u8, body);
+}
+
+/// The candidate lore texts in activation order, each already carrying the newline stock joins entries
+/// with, so the count the host hands back is the exact cost the budget spends.
+fn entriesBody(a: Allocator, input: []const u8) RequestError![]u8 {
+    const doc = try parseDoc(a, input);
+    const cand = try candidates(a, doc);
+    var list = std.json.Array.init(a);
+    for (cand) |e| list.append(.{ .string = try std.fmt.allocPrint(a, "{s}\n", .{e.content}) }) catch return error.OutOfMemory;
+    var root: std.json.ObjectMap = .empty;
+    try root.put(a, "entries", .{ .array = list });
+    return std.json.Stringify.valueAlloc(a, Value{ .object = root }, .{});
 }
 
 fn piecesBody(a: Allocator, input: []const u8) RequestError![]u8 {
@@ -285,29 +342,29 @@ fn build(a: Allocator, doc: std.json.ObjectMap) RequestError!Built {
         }
     };
 
-    var store = wi.WorldInfoStore.init(a);
-    store.setFromSettings(settings_str);
-    if (doc.get("world")) |world| if (world == .object) {
-        const book = try std.json.Stringify.valueAlloc(a, world, .{});
-        // A book the request could not express (no `entries` object) yields no lore rather than
-        // failing the whole send, matching how the browser degrades a bad book file.
-        store.loadBookFromJson(request_book_id, book) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => {},
-        };
-        _ = store.toggleGlobal(request_book_id) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-        };
-    };
+    var store = try loadStore(a, doc, settings_str);
     const wi_entries = try store.collectActive(a);
 
-    // No per-entry token counts cross the boundary, so the lore slice is byte-budgeted on both the
-    // `pieces` and the `fit` call. Mixing a token budget with byte costs is worse than either
-    // (char_api.zig:2237), and costing lore by bytes on both calls keeps the two agreeing.
+    // Stock counts the lore budget in TOKENS on both halves (world-info.js:4622 and :4624). The host
+    // gets those counts from the `entries` call and hands them back here; without them the whole
+    // budget degrades to bytes TOGETHER, because a token budget spent against byte costs is worse
+    // than either unit alone (char_api.zig).
+    const wi_costs: []const usize = blk: {
+        const arr = doc.get("wi_entry_costs") orelse break :blk &.{};
+        if (arr != .array) break :blk &.{};
+        if (arr.array.items.len != wi_entries.len) break :blk &.{};
+        const out = try a.alloc(usize, arr.array.items.len);
+        for (arr.array.items, 0..) |v, i| out[i] = @intCast(@max(0, intOf(@as(?Value, v), 0)));
+        break :blk out;
+    };
     const wi_budget = blk: {
-        var b = (generate.promptCharBudget(conn) *| @as(usize, @intCast(@max(0, store.budget)))) / 100;
+        const total = if (wi_costs.len > 0) generate.promptTokenBudget(conn) else generate.promptCharBudget(conn);
+        var b = (total *| @as(usize, @intCast(@max(0, store.budget)))) / 100;
         if (store.budget_cap > 0) {
-            const cap = generate.tokensToChars(@intCast(store.budget_cap));
+            const cap = if (wi_costs.len > 0)
+                @as(usize, @intCast(store.budget_cap))
+            else
+                generate.tokensToChars(@intCast(store.budget_cap));
             if (b > cap) b = cap;
         }
         break :blk b;
@@ -316,11 +373,16 @@ fn build(a: Allocator, doc: std.json.ObjectMap) RequestError!Built {
     const anchors = noteAnchors(note);
     const effective_system = generate.effectiveSystem(tpl.sysprompt_enabled, tpl.prefer_character_prompt, card_system, tpl.system_prompt);
 
-    // The browser draws its probability rolls from a clock-seeded PRNG. A stateless service cannot:
-    // `pieces` and `fit` build twice and must activate the same lore both times, so the seed comes
-    // from the request itself.
+    // `pieces` and `fit` build twice and must activate the same lore both times, so the seed cannot be
+    // a clock read here. The HOST supplies one fresh seed per generation instead: identical across the
+    // two calls of one send, different on the next send AND on a swipe, which is what a re-draw per
+    // build means. Deriving it from the request would make a swipe reroll identically.
     const prng = try a.create(std.Random.DefaultPrng);
-    prng.* = std.Random.DefaultPrng.init(requestSeed(chat_file, generation_type, rotation_index, history.items.len));
+    const host_seed = intOf(browser_obj.get("seed"), 0);
+    prng.* = std.Random.DefaultPrng.init(if (host_seed != 0)
+        @bitCast(host_seed)
+    else
+        requestSeed(chat_file, generation_type, rotation_index, history.items.len));
 
     var ctx = generate.Ctx{
         .chat = .{ .messages = chat_msgs.items },
@@ -371,6 +433,7 @@ fn build(a: Allocator, doc: std.json.ObjectMap) RequestError!Built {
         .char_note = .{ .prompt = depth_prompt.prompt, .depth = depth_prompt.depth, .role = depth_prompt.role },
         .jailbreak = jailbreak,
         .wi_entries = wi_entries,
+        .wi_entry_costs = wi_costs,
         .wi_scan_depth = @intCast(@max(0, store.scan_depth)),
         .wi_budget = wi_budget,
         .wi_recursive = store.recursive,
