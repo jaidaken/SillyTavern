@@ -15,6 +15,7 @@ import hashlib  # w3-grp
 import http.server
 import json
 import os
+import subprocess
 import pathlib
 import re
 import signal
@@ -1418,9 +1419,82 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return
         Handler.gen_finish(gid, "done")
 
+    # ---- server-side prompt assembly -----------------------------------------------------------
+    #
+    # SillyTavern builds the prompt itself when the start body carries none, so a mock that skipped it
+    # would let the gate pass a client that never gets a prompt. This runs the REAL builder through a
+    # small node bridge, fed from the state this mock already serves the client.
+
+    @classmethod
+    def card_for(cls, avatar_url):
+        if cls.saved_card is not None:
+            return cls.saved_card
+        want = str(avatar_url or "")
+        for c in _mock_characters(cls.mock_favs):
+            if c.get("avatar") == want:
+                return dict(c)
+        return {}
+
+    @classmethod
+    def assembly_world(cls):
+        entries = {}
+        for _fid, book in sorted(cls.worldinfo_books().items()):
+            for key, value in (book.get("entries") or {}).items():
+                if key not in entries:
+                    entries[key] = value
+        return {"entries": entries}
+
+    @classmethod
+    def assemble_prompt(cls, req):
+        chat = req.get("chat") or {}
+        if chat.get("group_id"):
+            msgs = [dict(m) for m in cls.group_appended]
+            meta = dict(cls.group_metadata())
+        else:
+            msgs = [dict(m) for m in cls.reader_current()] + [dict(m) for m in cls.appended_messages]
+            meta = dict(cls.chat_metadata())
+        request = {
+            "card": cls.card_for(chat.get("avatar_url")),
+            "messages": [
+                {
+                    "name": m.get("name", ""),
+                    "mes": m.get("mes", ""),
+                    "is_user": bool(m.get("is_user")),
+                    "is_system": bool(m.get("is_system")),
+                }
+                for m in msgs
+            ],
+            "settings": cls.settings_blob(),
+            "chat_metadata": meta,
+            "world": cls.assembly_world(),
+            "chat": chat,
+            "at_head": True,
+            "browser": req.get("browser") or {},
+        }
+        try:
+            out = subprocess.run(
+                ["node", str(pathlib.Path(__file__).resolve().parent / "assemble-for-mock.mjs")],
+                input=json.dumps(request), capture_output=True, text=True, timeout=30,
+            )
+            if out.returncode != 0:
+                sys.stderr.write("mock assemble failed: %s\n" % (out.stderr or out.stdout)[:400])
+                return None
+            return json.loads(out.stdout)
+        except Exception as exc:  # a mock that cannot assemble must say so, not answer an empty prompt
+            sys.stderr.write("mock assemble error: %s\n" % exc)
+            return None
+
     def gen_start(self, req):
         chat = req.get("chat") or {}
         params = req.get("generate") or {}
+        # No prompt in the body means the server assembles one, which is what the real route does.
+        if not params.get("prompt"):
+            built = Handler.assemble_prompt(req)
+            if built and not built.get("error"):
+                params["prompt"] = built.get("prompt", "")
+                if built.get("stop"):
+                    params["stop"] = built["stop"]
+                    params["stopping_strings"] = built["stop"]
         Handler.last_generate_server = params.get("api_server")
         Handler.last_generate_prompt = params.get("prompt")
         Handler.last_generate_body = json.dumps(params)

@@ -32,15 +32,23 @@ export async function readCard(charactersPath, avatarUrl) {
 }
 
 /**
+ * How many trailing turns a prompt is built from. No budget can reach past this many messages, and
+ * every one of them is costed with the tokenizer, so reading a whole long chat would spend thousands
+ * of encode calls to trim almost all of them away. Same window the browser used.
+ */
+export const PROMPT_WINDOW = 300;
+
+/**
  * The turns and the header metadata of a chat, in the shape the builder takes. The greeting is NOT
  * synthesised here: whether to rebuild it depends on reaching the head of the file, which the builder
  * decides from `at_head`.
  * @param {string} filePath Resolved chat file path.
- * @returns {Promise<{messages: object[], chat_metadata: object}>}
+ * @param {number} [limit] Keep at most this many trailing turns.
+ * @returns {Promise<{messages: object[], chat_metadata: object, at_head: boolean}>}
  */
-export async function readChatForPrompt(filePath) {
+export async function readChatForPrompt(filePath, limit = PROMPT_WINDOW) {
     if (!filePath || !fs.existsSync(filePath)) {
-        return { messages: [], chat_metadata: {} };
+        return { messages: [], chat_metadata: {}, at_head: true };
     }
     // Parsed here rather than through the chat endpoint: importing that module pulls in the config
     // bootstrap, which a unit test has no reason to stand up to read a jsonl file.
@@ -68,7 +76,12 @@ export async function readChatForPrompt(filePath) {
             is_system: Boolean(row.is_system),
         });
     }
-    return { messages, chat_metadata };
+    // at_head says whether the window starts at the file's first turn, which is what tells the builder
+    // to rebuild the greeting. A trimmed window does not, and a greeting added mid-chat would be wrong.
+    if (limit > 0 && messages.length > limit) {
+        return { messages: messages.slice(-limit), chat_metadata, at_head: false };
+    }
+    return { messages, chat_metadata, at_head: true };
 }
 
 /**
@@ -128,7 +141,7 @@ export function readWorld(worldsPath, names) {
 export async function buildPromptRequest({ charactersPath, worldsPath, settingsPath, chatFilePath, chat, browser = {} }) {
     const settings = readSettings(settingsPath);
     const card = await readCard(charactersPath, chat?.avatar_url ?? '');
-    const { messages, chat_metadata } = await readChatForPrompt(chatFilePath);
+    const { messages, chat_metadata, at_head } = await readChatForPrompt(chatFilePath);
     const linked = card?.data?.extensions?.world ? [card.data.extensions.world] : [];
     const globals = settings?.world_info_settings?.world_info?.globalSelect ?? [];
     return {
@@ -138,8 +151,7 @@ export async function buildPromptRequest({ charactersPath, worldsPath, settingsP
         chat_metadata,
         world: readWorld(worldsPath, [...linked, ...globals]),
         chat,
-        // Everything read above is the whole window, so the builder is always at the head of the file.
-        at_head: true,
+        at_head,
         browser,
     };
 }

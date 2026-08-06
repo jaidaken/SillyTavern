@@ -219,6 +219,8 @@ fn freePending() void {
         f.* = &.{};
     }
     freeAltGreetings(&pend_alt_greetings);
+    // Cleared with the context it belongs to: a stale flag would fire a send against a freed stash.
+    pend_send_on_append = false;
     pend_active = false;
 }
 
@@ -1552,6 +1554,9 @@ pub fn sendMessage() void {
         alloc.free(fname);
     }
     send_seq = chat_load_seq;
+    // appendTurn only issues a request when there is a chat file to append to; anything else and no
+    // callback is coming, so the send must not sit waiting for one.
+    const awaiting_append = !is_empty and send_file.len > 0 and send_avatar.len > 0;
     if (!is_empty) appendTurn(user_name, text, true, "");
 
     if (!stashSend(conn, c, persona, user_name, text, char_avatar orelse "")) {
@@ -1559,12 +1564,11 @@ pub fn sendMessage() void {
         return;
     }
     // The SERVER assembles the prompt now, and it assembles from the chat FILE, so the user's turn has
-    // to be in that file before the send goes out. The append's own callback is what says it is; an
-    // empty composer appended nothing and has nothing to wait for.
-    if (is_empty) {
-        launchServerSend();
-    } else {
+    // to be in that file before the send goes out. The append's own callback is what says it is.
+    if (awaiting_append) {
         pend_send_on_append = true;
+    } else {
+        launchServerSend();
     }
 }
 

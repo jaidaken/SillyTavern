@@ -81,7 +81,19 @@ describe('readChatForPrompt', () => {
 
     test('a missing chat file is an empty window rather than a failure', async () => {
         await expect(readChatForPrompt(path.join(root, 'chats', 'nope.jsonl')))
-            .resolves.toEqual({ messages: [], chat_metadata: {} });
+            .resolves.toEqual({ messages: [], chat_metadata: {}, at_head: true });
+    });
+
+    test('a chat longer than the window keeps its last turns and says it is not at the head', async () => {
+        const rows = Array.from({ length: 12 }, (_, i) => ({ name: 'Jamie', mes: `turn ${i}`, is_user: true }));
+        const file = writeChat('Ada', { chat_metadata: {} }, rows);
+
+        const windowed = await readChatForPrompt(file, 5);
+
+        expect(windowed.messages.map(m => m.mes)).toEqual(['turn 7', 'turn 8', 'turn 9', 'turn 10', 'turn 11']);
+        // The greeting belongs at the head of a chat; a trimmed window has no head to put it at.
+        expect(windowed.at_head).toBe(false);
+        expect((await readChatForPrompt(file, 100)).at_head).toBe(true);
     });
 });
 
