@@ -17,7 +17,6 @@ const uploads = @import("../platform/uploads.zig");
 const data = @import("./char_data.zig");
 const macro_chat = @import("../setup/macro_chat.zig");
 const generate = @import("../setup/generate.zig");
-const tokenizer = @import("../setup/tokenizer.zig");
 const templates = @import("../setup/templates.zig");
 const authors_note = @import("../setup/authors_note.zig");
 const an_state = @import("../setup/authors_note_state.zig");
@@ -104,12 +103,13 @@ var pend_timed_persist: bool = false;
 
 // ---- pending send (invariant 2) -------------------------------------------------------------
 
-// net has no per-request ctx: the send context is stashed OWNED and consumed by onPromptWindowDone.
+// net has no per-request ctx: the send context is stashed OWNED and consumed when the send goes out.
 var pend_active: bool = false;
 var pend_conn: ?generate.Connection = null;
 /// The solo avatar / group id the pending prompt-window fetch is for, held across the world-info warm.
-var pend_window_avatar: []u8 = &.{};
-var pend_group_window_id: []u8 = &.{};
+/// A solo send waiting for its user turn to reach the chat file. The server builds the prompt from
+/// that file, so sending before the append lands would build one missing the message being replied to.
+var pend_send_on_append: bool = false;
 var pend_char_name: []u8 = &.{};
 var pend_char_avatar: []u8 = &.{};
 var pend_user_name: []u8 = &.{};
@@ -173,8 +173,8 @@ fn stashConn(conn: generate.Connection) bool {
 
 /// The send's OWN copy of the templates and the chat's author's note, in an arena this file owns.
 ///
-/// A send is not instant: the prompt window is a fetch RTT, and a settings re-mine or a template
-/// edit during it frees the live set (config_state swaps its arena) under the in-flight build. So the
+/// A send is not instant: it waits for the user's turn to persist, and a settings re-mine or a
+/// template edit during that gap frees the live set (config_state swaps its arena) under it. So the
 /// templates are duped at stash time exactly as stashConn dupes the connection's URLs, and the arena
 /// is dropped in freePending.
 var pend_tpl_arena: ?std.heap.ArenaAllocator = null;
@@ -219,10 +219,6 @@ fn freePending() void {
         f.* = &.{};
     }
     freeAltGreetings(&pend_alt_greetings);
-    inline for (.{ &pend_window_avatar, &pend_group_window_id }) |f| {
-        if (f.len > 0) alloc.free(f.*);
-        f.* = &.{};
-    }
     pend_active = false;
 }
 
@@ -1492,10 +1488,9 @@ fn deepField(c: char_store.Character, shallow: []const u8, deep: []const u8) []c
     return shallow;
 }
 
-/// Send the composer's text: append the user turn to the display, persist it, then fetch a budgeted
-/// prompt window from the spine (NOT the display store) and open the streaming generate through the JS
-/// pump (ZX16). The prompt window is a separate `/api/chats/get` fetch so a tail-only display never
-/// bounds what the model sees (invariant 2); onPromptWindowDone assembles + dispatches once it lands.
+/// Send the composer's text: append the user turn to the display, persist it, and open the streaming
+/// generate once it lands. The SERVER assembles the prompt from the chat file, so a tail-only display
+/// never bounds what the model sees (invariant 2) and no window fetch is needed here.
 pub fn sendMessage() void {
     if (zx.platform.role != .client) return;
     // w3-chatref: an open group routes the composer into the rotation; the solo path below is
@@ -1563,28 +1558,34 @@ pub fn sendMessage() void {
         chars_log.err("send: could not stash the send context", .{});
         return;
     }
-    // The WI entry token counts are warmed first so activation can spend a token budget; the window
-    // fetch is what its completion continues into.
-    setOwned(&pend_window_avatar, c.avatar);
-    beginWiWarm(&launchSoloPromptWindow);
+    // The SERVER assembles the prompt now, and it assembles from the chat FILE, so the user's turn has
+    // to be in that file before the send goes out. The append's own callback is what says it is; an
+    // empty composer appended nothing and has nothing to wait for.
+    if (is_empty) {
+        launchServerSend();
+    } else {
+        pend_send_on_append = true;
+    }
 }
 
-/// Fetch the prompt window for the stashed solo send. Runs after the world-info warm, never before.
-fn launchSoloPromptWindow() void {
-    // A send cancelled during the warm has nothing left to fetch a window for.
-    if (!pend_active) return;
-    // No file yet: degrade to greeting + user turn (a null page) rather than fetch a malformed body.
-    if (send_file.len == 0) {
-        onPromptWindowDone(0, 0, null);
-        return;
-    }
-    const ref = data.ChatRef{ .solo = .{ .avatar = pend_window_avatar, .file = send_file } }; // w3-chatref: one page-body path
-    const win_body = data.pageBody(alloc, ref, .{ .limit = pager.PROMPT_LIMIT }) catch {
-        freePending();
+/// Starts a server-assembled generation from the stashed send context. The prompt is empty and so is
+/// the stop set: an absent prompt is what tells /api/generation/start to build one, and it answers
+/// with the stop sequences the template implies. Every input it needs that only a browser knows rides
+/// the `browser` object in the start body.
+fn launchServerSend() void {
+    defer endSend();
+    const conn = pend_conn orelse return;
+    const body = generate.buildRequestBody(alloc, conn, "", &.{}) catch {
+        net_log.warn("send: request-body build failed", .{});
         return;
     };
-    defer alloc.free(win_body);
-    net.request(ref.url(), win_body, 0, onPromptWindowDone, .{});
+    defer alloc.free(body);
+    const start_body = buildStartBody(body) orelse {
+        net_log.warn("send: start-body build failed", .{});
+        return;
+    };
+    defer alloc.free(start_body);
+    stream_drive.send(pend_char_name, pend_char_avatar, start_body);
 }
 
 /// w3-chatref: the composer's group branch. Builds the rotation definition from the open group and
@@ -1675,113 +1676,10 @@ fn noteAnchors(note: authors_note.Note) Anchors {
     };
 }
 
-// ---- token counting: each piece counted independently (classic script.js:4890), fetch failure
-// degrades to the byte-length char budget so a send never hangs. ----
-
-/// Persists across sends so a steady-state send re-fetches only the turns new since the last one, like
-/// the classic tokenCache. Keyed by tokenizer identity (and model for the remote tier).
-var tok_cache: tokenizer.TokenCache = .{};
-
-/// Concurrent encode fetches in flight. net.zig has 8 slots; this leaves headroom for other traffic
-/// while still overlapping round-trips the way the classic client's async getTokenCountAsync calls do.
-const TOK_CONCURRENCY: usize = 4;
-
-/// Bumped per job so a straggler encode-completion from an aborted send (a token-fetch failure ends the
-/// job via finishByteFallback while its other fetches stay inflight; net.zig does not cancel them) cannot
-/// write into a NEW job's arrays. The epoch rides the fetch tag; a mismatch is ignored wholesale.
-var tok_epoch_seq: u64 = 0;
-
-/// Bits reserved for the piece index in the fetch tag; the epoch takes the rest. A job has 1 + injections
-/// + history pieces, far under 2^20, so 20 bits is ample.
-const TOK_INDEX_BITS: u6 = 20;
-const TOK_INDEX_MASK: u64 = (1 << TOK_INDEX_BITS) - 1;
-
-const TokJob = struct {
-    active: bool = false,
-    epoch: u64 = 0,
-    pieces: generate.Pieces = undefined,
-    token_budget: usize = 0,
-    char_budget: usize = 0,
-    kind: tokenizer.Tokenizer = .none,
-    disc: u64 = 0,
-    encode_path: []const u8 = "",
-    remote: bool = false,
-    /// The resolved stopping-string set, each element owned so it survives freePending; empty = no
-    /// stops. Composed by generate.buildStoppingStrings to match the classic frontend's array.
-    stop: [][]u8 = &.{},
-    /// CR-stripped copies of every piece (overhead, then injections, then history), the strings the
-    /// classic client counts (item.replace(/\r/g,'')). Owned. Parallel to `counts`/`filled`.
-    texts: [][]u8 = &.{},
-    counts: []usize = &.{},
-    filled: []bool = &.{},
-    n_inj: usize = 0,
-    /// Indices still needing a fetch (kept at full allocation length; `q_len` is the valid count so the
-    /// slice is never resliced before free). `q_next` is the next to dispatch, `remaining` the unresolved.
-    queue: []usize = &.{},
-    q_len: usize = 0,
-    q_next: usize = 0,
-    remaining: usize = 0,
-    inflight: usize = 0,
-};
-var tok_job: TokJob = .{};
-
-/// Strip every CR, owned. The classic client counts `item.replace(/\r/g,'')`, so the count must be over
-/// the CR-free bytes; fitAndAssemble strips the joined prompt to the same end.
-fn stripCR(s: []const u8) std.mem.Allocator.Error![]u8 {
-    var out = try alloc.alloc(u8, s.len);
-    var w: usize = 0;
-    for (s) |b| {
-        if (b == '\r') continue;
-        out[w] = b;
-        w += 1;
-    }
-    if (w != s.len) {
-        const shrunk = alloc.realloc(out, w) catch out[0..w];
-        return shrunk;
-    }
-    return out;
-}
-
-fn freeTokJob() void {
-    // A default job (no send ever launched here) has `pieces` undefined; only free a job that started.
-    if (!tok_job.active) {
-        tok_job = .{};
-        return;
-    }
-    for (tok_job.stop) |s| alloc.free(s);
-    if (tok_job.stop.len > 0) alloc.free(tok_job.stop);
-    for (tok_job.texts) |t| alloc.free(t);
-    if (tok_job.texts.len > 0) alloc.free(tok_job.texts);
-    if (tok_job.counts.len > 0) alloc.free(tok_job.counts);
-    if (tok_job.filled.len > 0) alloc.free(tok_job.filled);
-    if (tok_job.queue.len > 0) alloc.free(tok_job.queue);
-    generate.freePieces(alloc, &tok_job.pieces);
-    tok_job = .{};
-}
-
-/// The single terminal for a send: releases the token job (pieces + fetch buffers) and the pending
-/// send state. Every finish and abort path routes here so nothing leaks across the async gap.
+/// The single terminal for a send: releases the stashed send context. Every finish and abort path
+/// routes here so nothing leaks across the async gap.
 fn endSend() void {
-    freeTokJob();
     freePending();
-}
-
-/// Starts the server-owned generation from a finished prompt, then ends the send. Reads the connection
-/// and the character identity from the still-live pending state (endSend frees them last).
-fn finishSend(prompt: []const u8) void {
-    defer endSend();
-    const conn = pend_conn orelse return;
-    const body = generate.buildRequestBody(alloc, conn, prompt, tok_job.stop) catch {
-        net_log.warn("send: request-body build failed", .{});
-        return;
-    };
-    defer alloc.free(body);
-    const start_body = buildStartBody(body) orelse {
-        net_log.warn("send: start-body build failed", .{});
-        return;
-    };
-    defer alloc.free(start_body);
-    stream_drive.send(pend_char_name, pend_char_avatar, start_body);
 }
 
 /// Wraps the generation parameters with the chat this reply belongs to. The server resolves the chat
@@ -1796,6 +1694,9 @@ fn buildStartBody(generate_body: []const u8) ?[]u8 {
         std.json.Stringify.valueAlloc(alloc, .{
             .group_id = gid,
             .character_name = pend_char_name,
+            // The group id resolves the chat FILE; the avatar is how the server finds the card of the
+            // member whose turn this is, and without it that member would speak with no character.
+            .avatar_url = send_avatar,
         }, .{}) catch return null
     else
         std.json.Stringify.valueAlloc(alloc, .{
@@ -1831,601 +1732,6 @@ fn buildStartBody(generate_body: []const u8) ?[]u8 {
         "{{\"chat\":{s},\"generate\":{s},\"reply_prefix\":{s},\"trim_sentences\":{},\"trim_spaces\":{},\"browser\":{s}}}",
         .{ chat, generate_body, prefix_json, pend_tpl.trim_sentences, pend_tpl.trim_spaces, browser },
     ) catch null;
-}
-
-/// Trim on byte lengths against the char budget: the classic pre-token behavior and the fallback when a
-/// tokenizer is unavailable or an encode fetch fails. Builds the prompt and finishes the send.
-fn finishByteFallback() void {
-    const costs = generate.byteCostTable(alloc, tok_job.pieces) catch {
-        chars_log.err("send: fallback cost build failed", .{});
-        endSend();
-        return;
-    };
-    defer generate.freeCostTable(alloc, costs);
-    const prompt = generate.fitAndAssemble(alloc, tok_job.pieces, costs, tok_job.char_budget) catch {
-        chars_log.err("send: fallback prompt build failed", .{});
-        endSend();
-        return;
-    };
-    defer alloc.free(prompt);
-    finishSend(prompt);
-}
-
-/// All token counts are in: split them into the story/injection/history cost table and trim on real
-/// tokens against the token budget, then open the stream.
-fn finishTokenJob() void {
-    const n = tok_job.n_inj;
-    const n_hist = tok_job.pieces.wrapped_history.len;
-    // The trailing alignment unit's count folds into overhead (always reserved); history stops before it.
-    const align_cost: usize = if (tok_job.pieces.alignment.len > 0) tok_job.counts[1 + n + n_hist] else 0;
-    const costs = generate.CostTable{
-        .overhead = tok_job.counts[0] + align_cost,
-        .injections = tok_job.counts[1 .. 1 + n],
-        .history = tok_job.counts[1 + n .. 1 + n + n_hist],
-    };
-    const prompt = generate.fitAndAssemble(alloc, tok_job.pieces, costs, tok_job.token_budget) catch {
-        chars_log.err("send: token prompt build failed", .{});
-        endSend();
-        return;
-    };
-    defer alloc.free(prompt);
-    finishSend(prompt);
-}
-
-fn tokBody(index: usize) std.mem.Allocator.Error![]u8 {
-    const conn = pend_conn.?;
-    if (tok_job.remote) {
-        return std.json.Stringify.valueAlloc(alloc, .{
-            .text = tok_job.texts[index],
-            .url = conn.api_server,
-            .model = conn.model,
-            .api_type = conn.api_type,
-        }, .{});
-    }
-    return std.json.Stringify.valueAlloc(alloc, .{ .text = tok_job.texts[index] }, .{});
-}
-
-fn fireNextTokenFetch() void {
-    // net.request can complete SYNCHRONOUSLY on slot exhaustion (its on_done fires inline), which routes
-    // through onTokenCountDone and can tear the job down mid-loop; re-check `active` before each step.
-    while (tok_job.active and tok_job.inflight < TOK_CONCURRENCY and tok_job.q_next < tok_job.q_len) {
-        const index = tok_job.queue[tok_job.q_next];
-        tok_job.q_next += 1;
-        const body = tokBody(index) catch {
-            finishByteFallback();
-            return;
-        };
-        tok_job.inflight += 1;
-        net.request(tok_job.encode_path, body, (tok_job.epoch << TOK_INDEX_BITS) | @as(u64, index), onTokenCountDone, .{});
-        alloc.free(body);
-    }
-}
-
-fn onTokenCountDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
-    // A straggler from an aborted send carries that job's epoch; ignore it entirely (no inflight
-    // decrement, no array write) so it can never touch a newer job's state.
-    if (!tok_job.active or (tag >> TOK_INDEX_BITS) != tok_job.epoch) return;
-    tok_job.inflight -|= 1;
-    const index: usize = @intCast(tag & TOK_INDEX_MASK);
-    var count: ?usize = null;
-    if (res != null and status >= 200 and status < 300) {
-        if (res.?.json(struct { count: ?i64 = null, @"error": ?bool = null })) |parsed| {
-            defer parsed.deinit();
-            if ((parsed.value.@"error" orelse false) == false) {
-                if (parsed.value.count) |c| if (c >= 0) {
-                    count = @intCast(c);
-                };
-            }
-        } else |_| {}
-    }
-    const c = count orelse {
-        net_log.warn("send: token count fetch failed ({d}) - falling back to the char estimate", .{status});
-        finishByteFallback();
-        return;
-    };
-    tok_job.counts[index] = c;
-    tok_job.filled[index] = true;
-    tok_cache.put(alloc, tok_job.texts[index], tok_job.disc, c);
-    tok_job.remaining -= 1;
-    if (tok_job.remaining == 0) {
-        finishTokenJob();
-        return;
-    }
-    fireNextTokenFetch();
-}
-
-/// Stashes the assembled pieces and tokenizes each (cache first, then bounded fetches). On a setup OOM
-/// it degrades to the byte-cost path rather than dropping the send.
-fn startTokenJob(pieces: generate.Pieces, token_budget: usize, char_budget: usize, kind: tokenizer.Tokenizer, disc: u64, encode_path: []const u8, remote: bool, stop: [][]u8) void {
-    const n = pieces.injections.len;
-    // +1 trailing unit for the alignment message (its count folds into overhead in finishTokenJob).
-    const total = 1 + n + pieces.wrapped_history.len + @intFromBool(pieces.alignment.len > 0);
-    tok_epoch_seq +%= 1;
-    tok_job = .{
-        .active = true,
-        .epoch = tok_epoch_seq,
-        .pieces = pieces,
-        .token_budget = token_budget,
-        .char_budget = char_budget,
-        .kind = kind,
-        .disc = disc,
-        .encode_path = encode_path,
-        .remote = remote,
-        .stop = stop,
-        .n_inj = n,
-    };
-    // No tokenizer resolved (a non-textgen or unknown backend): trim on the char estimate.
-    if (kind == .none) return finishByteFallback();
-    tok_job.texts = alloc.alloc([]u8, total) catch return startupFail(0);
-    // Track how many texts are filled so a mid-loop OOM frees exactly those.
-    var built: usize = 0;
-    tok_job.counts = alloc.alloc(usize, total) catch return startupFail(built);
-    tok_job.filled = alloc.alloc(bool, total) catch return startupFail(built);
-    tok_job.queue = alloc.alloc(usize, total) catch return startupFail(built);
-    @memset(tok_job.filled, false);
-
-    while (built < total) : (built += 1) {
-        const src = pieceText(pieces, n, built);
-        tok_job.texts[built] = stripCR(src) catch return startupFail(built);
-    }
-
-    tok_job.remaining = 0;
-    tok_job.q_next = 0;
-    var q: usize = 0;
-    for (0..total) |i| {
-        if (tok_cache.get(tok_job.texts[i], disc)) |hit| {
-            tok_job.counts[i] = hit;
-            tok_job.filled[i] = true;
-        } else {
-            tok_job.queue[q] = i;
-            q += 1;
-            tok_job.remaining += 1;
-        }
-    }
-    tok_job.q_len = q;
-    if (tok_job.remaining == 0) {
-        finishTokenJob();
-        return;
-    }
-    fireNextTokenFetch();
-}
-
-/// The source string for job unit `i`: index 0 is the overhead, 1..n the injections, the rest history.
-fn pieceText(pieces: generate.Pieces, n: usize, i: usize) []const u8 {
-    if (i == 0) return pieces.overhead;
-    if (i <= n) return pieces.injections[i - 1].wrapped;
-    const hi = i - 1 - n;
-    if (hi < pieces.wrapped_history.len) return pieces.wrapped_history[hi];
-    return pieces.alignment; // trailing unit: reserves the alignment cost into overhead
-}
-
-/// A token-job setup allocation failed after `built` texts were stripped: free the partial job and
-/// degrade to the byte-cost path so the send still goes out.
-fn startupFail(built: usize) void {
-    for (0..built) |i| alloc.free(tok_job.texts[i]);
-    if (tok_job.texts.len > 0) alloc.free(tok_job.texts);
-    if (tok_job.counts.len > 0) alloc.free(tok_job.counts);
-    if (tok_job.filled.len > 0) alloc.free(tok_job.filled);
-    if (tok_job.queue.len > 0) alloc.free(tok_job.queue);
-    tok_job.texts = &.{};
-    tok_job.counts = &.{};
-    tok_job.filled = &.{};
-    tok_job.queue = &.{};
-    finishByteFallback();
-}
-
-// ---- world-info entry token costs -------------------------------------------------------------
-//
-// Stock counts each candidate entry with the real tokenizer before spending the WI budget on it. The
-// counts are warmed into `tok_cache` BEFORE the prompt-window fetch, so activation itself stays a pure
-// synchronous pass over already-known costs.
-
-const WI_WARM_CONCURRENCY: usize = 4;
-
-var wi_warm_epoch_seq: u64 = 0;
-
-const WiWarmJob = struct {
-    active: bool = false,
-    epoch: u64 = 0,
-    /// Owned "<content>\n" strings, the exact text whose count the budget spends.
-    texts: [][]u8 = &.{},
-    q_next: usize = 0,
-    inflight: usize = 0,
-    remaining: usize = 0,
-    disc: u64 = 0,
-    encode_path: []const u8 = "",
-    remote: bool = false,
-    next: ?*const fn () void = null,
-};
-var wi_warm: WiWarmJob = .{};
-
-/// The text whose token count a WI entry spends: its content plus the newline stock joins entries
-/// with, so the count already carries the separator.
-fn wiCostText(content: []const u8) std.mem.Allocator.Error![]u8 {
-    return std.fmt.allocPrint(alloc, "{s}\n", .{content});
-}
-
-/// Per-candidate token costs, or an empty slice when any of them is not in the cache (a lore edit
-/// during the warm, a failed fetch, no tokenizer). Empty means the send costs WI by bytes instead.
-fn wiEntryCosts(entries: []const wi_store.Entry) []usize {
-    if (entries.len == 0) return &.{};
-    const conn = pend_conn orelse return &.{};
-    const kind = tokenizer.bestMatch(conn.api_type, conn.model, conn.api_server.len > 0, false);
-    const disc = tokenizer.cacheDisc(kind, conn.model);
-    const out = alloc.alloc(usize, entries.len) catch return &.{};
-    for (entries, 0..) |e, i| {
-        const text = wiCostText(e.content) catch {
-            alloc.free(out);
-            return &.{};
-        };
-        defer alloc.free(text);
-        out[i] = tok_cache.get(text, disc) orelse {
-            alloc.free(out);
-            return &.{};
-        };
-    }
-    return out;
-}
-
-fn freeWiWarm() void {
-    for (wi_warm.texts) |t| alloc.free(t);
-    if (wi_warm.texts.len > 0) alloc.free(wi_warm.texts);
-    wi_warm = .{};
-}
-
-/// Runs `next` once every candidate entry has a cached token count. Any failure still runs it: the
-/// send then costs WI by bytes rather than not happening at all.
-fn beginWiWarm(next: *const fn () void) void {
-    freeWiWarm();
-    const conn = pend_conn orelse return next();
-    const entries: []const wi_store.Entry = wi_store.global.collectActive(alloc) catch return next();
-    defer alloc.free(entries);
-    if (entries.len == 0) return next();
-    const kind = tokenizer.bestMatch(conn.api_type, conn.model, conn.api_server.len > 0, false);
-    const remote = kind == .remote_textgen;
-    const disc = tokenizer.cacheDisc(kind, conn.model);
-
-    var texts: std.ArrayList([]u8) = .empty;
-    errdefer {
-        for (texts.items) |t| alloc.free(t);
-        texts.deinit(alloc);
-    }
-    for (entries) |e| {
-        const text = wiCostText(e.content) catch {
-            for (texts.items) |t| alloc.free(t);
-            texts.deinit(alloc);
-            return next();
-        };
-        if (tok_cache.get(text, disc) != null) {
-            alloc.free(text);
-            continue;
-        }
-        texts.append(alloc, text) catch {
-            alloc.free(text);
-            for (texts.items) |t| alloc.free(t);
-            texts.deinit(alloc);
-            return next();
-        };
-    }
-    const owned = texts.toOwnedSlice(alloc) catch {
-        for (texts.items) |t| alloc.free(t);
-        texts.deinit(alloc);
-        return next();
-    };
-    if (owned.len == 0) {
-        alloc.free(owned);
-        return next();
-    }
-    wi_warm_epoch_seq +%= 1;
-    wi_warm = .{
-        .active = true,
-        .epoch = wi_warm_epoch_seq,
-        .texts = owned,
-        .remaining = owned.len,
-        .disc = disc,
-        .encode_path = if (remote) tokenizer.remote_encode_path else tokenizer.localEncodePath(kind),
-        .remote = remote,
-        .next = next,
-    };
-    fireNextWiWarmFetch();
-}
-
-/// Ends the warm and continues the send. Called once, whether every count landed or one failed.
-fn finishWiWarm() void {
-    const next = wi_warm.next;
-    freeWiWarm();
-    if (next) |f| f();
-}
-
-fn wiWarmBody(index: usize) std.mem.Allocator.Error![]u8 {
-    const conn = pend_conn.?;
-    if (wi_warm.remote) {
-        return std.json.Stringify.valueAlloc(alloc, .{
-            .text = wi_warm.texts[index],
-            .url = conn.api_server,
-            .model = conn.model,
-            .api_type = conn.api_type,
-        }, .{});
-    }
-    return std.json.Stringify.valueAlloc(alloc, .{ .text = wi_warm.texts[index] }, .{});
-}
-
-fn fireNextWiWarmFetch() void {
-    // net.request can complete synchronously on slot exhaustion, tearing the job down mid-loop.
-    while (wi_warm.active and wi_warm.inflight < WI_WARM_CONCURRENCY and wi_warm.q_next < wi_warm.texts.len) {
-        const index = wi_warm.q_next;
-        wi_warm.q_next += 1;
-        const body = wiWarmBody(index) catch return finishWiWarm();
-        wi_warm.inflight += 1;
-        net.request(wi_warm.encode_path, body, (wi_warm.epoch << TOK_INDEX_BITS) | @as(u64, index), onWiWarmDone, .{});
-        alloc.free(body);
-    }
-}
-
-fn onWiWarmDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
-    if (!wi_warm.active or (tag >> TOK_INDEX_BITS) != wi_warm.epoch) return;
-    wi_warm.inflight -|= 1;
-    const index: usize = @intCast(tag & TOK_INDEX_MASK);
-    var count: ?usize = null;
-    if (res != null and status >= 200 and status < 300) {
-        if (res.?.json(struct { count: ?i64 = null, @"error": ?bool = null })) |parsed| {
-            defer parsed.deinit();
-            if ((parsed.value.@"error" orelse false) == false) {
-                if (parsed.value.count) |c| if (c >= 0) {
-                    count = @intCast(c);
-                };
-            }
-        } else |_| {}
-    }
-    const c = count orelse {
-        net_log.warn("send: world-info token count failed ({d}) - costing lore by bytes", .{status});
-        finishWiWarm();
-        return;
-    };
-    tok_cache.put(alloc, wi_warm.texts[index], wi_warm.disc, c);
-    wi_warm.remaining -= 1;
-    if (wi_warm.remaining == 0) {
-        finishWiWarm();
-        return;
-    }
-    fireNextWiWarmFetch();
-}
-
-/// Prompt-window fetch completion: parse the spine page (a failure degrades to a null page), then
-/// assemble and dispatch the generate. The pending state is freed by the send's terminal (endSend),
-/// not here, because the token-count round-trip outlives this callback.
-fn onPromptWindowDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
-    _ = tag;
-    if (!pend_active) return;
-    var page: ?data.ChatPage = null;
-    if (res != null and status >= 200 and status < 300) {
-        if (res.?.json(std.json.Value)) |parsed| {
-            defer parsed.deinit();
-            if (data.parseChatPage(alloc, parsed.value)) |p| {
-                page = p;
-            } else |_| {}
-        } else |_| {}
-    } else if (res != null) {
-        net_log.warn("send: prompt window fetch returned {d} - degrading to the user turn", .{status});
-    }
-    defer if (page) |p| data.freeChatPage(alloc, p);
-    // An error here means the send failed BEFORE the token job launched (nothing async in flight), so the
-    // terminal cleanup is ours; a launched job frees itself through endSend when it settles.
-    dispatchGenerate(page) catch |err| {
-        chars_log.err("send: prompt/body build failed: {s}", .{@errorName(err)});
-        endSend();
-    };
-}
-
-/// Builds the prompt history from the fetched spine window, assembles the prompt pieces, and kicks off
-/// the token-count job that trims and opens the stream. The window is the deep history (may exceed the
-/// display); the greeting is reconstructed when the fetch reached the head of the file, and the just-sent
-/// user turn is appended unless the race already put it at the window tail (dedup). An error is returned
-/// only for a pre-job failure, whose cleanup the caller owns; nothing on screen bounds the window (inv 2).
-fn dispatchGenerate(page: ?data.ChatPage) !void {
-    const conn = pend_conn orelse return error.MissingConnection;
-    var history: std.ArrayList(generate.PromptMsg) = .empty;
-    defer history.deinit(alloc);
-
-    const at_head = if (page) |p| !p.has_more_before else true;
-    // An EMPTY page (fresh chat) needs the greeting too; the old guard required a user message and so
-    // dropped it on every new conversation. A leading assistant turn already IS the greeting.
-    const head_lacks_greeting = if (page) |p| (p.messages.len == 0 or p.messages[0].is_user) else true;
-    var greeting: ?[]u8 = null;
-    defer if (greeting) |g| alloc.free(g);
-    if (at_head and head_lacks_greeting and pend_first_mes.len > 0) {
-        greeting = data.renderGreeting(alloc, pend_first_mes, .{
-            .char = pend_char_name,
-            .user = pend_user_name,
-            .persona = pend_persona_desc,
-            .description = pend_description,
-            .personality = pend_personality,
-            .scenario = pend_scenario,
-            .mes_example = pend_mes_example,
-            // {{pick}} in the greeting seeds off the chat id (stock getChatIdHash); without it the pick
-            // hashes an empty chat id and diverges from the old frontend.
-            .chat_id = send_file,
-        }) catch null;
-        if (greeting) |g| try history.append(alloc, .{ .name = pend_char_name, .mes = g });
-    }
-
-    var user_turn_present = false;
-    if (page) |p| {
-        for (p.messages) |m| {
-            const name = if (m.name.len > 0) m.name else if (m.is_user) pend_user_name else pend_char_name;
-            try history.append(alloc, .{ .name = name, .mes = m.mes, .role = roleOf(m) });
-        }
-        if (p.messages.len > 0) {
-            const last = p.messages[p.messages.len - 1];
-            user_turn_present = last.is_user and std.mem.eql(u8, last.mes, pend_user_text);
-        }
-    }
-    // w3-grp: a group member launch stashes no user text (the turn is already in the window).
-    if (!user_turn_present and pend_user_text.len > 0) try history.append(alloc, .{ .name = pend_user_name, .mes = pend_user_text, .role = .user });
-
-    // w3-wi-engine: candidates come from the store AT DISPATCH, never the stash (probe#3 delta 3:
-    // store-owned book memory; the async gap between send and this callback cannot dangle them).
-    const wi_candidates: []const wi_store.Entry = wi_store.global.collectActive(alloc) catch &.{};
-    defer alloc.free(wi_candidates);
-    // Stock's budget is TOKENS on both halves (world-info.js:4622 percentage, :4624 absolute cap) and it
-    // counts each entry with the real tokenizer (:4940). wiEntryCosts hands back per-entry token counts
-    // when the warm pass has them all; without them the whole budget degrades to bytes together, since
-    // mixing a token budget with byte costs would be worse than either.
-    const wi_costs = wiEntryCosts(wi_candidates);
-    defer if (wi_costs.len > 0) alloc.free(wi_costs);
-    const wi_budget = blk: {
-        const total = if (wi_costs.len > 0) generate.promptTokenBudget(conn) else generate.promptCharBudget(conn);
-        var b = (total *| @as(usize, @intCast(wi_store.global.budget))) / 100;
-        if (wi_store.global.budget_cap > 0) {
-            const cap = if (wi_costs.len > 0)
-                @as(usize, @intCast(wi_store.global.budget_cap))
-            else
-                generate.tokensToChars(@intCast(wi_store.global.budget_cap));
-            if (b > cap) b = cap;
-        }
-        break :blk b;
-    };
-
-    // Persona TOP_AN / BOTTOM_AN attaches in generate.assemblePieces, OUTSIDE the WI an-anchors (stock
-    // addPersonaDescriptionExtensionPrompt runs after the WI an-merge, script.js:3183 vs world-info.js:5149).
-    const eff_note = pend_note;
-    // The note's anchor positions render through the story string; the in_chat position is inserted
-    // into the history by the builder. Both read the same note, so only one of them ever fires.
-    const anchors = noteAnchors(eff_note);
-    // Effective system prompt: the card's own system_prompt wins over the global (generate.effectiveSystem).
-    const effective_system = generate.effectiveSystem(pend_tpl.sysprompt_enabled, pend_tpl.prefer_character_prompt, pend_system_prompt, pend_tpl.system_prompt);
-    // Chat-state macros ({{lastMessage}}, {{lastUserMessage}}, the ids) read the window we just built.
-    // SWIPES ARE NOT MODELLED on this path: char_data's turn parse carries no swipes array, so every
-    // message reports a single swipe and {{lastSwipeId}}/{{currentSwipeId}} read 1.
-    var chat_msgs: std.ArrayList(macro_chat.Msg) = .empty;
-    defer chat_msgs.deinit(alloc);
-    if (page) |p| for (p.messages) |m| {
-        chat_msgs.append(alloc, .{
-            .name = m.name,
-            .mes = m.mes,
-            .is_user = m.is_user,
-            .is_system = m.is_system,
-        }) catch break;
-    };
-    // The clock the time macros read. getTimezoneOffset is minutes WEST of UTC, so it negates.
-    const now_ms_f = nowMs();
-    const tz_offset = tzOffsetMinutes();
-    // {{idleDuration}} measures from the newest USER turn. char_data's parse drops send_date, so the
-    // gap is not knowable here and the macro reads zero rather than inventing an interval.
-    const last_user_ms: f64 = 0;
-    var ctx = generate.Ctx{
-        .chat = .{ .messages = chat_msgs.items },
-        .now_ms = @intFromFloat(now_ms_f),
-        .utc_offset_minutes = tz_offset,
-        .idle_ms = if (last_user_ms > 0) @intFromFloat(now_ms_f - last_user_ms) else 0,
-        .env = .{
-            .model = conn.model,
-            .system_prompt = effective_system,
-            .input = pend_user_text,
-            .max_context = @intCast(@max(0, conn.max_context)),
-            .max_prompt = generate.promptTokenBudget(conn),
-            .max_response = @intCast(@max(0, conn.max_tokens)),
-            .last_generation_type = "normal",
-        },
-        .char = pend_char_name,
-        .user = pend_user_name,
-        .persona = pend_persona_desc,
-        .description = pend_description,
-        .personality = pend_personality,
-        .scenario = pend_scenario,
-        .mes_example = pend_mes_example,
-        // Card-field macros ({{charPrompt}}/{{greeting}}/...); charPrompt/charInstruction gate on the
-        // prefer_character_* flags exactly like stock getCharacterCardFields (script.js:3384/3388).
-        .char_prompt = if (pend_tpl.prefer_character_prompt) pend_system_prompt else "",
-        .char_instruction = if (pend_tpl.prefer_character_jailbreak) pend_post_history else "",
-        .char_depth_prompt = pend_char_note,
-        .creator_notes = pend_creator_notes,
-        .first_mes = pend_first_mes,
-        .alt_greetings = pend_alt_greetings,
-        .char_version = pend_char_version,
-        .system = effective_system,
-        .original = pend_tpl.system_prompt,
-        .anchor_before = anchors.before,
-        .anchor_after = anchors.after,
-        // {{pick}} seeds off the open chat id (stock getChatIdHash macros.js:262 = main_chat ??
-        // getCurrentChatId(); this client tracks only the latter, send_file); {{roll}}/{{random}} draw the PRNG.
-        .chat_id = send_file,
-        .rng = wiRandom(),
-    };
-    // {{mesExamples}} formatted value: precomputed here (macros.zig cannot reach the example pipeline).
-    const mes_fmt = generate.renderMesExamplesMacro(alloc, pend_mes_example, pend_char_name, pend_user_name, pend_tpl.instruct, pend_tpl.context.example_separator, ctx) catch "";
-    defer if (mes_fmt.len > 0) alloc.free(mes_fmt);
-    ctx.mes_example_formatted = mes_fmt;
-    // Jailbreak / post-history: card override wins over the global (same sysprompt gate). Its
-    // {{original}} means the global POST_HISTORY here, so resolve against that before it injects.
-    const effective_jb = generate.effectiveSystem(pend_tpl.sysprompt_enabled, pend_tpl.prefer_character_jailbreak, pend_post_history, pend_tpl.sysprompt_post_history);
-    var jb_ctx = ctx;
-    jb_ctx.original = pend_tpl.sysprompt_post_history;
-    const jb_resolved: []const u8 = if (effective_jb.len > 0) try generate.substituteMacros(alloc, effective_jb, jb_ctx) else "";
-    defer if (jb_resolved.len > 0) alloc.free(jb_resolved);
-    // w3-wi-engine: the engine knobs ride the shape; scan depth + recursion + budget are the
-    // store's hydrated classic settings, the rng is this module's seeded PRNG.
-    const shape = generate.Shape{
-        .tpl = pend_tpl,
-        .note = eff_note,
-        .char_note = .{ .prompt = pend_char_note, .depth = pend_char_note_depth, .role = pend_char_note_role },
-        .jailbreak = jb_resolved,
-        .wi_entries = wi_candidates,
-        .wi_scan_depth = @intCast(@max(0, wi_store.global.scan_depth)),
-        .wi_budget = wi_budget,
-        .wi_entry_costs = wi_costs,
-        .wi_recursive = wi_store.global.recursive,
-        .wi_max_recursion_steps = @intCast(@max(0, wi_store.global.max_recursion_steps)),
-        .wi_case_sensitive = wi_store.global.case_sensitive,
-        .wi_match_whole_words = wi_store.global.match_whole_words,
-        .wi_min_activations = @intCast(@max(0, wi_store.global.min_activations)),
-        .wi_min_activations_depth_max = @intCast(@max(0, wi_store.global.min_activations_depth_max)),
-        .wi_use_group_scoring = wi_store.global.use_group_scoring,
-        .wi_rng = wiRandom(),
-        .wi_timed_in = wi_timed.current(),
-        // chunk-4: characterFilter identity, generation type, and the extended scan-source texts. The
-        // raw avatar (not the thumb URL) matches stock getCharaFilename; null tags = no tag mapping.
-        .wi_chara_filename = charaFilename(send_avatar),
-        .wi_char_tags = tag_store.global.tagsFor(send_avatar),
-        .wi_generation_trigger = "normal",
-        .wi_persona_description = pend_persona_desc,
-        .wi_character_description = pend_description,
-        .wi_character_personality = pend_personality,
-        .wi_character_depth_prompt = pend_char_note,
-        .wi_scenario = pend_scenario,
-        .wi_creator_notes = pend_creator_notes,
-        .persona_position = pend_tpl.persona_position,
-        .persona_depth = pend_tpl.persona_depth,
-        .persona_role = pend_tpl.persona_role,
-    };
-    // Assemble the prompt into separately-costable pieces. The budget walk waits until each piece has a
-    // real token count (or the byte fallback); pieces is owned and outlives this callback in tok_job.
-    const had_timed = wi_timed.hasState();
-    var pieces = generate.assemblePieces(alloc, ctx, history.items, shape, true) catch |err| {
-        chars_log.err("send: prompt assembly failed: {s}", .{@errorName(err)});
-        endSend();
-        return;
-    };
-    // wi-timed: advance the in-memory state now so the NEXT send reads this send's outcome before the
-    // server persist. Persist when a window is live now or was before (so an expiry still clears it).
-    if (pieces.timed_json) |tj| if (tj.len > 0) wi_timed.advance(tj);
-    pend_timed_persist = had_timed or wi_timed.hasState();
-
-    // The full stopping-string set the classic frontend sends (names + instruct sequences + custom),
-    // owned so it survives to finishSend past freePending. pend_user_name = name1, pend_char_name = name2.
-    const stop_owned = generate.buildStoppingStrings(alloc, pend_tpl, ctx, pend_user_name, pend_char_name) catch {
-        generate.freePieces(alloc, &pieces);
-        endSend();
-        return;
-    };
-
-    // Resolve the tokenizer the classic client would use, then count each piece. A configured backend
-    // with a supported type uses its own remote tokenizer (exact for llama.cpp); else a local model.
-    const kind = tokenizer.bestMatch(conn.api_type, conn.model, conn.api_server.len > 0, false);
-    const remote = kind == .remote_textgen;
-    const encode_path = if (remote) tokenizer.remote_encode_path else tokenizer.localEncodePath(kind);
-    const disc = tokenizer.cacheDisc(kind, conn.model);
-    startTokenJob(pieces, generate.promptTokenBudget(conn), generate.promptCharBudget(conn), kind, disc, encode_path, remote, stop_owned);
 }
 
 /// Called by stream_drive on stream seal. The assistant turn is written by the server that ran the
@@ -2514,12 +1820,14 @@ fn onAppendDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
             return;
         }
         net_log.warn("chat append ({s}): file changed (409) and the turn could not be re-issued; re-syncing", .{which});
+        abandonWaitingSend("the turn could not be persisted");
         pager.beginResync();
         reloadCurrentChat();
         return;
     }
     if (status < 200 or status >= 300) {
         net_log.warn("chat append ({s}) failed: {d} - turn not persisted", .{ which, status });
+        abandonWaitingSend("the turn was not persisted");
         return;
     }
     if (res) |r| {
@@ -2531,6 +1839,20 @@ fn onAppendDone(tag: u64, status: u16, res: ?*zx.Fetch.Response) void {
         } else |_| {}
     }
     chars_log.debug("chat append ({s}) persisted", .{which});
+    // The user's turn is in the file, so the prompt the server builds will contain it.
+    if (tag != 0 and pend_send_on_append) {
+        pend_send_on_append = false;
+        launchServerSend();
+    }
+}
+
+/// Releases a send that was waiting on a user turn which never landed. Sending anyway would ask the
+/// model to reply to a message the chat file does not have.
+fn abandonWaitingSend(why: []const u8) void {
+    if (!pend_send_on_append) return;
+    pend_send_on_append = false;
+    net_log.warn("send abandoned: {s}", .{why});
+    endSend();
 }
 
 /// Write the chat's live timed-effect state to the header via /api/chats/metadata (the timedWorldInfo
@@ -2578,13 +1900,13 @@ pub fn stopStream() void {
 
 // w3-grp ---- group member launch ----
 
-/// Launch one rotation member: stash THIS member's card into the pending-send slot and fetch
-/// the GROUP prompt window; onPromptWindowDone/dispatchGenerate then run unchanged, so the
-/// member's prompt is budgeted exactly like a solo send (invariant 2) and streams under the
-/// member's own name+avatar. False = could not start; the caller aborts the queue.
+/// Launch one rotation member: stash THIS member's card into the pending-send slot and start the
+/// generation. The member's avatar rides the start body, so the server builds from that member's card
+/// and the reply streams under its own name. False = could not start; the caller aborts the queue.
 pub fn launchGroupMember(m: @import("./group_rotation.zig").Member) bool {
     if (zx.platform.role != .client) return false;
-    const gid = group_send.chatId() orelse return false;
+    // A member launch outside a live rotation has no chat to write into.
+    if (group_send.chatId() == null) return false;
     const conn = conn_mod.active() orelse {
         net_log.warn("group launch: no backend configured", .{});
         return false;
@@ -2607,25 +1929,14 @@ pub fn launchGroupMember(m: @import("./group_rotation.zig").Member) bool {
         chars_log.err("group launch: could not stash the member send context", .{});
         return false;
     }
-    // No solo greeting reconstruction and no forced user-turn append for a member launch: the
-    // group window already carries every persisted turn, including the user's.
+    // No forced user-turn append for a member launch: the rotation driver persisted the user's turn
+    // before any member started, so the chat file the server reads already carries it.
     setOwned(&pend_first_mes, "");
     setOwned(&pend_user_text, "");
-    setOwned(&pend_group_window_id, gid);
-    beginWiWarm(&launchGroupPromptWindow);
+    // The rotation driver persisted the user's turn before any member launched, so this one has
+    // nothing to wait for.
+    launchServerSend();
     return true;
-}
-
-/// Fetch the group prompt window for the stashed member launch. Runs after the world-info warm.
-fn launchGroupPromptWindow() void {
-    if (!pend_active) return;
-    const ref = data.ChatRef{ .group = .{ .id = pend_group_window_id } }; // w3-chatref: one page-body path
-    const win_body = data.pageBody(alloc, ref, .{ .limit = pager.PROMPT_LIMIT }) catch {
-        freePending();
-        return;
-    };
-    defer alloc.free(win_body);
-    net.request(ref.url(), win_body, 0, onPromptWindowDone, .{});
 }
 
 // w3-grp
