@@ -1974,6 +1974,42 @@ export async function appendChatMessages(user, ref, cardName, messages, changeTo
     });
 }
 
+/**
+ * Merges keys into a chat's header metadata, under the same lock an append takes so the two cannot
+ * interleave and lose each other's write.
+ * @param {ChatRef} ref Resolved chat reference.
+ * @param {object} patch Keys to set on chat_metadata; existing keys not named here survive.
+ * @returns {Promise<boolean>} Whether the file was rewritten.
+ */
+export async function updateChatMetadata(ref, patch) {
+    if (!patch || typeof patch !== 'object' || Object.keys(patch).length === 0) {
+        return false;
+    }
+    return await withFileLock(ref.filePath, async () => {
+        const raw = await tryReadFile(ref.filePath);
+        if (raw === null || raw.length === 0) {
+            return false;
+        }
+        const parsed = parseChatContent(raw);
+        if (!parsed.header) {
+            return false;
+        }
+        const current = /** @type {any} */ (parsed.header);
+        const header = { ...current, chat_metadata: { ...(current.chat_metadata ?? {}), ...patch } };
+        const lines = (raw.endsWith('\n') ? raw.slice(0, -1) : raw).split('\n');
+        // Located by its exact text, not by position: a file can carry a blank or unparseable line
+        // before the header, and rewriting line zero would then destroy a message.
+        const at = lines.indexOf(parsed.headerRaw);
+        if (at < 0) {
+            return false;
+        }
+        lines[at] = JSON.stringify(header);
+        await tryWriteFile(ref.filePath, lines.join('\n'));
+        chatInfoCache.delete(ref.filePath);
+        return true;
+    });
+}
+
 router.post('/append', async function (request, response) {
     try {
         const resolved = resolveUndoRef(request);

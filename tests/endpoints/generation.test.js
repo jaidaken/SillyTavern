@@ -612,6 +612,59 @@ describe('server-owned generation', () => {
         }
     }, CASE_TIMEOUT_MS);
 
+    test('a variable a card sets during assembly is written back to the chat once the generation starts', async () => {
+        const settingsPath = path.join(server.userDirectory(), 'settings.json');
+        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        settings.main_api = 'textgenerationwebui';
+        settings.textgenerationwebui_settings = { ...(settings.textgenerationwebui_settings ?? {}), type: 'ooba' };
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 4), 'utf8');
+
+        // The author's note is the macro-bearing text this test can write without rebuilding a card
+        // png: it reads one variable and sets another, so one send shows the whole round trip.
+        const filePath = path.join(server.userDirectory(), 'chats', 'default_Seraphina', 'vars.jsonl');
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, [
+            JSON.stringify({
+                user_name: 'You',
+                character_name: 'Seraphina',
+                chat_metadata: {
+                    variables: { lamp: 'seven' },
+                    note_prompt: 'the lamp reads {{getvar::lamp}}{{setvar::seen::yes}}',
+                    note_interval: 1,
+                    note_position: 1,
+                    note_depth: 1,
+                    note_role: 0,
+                },
+            }),
+            JSON.stringify({ name: 'You', is_user: true, is_system: false, mes: 'and the lamp?', send_date: 1700000000000, extra: {} }),
+        ].join('\n'), 'utf8');
+
+        const upstream = new ScriptedUpstream();
+        await upstream.start();
+        try {
+            const client = await loggedInClient(server);
+            const response = await client.postJson('/api/generation/start', {
+                chat: { avatar_url: 'default_Seraphina.png', file_name: 'vars', character_name: 'Seraphina' },
+                generate: { api_type: 'generic', api_server: upstream.baseUrl, model: 'mock', max_tokens: 64 },
+                browser: { input: 'and the lamp?', utc_offset_minutes: 0, is_mobile: false, generation_type: 'normal', rotation_index: 0 },
+            });
+            expect(response.status).toBe(200);
+            await until(() => upstream.bodies.length > 0, 'the upstream request body');
+
+            expect(upstream.bodies[0]?.prompt).toContain('the lamp reads seven');
+            await until(() => readChatLines(filePath)[0]?.chat_metadata?.variables?.seen === 'yes', 'the variable write');
+
+            const header = readChatLines(filePath)[0];
+            expect(header.chat_metadata.variables).toEqual({ lamp: 'seven', seen: 'yes' });
+            // The note itself survives the rewrite: the header is merged, not replaced.
+            expect(header.chat_metadata.note_prompt).toContain('{{getvar::lamp}}');
+
+            upstream.finish();
+        } finally {
+            await upstream.stop();
+        }
+    }, CASE_TIMEOUT_MS);
+
     test('a start that sends its own prompt keeps it, so a caller assembling for itself is untouched', async () => {
         seedChat(server, 'own-prompt');
         const upstream = new ScriptedUpstream();

@@ -8,6 +8,7 @@
 
 import express from 'express';
 import fetch from 'node-fetch';
+import writeFileAtomic from 'write-file-atomic';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -21,7 +22,7 @@ import { assemblePrompt } from '../prompt-builder.js';
 import { buildPromptRequest } from '../prompt-request.js';
 import { createTokenCounter } from '../token-count.js';
 import { buildUpstreamRequest } from './backends/text-completions.js';
-import { ChatRef, appendChatMessages } from './chats.js';
+import { ChatRef, appendChatMessages, updateChatMetadata } from './chats.js';
 
 export const router = express.Router();
 
@@ -263,6 +264,33 @@ async function runUpstream(session, url, args, apiType) {
     pumpUpstream(session, upstream.body, apiType === TEXTGEN_TYPES.OLLAMA);
 }
 
+/**
+ * Writes the variables a build set: chat variables into the chat's own header metadata, globals into
+ * the settings blob, each only when that store was actually written to. A failure here is logged and
+ * swallowed: the generation is already running, and losing a variable is not worth failing a reply.
+ * @param {import('express').Request} request The request being served.
+ * @param {any} target Resolved chat target.
+ * @param {object|null} variables Chat variables, or null when none were set.
+ * @param {object|null} globalVariables Global variables, or null when none were set.
+ * @returns {Promise<void>}
+ */
+async function commitVariables(request, target, variables, globalVariables) {
+    try {
+        if (variables) {
+            await updateChatMetadata(target.ref, { variables });
+        }
+        if (globalVariables) {
+            const settingsPath = path.join(request.user.directories.root, SETTINGS_FILE);
+            const settings = JSON.parse(await fs.promises.readFile(settingsPath, 'utf8'));
+            const extensions = settings.extension_settings = settings.extension_settings ?? {};
+            extensions.variables = { ...(extensions.variables ?? {}), global: globalVariables };
+            await writeFileAtomic(settingsPath, JSON.stringify(settings, null, 4));
+        }
+    } catch (/** @type {any} */ error) {
+        log.net.error('Persisting prompt variables failed:', error?.message ?? error);
+    }
+}
+
 router.post('/start', async function (request, response) {
     try {
         const body = request.body;
@@ -297,6 +325,10 @@ router.post('/start', async function (request, response) {
             return response.status(429).send({ error: 'too_many_generations', limit: MAX_ACTIVE_PER_HANDLE });
         }
 
+        /** @type {object|null} */
+        let pendingVariables = null;
+        /** @type {object|null} */
+        let pendingGlobalVariables = null;
         // ASSEMBLY IS THE SERVER'S when the caller does not supply a prompt. The builder is the same
         // code the browser runs, proven byte-identical against it over the scenario set, so this is a
         // re-hosting rather than a second implementation. A caller that DOES send a prompt keeps the
@@ -329,6 +361,10 @@ router.post('/start', async function (request, response) {
                 if (!body.reply_prefix && built.replyPrefix) {
                     body.reply_prefix = built.replyPrefix;
                 }
+                // Staged, not written: a {{setvar}} takes effect only if the generation it was built
+                // for actually starts, so a refused or unbuildable send leaves the variables alone.
+                pendingVariables = built.variables;
+                pendingGlobalVariables = built.globalVariables;
             } catch (error) {
                 log.net.error('Server-side prompt assembly failed:', error);
                 return response.status(500).send({ error: 'prompt_assembly_failed' });
@@ -349,6 +385,9 @@ router.post('/start', async function (request, response) {
         params.stream = true;
         const { url, args, apiType } = await buildUpstreamRequest(request, { ...params }, session.controller.signal);
         runUpstream(session, url, args, apiType).catch(error => log.net.error('Generation start failed:', error));
+
+        // The generation is under way, so the staged variable writes are now owed.
+        await commitVariables(request, target, pendingVariables, pendingGlobalVariables);
 
         return response.send({ generation_id: session.id, last_event_id: session.lastEventId });
     } catch (/** @type {any} */ error) {

@@ -24,6 +24,7 @@ const macro_chat = @import("./pages/setup/macro_chat.zig");
 const wi = @import("./pages/setup/world_info.zig");
 const wi_engine = @import("./pages/setup/world_info_engine.zig");
 const char_data = @import("./pages/cast/char_data.zig");
+const macro_vars = @import("./pages/setup/macro_vars.zig");
 
 const Allocator = std.mem.Allocator;
 const Value = std.json.Value;
@@ -228,7 +229,20 @@ fn fitBody(a: Allocator, input: []const u8) RequestError![]u8 {
 
     var root: std.json.ObjectMap = .empty;
     try root.put(a, "prompt", .{ .string = prompt });
+    if (try dirtyStoreValue(a, built.vars.chat)) |v| try root.put(a, "variables", v);
+    if (try dirtyStoreValue(a, built.vars.global)) |v| try root.put(a, "global_variables", v);
     return std.json.Stringify.valueAlloc(a, Value{ .object = root }, .{});
+}
+
+/// The whole store as `{ name: value }`, but only when a `{{setvar}}` actually wrote to it. Null keeps
+/// the field out of the answer entirely, which is the host's signal that there is nothing to persist.
+fn dirtyStoreValue(a: Allocator, store: ?*macro_vars.Store) Allocator.Error!?Value {
+    const s = store orelse return null;
+    if (!s.dirty) return null;
+    var obj: std.json.ObjectMap = .empty;
+    var it = s.map.iterator();
+    while (it.next()) |e| try obj.put(a, e.key_ptr.*, .{ .string = e.value_ptr.* });
+    return Value{ .object = obj };
 }
 
 fn pieceValue(a: Allocator, kind: []const u8, text: []const u8) Allocator.Error!Value {
@@ -272,6 +286,9 @@ const Built = struct {
     pieces: generate.Pieces,
     stop: [][]u8,
     conn: generate.Connection,
+    /// The variable stores this build read and, where a `{{setvar}}` fired, wrote. The host persists
+    /// them; a store that stayed clean is not reported at all, so a plain read never rewrites a file.
+    vars: macro_vars.Stores,
 };
 
 /// Everything is arena-owned, so nothing here frees: the caller drops the arena. World info
@@ -405,8 +422,16 @@ fn build(a: Allocator, doc: std.json.ObjectMap) RequestError!Built {
     else
         requestSeed(chat_file, generation_type, rotation_index, history.items.len));
 
+    // Chat variables live in the chat's own metadata, globals in the settings blob, exactly where the
+    // old frontend kept them; loading both here is what lets `{{getvar}}` read across a page reload.
+    const vars: macro_vars.Stores = .{
+        .chat = try loadVarStore(a, objectField(meta, "variables")),
+        .global = try loadVarStore(a, globalVarsValue(doc)),
+    };
+
     var ctx = generate.Ctx{
         .chat = .{ .messages = chat_msgs.items },
+        .vars = vars,
         .now_ms = intOf(browser_obj.get("now_ms"), 0),
         .utc_offset_minutes = @intCast(intOf(browser_obj.get("utc_offset_minutes"), 0)),
         .idle_ms = 0,
@@ -484,6 +509,44 @@ fn build(a: Allocator, doc: std.json.ObjectMap) RequestError!Built {
         .pieces = try generate.assemblePieces(a, ctx, history.items, shape, true),
         .stop = try generate.buildStoppingStrings(a, tpl, ctx, persona.name, char_name),
         .conn = conn,
+        .vars = vars,
+    };
+}
+
+/// A `{ name: value }` object as a variable store. Arena-owned like everything else here. Values that
+/// are not strings are carried as their JSON text, which is how the old frontend stored a list.
+fn loadVarStore(a: Allocator, value: ?Value) RequestError!*macro_vars.Store {
+    const store = try a.create(macro_vars.Store);
+    store.* = .{};
+    const obj = switch (value orelse Value{ .null = {} }) {
+        .object => |o| o,
+        else => return store,
+    };
+    var it = obj.iterator();
+    while (it.next()) |e| {
+        const text = switch (e.value_ptr.*) {
+            .string => |s| s,
+            else => try std.json.Stringify.valueAlloc(a, e.value_ptr.*, .{}),
+        };
+        try store.set(a, e.key_ptr.*, text);
+    }
+    // Loading is not a write: only a {{setvar}} during the build marks the store for persistence.
+    store.dirty = false;
+    return store;
+}
+
+/// `settings.extension_settings.variables.global`, where the old frontend kept global variables.
+fn globalVarsValue(doc: std.json.ObjectMap) ?Value {
+    const settings = objectField(doc.get("settings") orelse return null, "extension_settings") orelse return null;
+    const variables = objectField(settings, "variables") orelse return null;
+    return objectField(variables, "global");
+}
+
+/// One field of a JSON object, or null when the value is not an object or lacks the field.
+fn objectField(value: ?Value, name: []const u8) ?Value {
+    return switch (value orelse return null) {
+        .object => |o| o.get(name),
+        else => null,
     };
 }
 
@@ -727,6 +790,54 @@ test "fit_joins_the_pieces_the_costs_leave_inside_the_budget" {
     try testing.expect(std.mem.indexOf(u8, parsed.value.prompt, "Aria is a lighthouse keeper.") != null);
     try testing.expect(std.mem.indexOf(u8, parsed.value.prompt, "Jamie: is the lamp still lit") != null);
     try testing.expect(std.mem.endsWith(u8, parsed.value.prompt, "Aria:"));
+}
+
+/// The same scenario with a chat variable set, and a card that reads and writes variables. The
+/// description is where the macros sit because a card field is substituted on every build.
+const vars_request =
+    \\{
+    \\ "settings": { "main_api": "textgenerationwebui", "textgenerationwebui_settings": { "type": "ooba", "max_length": 4096, "genamt": 256 },
+    \\               "extension_settings": { "variables": { "global": { "era": "third" } } } },
+    \\ "card": { "name": "Aria", "description": "Aria keeps lamp {{getvar::lamp}} in the {{getglobalvar::era}} age.{{setvar::seen::yes}}", "first_mes": "The lamp is lit." },
+    \\ "messages": [ { "name": "Jamie", "mes": "is the lamp still lit", "is_user": true, "is_system": false } ],
+    \\ "chat_metadata": { "note_prompt": "", "variables": { "lamp": "seven" } },
+    \\ "world": { "entries": {} },
+    \\ "chat": { "avatar_url": "aria.png", "file_name": "aria - 2026-08-06", "group_id": "" },
+    \\ "browser": { "input": "is the lamp still lit", "utc_offset_minutes": 60, "is_mobile": false, "generation_type": "normal", "rotation_index": 0 }
+    \\}
+;
+
+test "a_build_reads_chat_and_global_variables_into_the_prompt" {
+    const out = try piecesJson(testing.allocator, vars_request);
+    defer testing.allocator.free(out);
+
+    const parsed = try std.json.parseFromSlice(PiecesOut, testing.allocator, out, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    try testing.expect(std.mem.indexOf(u8, parsed.value.pieces[0].text, "Aria keeps lamp seven in the third age.") != null);
+}
+
+test "a_setvar_during_the_build_is_reported_back_for_the_host_to_persist" {
+    const with_costs =
+        \\{ "costs": [4, 0, 2, 8],
+    ++ vars_request[1..];
+
+    const out = try fitJson(testing.allocator, with_costs);
+    defer testing.allocator.free(out);
+
+    const Out = struct {
+        prompt: []const u8,
+        variables: ?struct { lamp: []const u8, seen: []const u8 } = null,
+        global_variables: ?struct { era: []const u8 } = null,
+    };
+    const parsed = try std.json.parseFromSlice(Out, testing.allocator, out, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    // The chat store was written, so it comes back whole; the global store was only read, so it is
+    // absent and the host has nothing to rewrite.
+    try testing.expectEqualStrings("yes", parsed.value.variables.?.seen);
+    try testing.expectEqualStrings("seven", parsed.value.variables.?.lamp);
+    try testing.expect(parsed.value.global_variables == null);
 }
 
 test "fit_rejects_a_costs_array_that_does_not_match_the_pieces" {

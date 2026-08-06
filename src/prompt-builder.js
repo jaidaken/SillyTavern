@@ -188,6 +188,14 @@ function pieceText(piece, index) {
 }
 
 /**
+ * @param {any} value Candidate.
+ * @returns {boolean} Whether it is a plain object, the shape a variable store comes back as.
+ */
+function isPlainObject(value) {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
  * Assembles one prompt through the wasm, counting tokens in process between its two calls.
  *
  * pieces returns every candidate piece of the prompt, each piece is costed with the injected
@@ -198,7 +206,7 @@ function pieceText(piece, index) {
  * @param {(text: string) => number|Promise<number>} [options.countTokens] Local token counter. Injected, so no HTTP is involved.
  * @param {any} [options.module] Already-instantiated exports. Takes precedence over wasmPath.
  * @param {string} [options.wasmPath] Module path, used when no module is supplied.
- * @returns {Promise<{prompt: string, stop: any[], timed: any, replyPrefix: string}>}
+ * @returns {Promise<{prompt: string, stop: any[], timed: any, replyPrefix: string, variables: object|null, globalVariables: object|null}>}
  */
 export async function assemblePrompt(request, { countTokens, module = null, wasmPath = DEFAULT_WASM_PATH } = {}) {
     if (!request || typeof request !== 'object') {
@@ -260,5 +268,9 @@ export async function assemblePrompt(request, { countTokens, module = null, wasm
         stop: Array.isArray(fitted.stop) ? fitted.stop : [],
         timed: fitted.timed ?? null,
         replyPrefix: typeof replyPrefix === 'string' ? replyPrefix : '',
+        // Present only when a {{setvar}} fired, so a build that merely read variables leaves the
+        // caller nothing to write back.
+        variables: isPlainObject(fitted.variables) ? fitted.variables : null,
+        globalVariables: isPlainObject(fitted.global_variables) ? fitted.global_variables : null,
     };
 }

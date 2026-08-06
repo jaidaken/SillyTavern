@@ -59,6 +59,7 @@ comptime {
     _ = @import("./setup/macros.zig");
     _ = @import("./setup/macro_chat.zig");
     _ = @import("./setup/macro_env.zig");
+    _ = @import("./setup/macro_vars.zig");
     _ = @import("./platform/moment_fmt.zig");
     _ = @import("./setup/macro_time.zig");
     _ = @import("./platform/rng.zig");

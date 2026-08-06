@@ -80,6 +80,9 @@ describe('assemblePrompt', () => {
             stop: ['\nAda:'],
             timed: { sticky: [3] },
             replyPrefix: 'Ada:',
+            // A build that set no variables reports none, so the caller writes nothing back.
+            variables: null,
+            globalVariables: null,
         });
         expect(countTokens).toHaveBeenCalledTimes(3);
         expect(countTokens.mock.calls.map(args => args[0])).toEqual(['system prompt', 'first message', 'raw string piece']);
@@ -218,7 +221,7 @@ describe('assemblePrompt', () => {
 
         const result = await assemblePrompt(REQUEST, { countTokens: () => 1, module });
 
-        expect(result).toEqual({ prompt: 'bare', stop: [], timed: null, replyPrefix: '' });
+        expect(result).toEqual({ prompt: 'bare', stop: [], timed: null, replyPrefix: '', variables: null, globalVariables: null });
     });
 });
 

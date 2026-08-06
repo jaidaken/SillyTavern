@@ -12,6 +12,7 @@ const std = @import("std");
 const macro_chat = @import("./macro_chat.zig");
 const macro_env = @import("./macro_env.zig");
 const macro_time = @import("./macro_time.zig");
+const macro_vars = @import("./macro_vars.zig");
 
 const rng = @import("../platform/rng.zig");
 
@@ -83,6 +84,9 @@ pub const Ctx = struct {
     /// Card-field macros resolve to values only when set (stock replaceCharacterCard, MacroEnvBuilder.js:96);
     /// renderStoryString's template passes set it, every baseChatReplace-equivalent pass leaves it false.
     replace_character_card: bool = false,
+    /// The chat-local and global variable stores the `{{getvar}}` family reads and writes. Absent by
+    /// default, which leaves those macros literal rather than rendering "" for a store that is not there.
+    vars: macro_vars.Stores = .{},
 
     fn outletByName(self: Ctx, name: []const u8) ?[]const u8 {
         for (self.outlets) |o| {
@@ -237,6 +241,14 @@ pub fn substituteMacros(alloc: Allocator, text: []const u8, ctx: Ctx) Allocator.
                 // Chat-state macros allocate (they format ids and copy message text), so they cannot
                 // ride the pure name-to-value `resolve` below.
                 // Env macros take their own `::` arguments, so they see the whole inner body.
+                // Before the env macros: a variable macro carries `::` arguments of its own, and it is
+                // the only family here that can WRITE, so it resolves against the stores or not at all.
+                if (try macro_vars.resolve(alloc, inner, ctx.vars)) |owned| {
+                    defer alloc.free(owned);
+                    try out.appendSlice(alloc, owned);
+                    i = close + 2;
+                    continue;
+                }
                 if (try macro_env.resolve(alloc, inner, ctx.env)) |owned| {
                     defer alloc.free(owned);
                     try out.appendSlice(alloc, owned);
@@ -287,8 +299,8 @@ fn outletKey(inner: []const u8) ?[]const u8 {
 /// of prior tags). `ctx.rng` drives the random pair (stock getPickReplaceMacro, core-macros.js:375).
 fn tryImpureMacro(alloc: Allocator, out: *std.ArrayList(u8), raw: []const u8, text: []const u8, byte_offset: usize, angle_delta: usize, ctx: Ctx) Allocator.Error!bool {
     if (matchRoll(raw)) |formula_raw| {
-        try appendRoll(alloc, out, formula_raw, ctx);
-        return true;
+        // False falls through to the literal, so an unrollable formula survives into the prompt.
+        if (try appendRoll(alloc, out, formula_raw, ctx)) return true;
     }
     if (matchListMacro(raw, "random")) |list_string| {
         const count = listItemCount(list_string);
@@ -484,9 +496,13 @@ fn parseDice(formula: []const u8) ?Dice {
 }
 
 /// Rolls the formula and appends `String(total)`; an invalid formula appends nothing (stock returns '').
-fn appendRoll(alloc: Allocator, out: *std.ArrayList(u8), formula_raw: []const u8, ctx: Ctx) Allocator.Error!void {
+/// Rolls the formula, or reports that it could not. A formula stock cannot parse renders as NOTHING
+/// there (macros.js:509 returns '' behind a debug line nobody reads), so a typo in a card silently
+/// deletes the macro and the author sees a gap they cannot explain. Here it stays literal, like every
+/// other macro this engine does not understand: visible, and obviously the thing to fix.
+fn appendRoll(alloc: Allocator, out: *std.ArrayList(u8), formula_raw: []const u8, ctx: Ctx) Allocator.Error!bool {
     const formula = std.mem.trim(u8, formula_raw, &std.ascii.whitespace);
-    const dice = parseDice(formula) orelse return;
+    const dice = parseDice(formula) orelse return false;
     var total: i64 = 0;
     var k: u64 = 0;
     while (k < dice.num_dice) : (k += 1) {
@@ -495,6 +511,7 @@ fn appendRoll(alloc: Allocator, out: *std.ArrayList(u8), formula_raw: []const u8
     }
     total += dice.modifier;
     try appendDecI64(alloc, out, total);
+    return true;
 }
 
 fn appendDecI64(alloc: Allocator, out: *std.ArrayList(u8), val: i64) Allocator.Error!void {
@@ -748,14 +765,24 @@ test "roll accepts the digits-only shortcut and a bare d form" {
     try testing.expectEqual(@as(i64, 1), bare_d);
 }
 
-test "an invalid roll formula resolves to empty" {
+test "an invalid roll formula stays visible instead of deleting itself" {
     const cases = [_][]const u8{ "{{roll:abc}}", "{{roll:0}}", "{{roll:2d}}", "{{roll:d0}}", "{{roll:1.5}}" };
     var prng = std.Random.DefaultPrng.init(1);
     for (cases) |c| {
         const out = try substituteMacros(testing.allocator, c, .{ .rng = prng.random() });
         defer testing.allocator.free(out);
-        try testing.expectEqualStrings("", out);
+        // Stock renders '' here, so a mistyped formula vanishes from the prompt with no sign it was
+        // ever there. The literal is the signal that the formula, not the dice, is the problem.
+        try testing.expectEqualStrings(c, out);
     }
+}
+
+test "an invalid roll inside a sentence leaves the rest of the text alone" {
+    var prng = std.Random.DefaultPrng.init(7);
+    const out = try substituteMacros(testing.allocator, "she rolls {{roll:2f6}} and waits", .{ .rng = prng.random() });
+    defer testing.allocator.free(out);
+
+    try testing.expectEqualStrings("she rolls {{roll:2f6}} and waits", out);
 }
 
 test "random always yields a member of the split list" {
