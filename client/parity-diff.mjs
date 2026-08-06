@@ -74,6 +74,7 @@ function parseArgs(argv) {
         else if (k === '--audit') { out.audit = true; i -= 1; }
         else if (k === '--update-golden') { out.updateGolden = true; i -= 1; }
         else if (k === '--macros') { out.macros = true; i -= 1; }
+        else if (k === '--equiv') { out.equiv = true; i -= 1; }
         else throw new Error(`unknown arg: ${k}`);
     }
     if (!out.data) out.data = join(tmpdir(), 'parity-data');
@@ -1278,6 +1279,91 @@ function auditSelfCheck() {
 /// shows up as a diff someone signed off on, not as drift nobody noticed.
 const GOLDEN_DIR = new URL('./parity-golden/', import.meta.url).pathname;
 
+// ---- equivalence: the server-side builder must agree with the browser's, byte for byte -----------
+//
+// The gate for switching the send path over. The approved snapshots ARE the browser's output for these
+// 60 scenarios, so this needs no browser at all: rebuild each scenario's request, run it through the
+// wasm service the way the server will, and compare against the snapshot. Masked like the differential,
+// because {{roll}} and {{random}} redraw per build by design.
+
+/// Counts tokens the way the CLIENT did for these snapshots: the same local encode route on the same
+/// server, so a difference in the fitted prompt is a difference in the BUILDER, not in the counting.
+async function makeCounter(repoRoot) {
+    // The server's own route is `encodeIds(text).length` over this exact model, with no BOS and no
+    // cleaning (src/endpoints/tokenizers.js countSentencepieceTokens), so counting here is identical
+    // to what the browser was told and needs no running server at all.
+    const { SentencePieceProcessor } = await import('@agnai/sentencepiece-js');
+    const sp = new SentencePieceProcessor();
+    await sp.load(join(repoRoot, 'src', 'tokenizers', 'llama.model'));
+    return (text) => sp.encodeIds(text).length;
+}
+
+/// The chat file the drive left behind, as the server would read it. The greeting matters here: the
+/// client writes it into the chat ALREADY macro-substituted, so reconstructing it from the card field
+/// would hand the builder unresolved text the real server never sees.
+function chatMessagesOnDisk(fileKey) {
+    const dir = join(argsData, 'default-user', 'chats', fileKey);
+    if (!existsSync(dir)) return [];
+    const out = [];
+    for (const f of readdirSync(dir)) {
+        if (!f.endsWith('.jsonl')) continue;
+        for (const line of readFileSync(join(dir, f), 'utf8').split('\n')) {
+            if (!line.trim()) continue;
+            let row = null;
+            try { row = JSON.parse(line); } catch { continue; }
+            if (typeof row.mes !== 'string' || row.is_user === undefined) continue;
+            out.push({ name: row.name ?? '', mes: row.mes, is_user: Boolean(row.is_user), is_system: Boolean(row.is_system) });
+        }
+    }
+    // The drive's own reply is on disk by the time this reads it, but the browser assembled its prompt
+    // BEFORE that reply existed. Cutting at the last user turn reproduces the window it actually saw.
+    let lastUser = -1;
+    for (let i = 0; i < out.length; i++) if (out[i].is_user) lastUser = i;
+    return lastUser >= 0 ? out.slice(0, lastUser + 1) : out;
+}
+
+/// The request the server will hand the builder, rebuilt from the scenario the seed generates.
+function equivRequest(state, applied, messages) {
+    return {
+        card: state.card,
+        messages,
+        settings: applied,
+        chat_metadata: applied.extension_settings?.note?.default
+            ? {
+                note_prompt: applied.extension_settings.note.default,
+                note_interval: applied.extension_settings.note.defaultInterval,
+                note_position: applied.extension_settings.note.defaultPosition,
+                note_depth: applied.extension_settings.note.defaultDepth,
+                note_role: applied.extension_settings.note.defaultRole,
+            }
+            : {},
+        world: state.world ?? { entries: {} },
+        chat: { avatar_url: `${FUZZ_CARD}.png`, file_name: state.card.chat, group_id: null },
+        browser: {
+            input: state.messages[state.messages.length - 1],
+            utc_offset_minutes: 0,
+            is_mobile: false,
+            generation_type: 'normal',
+            rotation_index: 0,
+        },
+    };
+}
+
+/// One wasm instance and one tokenizer for the whole run, built on first use.
+let equiv_state = null;
+async function equivAssemble(args, request) {
+    if (!equiv_state) {
+        const repoRoot = args.repo ?? '..';
+        const { assemblePrompt } = await import('../src/prompt-builder.js');
+        equiv_state = {
+            assemblePrompt,
+            wasmPath: join(repoRoot, 'client', 'zig-out', 'bin', 'prompt_service.wasm'),
+            countTokens: await makeCounter(repoRoot),
+        };
+    }
+    return equiv_state.assemblePrompt(request, { countTokens: equiv_state.countTokens, wasmPath: equiv_state.wasmPath });
+}
+
 async function runAudit(args) {
     const startedAt = Date.now();
     const basePng = readFileSync(join(argsData, 'default-user', 'characters', 'default_Seraphina.png'));
@@ -1314,6 +1400,25 @@ async function runAudit(args) {
             }
             if (error) { process.stdout.write(`  seed ${seed}: DRIVE ERROR: ${error}\n`); results.push({ seed, error }); continue; }
 
+            if (args.equiv) {
+                const request = equivRequest(state, applied, chatMessagesOnDisk(FUZZ_CARD));
+                let built = null, buildError = null;
+                try {
+                    built = await equivAssemble(args, request);
+                } catch (e) { buildError = e.message; }
+                if (buildError) {
+                    process.stdout.write(`  seed ${seed}: SERVER BUILD ERROR: ${buildError}\n`);
+                    (byCheck['server-build-error'] = byCheck['server-build-error'] || { seeds: new Set(), details: new Set() }).seeds.add(seed);
+                    (byCheck['server-build-error']).details.add(buildError.slice(0, 120));
+                } else if (maskFuzz(built.prompt) !== maskFuzz(hit.prompt)) {
+                    const rep = diffReport(maskFuzz(hit.prompt), maskFuzz(built.prompt));
+                    process.stdout.write(`  seed ${seed}: SERVER DIFFERS (browser ${rep.bytes.old}, server ${rep.bytes.new})\n--- browser   +++ server\n${rep.text}\n`);
+                    writeFileSync(join(args.data, `eq-${seed}-server.txt`), built.prompt);
+                    const b = byCheck['server-differs'] = byCheck['server-differs'] || { seeds: new Set(), details: new Set() };
+                    b.seeds.add(seed);
+                    b.details.add('the server builder disagrees with the browser');
+                }
+            }
             const findings = auditPrompt(hit.prompt, state, applied);
             const goldenPath = join(GOLDEN_DIR, `${seed}.txt`);
             let drift = null;

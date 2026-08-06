@@ -342,6 +342,27 @@ fn build(a: Allocator, doc: std.json.ObjectMap) RequestError!Built {
         }
     };
 
+    // The chat file does not necessarily carry the greeting: this client reconstructs it whenever the
+    // window reaches the head and the first row is not already an assistant turn (char_api.zig:2233).
+    // Without the same rule here every depth-anchored injection lands one message off, so the
+    // difference is not just a missing line.
+    const at_head = boolOf(doc.get("at_head"), true);
+    const head_lacks_greeting = history.items.len == 0 or history.items[0].role == .user;
+    if (at_head and head_lacks_greeting and first_mes.len > 0) {
+        const greeting = try generate.substituteMacros(a, first_mes, .{
+            .char = char_name,
+            .user = persona.name,
+            .persona = persona.description,
+            .description = description,
+            .personality = personality,
+            .scenario = scenario,
+            .mes_example = mes_example,
+            .chat_id = chat_file,
+        });
+        try history.insert(a, 0, .{ .name = char_name, .mes = greeting, .role = .assistant });
+        try chat_msgs.insert(a, 0, .{ .name = char_name, .mes = greeting, .is_user = false, .is_system = false });
+    }
+
     var store = try loadStore(a, doc, settings_str);
     const wi_entries = try store.collectActive(a);
 
@@ -666,20 +687,22 @@ test "pieces_returns_one_costable_entry_per_prompt_part" {
     const parsed = try std.json.parseFromSlice(PiecesOut, testing.allocator, out, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 
-    // overhead + alignment + the single history turn.
-    try testing.expectEqual(@as(usize, 3), parsed.value.pieces.len);
+    // overhead + alignment + the reconstructed greeting + the single history turn. The card carries a
+    // first_mes and the window is at the head, so the greeting is a history turn like the client's.
+    try testing.expectEqual(@as(usize, 4), parsed.value.pieces.len);
     try testing.expectEqualStrings("overhead", parsed.value.pieces[0].kind);
     try testing.expectEqualStrings("alignment", parsed.value.pieces[1].kind);
     try testing.expectEqualStrings("history", parsed.value.pieces[2].kind);
+    try testing.expectEqualStrings("history", parsed.value.pieces[3].kind);
     try testing.expect(std.mem.indexOf(u8, parsed.value.pieces[0].text, "Aria is a lighthouse keeper.") != null);
-    try testing.expect(std.mem.indexOf(u8, parsed.value.pieces[2].text, "is the lamp still lit") != null);
+    try testing.expect(std.mem.indexOf(u8, parsed.value.pieces[3].text, "is the lamp still lit") != null);
     try testing.expect(parsed.value.stop.len > 0);
     try testing.expectEqualStrings("\nAria:", parsed.value.reply_prefix);
 }
 
 test "fit_joins_the_pieces_the_costs_leave_inside_the_budget" {
     const with_costs =
-        \\{ "costs": [4, 0, 8],
+        \\{ "costs": [4, 0, 2, 8],
     ++ sample_request[1..];
 
     const out = try fitJson(testing.allocator, with_costs);
@@ -739,7 +762,7 @@ fn fitRoundTrip(a: Allocator, input: []const u8) !void {
 
 test "fit_cleans_up_on_every_allocation_failure" {
     const with_costs =
-        \\{ "costs": [4, 0, 8],
+        \\{ "costs": [4, 0, 2, 8],
     ++ sample_request[1..];
     try testing.checkAllAllocationFailures(testing.allocator, fitRoundTrip, .{@as([]const u8, with_costs)});
 }
