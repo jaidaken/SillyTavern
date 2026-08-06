@@ -1426,14 +1426,57 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # small node bridge, fed from the state this mock already serves the client.
 
     @classmethod
-    def card_for(cls, avatar_url):
+    def deep_card(cls, avatar):
+        """The deep card /api/characters/get serves: the shape a prompt is built from."""
+        if cls.hostile_card:
+            return _hostile_card(avatar)
         if cls.saved_card is not None:
             return cls.saved_card
-        want = str(avatar_url or "")
-        for c in _mock_characters(cls.mock_favs):
-            if c.get("avatar") == want:
-                return dict(c)
-        return {}
+        return {
+            "name": avatar,
+            "personality": "curious and warm",
+            "scenario": "a quiet harbor at dusk",
+            "mes_example": "<START>\n{{user}}: hello\n{{char}}: well met",
+            "description": "a lighthouse keeper who reads the weather",
+            "first_mes": "The lamp is lit. You are late.",
+            "fav": True,
+            "talkativeness": 0.7,
+            "tags": ["keeper", "coastal"],
+            "chat": f"{avatar} - 2026-01-01",
+            "create_date": "2026-01-01T00:00:00.000Z",
+            "json_data": json.dumps({"name": avatar, "data": {"character_book": {"entries": []}}}),
+            "data": {
+                "creator_notes": "for the harbour arc",
+                # A1: a per-card system_prompt override. Carries {{original}} so one prompt-body
+                # assertion proves the card wins AND {{original}} expands to the global sysprompt.
+                "system_prompt": "CARD SAYS {{original}} EXTRA",
+                # A1 jailbreak: the card's post-history instruction, injected as a user turn after
+                # the history. {{char}} proves macro resolution in the injected jailbreak.
+                "post_history_instructions": "JB PROBE reply as {{char}}",
+                "creator": "jaidaken",
+                "character_version": "1.2",
+                "alternate_greetings": ["The fog is in.", "Mind the step."],
+                "extensions": {
+                    "world": "",
+                    "depth_prompt": {"prompt": "keep the lamp burning", "depth": 4, "role": "system"},
+                },
+                # w3-wi: v2-spec embedded book, converted + surfaced read-only by the WI panel.
+                "character_book": {
+                    "name": "Keeper's Book",
+                    "entries": [
+                        {"keys": ["lighthouse"], "secondary_keys": [], "content": "The lamp never dies.",
+                         "enabled": True, "insertion_order": 10, "position": "before_char",
+                         "extensions": {"probability": 80, "depth": 3}},
+                    ],
+                },
+            },
+        }
+
+    @classmethod
+    def card_for(cls, avatar_url):
+        # The DEEP card, not the shallow list entry: system_prompt, the jailbreak and
+        # depth_prompt live only here, and a prompt is built from all three.
+        return cls.deep_card(str(avatar_url or "char"))
 
     @classmethod
     def assembly_world(cls):
@@ -1472,17 +1515,38 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             "browser": req.get("browser") or {},
         }
         try:
-            out = subprocess.run(
-                ["node", str(pathlib.Path(__file__).resolve().parent / "assemble-for-mock.mjs")],
-                input=json.dumps(request), capture_output=True, text=True, timeout=30,
-            )
-            if out.returncode != 0:
-                sys.stderr.write("mock assemble failed: %s\n" % (out.stderr or out.stdout)[:400])
-                return None
-            return json.loads(out.stdout)
+            with cls.assembler_lock:
+                proc = cls.assembler()
+                if proc is None:
+                    return None
+                proc.stdin.write(json.dumps(request) + "\n")
+                proc.stdin.flush()
+                line = proc.stdout.readline()
+            return json.loads(line) if line else None
         except Exception as exc:  # a mock that cannot assemble must say so, not answer an empty prompt
             sys.stderr.write("mock assemble error: %s\n" % exc)
+            cls.assembler_proc = None
             return None
+
+    assembler_proc = None
+    assembler_lock = threading.Lock()
+
+    @classmethod
+    def assembler(cls):
+        """The long-lived builder process. Started once: its tokenizer is a model load."""
+        if cls.assembler_proc is not None and cls.assembler_proc.poll() is None:
+            return cls.assembler_proc
+        script = pathlib.Path(__file__).resolve().parent / "assemble-for-mock.mjs"
+        proc = subprocess.Popen(
+            ["node", str(script)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=None, text=True, bufsize=1,
+        )
+        if (proc.stdout.readline() or "").strip() != "READY":
+            sys.stderr.write("mock assembler did not come up\n")
+            proc.kill()
+            return None
+        cls.assembler_proc = proc
+        return proc
 
     def gen_start(self, req):
         chat = req.get("chat") or {}
@@ -1931,49 +1995,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             avatar = req.get("avatar_url", "char")
             Handler.card_get_count += 1  # w3-wi: the deep-fetch completion signal for the gate
             Handler.last_card_get = avatar
-            if Handler.hostile_card:
-                return self.mock_json(_hostile_card(avatar))
-            if Handler.saved_card is not None:
-                return self.mock_json(Handler.saved_card)
-            return self.mock_json({
-                "name": avatar,
-                "personality": "curious and warm",
-                "scenario": "a quiet harbor at dusk",
-                "mes_example": "<START>\n{{user}}: hello\n{{char}}: well met",
-                "description": "a lighthouse keeper who reads the weather",
-                "first_mes": "The lamp is lit. You are late.",
-                "fav": True,
-                "talkativeness": 0.7,
-                "tags": ["keeper", "coastal"],
-                "chat": f"{avatar} - 2026-01-01",
-                "create_date": "2026-01-01T00:00:00.000Z",
-                "json_data": json.dumps({"name": avatar, "data": {"character_book": {"entries": []}}}),
-                "data": {
-                    "creator_notes": "for the harbour arc",
-                    # A1: a per-card system_prompt override. Carries {{original}} so one prompt-body
-                    # assertion proves the card wins AND {{original}} expands to the global sysprompt.
-                    "system_prompt": "CARD SAYS {{original}} EXTRA",
-                    # A1 jailbreak: the card's post-history instruction, injected as a user turn after
-                    # the history. {{char}} proves macro resolution in the injected jailbreak.
-                    "post_history_instructions": "JB PROBE reply as {{char}}",
-                    "creator": "jaidaken",
-                    "character_version": "1.2",
-                    "alternate_greetings": ["The fog is in.", "Mind the step."],
-                    "extensions": {
-                        "world": "",
-                        "depth_prompt": {"prompt": "keep the lamp burning", "depth": 4, "role": "system"},
-                    },
-                    # w3-wi: v2-spec embedded book, converted + surfaced read-only by the WI panel.
-                    "character_book": {
-                        "name": "Keeper's Book",
-                        "entries": [
-                            {"keys": ["lighthouse"], "secondary_keys": [], "content": "The lamp never dies.",
-                             "enabled": True, "insertion_order": 10, "position": "before_char",
-                             "extensions": {"probability": 80, "depth": 3}},
-                        ],
-                    },
-                },
-            })
+            return self.mock_json(Handler.deep_card(avatar))
         if path == "/api/characters/edit":
             # C-CARD: store the posted body and serve it back from /get, so the gate proves a real
             # round-trip (edit -> save -> reload shows the saved text) rather than a local echo.
