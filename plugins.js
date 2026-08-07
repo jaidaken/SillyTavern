@@ -39,7 +39,7 @@ if (command === 'install') {
 }
 
 async function updatePlugins() {
-    const directories = fs.readdirSync(pluginsPath, { withFileTypes: true })
+    const directories = (await fs.promises.readdir(pluginsPath, { withFileTypes: true }))
         .filter(dirent => dirent.isDirectory() || dirent.isSymbolicLink())
         .filter(dirent => !dirent.name.startsWith('.'))
         .map(dirent => dirent.name);

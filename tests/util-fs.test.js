@@ -25,27 +25,27 @@ describe('getImages', () => {
         }
     }
 
-    test('sorts by name with natural collation', () => {
+    test('sorts by name with natural collation', async () => {
         writeFile('b.png');
         writeFile('a.png');
         writeFile('c.png');
-        expect(getImages(tmpDir, 'name')).toEqual(['a.png', 'b.png', 'c.png']);
+        await expect(getImages(tmpDir, 'name')).resolves.toEqual(['a.png', 'b.png', 'c.png']);
     });
 
-    test('sorts by date oldest-first using file mtime', () => {
+    test('sorts by date oldest-first using file mtime', async () => {
         writeFile('newest.png', 3_000_000);
         writeFile('oldest.png', 1_000_000);
         writeFile('middle.png', 2_000_000);
-        expect(getImages(tmpDir, 'date')).toEqual(['oldest.png', 'middle.png', 'newest.png']);
+        await expect(getImages(tmpDir, 'date')).resolves.toEqual(['oldest.png', 'middle.png', 'newest.png']);
     });
 
-    test('reads each file mtime only once when sorting by date', () => {
+    test('reads each file mtime only once when sorting by date', async () => {
         for (let i = 0; i < 8; i++) {
             writeFile(`img${i}.png`, (8 - i) * 1_000_000);
         }
-        const spy = jest.spyOn(fs, 'statSync');
+        const spy = jest.spyOn(fs.promises, 'stat');
         try {
-            const result = getImages(tmpDir, 'date');
+            const result = await getImages(tmpDir, 'date');
             expect(result).toEqual(['img7.png', 'img6.png', 'img5.png', 'img4.png', 'img3.png', 'img2.png', 'img1.png', 'img0.png']);
             expect(spy).toHaveBeenCalledTimes(8);
         } finally {
@@ -53,11 +53,11 @@ describe('getImages', () => {
         }
     });
 
-    test('falls back to mtime 0 if a file disappears between readdir and stat', () => {
+    test('falls back to mtime 0 if a file disappears between readdir and stat', async () => {
         writeFile('survivor.png', 2_000_000);
         writeFile('ghost.png', 1_000_000);
-        const realStat = fs.statSync;
-        const spy = jest.spyOn(fs, 'statSync').mockImplementation((p, ...rest) => {
+        const realStat = fs.promises.stat;
+        const spy = jest.spyOn(fs.promises, 'stat').mockImplementation(async (p, ...rest) => {
             if (typeof p === 'string' && p.endsWith('ghost.png')) {
                 const err = new Error('ENOENT');
                 err.code = 'ENOENT';
@@ -66,17 +66,17 @@ describe('getImages', () => {
             return realStat(p, ...rest);
         });
         try {
-            expect(getImages(tmpDir, 'date')).toEqual(['ghost.png', 'survivor.png']);
+            await expect(getImages(tmpDir, 'date')).resolves.toEqual(['ghost.png', 'survivor.png']);
         } finally {
             spy.mockRestore();
         }
     });
 
-    test('propagates non-ENOENT stat errors (e.g. EACCES) instead of masking them', () => {
+    test('propagates non-ENOENT stat errors (e.g. EACCES) instead of masking them', async () => {
         writeFile('readable.png', 1_000_000);
         writeFile('forbidden.png', 2_000_000);
-        const realStat = fs.statSync;
-        const spy = jest.spyOn(fs, 'statSync').mockImplementation((p, ...rest) => {
+        const realStat = fs.promises.stat;
+        const spy = jest.spyOn(fs.promises, 'stat').mockImplementation(async (p, ...rest) => {
             if (typeof p === 'string' && p.endsWith('forbidden.png')) {
                 const err = new Error('EACCES');
                 err.code = 'EACCES';
@@ -85,52 +85,52 @@ describe('getImages', () => {
             return realStat(p, ...rest);
         });
         try {
-            expect(() => getImages(tmpDir, 'date')).toThrow(/EACCES/);
+            await expect(getImages(tmpDir, 'date')).rejects.toThrow(/EACCES/);
         } finally {
             spy.mockRestore();
         }
     });
 
-    test('filters to image types by default', () => {
+    test('filters to image types by default', async () => {
         writeFile('keep.png');
         writeFile('keep.jpg');
         writeFile('drop.mp4');
         writeFile('drop.mp3');
         writeFile('drop.txt');
         writeFile('no-extension');
-        expect(getImages(tmpDir, 'name')).toEqual(['keep.jpg', 'keep.png']);
+        await expect(getImages(tmpDir, 'name')).resolves.toEqual(['keep.jpg', 'keep.png']);
     });
 
-    test('filters to video types when requested', () => {
+    test('filters to video types when requested', async () => {
         writeFile('drop.png');
         writeFile('keep.mp4');
         writeFile('keep.webm');
-        expect(getImages(tmpDir, 'name', MEDIA_REQUEST_TYPE.VIDEO)).toEqual(['keep.mp4', 'keep.webm']);
+        await expect(getImages(tmpDir, 'name', MEDIA_REQUEST_TYPE.VIDEO)).resolves.toEqual(['keep.mp4', 'keep.webm']);
     });
 
-    test('filters to audio types when requested', () => {
+    test('filters to audio types when requested', async () => {
         writeFile('drop.png');
         writeFile('keep.mp3');
         writeFile('keep.wav');
-        expect(getImages(tmpDir, 'name', MEDIA_REQUEST_TYPE.AUDIO)).toEqual(['keep.mp3', 'keep.wav']);
+        await expect(getImages(tmpDir, 'name', MEDIA_REQUEST_TYPE.AUDIO)).resolves.toEqual(['keep.mp3', 'keep.wav']);
     });
 
-    test('accepts combined media-type bitmask', () => {
+    test('accepts combined media-type bitmask', async () => {
         writeFile('img.png');
         writeFile('clip.mp4');
         writeFile('song.mp3');
-        const result = getImages(tmpDir, 'name', MEDIA_REQUEST_TYPE.IMAGE | MEDIA_REQUEST_TYPE.AUDIO);
+        const result = await getImages(tmpDir, 'name', MEDIA_REQUEST_TYPE.IMAGE | MEDIA_REQUEST_TYPE.AUDIO);
         expect(result).toEqual(['img.png', 'song.mp3']);
     });
 
-    test('skips subdirectories', () => {
+    test('skips subdirectories', async () => {
         writeFile('real.png');
         fs.mkdirSync(path.join(tmpDir, 'sub.png'));
-        expect(getImages(tmpDir, 'name')).toEqual(['real.png']);
+        await expect(getImages(tmpDir, 'name')).resolves.toEqual(['real.png']);
     });
 
-    test('returns empty array for an empty directory', () => {
-        expect(getImages(tmpDir, 'name')).toEqual([]);
-        expect(getImages(tmpDir, 'date')).toEqual([]);
+    test('returns empty array for an empty directory', async () => {
+        await expect(getImages(tmpDir, 'name')).resolves.toEqual([]);
+        await expect(getImages(tmpDir, 'date')).resolves.toEqual([]);
     });
 });
