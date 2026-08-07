@@ -720,7 +720,14 @@ export async function getImages(directoryPath, sortBy = 'name', type = MEDIA_REQ
         case 'date': {
             const mtimes = new Map();
             for (const file of files) {
-                mtimes.set(file, (await fs.promises.stat(path.join(directoryPath, file))).mtimeMs);
+                try {
+                    mtimes.set(file, (await fs.promises.stat(path.join(directoryPath, file))).mtimeMs);
+                } catch (err) {
+                    if (/** @type {NodeJS.ErrnoException} */ (err)?.code !== 'ENOENT') {
+                        throw err;
+                    }
+                    mtimes.set(file, 0);
+                }
             }
             return files.sort((a, b) => (mtimes.get(a) ?? 0) - (mtimes.get(b) ?? 0));
         }

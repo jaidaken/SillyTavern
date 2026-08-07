@@ -2,11 +2,12 @@ import { defineConfig } from '@playwright/test';
 
 // Set when the Playwright-managed browser build is absent and a local Chromium must be used.
 const executablePath = process.env.ST_E2E_CHROMIUM || undefined;
+const baseURL = process.env.ST_BASE_URL || process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:8000';
 
 export default defineConfig({
     testMatch: '*.e2e.js',
     use: {
-        baseURL: 'http://127.0.0.1:8000',
+        baseURL,
         video: 'only-on-failure',
         screenshot: 'only-on-failure',
         launchOptions: { executablePath },

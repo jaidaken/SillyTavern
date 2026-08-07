@@ -4,16 +4,26 @@ import crypto from 'node:crypto';
 
 import storage from 'node-persist';
 import express from 'express';
+import { RateLimiterMemory, RateLimiterRes } from 'rate-limiter-flexible';
 
 import { getUserAvatar, toKey, getPasswordHash, getPasswordSalt, createBackupArchive, ensurePublicDirectoriesExist, toAvatarKey, getAccountVersion } from '../users.js';
 import { SETTINGS_FILE } from '../constants.js';
 import { checkForNewContent, CONTENT_TYPES } from './content-manager.js';
 import { color, Cache, getConfigValue } from '../util.js';
 import { log } from '../log.js';
+import { getIpAddress, retryAfter } from '../express-common.js';
 
+const RESET_POINTS = getConfigValue('rateLimiting.accountsResetMaxAttempts', 5, 'number');
+const PREFER_REAL_IP_HEADER = getConfigValue('rateLimiting.preferRealIpHeader', false, 'boolean');
 const RESET_CACHE = new Cache(5 * 60 * 1000);
 
+const generateResetCode = () => Array.from({ length: 6 }, () => crypto.randomInt(0, 10)).join('');
+
 export const router = express.Router();
+const resetLimiter = new RateLimiterMemory({
+    points: RESET_POINTS > 0 ? RESET_POINTS : Number.MAX_SAFE_INTEGER,
+    duration: 300,
+});
 
 router.post('/logout', async (request, response) => {
     try {
@@ -224,11 +234,24 @@ router.post('/change-name', async (request, response) => {
 
 router.post('/reset-step1', async (request, response) => {
     try {
-        const resetCode = String(crypto.randomInt(1000, 9999));
+        const ip = getIpAddress(request, PREFER_REAL_IP_HEADER);
+        const rateLimit = await resetLimiter.get(ip);
+
+        // Check for existing rate limits, but allow requesting a new code unless locked out
+        if (rateLimit !== null && rateLimit.consumedPoints > resetLimiter.points) {
+            throw rateLimit;
+        }
+
+        const resetCode = generateResetCode();
         log.users.info(color.magenta(`${request.user.profile.name}, your account reset code is: `) + color.red(resetCode));
         RESET_CACHE.set(request.user.profile.handle, resetCode);
         return response.sendStatus(204);
     } catch (error) {
+        if (error instanceof RateLimiterRes) {
+            log.users.error('Recover step 1 failed: Rate limited from', getIpAddress(request, PREFER_REAL_IP_HEADER));
+            return retryAfter(response, error).status(429).send({ error: 'Too many attempts. Try again later or contact your admin.' });
+        }
+
         log.users.error('Recover step 1 failed:', error);
         return response.sendStatus(500);
     }
@@ -246,9 +269,17 @@ router.post('/reset-step2', async (request, response) => {
             return response.status(400).json({ error: 'Incorrect password' });
         }
 
+        const ip = getIpAddress(request, PREFER_REAL_IP_HEADER);
+        const rateLimit = await resetLimiter.get(ip);
+
+        if (rateLimit !== null && rateLimit.consumedPoints > resetLimiter.points) {
+            throw rateLimit;
+        }
+
         const code = RESET_CACHE.get(request.user.profile.handle);
 
         if (!code || code !== request.body.code) {
+            await resetLimiter.consume(ip);
             log.users.warn('Recover step 2 failed: Incorrect code');
             return response.status(400).json({ error: 'Incorrect code' });
         }
@@ -259,9 +290,15 @@ router.post('/reset-step2', async (request, response) => {
         await ensurePublicDirectoriesExist();
         await checkForNewContent([request.user.directories]);
 
+        await resetLimiter.delete(ip);
         RESET_CACHE.remove(request.user.profile.handle);
         return response.sendStatus(204);
     } catch (error) {
+        if (error instanceof RateLimiterRes) {
+            log.users.error('Recover step 2 failed: Rate limited from', getIpAddress(request, PREFER_REAL_IP_HEADER));
+            return retryAfter(response, error).status(429).send({ error: 'Too many attempts. Try again later or contact your admin.' });
+        }
+
         log.users.error('Recover step 2 failed:', error);
         return response.sendStatus(500);
     }

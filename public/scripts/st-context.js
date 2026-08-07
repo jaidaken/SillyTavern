@@ -111,6 +111,7 @@ import { updateReasoningUI, parseReasoningFromString, getReasoningTemplateByName
 import { IGNORE_SYMBOL } from './constants.js';
 import { macros } from './macros/macro-system.js';
 import { log } from './log.js';
+import { MessageFormatter } from './message-formatter.js';
 
 // Mirrors MacrosParser's internal bridging so extensions keep the legacy (name, fn, description) signature,
 // without calling the deprecated MacrosParser.registerMacro.
@@ -310,6 +311,7 @@ export function getContext() {
         scrollChatToBottom,
         scrollOnMediaLoad,
         macros,
+        messageFormatter: MessageFormatter,
         loader,
         swipe: {
             left: swipe_left,

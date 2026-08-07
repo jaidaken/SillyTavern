@@ -18,6 +18,7 @@ export default [
             '**/*.min.js',
             'public/scripts/extensions/quick-reply/lib/**',
             'public/scripts/extensions/tts/lib/**',
+            'public/scripts/extensions/third-party/**',
         ],
     },
     js.configs.recommended,
