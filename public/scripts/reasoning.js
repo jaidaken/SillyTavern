@@ -699,26 +699,34 @@ export class PromptReasoning {
     /**
      * Marks the reasoning block as already opened by the prompt itself, so a response that carries
      * only the closing suffix still parses. Models that seed the thinking channel from their chat
-     * template end the assistant prefix with the reasoning prefix.
+     * template open the block in the assistant prefix, optionally with a lead-in after it.
      * @param {string} promptTail Text appended to the prompt as the assistant prefix
      */
     static markPrefixOpenedByPrompt(promptTail) {
         const latest = PromptReasoning.#LATEST;
-        if (!latest || latest.prefixReasoningFormatted) {
-            return;
-        }
-
-        if (!power_user.reasoning.auto_parse) {
+        if (!latest || latest.prefixReasoningFormatted || !power_user.reasoning.auto_parse) {
             return;
         }
 
         const prefix = substituteParams(power_user.reasoning.prefix || '');
-        if (!prefix.trim() || !String(promptTail).trimEnd().endsWith(prefix.trimEnd())) {
+        const suffix = substituteParams(power_user.reasoning.suffix || '');
+        if (!prefix.trim() || !suffix.trim()) {
             return;
         }
 
-        latest.prefixReasoning = '';
-        latest.prefixReasoningFormatted = prefix;
+        // The block counts as open only if nothing closes it after the last opening.
+        const opened = String(promptTail).lastIndexOf(prefix);
+        if (opened < 0) {
+            return;
+        }
+
+        const openBlock = String(promptTail).slice(opened);
+        if (openBlock.includes(suffix)) {
+            return;
+        }
+
+        latest.prefixReasoning = openBlock.slice(prefix.length);
+        latest.prefixReasoningFormatted = openBlock;
         latest.prefixIncomplete = true;
     }
 
