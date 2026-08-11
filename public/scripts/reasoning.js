@@ -697,6 +697,32 @@ export class PromptReasoning {
     }
 
     /**
+     * Marks the reasoning block as already opened by the prompt itself, so a response that carries
+     * only the closing suffix still parses. Models that seed the thinking channel from their chat
+     * template end the assistant prefix with the reasoning prefix.
+     * @param {string} promptTail Text appended to the prompt as the assistant prefix
+     */
+    static markPrefixOpenedByPrompt(promptTail) {
+        const latest = PromptReasoning.#LATEST;
+        if (!latest || latest.prefixReasoningFormatted) {
+            return;
+        }
+
+        if (!power_user.reasoning.auto_parse) {
+            return;
+        }
+
+        const prefix = substituteParams(power_user.reasoning.prefix || '');
+        if (!prefix.trim() || !String(promptTail).trimEnd().endsWith(prefix.trimEnd())) {
+            return;
+        }
+
+        latest.prefixReasoning = '';
+        latest.prefixReasoningFormatted = prefix;
+        latest.prefixIncomplete = true;
+    }
+
+    /**
      * Free the latest reasoning instance.
      * To be called when the generation has ended or stopped.
      */
