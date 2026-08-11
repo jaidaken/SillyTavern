@@ -3,9 +3,11 @@
 //! settings blob, the deep card, and the persona, then calls in, and the SSE pump stays in the JS
 //! glue (ZX16).
 //!
-//! Scope this phase: the textgen family only (main_api == "textgenerationwebui"). The openai-chat
-//! and kobold-horde families use other endpoints and body shapes and are out of scope; extraction
-//! returns error.UnsupportedApi for them rather than guessing.
+//! Scope: the textgen family (main_api == "textgenerationwebui") and the openai-chat family
+//! (main_api == "openai", chat_completion_source "custom" against a custom_url). The openai path
+//! reuses the same assembly: the server turns the fitted window into a chat_messages array. Other
+//! families use other endpoints and body shapes and are out of scope; extraction returns
+//! error.UnsupportedApi for them rather than guessing.
 //!
 //! The prompt SHAPE lives in templates.zig (the instruct/context model the formatting panel edits)
 //! and the macro resolver in macros.zig; this file orders the blocks and enforces the budget. Ctx and
@@ -26,16 +28,26 @@ pub const Role = templates.Role;
 pub const Templates = templates.Templates;
 pub const Note = authors_note.Note;
 
-/// The backend connection pulled out of the settings blob. `api_type`/`api_server` are owned; the
-/// samplers are plain scalars coerced from the blob with backend-neutral defaults when a field is
-/// absent. Free with `freeConnection`.
+/// The backend connection pulled out of the settings blob. `api_type`/`api_server`/`model` and the
+/// openai-chat fields are owned; the samplers are plain scalars coerced from the blob with
+/// backend-neutral defaults when a field is absent. Free with `freeConnection`.
 pub const Connection = struct {
+    /// Which request family the connection speaks. `buildRequestBody` emits the matching body shape.
+    /// Defaults to textgen so existing Connection literals keep compiling.
+    family: Family = .textgen,
     api_type: []u8,
     api_server: []u8,
-    /// The user-configured model name (stock getTextGenModel: the per-type `*_model` field). Owned,
-    /// possibly empty when the backend carries none (koboldcpp, or an unset field); the tokenizer
-    /// resolver then defers to the probed model and finally the llama default. Feeds getTokenizerBestMatch.
+    /// The user-configured model name (stock getTextGenModel: the per-type `*_model` field; for the
+    /// openai family the CUSTOM source's `custom_model`). Owned, possibly empty when the backend
+    /// carries none (koboldcpp, or an unset field); the tokenizer resolver then defers to the probed
+    /// model and finally the llama default. Feeds getTokenizerBestMatch.
     model: []u8,
+    /// openai-chat: the chat_completion_source (stock oai_settings.chat_completion_source), "custom"
+    /// for a llama.cpp-style OpenAI-compatible server. Owned, empty outside the openai family.
+    chat_completion_source: []u8 = &.{},
+    /// openai-chat: the configured custom_url (stock oai_settings.custom_url), what the server posts
+    /// /chat/completions to. Owned, empty outside the openai family.
+    custom_url: []u8 = &.{},
     /// Stock power_user.token_padding (default 64): tokens the classic client reserves out of the history
     /// budget (getMessagesTokenCount adds it to the overhead seed, tokenizers.js:482). promptTokenBudget
     /// subtracts it so the trim boundary matches.
@@ -49,10 +61,16 @@ pub const Connection = struct {
     rep_pen: f64,
 };
 
+/// The request family a connection belongs to. The textgen family sends a flat assembled prompt to a
+/// completion endpoint; the openai family sends a messages array to /chat/completions.
+pub const Family = enum { textgen, openai };
+
 pub fn freeConnection(alloc: Allocator, conn: Connection) void {
     alloc.free(conn.api_type);
     alloc.free(conn.api_server);
     alloc.free(conn.model);
+    if (conn.chat_completion_source.len > 0) alloc.free(conn.chat_completion_source);
+    if (conn.custom_url.len > 0) alloc.free(conn.custom_url);
 }
 
 pub const ConnectionError = error{ ParseFailed, NotAnObject, UnsupportedApi, MissingConnection } || Allocator.Error;
@@ -76,7 +94,49 @@ pub fn extractConnection(alloc: Allocator, settings_str: []const u8) ConnectionE
         else => return error.NotAnObject,
     };
 
-    if (!std.mem.eql(u8, strField(root, "main_api"), "textgenerationwebui")) return error.UnsupportedApi;
+    const main_api = strField(root, "main_api");
+    const is_openai = std.mem.eql(u8, main_api, "openai");
+    if (!is_openai and !std.mem.eql(u8, main_api, "textgenerationwebui")) return error.UnsupportedApi;
+
+    // openai-chat family: the active backend is oai_settings.chat_completion_source, and the CUSTOM
+    // source's URL is oai_settings.custom_url (a llama.cpp-style OpenAI-compatible server). The
+    // samplers sit under the *_openai keys; `amount_gen`/`max_context` stay at the root. api_server is
+    // mirrored onto custom_url so the send path and the server's token counter see a URL either way.
+    if (is_openai) {
+        const oai = switch (root.get("oai_settings") orelse return error.MissingConnection) {
+            .object => |o| o,
+            else => return error.MissingConnection,
+        };
+        const source = strField(oai, "chat_completion_source");
+        if (source.len == 0) return error.MissingConnection;
+        const url = strField(oai, "custom_url");
+        const api_type = try alloc.dupe(u8, "openai");
+        errdefer alloc.free(api_type);
+        const api_server = try alloc.dupe(u8, url);
+        errdefer alloc.free(api_server);
+        const model = try alloc.dupe(u8, strField(oai, "custom_model"));
+        errdefer alloc.free(model);
+        const chat_completion_source = try alloc.dupe(u8, source);
+        errdefer alloc.free(chat_completion_source);
+        const custom_url = try alloc.dupe(u8, url);
+        errdefer alloc.free(custom_url);
+        return .{
+            .family = .openai,
+            .api_type = api_type,
+            .api_server = api_server,
+            .model = model,
+            .chat_completion_source = chat_completion_source,
+            .custom_url = custom_url,
+            .token_padding = tokenPadding(root),
+            .max_context = numI64(root, "max_context", 8192),
+            .max_tokens = numI64(root, "amount_gen", 512),
+            .temperature = numF64(oai, "temp_openai", 1.0),
+            .top_p = numF64(oai, "top_p_openai", 1.0),
+            .top_k = numI64(oai, "top_k_openai", 0),
+            .min_p = numF64(oai, "min_p_openai", 0.0),
+            .rep_pen = numF64(oai, "rep_pen_openai", 1.0),
+        };
+    }
 
     const tg = switch (root.get("textgenerationwebui_settings") orelse return error.MissingConnection) {
         .object => |o| o,
@@ -95,6 +155,7 @@ pub fn extractConnection(alloc: Allocator, settings_str: []const u8) ConnectionE
     errdefer alloc.free(model);
 
     return .{
+        .family = .textgen,
         .api_type = api_type,
         .api_server = api_server,
         .model = model,
@@ -331,6 +392,9 @@ pub const AssembledInjection = struct {
     /// of `wrapped` when this injection is the oldest chat-block element (stock force_output_sequence.FIRST
     /// on coreChat[0], script.js:4757). Owned; freed in freePieces.
     first_variant: ?[]u8 = null,
+    /// The plain substituted block without the template wrapper, used verbatim as the chat message
+    /// content in openai mode. Owned; freed in freePieces.
+    raw: []u8 = &.{},
 };
 
 /// A single depth-injection source before grouping: RAW (unsubstituted) text with its target
@@ -406,7 +470,9 @@ fn groupInjections(alloc: Allocator, out: *std.ArrayList(AssembledInjection), in
         errdefer alloc.free(wrapped);
         const first_variant = try firstOutputVariant(alloc, instruct, c.role, name, value);
         errdefer if (first_variant) |fv| alloc.free(fv);
-        try out.append(alloc, .{ .depth = c.depth, .rank = roleRank(c.role), .wrapped = wrapped, .role = c.role, .is_user = c.role == .user, .first_variant = first_variant });
+        const raw = try alloc.dupe(u8, value);
+        errdefer alloc.free(raw);
+        try out.append(alloc, .{ .depth = c.depth, .rank = roleRank(c.role), .wrapped = wrapped, .role = c.role, .is_user = c.role == .user, .first_variant = first_variant, .raw = raw });
     }
 }
 
@@ -458,6 +524,17 @@ pub const Pieces = struct {
     collapse_newlines: bool,
     /// The updated timed-effect state as owned JSON, or null when the caller did not ask for it.
     timed_json: ?[]const u8,
+    /// The raw story text (the system message content in openai mode). Owned; freed in freePieces.
+    story: []u8 = &.{},
+    /// The user_alignment_message's substituted text WITHOUT the template wrapper, the chat message
+    /// content in openai mode ("" when none). Owned; freed in freePieces.
+    alignment_raw: []u8 = &.{},
+    /// The raw per-turn text, parallel to wrapped_history, the chat message content in openai mode.
+    /// Owned; freed in freePieces.
+    history_raw: [][]u8 = &.{},
+    /// The role per history turn, parallel to wrapped_history (chat messages can't be derived from the
+    /// wrapped text alone). Read-only; freed in freePieces.
+    history_roles: []const templates.Role = &.{},
 };
 
 pub fn freePieces(alloc: Allocator, p: *Pieces) void {
@@ -465,6 +542,7 @@ pub fn freePieces(alloc: Allocator, p: *Pieces) void {
     for (p.injections) |inj| {
         alloc.free(inj.wrapped);
         if (inj.first_variant) |fv| alloc.free(fv);
+        if (inj.raw.len > 0) alloc.free(inj.raw);
     }
     alloc.free(p.injections);
     for (p.wrapped_history) |w| alloc.free(w);
@@ -476,6 +554,11 @@ pub fn freePieces(alloc: Allocator, p: *Pieces) void {
     alloc.free(p.prefix);
     alloc.free(p.bias);
     if (p.timed_json) |j| alloc.free(j);
+    if (p.story.len > 0) alloc.free(p.story);
+    if (p.alignment_raw.len > 0) alloc.free(p.alignment_raw);
+    for (p.history_raw) |r| alloc.free(r);
+    if (p.history_raw.len > 0) alloc.free(p.history_raw);
+    if (p.history_roles.len > 0) alloc.free(p.history_roles);
 }
 
 /// Per-piece costs the budget walk sums, in whatever unit the caller measured (bytes for the fallback,
@@ -660,6 +743,56 @@ pub fn fitAndAssemble(alloc: Allocator, pieces: Pieces, costs: CostTable, budget
     return out.toOwnedSlice(alloc);
 }
 
+/// One OpenAI-compatible chat message: a template role plus raw content (no template wrapper). The
+/// openai family sends a messages array instead of the flat assembled prompt.
+pub const ChatMessage = struct {
+    role: templates.Role,
+    content: []const u8,
+};
+
+fn appendChatInjectionsAt(alloc: Allocator, out: *std.ArrayList(ChatMessage), pieces: Pieces, window_len: usize, at: usize) Allocator.Error!void {
+    // Same ordering as appendAssembledInjectionsAt: depth past the window first (deepest first), then
+    // ASSISTANT, USER, SYSTEM within a depth, then the jailbreak trailing all of them.
+    var order: std.ArrayList(usize) = .empty;
+    defer order.deinit(alloc);
+    for (pieces.injections, 0..) |inj, idx| {
+        if (window_len -| inj.depth != at) continue;
+        try order.append(alloc, idx);
+    }
+    std.sort.pdq(usize, order.items, pieces.injections, injectionLess);
+    for (order.items) |idx| {
+        const inj = pieces.injections[idx];
+        try out.append(alloc, .{ .role = inj.role, .content = inj.raw });
+    }
+}
+
+/// Mirrors fitAndAssemble's budget walk but emits a chat_messages array instead of the flat prompt: the
+/// system message (the raw story), the alignment message, the surviving history turns with each injection
+/// at its depth, then the post-history jailbreak. Wrapped pieces give way to their raw text, so the
+/// content is exactly what the model consumes and the host's per-piece token costs still line up.
+pub fn fitMessages(alloc: Allocator, pieces: Pieces, costs: CostTable, budget: usize) Allocator.Error![]ChatMessage {
+    var inj_sum: usize = 0;
+    for (costs.injections) |c| inj_sum += c;
+    const start = fitWindow(costs.history, budget -| costs.overhead -| inj_sum);
+    const window_len = pieces.history_len - start;
+
+    var out: std.ArrayList(ChatMessage) = .empty;
+    errdefer out.deinit(alloc);
+    // The system message is the raw story (OpenAI forbids a `name` on system messages, so none is sent).
+    if (pieces.story.len > 0) try out.append(alloc, .{ .role = .system, .content = pieces.story });
+    // user_alignment_message rides the front of the chat block unless the oldest chat-block element (a
+    // deep injection or the oldest history turn) is a user turn (script.js:4901); cost reserved in overhead.
+    if (pieces.alignment.len > 0 and (window_len > 0 or pieces.injections.len > 0) and !oldestChatIsUser(pieces, window_len, start))
+        try out.append(alloc, .{ .role = .user, .content = pieces.alignment_raw });
+    var i: usize = 0;
+    while (i < window_len) : (i += 1) {
+        try appendChatInjectionsAt(alloc, &out, pieces, window_len, i);
+        try out.append(alloc, .{ .role = pieces.history_roles[start + i], .content = pieces.history_raw[start + i] });
+    }
+    try appendChatInjectionsAt(alloc, &out, pieces, window_len, window_len);
+    return out.toOwnedSlice(alloc);
+}
+
 /// Assembles the prompt into separately-costable pieces WITHOUT applying the budget: the story-block
 /// overhead, each in-chat injection pre-wrapped, and each history turn pre-wrapped. World info activates
 /// here (it feeds the story string and the injections), and the timed-effect state is stringified while
@@ -765,6 +898,9 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
     story_ctx.use_raw_parsed = true;
     const story = try templates.renderStoryString(alloc, shape.tpl.context.story_string, story_ctx, instruct);
     defer alloc.free(story);
+    // The raw story (trimmed) becomes the system message content in openai mode; keep an owned copy.
+    const story_owned = try alloc.dupe(u8, std.mem.trim(u8, story, &std.ascii.whitespace));
+    errdefer alloc.free(story_owned);
     const wrapped_story = try templates.wrapStoryString(alloc, instruct, story);
     defer alloc.free(wrapped_story);
     try overhead.appendSlice(alloc, wrapped_story);
@@ -783,7 +919,10 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
     // each, jailbreak trailing. Ownership moves to the returned Pieces on success (free wrapped on error).
     var injections: std.ArrayList(AssembledInjection) = .empty;
     errdefer {
-        for (injections.items) |inj| alloc.free(inj.wrapped);
+        for (injections.items) |inj| {
+            alloc.free(inj.wrapped);
+            if (inj.raw.len > 0) alloc.free(inj.raw);
+        }
         injections.deinit(alloc);
     }
 
@@ -834,19 +973,41 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
         defer alloc.free(subbed);
         const wrapped = try templates.wrapMessage(alloc, instruct, .user, "", subbed);
         errdefer alloc.free(wrapped);
-        try injections.append(alloc, .{ .depth = 0, .rank = jailbreak_rank, .wrapped = wrapped, .role = .user, .is_user = true });
+        // Without its own raw copy the jailbreak reaches the openai path as an empty message.
+        const raw = try alloc.dupe(u8, subbed);
+        errdefer alloc.free(raw);
+        try injections.append(alloc, .{ .depth = 0, .rank = jailbreak_rank, .wrapped = wrapped, .role = .user, .is_user = true, .raw = raw });
     }
 
-    // Each history turn pre-wrapped in its role's sequence, the string the caller tokenizes.
+    // Each history turn pre-wrapped in its role's sequence, the string the caller tokenizes. The raw
+    // content and role are kept in parallel for the openai chat path.
     var wh: std.ArrayList([]u8) = .empty;
     errdefer {
         for (wh.items) |x| alloc.free(x);
         wh.deinit(alloc);
     }
+    var wh_raw: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (wh_raw.items) |x| alloc.free(x);
+        wh_raw.deinit(alloc);
+    }
+    var wh_roles: std.ArrayList(templates.Role) = .empty;
+    errdefer wh_roles.deinit(alloc);
     for (history) |m| {
         const wrapped = try templates.wrapMessage(alloc, instruct, m.role, m.name, m.mes);
-        errdefer alloc.free(wrapped);
+        // Ownership moves to the lists once each append succeeds; until then the defers free on any
+        // later failure in this iteration (an append error propagates and the function-scope errdefer
+        // frees what already made it into the lists).
+        var wrapped_owned = false;
+        defer if (!wrapped_owned) alloc.free(wrapped);
+        const raw = try alloc.dupe(u8, m.mes);
+        var raw_owned = false;
+        defer if (!raw_owned) alloc.free(raw);
         try wh.append(alloc, wrapped);
+        wrapped_owned = true;
+        try wh_raw.append(alloc, raw);
+        raw_owned = true;
+        try wh_roles.append(alloc, m.role);
     }
 
     const hist_is_user = try alloc.alloc(bool, history.len);
@@ -863,9 +1024,13 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
 
     // user_alignment_message (script.js:4789): a first user turn built now; fitAndAssemble emits it unless
     // the oldest chat-block element is a user turn. force_output_sequence.FIRST resolves to input_sequence here.
+    // The raw substituted text is kept too, as the chat message content in openai mode.
+    var alignment_raw: []u8 = &.{};
+    errdefer if (alignment_raw.len > 0) alloc.free(alignment_raw);
     const alignment: []u8 = if (instruct.enabled and shape.tpl.instruct.user_alignment_message.len > 0) blk: {
         const am = try substituteMacros(alloc, shape.tpl.instruct.user_alignment_message, wctx);
         defer alloc.free(am);
+        alignment_raw = try alloc.dupe(u8, std.mem.trim(u8, am, &std.ascii.whitespace));
         break :blk try templates.wrapMessage(alloc, instruct, .user, wctx.user, am);
     } else try alloc.dupe(u8, "");
     errdefer alloc.free(alignment);
@@ -904,6 +1069,7 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
         for (inj_slice) |inj| {
             alloc.free(inj.wrapped);
             if (inj.first_variant) |fv| alloc.free(fv);
+            if (inj.raw.len > 0) alloc.free(inj.raw);
         }
         alloc.free(inj_slice);
     }
@@ -912,6 +1078,13 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
         for (wh_slice) |x| alloc.free(x);
         alloc.free(wh_slice);
     }
+    const wh_raw_slice = try wh_raw.toOwnedSlice(alloc);
+    errdefer {
+        for (wh_raw_slice) |x| alloc.free(x);
+        alloc.free(wh_raw_slice);
+    }
+    const wh_roles_slice = try wh_roles.toOwnedSlice(alloc);
+    errdefer alloc.free(wh_roles_slice);
     return .{
         .overhead = overhead_slice,
         .injections = inj_slice,
@@ -926,6 +1099,10 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
         .history_len = history.len,
         .collapse_newlines = shape.tpl.collapse_newlines,
         .timed_json = timed_json,
+        .story = story_owned,
+        .alignment_raw = alignment_raw,
+        .history_raw = wh_raw_slice,
+        .history_roles = wh_roles_slice,
     };
 }
 
@@ -1348,24 +1525,46 @@ fn filterJoin(a: Allocator, p1: []const u8, p2: []const u8, sep: []const u8) All
 /// `stopping_strings`. An empty sequence sends an empty array, which every backend treats as "no
 /// custom stops" rather than as a stop on the empty string.
 pub fn buildRequestBody(alloc: Allocator, conn: Connection, prompt: []const u8, stop: []const []const u8) Allocator.Error![]u8 {
-    return std.json.Stringify.valueAlloc(alloc, .{
-        .prompt = prompt,
-        .max_new_tokens = conn.max_tokens,
-        .max_tokens = conn.max_tokens,
-        .truncation_length = conn.max_context,
-        .max_context_length = conn.max_context,
-        .stream = true,
-        .api_type = conn.api_type,
-        .api_server = conn.api_server,
-        .temperature = conn.temperature,
-        .top_p = conn.top_p,
-        .top_k = conn.top_k,
-        .min_p = conn.min_p,
-        .rep_pen = conn.rep_pen,
-        .repetition_penalty = conn.rep_pen,
-        .stop = stop,
-        .stopping_strings = stop,
-    }, .{});
+    return switch (conn.family) {
+        .openai => std.json.Stringify.valueAlloc(alloc, .{
+            .prompt = "",
+            .main_api = "openai",
+            .chat_completion_source = conn.chat_completion_source,
+            .custom_url = conn.custom_url,
+            .api_type = conn.api_type,
+            .api_server = conn.api_server,
+            .model = conn.model,
+            .max_tokens = conn.max_tokens,
+            .max_context_length = conn.max_context,
+            .stream = true,
+            .temperature = conn.temperature,
+            .top_p = conn.top_p,
+            .top_k = conn.top_k,
+            .min_p = conn.min_p,
+            .rep_pen = conn.rep_pen,
+            .repetition_penalty = conn.rep_pen,
+            .stop = stop,
+            .stopping_strings = stop,
+        }, .{}),
+        .textgen => std.json.Stringify.valueAlloc(alloc, .{
+            .prompt = prompt,
+            .max_new_tokens = conn.max_tokens,
+            .max_tokens = conn.max_tokens,
+            .truncation_length = conn.max_context,
+            .max_context_length = conn.max_context,
+            .stream = true,
+            .api_type = conn.api_type,
+            .api_server = conn.api_server,
+            .temperature = conn.temperature,
+            .top_p = conn.top_p,
+            .top_k = conn.top_k,
+            .min_p = conn.min_p,
+            .rep_pen = conn.rep_pen,
+            .repetition_penalty = conn.rep_pen,
+            .stop = stop,
+            .stopping_strings = stop,
+        }, .{}),
+    };
 }
 
 /// The stop sequences a template implies. The instruct stop_sequence is the real one; a template
@@ -1606,9 +1805,34 @@ test "extractConnection defaults absent samplers and allows an empty server" {
     try testing.expectEqual(@as(i64, 0), conn.top_k);
 }
 
+test "extractConnection mines the openai-chat family from oai_settings" {
+    const conn = try extractConnection(testing.allocator,
+        \\{"main_api":"openai","max_context":12288,"amount_gen":256,"oai_settings":{"chat_completion_source":"custom","custom_url":"http://192.168.1.10:41100/v1","custom_model":"llama-3.1-8b","temp_openai":0.7,"top_p_openai":0.9,"top_k_openai":40,"min_p_openai":0.05}}
+    );
+    defer freeConnection(testing.allocator, conn);
+    try testing.expectEqual(Family.openai, conn.family);
+    try testing.expectEqualStrings("openai", conn.api_type);
+    try testing.expectEqualStrings("http://192.168.1.10:41100/v1", conn.api_server);
+    try testing.expectEqualStrings("http://192.168.1.10:41100/v1", conn.custom_url);
+    try testing.expectEqualStrings("custom", conn.chat_completion_source);
+    try testing.expectEqualStrings("llama-3.1-8b", conn.model);
+    try testing.expectEqual(@as(i64, 12288), conn.max_context);
+    try testing.expectEqual(@as(i64, 256), conn.max_tokens);
+    try testing.expectEqual(@as(f64, 0.7), conn.temperature);
+    try testing.expectEqual(@as(f64, 0.9), conn.top_p);
+    try testing.expectEqual(@as(i64, 40), conn.top_k);
+    try testing.expectEqual(@as(f64, 0.05), conn.min_p);
+}
+
 test "extractConnection rejects other families and malformed blobs" {
+    try testing.expectError(error.MissingConnection, extractConnection(testing.allocator,
+        \\{"main_api":"openai"}
+    ));
+    try testing.expectError(error.MissingConnection, extractConnection(testing.allocator,
+        \\{"main_api":"openai","oai_settings":{"chat_completion_source":""}}
+    ));
     try testing.expectError(error.UnsupportedApi, extractConnection(testing.allocator,
-        \\{"main_api":"openai","textgenerationwebui_settings":{"type":"ooba"}}
+        \\{"main_api":"koboldhorde"}
     ));
     try testing.expectError(error.UnsupportedApi, extractConnection(testing.allocator, "{}"));
     try testing.expectError(error.MissingConnection, extractConnection(testing.allocator,
@@ -1999,6 +2223,29 @@ test "fitWindow charges each entry its own cost so a costlier wrap keeps fewer" 
     const heavy = [_]usize{ 30, 30, 30 };
     try testing.expectEqual(@as(usize, 2), fitWindow(&heavy, 31));
     try testing.expectEqual(@as(usize, 30), templates.wrapCost(chatml, .user, "A", "xx"));
+}
+
+test "fitMessages carries the jailbreak text as its message content" {
+    const ctx = Ctx{ .char = "Rita", .description = "A diver." };
+    const history = [_]PromptMsg{.{ .name = "J", .mes = "hello", .role = .user }};
+    var shape = chatmlShape();
+    shape.jailbreak = "STAY_IN_CHARACTER";
+    var pieces = try assemblePieces(testing.allocator, ctx, &history, shape, false);
+    defer freePieces(testing.allocator, &pieces);
+    const hist_costs = [_]usize{1};
+    const inj_costs = [_]usize{1};
+    const costs = CostTable{ .overhead = 1, .injections = &inj_costs, .history = &hist_costs };
+
+    const msgs = try fitMessages(testing.allocator, pieces, costs, 100);
+    defer testing.allocator.free(msgs);
+    var found: ?ChatMessage = null;
+    for (msgs) |m| {
+        if (std.mem.indexOf(u8, m.content, "STAY_IN_CHARACTER") != null) found = m;
+    }
+    const jb = found orelse return error.JailbreakMissingFromMessages;
+    try testing.expectEqualStrings("STAY_IN_CHARACTER", jb.content);
+    try testing.expectEqual(Role.user, jb.role);
+    for (msgs) |m| try testing.expect(m.content.len > 0);
 }
 
 test "fitAndAssemble trims history on a real per-turn token-cost table" {
@@ -2842,7 +3089,10 @@ test "groupInjections joins same-depth values then resolves {{pick}} off the who
     const tpl = templates.Instruct{ .enabled = true, .system_sequence = "<sys>", .system_suffix = "<end>", .wrap = false, .names_behavior = .none };
     var out: std.ArrayList(AssembledInjection) = .empty;
     defer {
-        for (out.items) |x| testing.allocator.free(x.wrapped);
+        for (out.items) |x| {
+            testing.allocator.free(x.wrapped);
+            if (x.raw.len > 0) testing.allocator.free(x.raw);
+        }
         out.deinit(testing.allocator);
     }
     try groupInjections(testing.allocator, &out, tpl, &contribs, mctx);

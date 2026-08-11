@@ -22,6 +22,7 @@ import { assemblePrompt } from '../prompt-builder.js';
 import { buildPromptRequest } from '../prompt-request.js';
 import { createTokenCounter } from '../token-count.js';
 import { buildUpstreamRequest } from './backends/text-completions.js';
+import { buildUpstreamRequest as buildChatUpstreamRequest } from './backends/chat-completions.js';
 import { ChatRef, appendChatMessages, updateChatMetadata } from './chats.js';
 
 export const router = express.Router();
@@ -383,6 +384,11 @@ router.post('/start', async function (request, response) {
                     },
                 );
                 params.prompt = built.prompt;
+                // The openai family answers with a fitted messages array instead of the flat prompt;
+                // it rides the params so the chat upstream builder sends it verbatim.
+                if (Array.isArray(built.chat_messages)) {
+                    params.messages = built.chat_messages;
+                }
                 if (Array.isArray(built.stop) && built.stop.length > 0) {
                     // Both spellings, because the backends disagree: llama.cpp and the OpenAI-shaped
                     // servers read `stop`, ooba and kobold read `stopping_strings`.
@@ -420,7 +426,13 @@ router.post('/start', async function (request, response) {
         // The whole design is a token stream; a non-streaming upstream would return one blob with no
         // frames to replay, so the flag is set here rather than trusted from the body.
         params.stream = true;
-        const { url, args, apiType } = await buildUpstreamRequest(request, { ...params }, session.controller.signal);
+        // An openai send with no assembled messages is refused rather than sent as an empty conversation.
+        const isChatFamily = params.main_api === 'openai';
+        if (isChatFamily && !Array.isArray(params.messages)) {
+            return response.status(400).send({ error: 'chat_messages_missing' });
+        }
+        const buildUpstream = isChatFamily ? buildChatUpstreamRequest : buildUpstreamRequest;
+        const { url, args, apiType } = await buildUpstream(request, { ...params }, session.controller.signal);
         runUpstream(session, url, args, apiType).catch(error => log.net.error('Generation start failed:', error));
 
         // The generation is under way, so the staged variable writes are now owed.

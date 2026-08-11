@@ -100,6 +100,61 @@ const API_OPENROUTER = 'https://openrouter.ai/api/v1';
 const API_WORKERS_AI = 'https://api.cloudflare.com/client/v4/accounts';
 
 /**
+ * Builds the CUSTOM-source /chat/completions request for a SERVER-ASSEMBLED generation (the /start
+ * path in generation.js). Mirrors text-completions buildUpstreamRequest: the body comes from `params`
+ * (the wasm-fitted chat `messages`, samplers, stop), never from request.body, and the abort signal is
+ * the session's. The classic /generate route in this file is untouched; this is the send path the
+ * Zig client's openai family rides.
+ *
+ * A missing CUSTOM secret is not an error: the target is a local llama.cpp-style OpenAI-compatible
+ * server that needs no key, and the classic route already exempts CUSTOM from the key check.
+ *
+ * @param {import('express').Request} request Express request (auth via request.user.directories).
+ * @param {any} params Generation params incl. `messages`, `custom_url`, `model`, samplers, `stop`.
+ * @param {AbortSignal} signal Session abort signal.
+ * @returns {Promise<{url: string, args: import('node-fetch').RequestInit, apiType: string, baseUrl: string, params: any}>}
+ */
+export async function buildUpstreamRequest(request, params, signal) {
+    const baseUrl = String(params.custom_url || params.api_server || '').trim();
+    // custom_url carries the /v1 prefix the way the classic client stores it, so only the trailing
+    // slash is trimmed before the /chat/completions endpoint is appended.
+    const url = trimTrailingSlash(baseUrl) + '/chat/completions';
+
+    let apiKey = '';
+    try {
+        apiKey = await readSecret(request.user.directories, SECRET_KEYS.CUSTOM, params.secret_id ?? null);
+    } catch {
+        // No key configured: local OpenAI-compatible servers run without one.
+    }
+
+    const body = {
+        messages: params.messages,
+        model: params.model,
+        temperature: params.temperature,
+        max_tokens: params.max_tokens,
+        stream: params.stream ?? true,
+        top_p: params.top_p,
+        top_k: params.top_k,
+        repetition_penalty: params.repetition_penalty ?? params.rep_pen,
+    };
+    if (Array.isArray(params.stop) && params.stop.length > 0) {
+        body.stop = params.stop;
+    }
+
+    const args = {
+        method: 'POST',
+        body: JSON.stringify(body),
+        headers: { 'Content-Type': 'application/json' },
+        signal,
+        timeout: 0,
+    };
+    if (apiKey) {
+        args.headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+    return { url, args, apiType: 'openai', baseUrl, params: body };
+}
+
+/**
  * Module-scoped Claude caching configuration values.
  */
 const cacheTTL = getConfigValue('claude.extendedTTL', false, 'boolean') ? '1h' : '5m';

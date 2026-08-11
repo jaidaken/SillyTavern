@@ -514,8 +514,8 @@ pub fn setFrom(settings_str: []const u8) void {
     }
     conn = generate.extractConnection(alloc, settings_str) catch |err| {
         switch (err) {
-            error.UnsupportedApi => log.info("send: non-textgen backend, send disabled this phase", .{}),
-            error.MissingConnection => log.info("send: no textgen backend configured", .{}),
+            error.UnsupportedApi => log.info("send: unsupported backend, send disabled this phase", .{}),
+            error.MissingConnection => log.info("send: no backend configured", .{}),
             else => log.warn("send: connection parse failed: {s}", .{@errorName(err)}),
         }
         setState(.none);
@@ -523,13 +523,19 @@ pub fn setFrom(settings_str: []const u8) void {
     };
     // The mined type wins over the table default even when the table does not offer it: the selector
     // showing "Select..." is honest about an unoffered backend, where showing llamacpp would not be.
+    // The openai family is not a textgen type: keep its selector out of the textgen dropdown and skip
+    // the textgen status probe (the chat server is polled elsewhere this phase).
     if (conn) |c| {
-        if (c.api_type.len > 0) storeSelected(c.api_type);
+        if (c.family == .textgen) {
+            if (c.api_type.len > 0) storeSelected(c.api_type);
+            updateConnState();
+            readPollInterval();
+            checkStatus();
+            startPoll();
+            return;
+        }
     }
     updateConnState();
-    readPollInterval();
-    checkStatus();
-    startPoll();
 }
 
 /// The pre-probe state: what the settings blob says, before the backend has been asked anything.

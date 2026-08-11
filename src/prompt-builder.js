@@ -206,7 +206,7 @@ function isPlainObject(value) {
  * @param {(text: string) => number|Promise<number>} [options.countTokens] Local token counter. Injected, so no HTTP is involved.
  * @param {any} [options.module] Already-instantiated exports. Takes precedence over wasmPath.
  * @param {string} [options.wasmPath] Module path, used when no module is supplied.
- * @returns {Promise<{prompt: string, stop: any[], timed: any, bias: string, variables: object|null, globalVariables: object|null}>}
+ * @returns {Promise<{prompt: string, stop: any[], timed: any, bias: string, variables: object|null, globalVariables: object|null, chat_messages: object[]|null}>}
  */
 export async function assemblePrompt(request, { countTokens, module = null, wasmPath = DEFAULT_WASM_PATH } = {}) {
     if (!request || typeof request !== 'object') {
@@ -265,6 +265,9 @@ export async function assemblePrompt(request, { countTokens, module = null, wasm
     // `bias` is what a saved reply opens with; the wasm's own `reply_prefix` is the prompt's trailing
     // cue, which is a different thing and belongs inside the prompt, not on the reply.
     const bias = fitted.bias ?? '';
+    // The openai family answers with a chat_messages array (role + raw content) instead of the flat
+    // prompt; the caller forwards it verbatim as the request `messages`.
+    const chatMessages = Array.isArray(fitted.chat_messages) ? fitted.chat_messages : null;
     return {
         prompt: fitted.prompt,
         stop: Array.isArray(fitted.stop) ? fitted.stop : [],
@@ -274,5 +277,6 @@ export async function assemblePrompt(request, { countTokens, module = null, wasm
         // caller nothing to write back.
         variables: isPlainObject(fitted.variables) ? fitted.variables : null,
         globalVariables: isPlainObject(fitted.global_variables) ? fitted.global_variables : null,
+        chat_messages: chatMessages,
     };
 }

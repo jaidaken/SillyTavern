@@ -188,12 +188,16 @@ fn piecesBody(a: Allocator, input: []const u8) RequestError![]u8 {
     const doc = try parseDoc(a, input);
     const built = try build(a, doc);
     const p = built.pieces;
+    const chat = built.conn.family == .openai;
 
     var list = std.json.Array.init(a);
-    try list.append(try pieceValue(a, "overhead", p.overhead));
-    try list.append(try pieceValue(a, "alignment", p.alignment));
-    for (p.injections) |inj| try list.append(try pieceValue(a, "injection", inj.wrapped));
-    for (p.wrapped_history) |w| try list.append(try pieceValue(a, "history", w));
+    // In openai mode the pieces carry the RAW texts (the host tokenizes exactly what the chat messages
+    // will contain): the story, the alignment, each injection and turn without their template wrapper.
+    // The arity is unchanged (2 + injections + history), so fitBody's cost table lines up identically.
+    try list.append(try pieceValue(a, "overhead", if (chat) p.story else p.overhead));
+    try list.append(try pieceValue(a, "alignment", if (chat) p.alignment_raw else p.alignment));
+    for (p.injections) |inj| try list.append(try pieceValue(a, "injection", if (chat) inj.raw else inj.wrapped));
+    for (p.wrapped_history, 0..) |w, i| try list.append(try pieceValue(a, "history", if (chat) p.history_raw[i] else w));
 
     var stops = std.json.Array.init(a);
     for (built.stop) |s| try stops.append(.{ .string = s });
@@ -225,10 +229,25 @@ fn fitBody(a: Allocator, input: []const u8) RequestError![]u8 {
         .injections = raw[2 .. 2 + p.injections.len],
         .history = raw[2 + p.injections.len ..],
     };
-    const prompt = try generate.fitAndAssemble(a, p, table, generate.promptTokenBudget(built.conn));
-
+    const budget = generate.promptTokenBudget(built.conn);
     var root: std.json.ObjectMap = .empty;
-    try root.put(a, "prompt", .{ .string = prompt });
+    if (built.conn.family == .openai) {
+        // The openai family answers with a chat_messages array (role + raw content) instead of the flat
+        // prompt; the host forwards it verbatim as the request `messages`.
+        const msgs = try generate.fitMessages(a, p, table, budget);
+        var arr = std.json.Array.init(a);
+        for (msgs) |m| {
+            var o: std.json.ObjectMap = .empty;
+            try o.put(a, "role", .{ .string = @tagName(m.role) });
+            try o.put(a, "content", .{ .string = m.content });
+            try arr.append(.{ .object = o });
+        }
+        try root.put(a, "chat_messages", .{ .array = arr });
+        try root.put(a, "prompt", .{ .string = "" });
+    } else {
+        const prompt = try generate.fitAndAssemble(a, p, table, budget);
+        try root.put(a, "prompt", .{ .string = prompt });
+    }
     // Stops ride the FIT answer too: without them a model runs past the end of its own turn and
     // writes the user's next line.
     var stops = std.json.Array.init(a);
@@ -299,6 +318,8 @@ const Built = struct {
     pieces: generate.Pieces,
     stop: [][]u8,
     conn: generate.Connection,
+    /// The raw history the pieces were assembled from, needed for the openai chat_messages array.
+    history: []const generate.PromptMsg,
     /// The variable stores this build read and, where a `{{setvar}}` fired, wrote. The host persists
     /// them; a store that stayed clean is not reported at all, so a plain read never rewrites a file.
     vars: macro_vars.Stores,
@@ -522,6 +543,7 @@ fn build(a: Allocator, doc: std.json.ObjectMap) RequestError!Built {
         .pieces = try generate.assemblePieces(a, ctx, history.items, shape, true),
         .stop = try generate.buildStoppingStrings(a, tpl, ctx, persona.name, char_name),
         .conn = conn,
+        .history = history.items,
         .vars = vars,
     };
 }

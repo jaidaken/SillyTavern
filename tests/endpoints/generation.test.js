@@ -44,6 +44,8 @@ class ScriptedUpstream {
         this.received = [];
         /** @type {any[]} Parsed body of every upstream request received. */
         this.bodies = [];
+        /** @type {string[]} Path of every upstream request received, so a test can tell which endpoint was posted to. */
+        this.paths = [];
     }
 
     get baseUrl() {
@@ -55,6 +57,7 @@ class ScriptedUpstream {
         this.server = http.createServer((req, res) => {
             this.requests += 1;
             this.received.push(req.headers);
+            this.paths.push(req.url ?? '');
             const chunks = [];
             req.on('data', chunk => chunks.push(chunk));
             req.on('end', () => {
@@ -605,6 +608,68 @@ describe('server-owned generation', () => {
             expect(prompt).toContain('guardian of this forest');
             expect(prompt).toContain('a turn from earlier');
             expect(prompt.split('a turn from earlier')).toHaveLength(2);
+
+            upstream.finish();
+        } finally {
+            await upstream.stop();
+        }
+    }, CASE_TIMEOUT_MS);
+
+    test('an openai-family send posts a role-tagged messages array to the chat endpoint', async () => {
+        const filePath = path.join(server.userDirectory(), 'chats', 'default_Seraphina', 'chatapi.jsonl');
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, [
+            JSON.stringify({ user_name: 'You', character_name: 'Seraphina', chat_metadata: {} }),
+            JSON.stringify({ name: 'You', is_user: true, is_system: false, mes: 'a turn from earlier', send_date: 1700000000000, extra: {} }),
+        ].join('\n'), 'utf8');
+
+        const upstream = new ScriptedUpstream();
+        await upstream.start();
+        try {
+            // The chat family is selected by the settings blob, and custom_url is where the server posts.
+            const settingsPath = path.join(server.userDirectory(), 'settings.json');
+            const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+            settings.main_api = 'openai';
+            settings.oai_settings = {
+                ...(settings.oai_settings ?? {}),
+                chat_completion_source: 'custom',
+                custom_url: `${upstream.baseUrl}/v1`,
+                custom_model: 'mock-chat',
+            };
+            fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 4), 'utf8');
+
+            const client = await loggedInClient(server);
+            const response = await client.postJson('/api/generation/start', {
+                chat: { avatar_url: 'default_Seraphina.png', file_name: 'chatapi', character_name: 'Seraphina' },
+                // The client sends api_server alongside custom_url (both mined from the same setting),
+                // and the handler requires api_server to be a string.
+                generate: { main_api: 'openai', api_type: 'openai', chat_completion_source: 'custom', custom_url: `${upstream.baseUrl}/v1`, api_server: `${upstream.baseUrl}/v1`, model: 'mock-chat', max_tokens: 64 },
+                browser: { input: 'what keeps the lamp lit', utc_offset_minutes: 0, is_mobile: false, generation_type: 'normal', rotation_index: 0 },
+            });
+            expect(response.status).toBe(200);
+
+            await until(() => upstream.bodies.length > 0, 'the upstream request body');
+            const body = upstream.bodies[0];
+
+            // The chat family posts to /chat/completions, not the flat-prompt completions endpoint.
+            expect(upstream.paths[0]).toBe('/v1/chat/completions');
+            expect(Array.isArray(body?.messages)).toBe(true);
+            expect(body.messages.length).toBeGreaterThan(1);
+            // Every message carries a role and non-empty content: an empty one is a dropped prompt block.
+            for (const message of body.messages) {
+                expect(['system', 'user', 'assistant']).toContain(message.role);
+                expect(typeof message.content).toBe('string');
+                expect(message.content.length).toBeGreaterThan(0);
+            }
+            // The point of the chat family: card, greeting and user turn arrive as SEPARATE role-tagged
+            // messages rather than one flat blob. The greeting is the character speaking, so it is assistant.
+            expect(body.messages[0].role).toBe('system');
+            expect(body.messages[0].content).toContain("Seraphina's Personality");
+            const greeting = body.messages.find(m => m.content.includes('guardian of this forest'));
+            expect(greeting?.role).toBe('assistant');
+            const userTurn = body.messages.find(m => m.content.includes('a turn from earlier'));
+            expect(userTurn?.role).toBe('user');
+            expect(body.prompt === undefined || body.prompt === '').toBe(true);
 
             upstream.finish();
         } finally {
