@@ -214,6 +214,13 @@ pub const Stream = struct {
                 try self.think.push(self.allocator, self.store, tok);
                 self.tokens += 1;
             },
+            // Already-separated thinking bypasses the splitter: there are no tags to scan for, and
+            // routing it through `.probe` would read it as body.
+            .reasoning => |think| {
+                defer self.allocator.free(think);
+                try self.store.appendReasoningTail(think);
+                self.tokens += 1;
+            },
             // Only flagged: `drain` is iterating `line`, which `end` frees.
             .done => self.saw_done = true,
             .empty => {},
@@ -847,6 +854,23 @@ test "begin_resets_the_token_count_when_the_store_refuses_the_new_stream" {
 
 fn msgReasoning(f: *const Fixture, index: usize) []const u8 {
     return f.store.slice()[index].reasoning;
+}
+
+test "stream_routes_a_reasoning_content_field_to_reasoning_not_body" {
+    var f: Fixture = undefined;
+    f.init(testing.allocator);
+    defer f.deinit();
+
+    try f.open(testing.allocator, "Seraphina");
+    // The deepseek shape: thinking arrives under its own key with no tags, then the reply follows as
+    // ordinary content. Routed through the splitter instead, the thinking would land in the body.
+    try f.stream.feed("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"weighing\"}}]}\n");
+    try f.stream.feed("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\" it up\"}}]}\n");
+    try f.stream.feed("data: {\"choices\":[{\"delta\":{\"content\":\"The answer.\"}}]}\n");
+    f.stream.end();
+
+    try testing.expectEqualStrings("weighing it up", msgReasoning(&f, 0));
+    try testing.expectEqualStrings("The answer.", f.body(0));
 }
 
 test "stream_splits_a_think_block_into_reasoning_and_body" {

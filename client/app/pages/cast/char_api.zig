@@ -1000,6 +1000,13 @@ fn adoptServerReply(msgs: std.json.Array) void {
     const st = &store.global;
     if (st.messages.items.len == 0) return;
     const last = st.messages.items.len - 1;
+    // Adopted even when the body already matches: the tab that streamed the reply is otherwise the
+    // only one that never shows the thinking.
+    const think = serverReasoning(obj);
+    if (think.len > 0 and !std.mem.eql(u8, st.messages.items[last].reasoning, think)) {
+        st.replaceReasoning(last, think) catch {};
+        regions.bumpMessageLog();
+    }
     if (std.mem.eql(u8, st.messages.items[last].body, mes)) return;
     // The swap re-lays out the last message, and a shorter body leaves a reader that was following
     // the reply parked above the new bottom. Re-settle only if it was at the bottom to begin with.
@@ -1007,6 +1014,18 @@ fn adoptServerReply(msgs: std.json.Array) void {
     st.replaceBody(last, mes) catch return;
     regions.bumpMessageLog();
     if (following) reader.scrollBottom();
+}
+
+/// The thinking text a chat-appended message carries under `extra.reasoning`, empty when absent or
+/// the wrong shape. Mirrors the lift `data.chatMsgFrom` does for a message read off the chat file.
+fn serverReasoning(obj: std.json.ObjectMap) []const u8 {
+    const extra = obj.get("extra") orelse return "";
+    if (extra != .object) return "";
+    const v = extra.object.get("reasoning") orelse return "";
+    return switch (v) {
+        .string => |s| s,
+        else => "",
+    };
 }
 
 /// Whether a chat-appended event names the chat this page has open. The identity is the card and

@@ -213,6 +213,19 @@ pub const Store = struct {
         msg.body_owned = copy;
     }
 
+    /// Replaces a sealed message's thinking text with `bytes` (copied). The server accumulates the
+    /// reasoning field the live token stream never carries, so the tab that streamed the reply adopts
+    /// it the same way it adopts the authoritative body.
+    pub fn replaceReasoning(self: *Store, index: usize, bytes: []const u8) Allocator.Error!void {
+        if (index >= self.messages.items.len) return;
+        if (self.stream_index != null and self.stream_index.? == index) return;
+        const copy = try self.allocator.dupe(u8, bytes);
+        const msg = &self.messages.items[index];
+        if (msg.reasoning_owned) |old| self.allocator.free(old);
+        msg.reasoning = copy;
+        msg.reasoning_owned = copy;
+    }
+
     fn seal(self: *Store, buf: *std.ArrayList(u8), text: *[]const u8, owned: *?[]u8) void {
         if (buf.items.len == 0) {
             buf.deinit(self.allocator);
