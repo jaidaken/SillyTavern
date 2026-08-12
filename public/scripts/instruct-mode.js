@@ -7,6 +7,7 @@ import {
     power_user,
     context_presets,
 } from './power-user.js';
+import { PromptReasoning } from './reasoning.js';
 import { onlyUnique, regexFromString, resetScrollHeight } from './utils.js';
 import { log } from './log.js';
 
@@ -648,7 +649,14 @@ export function formatInstructModePrompt(name, isImpersonate, promptBias, name1,
         text += (includeNames ? promptBias : (separator + promptBias.trimStart()));
     }
 
-    return (instruct.wrap ? text.trimEnd() : text) + (includeNames ? '' : separator);
+    const result = (instruct.wrap ? text.trimEnd() : text) + (includeNames ? '' : separator);
+
+    // An impersonation prompt is the user's turn, so a thinking channel opened here is not the model's.
+    if (!isImpersonate) {
+        PromptReasoning.markPrefixOpenedByPrompt(result);
+    }
+
+    return result;
 }
 
 /**

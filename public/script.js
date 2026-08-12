@@ -6589,7 +6589,9 @@ export function cleanUpMessage({ getMessage, isImpersonate, isContinue, displayI
         getMessage = trimToEndSentence(getMessage);
     }
 
-    if (power_user.trim_spaces && !PromptReasoning.getLatestPrefix()) {
+    // Reasoning carried into the prompt must keep its spacing at the join; a block the prompt merely
+    // opened carries no text, so trimming stays on for every ordinary reply.
+    if (power_user.trim_spaces && !PromptReasoning.getLatestPrefixReasoning()) {
         getMessage = getMessage.trim();
     }
 

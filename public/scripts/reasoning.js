@@ -697,6 +697,65 @@ export class PromptReasoning {
     }
 
     /**
+     * Returns the reasoning text carried into the prompt, as opposed to a block the prompt merely opened.
+     * @returns {string} Reasoning text the model is continuing from
+     */
+    static getLatestPrefixReasoning() {
+        if (!PromptReasoning.#LATEST?.prefixIncomplete) {
+            return '';
+        }
+
+        return PromptReasoning.#LATEST.prefixReasoning;
+    }
+
+    /**
+     * The part of a text that sits inside a reasoning block still waiting to be closed.
+     * @param {string} text Text to inspect, usually the assistant prefix of a prompt
+     * @returns {string?} The open block including its prefix, or null if nothing left one open
+     */
+    static openReasoningBlock(text) {
+        if (!power_user.reasoning.auto_parse) {
+            return null;
+        }
+
+        const prefix = substituteParams(power_user.reasoning.prefix || '');
+        const suffix = substituteParams(power_user.reasoning.suffix || '');
+        if (!prefix.trim() || !suffix.trim()) {
+            return null;
+        }
+
+        const opened = String(text).lastIndexOf(prefix);
+        if (opened < 0) {
+            return null;
+        }
+
+        const block = String(text).slice(opened);
+        return block.includes(suffix) ? null : block;
+    }
+
+    /**
+     * Marks the reasoning block as already opened by the prompt, so a response carrying only the closing
+     * suffix still parses. Templates that open a thinking channel do it in the assistant prefix.
+     * @param {string} promptTail Text appended to the prompt as the assistant prefix
+     */
+    static markPrefixOpenedByPrompt(promptTail) {
+        const latest = PromptReasoning.#LATEST;
+        if (!latest || latest.prefixReasoningFormatted) {
+            return;
+        }
+
+        if (PromptReasoning.openReasoningBlock(promptTail) === null) {
+            return;
+        }
+
+        // The tag alone, never the lead-in seeded after it: that is prompt text, and it would read as
+        // something the model wrote. The response continues from after the seed, so parsing is unaffected.
+        latest.prefixReasoning = '';
+        latest.prefixReasoningFormatted = substituteParams(power_user.reasoning.prefix || '');
+        latest.prefixIncomplete = true;
+    }
+
+    /**
      * Free the latest reasoning instance.
      * To be called when the generation has ended or stopped.
      */
@@ -1542,8 +1601,11 @@ export function parseReasoningInSwipes(swipes, swipeInfoArray, duration) {
         return;
     }
 
+    // Swipes are alternative completions of the same prompt, so they inherit its opened reasoning block.
+    const prefix = PromptReasoning.getLatestPrefix();
+
     for (let index = 0; index < swipes.length; index++) {
-        const parsedReasoning = parseReasoningFromString(swipes[index]);
+        const parsedReasoning = parseReasoningFromString(prefix + swipes[index]);
         if (parsedReasoning) {
             swipes[index] = getRegexedString(parsedReasoning.content, regex_placement.REASONING);
             swipeInfoArray[index].extra.reasoning = parsedReasoning.reasoning;

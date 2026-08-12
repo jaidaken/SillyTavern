@@ -84,6 +84,8 @@ describe('assemblePrompt', () => {
             // A build that set no variables reports none, so the caller writes nothing back.
             variables: null,
             globalVariables: null,
+            // Null for a text-completion build; the openai family answers with an array instead.
+            chat_messages: null,
         });
         expect(countTokens).toHaveBeenCalledTimes(3);
         expect(countTokens.mock.calls.map(args => args[0])).toEqual(['system prompt', 'first message', 'raw string piece']);
@@ -222,7 +224,9 @@ describe('assemblePrompt', () => {
 
         const result = await assemblePrompt(REQUEST, { countTokens: () => 1, module });
 
-        expect(result).toEqual({ prompt: 'bare', stop: [], timed: null, bias: '', variables: null, globalVariables: null });
+        // chat_messages joined the contract in 0b63ae22e (chat completions) and is null for a text-completion
+        // build; the assertion stayed whole rather than loosening to objectContaining, so a dropped field fails.
+        expect(result).toEqual({ prompt: 'bare', stop: [], timed: null, bias: '', variables: null, globalVariables: null, chat_messages: null });
     });
 });
 
