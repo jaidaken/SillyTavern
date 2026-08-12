@@ -733,6 +733,37 @@ export class PromptReasoning {
     }
 
     /**
+     * Rewrites an assistant cue so the model starts inside a thinking block. Left to decide for itself a
+     * model imitates the turns above it, so in a chat whose history contains no thinking it stops
+     * thinking; opening the block in the cue is what makes it independent of that history.
+     * @param {string} cue Assistant cue about to end the prompt
+     * @returns {string} The cue with a thought block left open
+     */
+    static enableThinkingInCue(cue) {
+        const prefix = substituteParams(power_user.reasoning.prefix || '');
+        const suffix = substituteParams(power_user.reasoning.suffix || '');
+        if (!power_user.reasoning.auto_parse || !prefix.trim() || !suffix.trim()) {
+            return cue;
+        }
+
+        if (PromptReasoning.openReasoningBlock(cue) !== null) {
+            return cue;
+        }
+
+        // A cue carrying the closed-empty form is reopened by dropping its closing tag.
+        const text = String(cue);
+        const opened = text.lastIndexOf(prefix);
+        if (opened >= 0 && text.endsWith(suffix)) {
+            const inner = text.slice(opened + prefix.length, text.length - suffix.length);
+            if (!inner.trim()) {
+                return text.slice(0, text.length - suffix.length);
+            }
+        }
+
+        return text + prefix;
+    }
+
+    /**
      * Rewrites an assistant cue to say "not thinking this turn", which these templates express as a
      * thought block opened and closed with nothing inside. Left to itself a model opens its own block,
      * so declining to open one is not enough to stop it.

@@ -651,16 +651,18 @@ export function formatInstructModePrompt(name, isImpersonate, promptBias, name1,
 
     const result = (instruct.wrap ? text.trimEnd() : text) + (includeNames ? '' : separator);
 
+    // An impersonation prompt is the user's turn, so thinking is not theirs to do.
+    if (isImpersonate) {
+        return result;
+    }
+
     if (power_user.reasoning.enabled === false) {
         return PromptReasoning.disableThinkingInCue(result);
     }
 
-    // An impersonation prompt is the user's turn, so a thinking channel opened here is not the model's.
-    if (!isImpersonate) {
-        PromptReasoning.markPrefixOpenedByPrompt(result);
-    }
-
-    return result;
+    const thinking = PromptReasoning.enableThinkingInCue(result);
+    PromptReasoning.markPrefixOpenedByPrompt(thinking);
+    return thinking;
 }
 
 /**
