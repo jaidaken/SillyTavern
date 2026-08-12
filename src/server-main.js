@@ -243,10 +243,15 @@ app.use(express.static(publicDirectory, {
     setHeaders: (res, filePath) => {
         const relativePath = path.relative(publicDirectory, filePath);
         if (relativePath.endsWith('.html')) {
-            // html always revalidates; lib/img/fonts only change on deploy so they cache for a day
             res.setHeader('Cache-Control', 'no-cache');
         } else if (/^(lib|img|webfonts)[/\\]/.test(relativePath) || relativePath.endsWith('.woff2')) {
+            // lib/img/fonts only change on deploy so they cache for a day
             res.setHeader('Cache-Control', 'public, max-age=86400');
+        } else if (/\.(js|mjs|css)$/.test(relativePath)) {
+            // First-party code is never cached: an hour of max-age means every deploy needs a
+            // hard-reload to take, and the nix store pins mtimes to 1970 so revalidation cannot
+            // tell versions apart either. no-store ends the stale-page class outright.
+            res.setHeader('Cache-Control', 'no-store');
         }
     },
 }));
@@ -255,12 +260,10 @@ app.use(express.static(publicDirectory, {
 // Check CLIENT_DIST env var first, then default to <serverDirectory>/client/dist/
 const clientDist = process.env.CLIENT_DIST || path.join(serverDirectory, 'client', 'dist');
 app.use('/client', express.static(clientDist, {
-    maxAge: '1h',
-    setHeaders: (res, filePath) => {
-        const relativePath = path.relative(clientDist, filePath);
-        if (relativePath.endsWith('.html') || relativePath.endsWith('.wasm')) {
-            res.setHeader('Cache-Control', 'no-cache');
-        }
+    // Rsynced with real mtimes, so no-cache revalidation works here and 304s keep it cheap.
+    maxAge: 0,
+    setHeaders: (res) => {
+        res.setHeader('Cache-Control', 'no-cache');
     },
 }));
 
