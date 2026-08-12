@@ -7,6 +7,7 @@ import {
     power_user,
     context_presets,
 } from './power-user.js';
+import { isThinkingTurn } from './reasoning-cue.js';
 import { PromptReasoning } from './reasoning.js';
 import { onlyUnique, regexFromString, resetScrollHeight } from './utils.js';
 import { log } from './log.js';
@@ -651,8 +652,9 @@ export function formatInstructModePrompt(name, isImpersonate, promptBias, name1,
 
     const result = (instruct.wrap ? text.trimEnd() : text) + (includeNames ? '' : separator);
 
-    // An impersonation prompt is the user's turn, so thinking is not theirs to do.
-    if (isImpersonate) {
+    // Only the character's own reply carries a thought: an impersonation writes as the user, and a quiet
+    // prompt is a utility call whose budget belongs to the answer.
+    if (!isThinkingTurn({ isImpersonate, isQuiet, isQuietToLoud })) {
         return result;
     }
 

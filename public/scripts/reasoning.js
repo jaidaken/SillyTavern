@@ -8,6 +8,7 @@ import { macros, MacroCategory } from './macros/macro-system.js';
 import { chat_completion_sources, getChatCompletionModel, oai_settings } from './openai.js';
 import { Popup } from './popup.js';
 import { performFuzzySearch, power_user } from './power-user.js';
+import * as cue from './reasoning-cue.js';
 import { getPresetManager } from './preset-manager.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from './slash-commands/SlashCommandArgument.js';
@@ -721,19 +722,18 @@ export class PromptReasoning {
      * @returns {string?} The open block including its prefix, or null if nothing left one open
      */
     static openReasoningBlock(text) {
-        const prefix = substituteParams(power_user.reasoning.prefix || '');
-        const suffix = substituteParams(power_user.reasoning.suffix || '');
-        if (!prefix.trim() || !suffix.trim()) {
-            return null;
-        }
+        return cue.openReasoningBlock(text, PromptReasoning.#tags());
+    }
 
-        const opened = String(text).lastIndexOf(prefix);
-        if (opened < 0) {
-            return null;
-        }
-
-        const block = String(text).slice(opened);
-        return block.includes(suffix) ? null : block;
+    /**
+     * Resolves the configured tags with macros substituted, the form the cue helpers work in.
+     * @returns {cue.ReasoningTags} Reasoning tags
+     */
+    static #tags() {
+        return {
+            prefix: substituteParams(power_user.reasoning.prefix || ''),
+            suffix: substituteParams(power_user.reasoning.suffix || ''),
+        };
     }
 
     /**
@@ -743,30 +743,12 @@ export class PromptReasoning {
      * @param {string} cue Assistant cue about to end the prompt
      * @returns {string} The cue with a thought block left open
      */
-    static enableThinkingInCue(cue) {
-        const prefix = substituteParams(power_user.reasoning.prefix || '');
-        const suffix = substituteParams(power_user.reasoning.suffix || '');
-        if (!power_user.reasoning.auto_parse || !prefix.trim() || !suffix.trim()) {
-            return cue;
+    static enableThinkingInCue(text) {
+        if (!power_user.reasoning.auto_parse) {
+            return text;
         }
 
-        const seed = PromptReasoning.getThinkingSeed();
-        const open = PromptReasoning.openReasoningBlock(cue);
-        if (open !== null) {
-            // Seed a block the template opened but left empty; measured, a bare one is closed unthought.
-            return open.slice(prefix.length).trim() ? cue : String(cue) + '\n' + seed;
-        }
-
-        const text = String(cue);
-        const opened = text.lastIndexOf(prefix);
-        if (opened >= 0 && text.endsWith(suffix)) {
-            const inner = text.slice(opened + prefix.length, text.length - suffix.length);
-            if (!inner.trim()) {
-                return text.slice(0, text.length - suffix.length) + seed;
-            }
-        }
-
-        return text + prefix + '\n' + seed;
+        return cue.enableThinkingInCue(text, { ...PromptReasoning.#tags(), seed: PromptReasoning.getThinkingSeed() });
     }
 
     /**
@@ -775,8 +757,7 @@ export class PromptReasoning {
      * @returns {string} Seed text, never empty
      */
     static getThinkingSeed() {
-        const seed = substituteParams(power_user.reasoning.seed || '');
-        return seed.trim() ? seed : PromptReasoning.DEFAULT_SEED;
+        return cue.resolveSeed(substituteParams(power_user.reasoning.seed || ''));
     }
 
     /**
@@ -786,22 +767,8 @@ export class PromptReasoning {
      * @param {string} cue Assistant cue about to end the prompt
      * @returns {string} The cue with an empty closed block, unchanged if the tags are not configured
      */
-    static disableThinkingInCue(cue) {
-        const prefix = substituteParams(power_user.reasoning.prefix || '');
-        const suffix = substituteParams(power_user.reasoning.suffix || '');
-        if (!prefix.trim() || !suffix.trim()) {
-            return cue;
-        }
-
-        const openBlock = PromptReasoning.openReasoningBlock(cue);
-        if (openBlock === null) {
-            // Nothing open: either the cue already closes one, or it never mentions thinking at all.
-            return String(cue).includes(prefix) ? cue : String(cue) + prefix + '\n' + suffix;
-        }
-
-        // Keep the cue's own spacing after the tag so the result matches the shape the template emits.
-        const spacing = openBlock.slice(prefix.length).match(/^\s*/)[0] || '\n';
-        return String(cue).slice(0, String(cue).length - openBlock.length) + prefix + spacing + suffix;
+    static disableThinkingInCue(text) {
+        return cue.disableThinkingInCue(text, PromptReasoning.#tags());
     }
 
     /**
