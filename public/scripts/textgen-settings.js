@@ -20,6 +20,7 @@ import { autoSelectInstructPreset, selectContextPreset, selectInstructPreset } f
 import { BIAS_CACHE, createNewLogitBiasEntry, displayLogitBias, getLogitBiasListResult } from './logit-bias.js';
 
 import { power_user, registerDebugFunction } from './power-user.js';
+import { PromptReasoning } from './reasoning.js';
 import { getActiveManualApiSamplers, loadApiSelectedSamplers, isSamplerManualPriorityEnabled } from './samplerSelect.js';
 import { SECRET_KEYS, writeSecret } from './secrets.js';
 import { getEventSourceStream } from './sse-stream.js';
@@ -1598,6 +1599,30 @@ export function replaceMacrosInList(str) {
  * @param {string} type Request type (impersonate, quiet, continue, etc)
  * @returns {Promise<object>} Final generation parameters object appropriate for the text completion source
  */
+/**
+ * Reasoning budget fields for a backend that can cut a thought short and resume the reply.
+ * llama.cpp arms the forcing sequence only in the handler for reasoning_budget_message, which runs only
+ * when that key is present, so omitting it leaves the budget counting down to nothing.
+ * @param {string} prompt The assembled prompt
+ * @returns {object} Fields to merge into the request, empty when no budget applies
+ */
+function getReasoningBudgetParams(prompt) {
+    const budget = Number(power_user.reasoning?.budget) || 0;
+    const openBlock = budget > 0 ? PromptReasoning.openReasoningBlock(prompt) : null;
+    if (!openBlock) {
+        return {};
+    }
+
+    return {
+        generation_prompt: openBlock,
+        reasoning_budget_tokens: budget,
+        reasoning_budget_start_tag: substituteParams(power_user.reasoning.prefix || ''),
+        reasoning_budget_end_tags: [substituteParams(power_user.reasoning.suffix || '')],
+        reasoning_budget_message: String(power_user.reasoning.budget_message ?? ''),
+        reasoning_control: true,
+    };
+}
+
 export async function createTextGenGenerationData(settings, model, finalPrompt = null, maxTokens = null, isImpersonate = false, isContinue = false, cfgValues = null, type = 'quiet') {
     settings = settings ?? textgenerationwebui_settings;
     model = model ?? getTextGenModel(settings);
@@ -1796,6 +1821,10 @@ export async function createTextGenGenerationData(settings, model, finalPrompt =
 
     if (settings.type === TABBY || settings.type === LLAMACPP) {
         params.n = canMultiSwipe ? settings.n : 1;
+    }
+
+    if (settings.type === LLAMACPP) {
+        Object.assign(params, getReasoningBudgetParams(String(finalPrompt ?? '')));
     }
 
     switch (settings.type) {

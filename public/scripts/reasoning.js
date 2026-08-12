@@ -48,6 +48,8 @@ const UI = {
     $showHidden: $('#reasoning_show_hidden'),
     $addToPrompts: $('#reasoning_add_to_prompts'),
     $maxAdditions: $('#reasoning_max_additions'),
+    $budget: $('#reasoning_budget'),
+    $budgetMessage: $('#reasoning_budget_message'),
 };
 
 /**
@@ -885,6 +887,18 @@ function loadReasoningSettings() {
     UI.$maxAdditions.val(power_user.reasoning.max_additions);
     UI.$maxAdditions.on('input', function () {
         power_user.reasoning.max_additions = Number($(this).val());
+        saveSettingsDebounced();
+    });
+
+    UI.$budget.val(power_user.reasoning.budget ?? 0);
+    UI.$budget.on('input', function () {
+        power_user.reasoning.budget = Number($(this).val());
+        saveSettingsDebounced();
+    });
+
+    UI.$budgetMessage.val(power_user.reasoning.budget_message ?? '');
+    UI.$budgetMessage.on('input', function () {
+        power_user.reasoning.budget_message = String($(this).val());
         saveSettingsDebounced();
     });
 
