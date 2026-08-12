@@ -50,6 +50,7 @@ const UI = {
     $maxAdditions: $('#reasoning_max_additions'),
     $budget: $('#reasoning_budget'),
     $budgetMessage: $('#reasoning_budget_message'),
+    $instructions: $('#reasoning_instructions'),
 };
 
 /**
@@ -704,29 +705,66 @@ export class PromptReasoning {
      * template open the block in the assistant prefix, optionally with a lead-in after it.
      * @param {string} promptTail Text appended to the prompt as the assistant prefix
      */
-    static markPrefixOpenedByPrompt(promptTail) {
-        const latest = PromptReasoning.#LATEST;
-        if (!latest || latest.prefixReasoningFormatted || !power_user.reasoning.auto_parse) {
-            return;
+    /**
+     * The instructions that open the thought block, written as text the model continues rather than
+     * as an order to it. Empty when unset or when reasoning is not being parsed.
+     * @returns {string} Text to append after the reasoning prefix in the prompt.
+     */
+    static getReasoningInstructions() {
+        if (!power_user.reasoning.auto_parse) {
+            return '';
+        }
+
+        const instructions = substituteParams(power_user.reasoning.instructions || '');
+        return instructions.trim() ? instructions : '';
+    }
+
+    /**
+     * The part of the text that sits inside a thought block still waiting to be closed, or null
+     * when nothing opened one. A block counts as open only if no suffix follows the last prefix.
+     * @param {string} text Text to inspect, usually the assistant prefix of a prompt.
+     * @returns {string?} The open block, prefix included.
+     */
+    static openReasoningBlock(text) {
+        if (!power_user.reasoning.auto_parse) {
+            return null;
         }
 
         const prefix = substituteParams(power_user.reasoning.prefix || '');
         const suffix = substituteParams(power_user.reasoning.suffix || '');
         if (!prefix.trim() || !suffix.trim()) {
-            return;
+            return null;
         }
 
-        // The block counts as open only if nothing closes it after the last opening.
-        const opened = String(promptTail).lastIndexOf(prefix);
+        const opened = String(text).lastIndexOf(prefix);
         if (opened < 0) {
+            return null;
+        }
+
+        const block = String(text).slice(opened);
+        return block.includes(suffix) ? null : block;
+    }
+
+    /**
+     * @param {string} text Text to inspect.
+     * @returns {boolean} Whether the text leaves a thought block open.
+     */
+    static opensReasoning(text) {
+        return PromptReasoning.openReasoningBlock(text) !== null;
+    }
+
+    static markPrefixOpenedByPrompt(promptTail) {
+        const latest = PromptReasoning.#LATEST;
+        if (!latest || latest.prefixReasoningFormatted) {
             return;
         }
 
-        const openBlock = String(promptTail).slice(opened);
-        if (openBlock.includes(suffix)) {
+        const openBlock = PromptReasoning.openReasoningBlock(promptTail);
+        if (openBlock === null) {
             return;
         }
 
+        const prefix = substituteParams(power_user.reasoning.prefix || '');
         latest.prefixReasoning = openBlock.slice(prefix.length);
         latest.prefixReasoningFormatted = openBlock;
         latest.prefixIncomplete = true;
@@ -874,6 +912,12 @@ function loadReasoningSettings() {
     UI.$budgetMessage.val(power_user.reasoning.budget_message);
     UI.$budgetMessage.on('input', function () {
         power_user.reasoning.budget_message = String($(this).val());
+        saveSettingsDebounced();
+    });
+
+    UI.$instructions.val(power_user.reasoning.instructions);
+    UI.$instructions.on('input', function () {
+        power_user.reasoning.instructions = String($(this).val());
         saveSettingsDebounced();
     });
 

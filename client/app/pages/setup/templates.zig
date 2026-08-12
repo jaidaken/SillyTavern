@@ -187,6 +187,10 @@ pub const Templates = struct {
     /// install: power-user.js:125 initialises false, but the shipped settings and the checkbox default
     /// (power-user.js:367) are both true, so every blob that omits the key came from a true world.
     always_force_name2: bool = true,
+    /// power_user.reasoning: the thought-block tags, and the instructions written just inside an
+    /// open block so they steer the thinking rather than competing with the roleplay prompt. Not
+    /// part of an instruct preset, so they live here rather than on Instruct.
+    reasoning: ReasoningCue = .{},
     /// power_user.trim_sentences (stock default false): drop a trailing incomplete sentence from the
     /// finished reply (cleanUpMessage, script.js:6555 -> utils.js trimToEndSentence).
     trim_sentences: bool = false,
@@ -246,6 +250,13 @@ pub fn parseTemplates(arena: Allocator, settings_str: []const u8) Allocator.Erro
 
     if (power_user.get("instruct")) |v| {
         if (v == .object) out.instruct = try parseInstruct(arena, v.object);
+    }
+    if (power_user.get("reasoning")) |v| {
+        if (v == .object) out.reasoning = .{
+            .prefix = try strField(arena, v.object, "prefix"),
+            .suffix = try strField(arena, v.object, "suffix"),
+            .instructions = try strField(arena, v.object, "instructions"),
+        };
     }
     if (power_user.get("context")) |v| {
         if (v == .object) out.context = try parseContext(arena, v.object);
@@ -791,6 +802,21 @@ pub fn wrapStoryString(alloc: Allocator, tpl: Instruct, story: []const u8) Alloc
 
 /// The sequence that primes the model to answer in character: the output sequence (plus a name when
 /// the template asks for one), or the classic `Char:` prefix when instruct is off. Owned result.
+/// The thought-block settings the cue needs. Borrowed from the settings arena.
+pub const ReasoningCue = struct {
+    prefix: []const u8 = "",
+    suffix: []const u8 = "",
+    instructions: []const u8 = "",
+
+    /// Whether `cue` leaves a thought block open, which is where the instructions belong: a block
+    /// counts as open only when no closing tag follows the last opening one.
+    fn opens(self: ReasoningCue, cue: []const u8) bool {
+        if (self.instructions.len == 0 or self.prefix.len == 0 or self.suffix.len == 0) return false;
+        const opened = std.mem.lastIndexOf(u8, cue, self.prefix) orelse return false;
+        return std.mem.indexOf(u8, cue[opened..], self.suffix) == null;
+    }
+};
+
 pub fn continuationPrefix(alloc: Allocator, tpl: Instruct, char_name: []const u8) Allocator.Error![]u8 {
     return continuationPrefixBias(alloc, tpl, char_name, "");
 }
@@ -798,12 +824,12 @@ pub fn continuationPrefix(alloc: Allocator, tpl: Instruct, char_name: []const u8
 /// `continuationPrefix` plus the prompt bias stock appends inside the same call (instruct-mode.js:648):
 /// with names it butts against the `Char:`, without them it rides its own separator, trimmed at the front.
 pub fn continuationPrefixBias(alloc: Allocator, tpl: Instruct, char_name: []const u8, bias: []const u8) Allocator.Error![]u8 {
-    return continuationPrefixFull(alloc, tpl, char_name, bias, true);
+    return continuationPrefixFull(alloc, tpl, char_name, bias, true, .{});
 }
 
 /// Adds the instruct-OFF gate. Stock appends `Char:` there only when force_name2 is set (script.js:5052),
 /// which for a global bias means power_user.always_force_name2; the classic client emits no cue otherwise.
-pub fn continuationPrefixFull(alloc: Allocator, tpl: Instruct, char_name: []const u8, bias: []const u8, force_name2: bool) Allocator.Error![]u8 {
+pub fn continuationPrefixFull(alloc: Allocator, tpl: Instruct, char_name: []const u8, bias: []const u8, force_name2: bool, reasoning: ReasoningCue) Allocator.Error![]u8 {
     if (!tpl.enabled) {
         // Leading newline because stock stripped the last message's own (script.js:4976) and puts one
         // back here; fitAndAssemble drops it again if the tail already ends in one.
@@ -855,6 +881,7 @@ pub fn continuationPrefixFull(alloc: Allocator, tpl: Instruct, char_name: []cons
     const body = if (tpl.wrap) std.mem.trimEnd(u8, text.items, &std.ascii.whitespace) else text.items;
     try out.appendSlice(alloc, body);
     if (!include_names) try out.appendSlice(alloc, sep); // stock's `+ (includeNames ? '' : separator)`
+    if (reasoning.opens(out.items)) try out.appendSlice(alloc, reasoning.instructions);
     return out.toOwnedSlice(alloc);
 }
 
@@ -884,6 +911,43 @@ fn chatmlInstruct() Instruct {
         .wrap = true,
         .names_behavior = .none,
     };
+}
+
+test "thinking instructions land inside an open thought block, and nowhere else" {
+    const alloc = testing.allocator;
+    var tpl = Instruct{
+        .enabled = true,
+        .output_sequence = "<|turn>model\n",
+        .last_output_sequence = "<|turn>model\n<|channel>thought\n",
+        .wrap = false,
+    };
+    const cue = ReasoningCue{
+        .prefix = "<|channel>thought",
+        .suffix = "<channel|>",
+        .instructions = "Decide, then write the reply once.",
+    };
+
+    const open = try continuationPrefixFull(alloc, tpl, "Angie", "", false, cue);
+    defer alloc.free(open);
+    try testing.expectEqualStrings("<|turn>model\n<|channel>thought\nDecide, then write the reply once.", open);
+
+    // A cue whose block is already closed (the template's thinking-off form) takes nothing.
+    tpl.last_output_sequence = "<|turn>model\n<|channel>thought\n<channel|>";
+    const closed = try continuationPrefixFull(alloc, tpl, "Angie", "", false, cue);
+    defer alloc.free(closed);
+    try testing.expectEqualStrings("<|turn>model\n<|channel>thought\n<channel|>", closed);
+
+    // So does a cue that never opens one.
+    tpl.last_output_sequence = "<|turn>model\n";
+    const none = try continuationPrefixFull(alloc, tpl, "Angie", "", false, cue);
+    defer alloc.free(none);
+    try testing.expectEqualStrings("<|turn>model\n", none);
+
+    // And an unset instructions field leaves every cue alone.
+    tpl.last_output_sequence = "<|turn>model\n<|channel>thought\n";
+    const unset = try continuationPrefixFull(alloc, tpl, "Angie", "", false, .{});
+    defer alloc.free(unset);
+    try testing.expectEqualStrings("<|turn>model\n<|channel>thought\n", unset);
 }
 
 test "parseTemplates mines both halves out of power_user" {

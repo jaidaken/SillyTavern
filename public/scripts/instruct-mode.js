@@ -649,9 +649,16 @@ export function formatInstructModePrompt(name, isImpersonate, promptBias, name1,
         text += (includeNames ? promptBias : (separator + promptBias.trimStart()));
     }
 
-    const result = (instruct.wrap ? text.trimEnd() : text) + (includeNames ? '' : separator);
+    let result = (instruct.wrap ? text.trimEnd() : text) + (includeNames ? '' : separator);
 
     if (!isImpersonate) {
+        // Instructions land INSIDE the thought block, so they steer the thinking without competing
+        // with the roleplay prompt and without any chance of being narrated into the reply.
+        const instructions = PromptReasoning.getReasoningInstructions();
+        if (instructions && PromptReasoning.opensReasoning(result)) {
+            result += instructions;
+        }
+
         PromptReasoning.markPrefixOpenedByPrompt(result);
     }
 

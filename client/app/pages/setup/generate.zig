@@ -68,6 +68,10 @@ pub const Connection = struct {
     reasoning_prefix: []u8 = &.{},
     reasoning_suffix: []u8 = &.{},
     reasoning_budget_message: []u8 = &.{},
+    /// Stock power_user.reasoning.instructions. The textgen family writes these into its own cue
+    /// (templates.continuationPrefixFull); the openai family hands them to the server, which prefills
+    /// them as the final turn's reasoning so they land inside the block the template opens.
+    reasoning_instructions: []u8 = &.{},
 };
 
 /// The request family a connection belongs to. The textgen family sends a flat assembled prompt to a
@@ -83,6 +87,7 @@ pub fn freeConnection(alloc: Allocator, conn: Connection) void {
     if (conn.reasoning_prefix.len > 0) alloc.free(conn.reasoning_prefix);
     if (conn.reasoning_suffix.len > 0) alloc.free(conn.reasoning_suffix);
     if (conn.reasoning_budget_message.len > 0) alloc.free(conn.reasoning_budget_message);
+    if (conn.reasoning_instructions.len > 0) alloc.free(conn.reasoning_instructions);
 }
 
 /// The reasoning settings, owned. Freed by `freeConnection` along with the rest of the connection.
@@ -91,10 +96,11 @@ const Reasoning = struct {
     prefix: []u8,
     suffix: []u8,
     message: []u8,
+    instructions: []u8,
 };
 
 fn reasoningSettings(alloc: Allocator, root: std.json.ObjectMap) Allocator.Error!Reasoning {
-    const empty = Reasoning{ .budget = 0, .prefix = &.{}, .suffix = &.{}, .message = &.{} };
+    const empty = Reasoning{ .budget = 0, .prefix = &.{}, .suffix = &.{}, .message = &.{}, .instructions = &.{} };
     const pu = switch (root.get("power_user") orelse return empty) {
         .object => |o| o,
         else => return empty,
@@ -109,8 +115,10 @@ fn reasoningSettings(alloc: Allocator, root: std.json.ObjectMap) Allocator.Error
     const suffix = try alloc.dupe(u8, strField(r, "suffix"));
     errdefer alloc.free(suffix);
     const message = try alloc.dupe(u8, strField(r, "budget_message"));
+    errdefer alloc.free(message);
+    const instructions = try alloc.dupe(u8, strField(r, "instructions"));
 
-    return .{ .budget = numI64(r, "budget", 0), .prefix = prefix, .suffix = suffix, .message = message };
+    return .{ .budget = numI64(r, "budget", 0), .prefix = prefix, .suffix = suffix, .message = message, .instructions = instructions };
 }
 
 pub const ConnectionError = error{ ParseFailed, NotAnObject, UnsupportedApi, MissingConnection } || Allocator.Error;
@@ -167,6 +175,7 @@ pub fn extractConnection(alloc: Allocator, settings_str: []const u8) ConnectionE
             .reasoning_prefix = reasoning.prefix,
             .reasoning_suffix = reasoning.suffix,
             .reasoning_budget_message = reasoning.message,
+            .reasoning_instructions = reasoning.instructions,
             .api_type = api_type,
             .api_server = api_server,
             .model = model,
@@ -206,6 +215,7 @@ pub fn extractConnection(alloc: Allocator, settings_str: []const u8) ConnectionE
         .reasoning_prefix = reasoning.prefix,
         .reasoning_suffix = reasoning.suffix,
         .reasoning_budget_message = reasoning.message,
+        .reasoning_instructions = reasoning.instructions,
         .api_type = api_type,
         .api_server = api_server,
         .model = model,
@@ -1094,7 +1104,7 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
     // Instruct OFF puts the bias on the LAST MESSAGE instead of the cue (script.js:5144), so hand the cue
     // an empty bias there and let fitAndAssemble append it; force_name2 also gates the cue itself.
     const cue_bias: []const u8 = if (instruct.enabled) bias_sub else "";
-    const prefix = try templates.continuationPrefixFull(alloc, instruct, ctx.char, cue_bias, shape.tpl.always_force_name2);
+    const prefix = try templates.continuationPrefixFull(alloc, instruct, ctx.char, cue_bias, shape.tpl.always_force_name2, shape.tpl.reasoning);
     errdefer alloc.free(prefix);
     const tail_bias = try alloc.dupe(u8, if (instruct.enabled) "" else std.mem.trimStart(u8, bias_sub, &std.ascii.whitespace));
     errdefer alloc.free(tail_bias);
@@ -1596,6 +1606,7 @@ pub fn buildRequestBody(alloc: Allocator, conn: Connection, prompt: []const u8, 
             .stop = stop,
             .stopping_strings = stop,
             .reasoning_budget = conn.reasoning_budget,
+            .reasoning_instructions = conn.reasoning_instructions,
         }, .{}),
         .textgen => std.json.Stringify.valueAlloc(alloc, .{
             .prompt = prompt,
