@@ -266,6 +266,7 @@ import { initServerHistory } from './scripts/server-history.js';
 import { initSettingsSearch } from './scripts/setting-search.js';
 import { initBulkEdit } from './scripts/bulk-edit.js';
 import { getContext } from './scripts/st-context.js';
+import { isBelowTargetLength, measuredReplyText } from './scripts/auto-continue-length.js';
 import { extractReasoningFromData, extractReasoningSignatureFromData, initReasoning, parseReasoningInSwipes, PromptReasoning, ReasoningHandler, removeReasoningFromString, updateReasoningUI } from './scripts/reasoning.js';
 import { accountStorage } from './scripts/util/AccountStorage.js';
 import { initWelcomeScreen, openPermanentAssistantChat, openPermanentAssistantCard, getPermanentAssistantAvatar } from './scripts/welcome-screen.js';
@@ -5763,8 +5764,8 @@ export async function shouldAutoContinue(messageChunk, isImpersonate) {
 
     if (messageChunk.trim().length > USABLE_LENGTH && chat.length) {
         const lastMessage = chat[chat.length - 1];
-        const messageLength = await getTokenCountAsync(lastMessage.mes);
-        const shouldAutoContinue = messageLength < power_user.auto_continue.target_length;
+        const messageLength = await getTokenCountAsync(measuredReplyText(lastMessage));
+        const shouldAutoContinue = isBelowTargetLength(messageLength, power_user.auto_continue.target_length);
 
         if (shouldAutoContinue) {
             log.gen.debug(`Triggering auto-continue. Message tokens: ${messageLength}. Target tokens: ${power_user.auto_continue.target_length}. Message chunk: ${messageChunk}`);
