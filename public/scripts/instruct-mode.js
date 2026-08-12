@@ -651,6 +651,10 @@ export function formatInstructModePrompt(name, isImpersonate, promptBias, name1,
 
     const result = (instruct.wrap ? text.trimEnd() : text) + (includeNames ? '' : separator);
 
+    if (power_user.reasoning.enabled === false) {
+        return PromptReasoning.closeOpenReasoningBlock(result);
+    }
+
     // An impersonation prompt is the user's turn, so a thinking channel opened here is not the model's.
     if (!isImpersonate) {
         PromptReasoning.markPrefixOpenedByPrompt(result);

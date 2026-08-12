@@ -2889,6 +2889,10 @@
                                     <input type="checkbox" id="context_size_derived" />
                                     <span data-i18n="Derive context size from backend">Derive context size from backend</span>
                                 </label>
+                                <label class="checkbox_label" for="reasoning_enabled" title="Let the model think before it replies, for templates whose assistant prefix opens a thinking block. Turning this off closes that block immediately, which is how such templates signal thinking-off, so the model answers straight away. No effect when the prefix opens no block." data-i18n="[title]reasoning_enabled">
+                                    <input type="checkbox" id="reasoning_enabled" name="reasoning_enabled" />
+                                    <span data-i18n="Enable Thinking">Enable Thinking</span>
+                                </label>
                             </div>
                             <div class="flex-container">
                                 <div id="api_button_textgenerationwebui" class="api_button menu_button menu_button_icon" type="submit" data-i18n="Connect" data-server-connect="ooba_blocking,vllm,aphrodite,tabby,koboldcpp,ollama,llamacpp,huggingface">Connect</div>

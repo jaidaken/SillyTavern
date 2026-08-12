@@ -50,6 +50,7 @@ const UI = {
     $maxAdditions: $('#reasoning_max_additions'),
     $budget: $('#reasoning_budget'),
     $budgetMessage: $('#reasoning_budget_message'),
+    $enabled: $('#reasoning_enabled'),
 };
 
 /**
@@ -736,6 +737,26 @@ export class PromptReasoning {
     }
 
     /**
+     * Closes a reasoning block the prompt left open, discarding whatever seeded it. An opened-and-
+     * immediately-closed block is how these templates say "not thinking this turn", so this is the
+     * off switch rather than simply declining to open one.
+     * @param {string} text Text whose trailing open block should be closed
+     * @returns {string} The text with the block closed, unchanged if none was open
+     */
+    static closeOpenReasoningBlock(text) {
+        const openBlock = PromptReasoning.openReasoningBlock(text);
+        if (openBlock === null) {
+            return text;
+        }
+
+        const prefix = substituteParams(power_user.reasoning.prefix || '');
+        const suffix = substituteParams(power_user.reasoning.suffix || '');
+        // Keep the template's own spacing after the tag, so the result matches the shape it emits itself.
+        const spacing = openBlock.slice(prefix.length).match(/^\s*/)[0];
+        return String(text).slice(0, String(text).length - openBlock.length) + prefix + spacing + suffix;
+    }
+
+    /**
      * Marks the reasoning block as already opened by the prompt, so a response carrying only the closing
      * suffix still parses. Templates that open a thinking channel do it in the assistant prefix.
      * @param {string} promptTail Text appended to the prompt as the assistant prefix
@@ -887,6 +908,12 @@ function loadReasoningSettings() {
     UI.$maxAdditions.val(power_user.reasoning.max_additions);
     UI.$maxAdditions.on('input', function () {
         power_user.reasoning.max_additions = Number($(this).val());
+        saveSettingsDebounced();
+    });
+
+    UI.$enabled.prop('checked', power_user.reasoning.enabled !== false);
+    UI.$enabled.on('change', function () {
+        power_user.reasoning.enabled = !!$(this).prop('checked');
         saveSettingsDebounced();
     });
 
