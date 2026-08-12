@@ -20,6 +20,7 @@ import { setAdditionalHeaders, setAdditionalHeadersByType } from '../../addition
 import { createHash } from 'node:crypto';
 import { log } from '../../log.js';
 import { takeReasoningBudget, buildPayload, ReasoningBudgetTracker } from '../../reasoning-budget.js';
+import { applyBannedStrings } from '../../banned-strings.js';
 
 export const router = express.Router();
 
@@ -342,6 +343,14 @@ export async function buildUpstreamRequest(request, params, signal) {
         signal,
         timeout: 0,
     };
+
+    // llama.cpp has no banned_strings, so the quoted half of the Banned Tokens box is otherwise
+    // discarded in silence. Whatever the model spells as one token can be banned outright instead.
+    if (apiType === TEXTGEN_TYPES.LLAMACPP && Array.isArray(params.banned_strings) && params.banned_strings.length) {
+        await setAdditionalHeadersByType(args.headers, apiType, baseUrl, request.user.directories, params.secret_id ?? null);
+        await applyBannedStrings(url.replace(/\/completion$/, ''), args.headers, params);
+        args.body = JSON.stringify(params);
+    }
 
     // Keyed off the params handed in, not request.body: /start nests them under `generate`, so
     // request.body.api_type is undefined there and no auth header would be attached.
