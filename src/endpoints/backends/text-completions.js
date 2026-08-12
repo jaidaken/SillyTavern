@@ -484,7 +484,18 @@ async function forwardWithReasoningBudget(upstream, response, params, settings, 
     }
 
     try {
-        const exhausted = await pump(upstream, true);
+        let exhausted = false;
+        try {
+            exhausted = await pump(upstream, true);
+        } catch (error) {
+            // Walking away from the first stream tears its request down, which reads as an abort.
+            // That is the expected end of a budgeted generation, not a failure.
+            if (!tracker.isExhausted()) {
+                throw error;
+            }
+            exhausted = true;
+        }
+
         if (!exhausted) {
             return void (!response.writableEnded && response.end());
         }
@@ -499,8 +510,8 @@ async function forwardWithReasoningBudget(upstream, response, params, settings, 
         } else {
             log.net.warn('[ReasoningBudget] continuation request failed, ending after the thinking');
         }
-    } catch (error) {
-        log.net.error('[ReasoningBudget] streaming failed:', error);
+    } catch (/** @type {any} */ error) {
+        log.net.error('[ReasoningBudget] streaming failed:', error?.stack ?? error);
     } finally {
         // Abandoned only once the continuation has its own generation running: cancelling it any
         // earlier takes the shared abort signal down with it.
