@@ -4604,7 +4604,7 @@
                                     </div>
                                 </div>
                                 <div class="flex-container alignItemsBaseline">
-                                    <div class="flex1 flex-container alignItemsBaseline" title="Text completion only. Stop thinking after this many tokens and resume for the reply, the way llama.cpp bounds it on chat completions. 0 disables." data-i18n="[title]reasoning_budget">
+                                    <div class="flex1 flex-container alignItemsBaseline" title="Stop thinking after this many tokens and continue with the reply. On chat completions this is sent to llama.cpp as its own reasoning budget; on text completion the server enforces it. 0 disables." data-i18n="[title]reasoning_budget">
                                         <input aria-label="Reasoning budget" id="reasoning_budget" name="reasoning_budget" class="text_pole textarea_compact widthUnset" type="number" min="0" max="99999" />
                                         <small data-i18n="Budget">Budget</small>
                                     </div>

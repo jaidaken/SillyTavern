@@ -2588,6 +2588,12 @@ router.post('/generate', async function (request, response, next) {
             }
         }
 
+        // llama.cpp bounds thinking with a per-request token budget, so the same setting can drive
+        // both APIs and the server needs no --reasoning-budget on its command line.
+        if (request.body.reasoning_budget > 0 && request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.CUSTOM) {
+            bodyParams['reasoning_budget_tokens'] = Number(request.body.reasoning_budget);
+        }
+
         if (request.body.verbosity && [CHAT_COMPLETION_SOURCES.CUSTOM, CHAT_COMPLETION_SOURCES.OPENAI].includes(request.body.chat_completion_source)) {
             if (OPENAI_VERBOSITY_MODELS.test(request.body.model)) {
                 bodyParams['verbosity'] = request.body.verbosity;
