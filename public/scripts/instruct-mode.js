@@ -786,6 +786,20 @@ export function getInstructMacros(env) {
             value: power_user.context.chat_start,
             enabled: true,
         },
+        // The thinking budget, so a prompt can tell the model how much room it has before the
+        // block is closed for it. Empty when no budget is set, since there is no limit to state.
+        {
+            key: 'reasoningBudget',
+            value: String(power_user.reasoning.budget || ''),
+            enabled: power_user.reasoning.budget > 0,
+        },
+        {
+            key: 'reasoningBudgetWords',
+            // Tokens are meaningless to a model counting its own prose; words are what it can pace
+            // against. Roughly three quarters of a word per token for English.
+            value: String(Math.round((power_user.reasoning.budget || 0) * 0.75)),
+            enabled: power_user.reasoning.budget > 0,
+        },
     ];
 
     const macros = [];
