@@ -706,8 +706,15 @@ export class PromptReasoning {
      * @param {string} promptTail Text appended to the prompt as the assistant prefix
      */
     /**
+     * @readonly Lead-in used when no thinking instructions are configured. A thought block opened
+     * with nothing after the tag reads as already finished, and the model closes it unthought.
+     * @type {string}
+     */
+    static DEFAULT_INSTRUCTIONS = 'What matters in this moment:';
+
+    /**
      * The instructions that open the thought block, written as text the model continues rather than
-     * as an order to it. Empty when unset or when reasoning is not being parsed.
+     * as an order to it. Falls back to the default lead-in, since a bare open block kills thinking.
      * @returns {string} Text to append after the reasoning prefix in the prompt.
      */
     static getReasoningInstructions() {
@@ -716,7 +723,38 @@ export class PromptReasoning {
         }
 
         const instructions = substituteParams(power_user.reasoning.instructions || '');
-        return instructions.trim() ? instructions : '';
+        return instructions.trim() ? instructions : PromptReasoning.DEFAULT_INSTRUCTIONS;
+    }
+
+    /**
+     * The text a prompt's assistant cue needs appended so its thought block actually thinks:
+     * the configured instructions (or the default lead-in) when the cue opens an EMPTY block,
+     * nothing when there is no block or the template already seeded it.
+     * @param {string} cue Assistant cue about to be appended to the prompt.
+     * @returns {string} Text to append to the cue, empty when nothing is needed.
+     */
+    static reasoningCueAddition(cue) {
+        const openBlock = PromptReasoning.openReasoningBlock(cue);
+        if (openBlock === null) {
+            return '';
+        }
+
+        const prefix = substituteParams(power_user.reasoning.prefix || '');
+        if (openBlock.slice(prefix.length).trim()) {
+            return '';
+        }
+
+        let instructions = PromptReasoning.getReasoningInstructions();
+        // A pasted leading tag would double the one the cue already carries.
+        if (instructions.startsWith(prefix)) {
+            instructions = instructions.slice(prefix.length);
+        }
+        if (!instructions.trim()) {
+            return '';
+        }
+
+        const separator = /\s$/.test(cue) ? '' : '\n';
+        return separator + instructions;
     }
 
     /**

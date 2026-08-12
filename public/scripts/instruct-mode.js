@@ -654,14 +654,7 @@ export function formatInstructModePrompt(name, isImpersonate, promptBias, name1,
     if (!isImpersonate) {
         // Instructions land INSIDE the thought block, so they steer the thinking without competing
         // with the roleplay prompt and without any chance of being narrated into the reply.
-        const instructions = PromptReasoning.getReasoningInstructions();
-        if (instructions && PromptReasoning.opensReasoning(result)) {
-            // A cue that ends on its own tag would otherwise run straight into the first word,
-            // breaking the tag's token boundary.
-            const separator = /\s$/.test(result) ? '' : '\n';
-            result += separator + instructions;
-        }
-
+        result += PromptReasoning.reasoningCueAddition(result);
         PromptReasoning.markPrefixOpenedByPrompt(result);
     }
 
