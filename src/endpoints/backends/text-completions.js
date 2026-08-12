@@ -17,6 +17,7 @@ import { forwardFetchResponse, trimV1, getConfigValue } from '../../util.js';
 import { setAdditionalHeaders, setAdditionalHeadersByType } from '../../additional-headers.js';
 import { createHash } from 'node:crypto';
 import { log } from '../../log.js';
+import { takeReasoningBudget, buildPayload, ReasoningBudgetTracker } from '../../reasoning-budget.js';
 
 export const router = express.Router();
 
@@ -418,6 +419,99 @@ export async function buildUpstreamRequest(request, params, signal) {
  * @param {string} baseUrl The backend base url.
  * @returns {Promise<void>}
  */
+/**
+ * Streams an upstream completion to the client, cutting thinking off at its budget and resuming the
+ * generation so a reply always follows. See src/reasoning-budget.js for why this exists.
+ * @param {import('node-fetch').Response} upstream Upstream streaming response.
+ * @param {import('express').Response} response Express response to write to.
+ * @param {any} params Generation parameters the upstream request was built from.
+ * @param {import('../../reasoning-budget.js').ReasoningBudget} settings Budget settings.
+ * @param {(params: any) => Promise<import('node-fetch').Response>} refetch Starts a follow-up generation.
+ * @returns {Promise<void>}
+ */
+async function forwardWithReasoningBudget(upstream, response, params, settings, refetch) {
+    if (!upstream.ok || !upstream.body) {
+        return await forwardFetchResponse(upstream, response);
+    }
+
+    response.statusCode = 200;
+    const tracker = new ReasoningBudgetTracker(settings, params.prompt ?? '');
+
+    /**
+     * Pipes one upstream stream through, stopping early if the budget runs out.
+     * @param {import('node-fetch').Response} stream Upstream stream.
+     * @param {boolean} watch Whether to enforce the budget on this stream.
+     * @returns {Promise<boolean>} True when the budget ran out and the stream was cut short.
+     */
+    async function pump(stream, watch) {
+        if (!stream.body) {
+            return false;
+        }
+
+        let buffer = '';
+        for await (const chunk of stream.body) {
+            buffer += chunk.toString('utf-8');
+
+            let index;
+            while ((index = buffer.indexOf('\n')) >= 0) {
+                const line = buffer.slice(0, index + 1);
+                buffer = buffer.slice(index + 1);
+                const payload = line.trim().startsWith('data: ') ? line.trim().slice(6).trim() : null;
+
+                if (watch && payload && payload !== '[DONE]') {
+                    try {
+                        tracker.accept(JSON.parse(payload));
+                    } catch {
+                        // A malformed or keepalive payload is not an accounting event.
+                    }
+                }
+
+                if (!response.writableEnded) {
+                    response.write(line);
+                }
+
+                if (watch && tracker.isExhausted()) {
+                    return true;
+                }
+            }
+        }
+
+        if (buffer && !response.writableEnded) {
+            response.write(buffer);
+        }
+
+        return false;
+    }
+
+    try {
+        const exhausted = await pump(upstream, true);
+        if (!exhausted) {
+            return void (!response.writableEnded && response.end());
+        }
+
+        if (upstream.body instanceof Readable && !upstream.body.destroyed) {
+            upstream.body.destroy();
+        }
+
+        if (!response.writableEnded) {
+            response.write(buildPayload(tracker.closingText(), tracker.llamaShape));
+        }
+
+        const continuation = await refetch(tracker.continuationParams(params));
+        if (continuation.ok && continuation.body) {
+            await pump(continuation, false);
+        } else {
+            log.net.warn('[ReasoningBudget] continuation request failed, ending after the thinking');
+        }
+    } catch (error) {
+        log.net.error('[ReasoningBudget] streaming failed:', error);
+    } finally {
+        if (!response.writableEnded) {
+            response.end();
+        }
+    }
+}
+
 export async function abortKoboldCppIfNeeded(request, baseUrl) {
     await abortKoboldCppRequest(request, trimV1(baseUrl));
 }
@@ -444,6 +538,9 @@ router.post('/generate', async function (request, response) {
             controller.abort();
         });
 
+        // Read before the upstream body is built, so the budget keys never reach the backend.
+        const reasoningBudget = takeReasoningBudget(request.body);
+
         const { url, args, params } = await buildUpstreamRequest(request, request.body, controller.signal);
         request.body = params;
 
@@ -452,7 +549,13 @@ router.post('/generate', async function (request, response) {
             parseOllamaStream(stream, request, response);
         } else if (request.body.stream) {
             const completionsStream = await fetch(url, args);
-            await forwardFetchResponse(completionsStream, response);
+
+            if (reasoningBudget) {
+                const refetch = (nextParams) => fetch(url, { ...args, body: JSON.stringify(nextParams) });
+                await forwardWithReasoningBudget(completionsStream, response, params, reasoningBudget, refetch);
+            } else {
+                await forwardFetchResponse(completionsStream, response);
+            }
         } else {
             const completionsReply = await fetch(url, args);
 
