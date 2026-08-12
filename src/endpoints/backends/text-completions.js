@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { Readable } from 'node:stream';
 import fetch from 'node-fetch';
 import express from 'express';
@@ -528,6 +530,26 @@ async function forwardWithReasoningBudget(upstream, response, params, settings, 
     }
 }
 
+/**
+ * Writes the exact generation request to disk when the user has asked for it, so the prompt can be
+ * audited byte for byte. Enabled by creating `prompt-dumps.on` in the user's data directory.
+ * @param {import('express').Request} request Express request carrying the generation body.
+ * @returns {void}
+ */
+function dumpPromptIfRequested(request) {
+    try {
+        const dir = request.user?.directories?.root;
+        if (!dir || !fs.existsSync(path.join(dir, 'prompt-dumps.on'))) {
+            return;
+        }
+
+        const record = { at: new Date().toISOString(), body: request.body };
+        fs.appendFileSync(path.join(dir, 'prompt-dumps.jsonl'), JSON.stringify(record) + '\n');
+    } catch (error) {
+        log.net.warn('[PromptDump] could not write the dump:', error);
+    }
+}
+
 export async function abortKoboldCppIfNeeded(request, baseUrl) {
     await abortKoboldCppRequest(request, trimV1(baseUrl));
 }
@@ -556,6 +578,9 @@ router.post('/generate', async function (request, response) {
 
         // Read before the upstream body is built, so the budget keys never reach the backend.
         const reasoningBudget = takeReasoningBudget(request.body);
+
+        // The request log truncates long strings, so it cannot answer questions about the prompt.
+        dumpPromptIfRequested(request);
 
         const { url, args, params } = await buildUpstreamRequest(request, request.body, controller.signal);
         request.body = params;
