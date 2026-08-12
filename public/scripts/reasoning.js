@@ -9,6 +9,7 @@ import { chat_completion_sources, getChatCompletionModel, oai_settings } from '.
 import { Popup } from './popup.js';
 import { performFuzzySearch, power_user } from './power-user.js';
 import * as cue from './reasoning-cue.js';
+import { ReasoningSplitter } from './reasoning-split.js';
 import { getPresetManager } from './preset-manager.js';
 import { SlashCommand } from './slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from './slash-commands/SlashCommandArgument.js';
@@ -286,6 +287,9 @@ export class ReasoningHandler {
     /** @type {number?} When reasoning is being parsed manually, and the reasoning has ended, this will be the index at which the actual messages starts */
     #parsingReasoningMesStartIndex = null;
 
+    /** @type {ReasoningSplitter?} Splits the stream; owns the tag state this class used to track inline. */
+    #splitter = null;
+
     /**
      * @param {Date?} [timeStarted=null] - When the generation started
      */
@@ -456,8 +460,8 @@ export class ReasoningHandler {
      * @param {PromptReasoning} promptReasoning - Prompt reasoning object
      * @returns {Promise<void>}
      */
-    async process(messageId, mesChanged, promptReasoning) {
-        mesChanged = this.#autoParseReasoningFromMessage(messageId, mesChanged, promptReasoning);
+    async process(messageId, mesChanged, promptReasoning, final = false) {
+        mesChanged = this.#autoParseReasoningFromMessage(messageId, mesChanged, promptReasoning, final);
 
         if (!this.reasoning && !this.#isHiddenReasoningModel)
             return;
@@ -482,7 +486,7 @@ export class ReasoningHandler {
      * @param {PromptReasoning} promptReasoning Prompt reasoning object
      * @returns {boolean} Whether the message has changed after reasoning parsing
      */
-    #autoParseReasoningFromMessage(messageId, mesChanged, promptReasoning) {
+    #autoParseReasoningFromMessage(messageId, mesChanged, promptReasoning, final = false) {
         if (!power_user.reasoning.auto_parse)
             return;
         if (!power_user.reasoning.prefix || !power_user.reasoning.suffix)
@@ -492,40 +496,31 @@ export class ReasoningHandler {
         const message = chat[messageId];
         if (!message) return mesChanged;
 
-        const parseTarget = promptReasoning?.prefixIncomplete ? (promptReasoning.prefixReasoningFormatted + message.mes) : message.mes;
+        const wasParsing = this.#isParsingReasoning || this.#splitter?.closed;
+        const carry = promptReasoning?.prefixIncomplete ? promptReasoning.prefixReasoningFormatted : '';
+        this.#splitter ??= new ReasoningSplitter({
+            prefix: power_user.reasoning.prefix,
+            suffix: power_user.reasoning.suffix,
+            carry,
+            trim: !!power_user.trim_spaces,
+        });
 
-        // If we are done with reasoning parse, we just split the message correctly so the reasoning doesn't show up inside of it.
-        if (this.#parsingReasoningMesStartIndex) {
-            message.mes = trimSpaces(parseTarget.slice(this.#parsingReasoningMesStartIndex));
+        const split = final ? this.#splitter.finalize(message.mes) : this.#splitter.update(message.mes);
+
+        if (!this.#splitter.parsing && !this.#splitter.closed && !wasParsing) {
             return mesChanged;
         }
 
         if (this.state === ReasoningState.None || this.#isHiddenReasoningModel) {
-            // If streamed message starts with the opening, cut it out and put all inside reasoning
-            if (parseTarget.startsWith(power_user.reasoning.prefix) && parseTarget.length > power_user.reasoning.prefix.length) {
-                this.#isParsingReasoning = true;
-
-                // Manually set starting state here, as we might already have received the ending suffix
-                this.state = ReasoningState.Thinking;
-                this.startTime = this.startTime ?? this.initialTime;
-                this.endTime = null;
-            }
+            this.state = ReasoningState.Thinking;
+            this.startTime = this.startTime ?? this.initialTime;
+            this.endTime = null;
         }
 
-        if (!this.#isParsingReasoning)
-            return mesChanged;
-
-        // If we are in manual parsing mode, all currently streaming mes tokens will go to the reasoning block
-        this.reasoning = parseTarget.slice(power_user.reasoning.prefix.length);
-        message.mes = '';
-
-        // If the reasoning contains the ending suffix, we cut that off and continue as message streaming
-        if (this.reasoning.includes(power_user.reasoning.suffix)) {
-            this.reasoning = this.reasoning.slice(0, this.reasoning.indexOf(power_user.reasoning.suffix));
-            this.#parsingReasoningMesStartIndex = parseTarget.indexOf(power_user.reasoning.suffix) + power_user.reasoning.suffix.length;
-            message.mes = trimSpaces(parseTarget.slice(this.#parsingReasoningMesStartIndex));
-            this.#isParsingReasoning = false;
-        }
+        this.reasoning = split.reasoning;
+        message.mes = split.content;
+        this.#isParsingReasoning = split.parsing;
+        this.#parsingReasoningMesStartIndex = this.#splitter.closed ? 1 : null;
 
         // Only return the original mesChanged value if we haven't cut off the complete message
         return message.mes.length ? mesChanged : false;

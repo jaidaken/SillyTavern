@@ -3690,7 +3690,7 @@ class StreamingProcessor {
             chat[messageId].extra.time_to_first_token = this.timeToFirstToken;
 
             // Update reasoning
-            await this.reasoningHandler.process(messageId, mesChanged, this.promptReasoning);
+            await this.reasoningHandler.process(messageId, mesChanged, this.promptReasoning, isFinal);
             processedText = chat[messageId].mes;
 
             // Token count update.
