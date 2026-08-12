@@ -282,6 +282,7 @@ export const power_user = {
         suffix: '</think>',
         separator: '\n',
         max_additions: 1,
+        seed: '',
         budget: 0,
         budget_message: '',
         enabled: true,

@@ -51,6 +51,7 @@ const UI = {
     $budget: $('#reasoning_budget'),
     $budgetMessage: $('#reasoning_budget_message'),
     $enabled: $('#reasoning_enabled'),
+    $seed: $('#reasoning_seed'),
 };
 
 /**
@@ -683,6 +684,9 @@ export class PromptReasoning {
     */
     static REASONING_PLACEHOLDER = '\u200B';
 
+    /** Used when no seed is configured. A bare opened block reads as finished and gets closed unthought. */
+    static DEFAULT_SEED = 'Okay, let me think.';
+
     /**
      * Returns the latest formatted reasoning prefix if the prefix is incomplete.
      * @returns {string} Formatted reasoning prefix
@@ -746,21 +750,33 @@ export class PromptReasoning {
             return cue;
         }
 
-        if (PromptReasoning.openReasoningBlock(cue) !== null) {
-            return cue;
+        const seed = PromptReasoning.getThinkingSeed();
+        const open = PromptReasoning.openReasoningBlock(cue);
+        if (open !== null) {
+            // Seed a block the template opened but left empty; measured, a bare one is closed unthought.
+            return open.slice(prefix.length).trim() ? cue : String(cue) + '\n' + seed;
         }
 
-        // A cue carrying the closed-empty form is reopened by dropping its closing tag.
         const text = String(cue);
         const opened = text.lastIndexOf(prefix);
         if (opened >= 0 && text.endsWith(suffix)) {
             const inner = text.slice(opened + prefix.length, text.length - suffix.length);
             if (!inner.trim()) {
-                return text.slice(0, text.length - suffix.length);
+                return text.slice(0, text.length - suffix.length) + seed;
             }
         }
 
-        return text + prefix;
+        return text + prefix + '\n' + seed;
+    }
+
+    /**
+     * The words the thought opens with. An empty block is how these templates say "not thinking", so a
+     * bare opener gets closed unthought: measured 3/3 empty bare, 3/3 thinking seeded.
+     * @returns {string} Seed text, never empty
+     */
+    static getThinkingSeed() {
+        const seed = substituteParams(power_user.reasoning.seed || '');
+        return seed.trim() ? seed : PromptReasoning.DEFAULT_SEED;
     }
 
     /**
@@ -946,6 +962,13 @@ function loadReasoningSettings() {
     UI.$enabled.prop('checked', power_user.reasoning.enabled !== false);
     UI.$enabled.on('change', function () {
         power_user.reasoning.enabled = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    UI.$seed.val(power_user.reasoning.seed ?? '');
+    UI.$seed.attr('placeholder', PromptReasoning.DEFAULT_SEED);
+    UI.$seed.on('input', function () {
+        power_user.reasoning.seed = String($(this).val());
         saveSettingsDebounced();
     });
 

@@ -4641,6 +4641,12 @@
                                         </div>
                                     </div>
                                     <div class="flex-container">
+                                        <div class="flex1" title="The words the thought opens with, written inside the block. A block opened with nothing in it reads as already finished and the model closes it unthought, so this is what makes thinking happen at all. It also sets the voice of the thinking: {{char}}'s head, right now: gives you the character's own inner monologue, while a neutral line gives you planning notes. Macros allowed." data-i18n="[title]reasoning_seed">
+                                            <small data-i18n="Thinking Seed">Thinking Seed</small>
+                                            <textarea aria-label="Thinking Seed" id="reasoning_seed" name="reasoning_seed" data-macros class="text_pole textarea_compact autoSetHeight" rows="2"></textarea>
+                                        </div>
+                                    </div>
+                                    <div class="flex-container">
                                         <div class="flex1" title="Stop thinking after this many tokens and continue with the reply. Requires the prefix and suffix above, and a backend that accepts a reasoning budget (llama.cpp). 0 disables." data-i18n="[title]reasoning_budget">
                                             <small data-i18n="Budget">Budget</small>
                                             <input aria-label="Budget" id="reasoning_budget" name="reasoning_budget" class="text_pole textarea_compact wide100p" type="number" min="0" max="99999" />
