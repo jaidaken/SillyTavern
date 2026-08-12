@@ -59,19 +59,6 @@ pub const Connection = struct {
     top_k: i64,
     min_p: f64,
     rep_pen: f64,
-    /// Stock power_user.reasoning.budget: thinking is cut off after this many tokens and the reply
-    /// resumes, so a model that loops inside its thought block still answers. Zero disables it. The
-    /// openai family hands it to llama.cpp as its own reasoning budget; on the textgen family the
-    /// server enforces it, and needs the tags below to see where a block opens and closes.
-    reasoning_budget: i64 = 0,
-    /// Stock power_user.reasoning.prefix/suffix/budget_message. Owned, empty when unset.
-    reasoning_prefix: []u8 = &.{},
-    reasoning_suffix: []u8 = &.{},
-    reasoning_budget_message: []u8 = &.{},
-    /// Stock power_user.reasoning.instructions. The textgen family writes these into its own cue
-    /// (templates.continuationPrefixFull); the openai family hands them to the server, which prefills
-    /// them as the final turn's reasoning so they land inside the block the template opens.
-    reasoning_instructions: []u8 = &.{},
 };
 
 /// The request family a connection belongs to. The textgen family sends a flat assembled prompt to a
@@ -84,41 +71,6 @@ pub fn freeConnection(alloc: Allocator, conn: Connection) void {
     alloc.free(conn.model);
     if (conn.chat_completion_source.len > 0) alloc.free(conn.chat_completion_source);
     if (conn.custom_url.len > 0) alloc.free(conn.custom_url);
-    if (conn.reasoning_prefix.len > 0) alloc.free(conn.reasoning_prefix);
-    if (conn.reasoning_suffix.len > 0) alloc.free(conn.reasoning_suffix);
-    if (conn.reasoning_budget_message.len > 0) alloc.free(conn.reasoning_budget_message);
-    if (conn.reasoning_instructions.len > 0) alloc.free(conn.reasoning_instructions);
-}
-
-/// The reasoning settings, owned. Freed by `freeConnection` along with the rest of the connection.
-const Reasoning = struct {
-    budget: i64,
-    prefix: []u8,
-    suffix: []u8,
-    message: []u8,
-    instructions: []u8,
-};
-
-fn reasoningSettings(alloc: Allocator, root: std.json.ObjectMap) Allocator.Error!Reasoning {
-    const empty = Reasoning{ .budget = 0, .prefix = &.{}, .suffix = &.{}, .message = &.{}, .instructions = &.{} };
-    const pu = switch (root.get("power_user") orelse return empty) {
-        .object => |o| o,
-        else => return empty,
-    };
-    const r = switch (pu.get("reasoning") orelse return empty) {
-        .object => |o| o,
-        else => return empty,
-    };
-
-    const prefix = try alloc.dupe(u8, strField(r, "prefix"));
-    errdefer alloc.free(prefix);
-    const suffix = try alloc.dupe(u8, strField(r, "suffix"));
-    errdefer alloc.free(suffix);
-    const message = try alloc.dupe(u8, strField(r, "budget_message"));
-    errdefer alloc.free(message);
-    const instructions = try alloc.dupe(u8, strField(r, "instructions"));
-
-    return .{ .budget = numI64(r, "budget", 0), .prefix = prefix, .suffix = suffix, .message = message, .instructions = instructions };
 }
 
 pub const ConnectionError = error{ ParseFailed, NotAnObject, UnsupportedApi, MissingConnection } || Allocator.Error;
@@ -168,14 +120,8 @@ pub fn extractConnection(alloc: Allocator, settings_str: []const u8) ConnectionE
         errdefer alloc.free(chat_completion_source);
         const custom_url = try alloc.dupe(u8, url);
         errdefer alloc.free(custom_url);
-        const reasoning = try reasoningSettings(alloc, root);
         return .{
             .family = .openai,
-            .reasoning_budget = reasoning.budget,
-            .reasoning_prefix = reasoning.prefix,
-            .reasoning_suffix = reasoning.suffix,
-            .reasoning_budget_message = reasoning.message,
-            .reasoning_instructions = reasoning.instructions,
             .api_type = api_type,
             .api_server = api_server,
             .model = model,
@@ -207,15 +153,9 @@ pub fn extractConnection(alloc: Allocator, settings_str: []const u8) ConnectionE
     errdefer alloc.free(api_server);
     const model = try alloc.dupe(u8, textGenModel(tg, type_str));
     errdefer alloc.free(model);
-    const reasoning = try reasoningSettings(alloc, root);
 
     return .{
         .family = .textgen,
-        .reasoning_budget = reasoning.budget,
-        .reasoning_prefix = reasoning.prefix,
-        .reasoning_suffix = reasoning.suffix,
-        .reasoning_budget_message = reasoning.message,
-        .reasoning_instructions = reasoning.instructions,
         .api_type = api_type,
         .api_server = api_server,
         .model = model,
@@ -1104,7 +1044,7 @@ pub fn assemblePieces(alloc: Allocator, ctx: Ctx, history: []const PromptMsg, sh
     // Instruct OFF puts the bias on the LAST MESSAGE instead of the cue (script.js:5144), so hand the cue
     // an empty bias there and let fitAndAssemble append it; force_name2 also gates the cue itself.
     const cue_bias: []const u8 = if (instruct.enabled) bias_sub else "";
-    const prefix = try templates.continuationPrefixFull(alloc, instruct, ctx.char, cue_bias, shape.tpl.always_force_name2, shape.tpl.reasoning);
+    const prefix = try templates.continuationPrefixFull(alloc, instruct, ctx.char, cue_bias, shape.tpl.always_force_name2);
     errdefer alloc.free(prefix);
     const tail_bias = try alloc.dupe(u8, if (instruct.enabled) "" else std.mem.trimStart(u8, bias_sub, &std.ascii.whitespace));
     errdefer alloc.free(tail_bias);
@@ -1605,8 +1545,6 @@ pub fn buildRequestBody(alloc: Allocator, conn: Connection, prompt: []const u8, 
             .repetition_penalty = conn.rep_pen,
             .stop = stop,
             .stopping_strings = stop,
-            .reasoning_budget = conn.reasoning_budget,
-            .reasoning_instructions = conn.reasoning_instructions,
         }, .{}),
         .textgen => std.json.Stringify.valueAlloc(alloc, .{
             .prompt = prompt,
@@ -1625,10 +1563,6 @@ pub fn buildRequestBody(alloc: Allocator, conn: Connection, prompt: []const u8, 
             .repetition_penalty = conn.rep_pen,
             .stop = stop,
             .stopping_strings = stop,
-            .reasoning_budget = conn.reasoning_budget,
-            .reasoning_prefix = conn.reasoning_prefix,
-            .reasoning_suffix = conn.reasoning_suffix,
-            .reasoning_budget_message = conn.reasoning_budget_message,
         }, .{}),
     };
 }
@@ -1855,34 +1789,6 @@ test "extractConnection reads type, server_urls, and coerced samplers" {
     try testing.expectEqual(@as(i64, 40), conn.top_k);
     try testing.expectEqual(@as(f64, 0.05), conn.min_p);
     try testing.expectEqual(@as(f64, 1.1), conn.rep_pen);
-}
-
-test "extractConnection carries the reasoning budget and its tags into the request body" {
-    const settings =
-        \\{"main_api":"textgenerationwebui","textgenerationwebui_settings":{"type":"llamacpp","server_urls":{}},
-        \\ "power_user":{"reasoning":{"budget":756,"prefix":"<|channel>thought","suffix":"<channel|>","budget_message":"Enough."}}}
-    ;
-    const conn = try extractConnection(testing.allocator, settings);
-    defer freeConnection(testing.allocator, conn);
-    try testing.expectEqual(@as(i64, 756), conn.reasoning_budget);
-    try testing.expectEqualStrings("<|channel>thought", conn.reasoning_prefix);
-    try testing.expectEqualStrings("<channel|>", conn.reasoning_suffix);
-    try testing.expectEqualStrings("Enough.", conn.reasoning_budget_message);
-
-    const body = try buildRequestBody(testing.allocator, conn, "prompt", &.{});
-    defer testing.allocator.free(body);
-    try testing.expect(std.mem.indexOf(u8, body, "\"reasoning_budget\":756") != null);
-    try testing.expect(std.mem.indexOf(u8, body, "\"reasoning_suffix\":\"<channel|>\"") != null);
-}
-
-test "a settings blob with no reasoning section disables the budget" {
-    const settings =
-        \\{"main_api":"textgenerationwebui","textgenerationwebui_settings":{"type":"llamacpp","server_urls":{}}}
-    ;
-    const conn = try extractConnection(testing.allocator, settings);
-    defer freeConnection(testing.allocator, conn);
-    try testing.expectEqual(@as(i64, 0), conn.reasoning_budget);
-    try testing.expectEqualStrings("", conn.reasoning_prefix);
 }
 
 test "extractConnection defaults absent samplers and allows an empty server" {

@@ -1,5 +1,3 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { Readable } from 'node:stream';
 import fetch from 'node-fetch';
 import express from 'express';
@@ -19,8 +17,6 @@ import { forwardFetchResponse, trimV1, getConfigValue } from '../../util.js';
 import { setAdditionalHeaders, setAdditionalHeadersByType } from '../../additional-headers.js';
 import { createHash } from 'node:crypto';
 import { log } from '../../log.js';
-import { takeReasoningBudget, buildPayload, ReasoningBudgetTracker } from '../../reasoning-budget.js';
-import { applyBannedStrings } from '../../banned-strings.js';
 
 export const router = express.Router();
 
@@ -344,14 +340,6 @@ export async function buildUpstreamRequest(request, params, signal) {
         timeout: 0,
     };
 
-    // llama.cpp has no banned_strings, so the quoted half of the Banned Tokens box is otherwise
-    // discarded in silence. Whatever the model spells as one token can be banned outright instead.
-    if (apiType === TEXTGEN_TYPES.LLAMACPP && Array.isArray(params.banned_strings) && params.banned_strings.length) {
-        await setAdditionalHeadersByType(args.headers, apiType, baseUrl, request.user.directories, params.secret_id ?? null);
-        await applyBannedStrings(url.replace(/\/completion$/, ''), args.headers, params);
-        args.body = JSON.stringify(params);
-    }
-
     // Keyed off the params handed in, not request.body: /start nests them under `generate`, so
     // request.body.api_type is undefined there and no auth header would be attached.
     await setAdditionalHeadersByType(args.headers, params.api_type, baseUrl, request.user.directories, params.secret_id ?? null);
@@ -430,142 +418,6 @@ export async function buildUpstreamRequest(request, params, signal) {
  * @param {string} baseUrl The backend base url.
  * @returns {Promise<void>}
  */
-/**
- * Streams an upstream completion to the client, cutting thinking off at its budget and resuming the
- * generation so a reply always follows. See src/reasoning-budget.js for why this exists.
- * @param {import('node-fetch').Response} upstream Upstream streaming response.
- * @param {import('express').Response} response Express response to write to.
- * @param {any} params Generation parameters the upstream request was built from.
- * @param {import('../../reasoning-budget.js').ReasoningBudget} settings Budget settings.
- * @param {(params: any) => Promise<import('node-fetch').Response>} refetch Starts a follow-up generation.
- * @returns {Promise<void>}
- */
-async function forwardWithReasoningBudget(upstream, response, params, settings, refetch) {
-    if (!upstream.ok || !upstream.body) {
-        return await forwardFetchResponse(upstream, response);
-    }
-
-    response.statusCode = 200;
-    const tracker = new ReasoningBudgetTracker(settings, params.prompt ?? '');
-
-    /**
-     * Pipes one upstream stream through, stopping early if the budget runs out.
-     * @param {import('node-fetch').Response} stream Upstream stream.
-     * @param {boolean} watch Whether to enforce the budget on this stream.
-     * @returns {Promise<boolean>} True when the budget ran out and the stream was cut short.
-     */
-    async function pump(stream, watch) {
-        if (!stream.body) {
-            return false;
-        }
-
-        let buffer = '';
-        for await (const chunk of stream.body) {
-            buffer += chunk.toString('utf-8');
-
-            let index;
-            while ((index = buffer.indexOf('\n')) >= 0) {
-                const line = buffer.slice(0, index + 1);
-                buffer = buffer.slice(index + 1);
-                const payload = line.trim().startsWith('data: ') ? line.trim().slice(6).trim() : null;
-
-                if (watch && payload && payload !== '[DONE]') {
-                    try {
-                        tracker.accept(JSON.parse(payload));
-                    } catch {
-                        // A malformed or keepalive payload is not an accounting event.
-                    }
-                }
-
-                if (!response.writableEnded) {
-                    response.write(line);
-                }
-
-                if (watch && tracker.isExhausted()) {
-                    return true;
-                }
-            }
-        }
-
-        if (buffer && !response.writableEnded) {
-            response.write(buffer);
-        }
-
-        return false;
-    }
-
-    try {
-        let exhausted = false;
-        try {
-            exhausted = await pump(upstream, true);
-        } catch (error) {
-            // Walking away from the first stream tears its request down, which reads as an abort.
-            // That is the expected end of a budgeted generation, not a failure.
-            if (!tracker.isExhausted()) {
-                throw error;
-            }
-            exhausted = true;
-        }
-
-        if (!exhausted) {
-            return void (!response.writableEnded && response.end());
-        }
-
-        if (!response.writableEnded) {
-            // The cut lands mid-event, before the blank line that terminates it. Without this the
-            // client joins both data lines into one event and throws parsing it, which aborts the
-            // generation and loses the reply.
-            response.write('\n');
-            response.write(buildPayload(tracker.closingText(), tracker.llamaShape));
-        }
-
-        // Cancel the abandoned generation before asking for the continuation. Left running it holds
-        // its slot and its cached prompt, so the continuation lands on a cold one and re-processes
-        // the whole prompt: measured at 46.9s of silence on a 35k-character chat.
-        if (upstream.body instanceof Readable && !upstream.body.destroyed) {
-            upstream.body.destroy();
-        }
-
-        const continuation = await refetch(tracker.continuationParams(params));
-        if (continuation.ok && continuation.body) {
-            await pump(continuation, false);
-        } else {
-            log.net.warn('[ReasoningBudget] continuation request failed, ending after the thinking');
-        }
-    } catch (/** @type {any} */ error) {
-        log.net.error('[ReasoningBudget] streaming failed:', error?.stack ?? error);
-    } finally {
-        // Abandoned only once the continuation has its own generation running: cancelling it any
-        // earlier takes the shared abort signal down with it.
-        if (upstream.body instanceof Readable && !upstream.body.destroyed) {
-            upstream.body.destroy();
-        }
-        if (!response.writableEnded) {
-            response.end();
-        }
-    }
-}
-
-/**
- * Writes the exact generation request to disk when the user has asked for it, so the prompt can be
- * audited byte for byte. Enabled by creating `prompt-dumps.on` in the user's data directory.
- * @param {import('express').Request} request Express request carrying the generation body.
- * @returns {void}
- */
-function dumpPromptIfRequested(request) {
-    try {
-        const dir = request.user?.directories?.root;
-        if (!dir || !fs.existsSync(path.join(dir, 'prompt-dumps.on'))) {
-            return;
-        }
-
-        const record = { at: new Date().toISOString(), body: request.body };
-        fs.appendFileSync(path.join(dir, 'prompt-dumps.jsonl'), JSON.stringify(record) + '\n');
-    } catch (error) {
-        log.net.warn('[PromptDump] could not write the dump:', error);
-    }
-}
-
 export async function abortKoboldCppIfNeeded(request, baseUrl) {
     await abortKoboldCppRequest(request, trimV1(baseUrl));
 }
@@ -592,12 +444,6 @@ router.post('/generate', async function (request, response) {
             controller.abort();
         });
 
-        // Read before the upstream body is built, so the budget keys never reach the backend.
-        const reasoningBudget = takeReasoningBudget(request.body);
-
-        // The request log truncates long strings, so it cannot answer questions about the prompt.
-        dumpPromptIfRequested(request);
-
         const { url, args, params } = await buildUpstreamRequest(request, request.body, controller.signal);
         request.body = params;
 
@@ -606,17 +452,7 @@ router.post('/generate', async function (request, response) {
             parseOllamaStream(stream, request, response);
         } else if (request.body.stream) {
             const completionsStream = await fetch(url, args);
-
-            if (reasoningBudget) {
-                // Its own signal: the first generation is abandoned mid-flight, and sharing one
-                // would abort the continuation along with it.
-                const continuation = new AbortController();
-                request.socket.on('close', () => continuation.abort());
-                const refetch = (nextParams) => fetch(url, { ...args, signal: continuation.signal, body: JSON.stringify(nextParams) });
-                await forwardWithReasoningBudget(completionsStream, response, params, reasoningBudget, refetch);
-            } else {
-                await forwardFetchResponse(completionsStream, response);
-            }
+            await forwardFetchResponse(completionsStream, response);
         } else {
             const completionsReply = await fetch(url, args);
 

@@ -187,10 +187,6 @@ pub const Templates = struct {
     /// install: power-user.js:125 initialises false, but the shipped settings and the checkbox default
     /// (power-user.js:367) are both true, so every blob that omits the key came from a true world.
     always_force_name2: bool = true,
-    /// power_user.reasoning: the thought-block tags, and the instructions written just inside an
-    /// open block so they steer the thinking rather than competing with the roleplay prompt. Not
-    /// part of an instruct preset, so they live here rather than on Instruct.
-    reasoning: ReasoningCue = .{},
     /// power_user.trim_sentences (stock default false): drop a trailing incomplete sentence from the
     /// finished reply (cleanUpMessage, script.js:6555 -> utils.js trimToEndSentence).
     trim_sentences: bool = false,
@@ -250,13 +246,6 @@ pub fn parseTemplates(arena: Allocator, settings_str: []const u8) Allocator.Erro
 
     if (power_user.get("instruct")) |v| {
         if (v == .object) out.instruct = try parseInstruct(arena, v.object);
-    }
-    if (power_user.get("reasoning")) |v| {
-        if (v == .object) out.reasoning = .{
-            .prefix = try strField(arena, v.object, "prefix"),
-            .suffix = try strField(arena, v.object, "suffix"),
-            .instructions = try strField(arena, v.object, "instructions"),
-        };
     }
     if (power_user.get("context")) |v| {
         if (v == .object) out.context = try parseContext(arena, v.object);
@@ -802,37 +791,6 @@ pub fn wrapStoryString(alloc: Allocator, tpl: Instruct, story: []const u8) Alloc
 
 /// The sequence that primes the model to answer in character: the output sequence (plus a name when
 /// the template asks for one), or the classic `Char:` prefix when instruct is off. Owned result.
-/// The thought-block settings the cue needs. Borrowed from the settings arena.
-pub const ReasoningCue = struct {
-    prefix: []const u8 = "",
-    suffix: []const u8 = "",
-    instructions: []const u8 = "",
-
-    /// Lead-in used when no instructions are configured: a block opened with nothing after the tag
-    /// reads as already finished, and the model closes it unthought.
-    pub const default_instructions = "What matters in this moment:";
-
-    /// The text `cue` needs appended so its thought block actually thinks: the instructions (or the
-    /// default lead-in) when the cue opens an EMPTY block, nothing when there is no open block or
-    /// the template already seeded it.
-    fn addition(self: ReasoningCue, cue: []const u8) ?[]const u8 {
-        if (self.prefix.len == 0 or self.suffix.len == 0) return null;
-        const opened = std.mem.lastIndexOf(u8, cue, self.prefix) orelse return null;
-        const block = cue[opened..];
-        if (std.mem.indexOf(u8, block, self.suffix) != null) return null;
-        if (std.mem.trim(u8, block[self.prefix.len..], &std.ascii.whitespace).len > 0) return null;
-
-        var instructions = if (std.mem.trim(u8, self.instructions, &std.ascii.whitespace).len > 0)
-            self.instructions
-        else
-            default_instructions;
-        // A pasted leading tag would double the one the cue already carries.
-        if (std.mem.startsWith(u8, instructions, self.prefix)) instructions = instructions[self.prefix.len..];
-        if (std.mem.trim(u8, instructions, &std.ascii.whitespace).len == 0) return null;
-        return instructions;
-    }
-};
-
 pub fn continuationPrefix(alloc: Allocator, tpl: Instruct, char_name: []const u8) Allocator.Error![]u8 {
     return continuationPrefixBias(alloc, tpl, char_name, "");
 }
@@ -840,12 +798,12 @@ pub fn continuationPrefix(alloc: Allocator, tpl: Instruct, char_name: []const u8
 /// `continuationPrefix` plus the prompt bias stock appends inside the same call (instruct-mode.js:648):
 /// with names it butts against the `Char:`, without them it rides its own separator, trimmed at the front.
 pub fn continuationPrefixBias(alloc: Allocator, tpl: Instruct, char_name: []const u8, bias: []const u8) Allocator.Error![]u8 {
-    return continuationPrefixFull(alloc, tpl, char_name, bias, true, .{});
+    return continuationPrefixFull(alloc, tpl, char_name, bias, true);
 }
 
 /// Adds the instruct-OFF gate. Stock appends `Char:` there only when force_name2 is set (script.js:5052),
 /// which for a global bias means power_user.always_force_name2; the classic client emits no cue otherwise.
-pub fn continuationPrefixFull(alloc: Allocator, tpl: Instruct, char_name: []const u8, bias: []const u8, force_name2: bool, reasoning: ReasoningCue) Allocator.Error![]u8 {
+pub fn continuationPrefixFull(alloc: Allocator, tpl: Instruct, char_name: []const u8, bias: []const u8, force_name2: bool) Allocator.Error![]u8 {
     if (!tpl.enabled) {
         // Leading newline because stock stripped the last message's own (script.js:4976) and puts one
         // back here; fitAndAssemble drops it again if the tail already ends in one.
@@ -897,12 +855,6 @@ pub fn continuationPrefixFull(alloc: Allocator, tpl: Instruct, char_name: []cons
     const body = if (tpl.wrap) std.mem.trimEnd(u8, text.items, &std.ascii.whitespace) else text.items;
     try out.appendSlice(alloc, body);
     if (!include_names) try out.appendSlice(alloc, sep); // stock's `+ (includeNames ? '' : separator)`
-    if (reasoning.addition(out.items)) |instructions| {
-        // A cue ending on its own tag would run straight into the first word of the instructions.
-        const needs_sep = out.items.len > 0 and !std.ascii.isWhitespace(out.items[out.items.len - 1]);
-        if (needs_sep) try out.append(alloc, '\n');
-        try out.appendSlice(alloc, instructions);
-    }
     return out.toOwnedSlice(alloc);
 }
 
@@ -932,96 +884,6 @@ fn chatmlInstruct() Instruct {
         .wrap = true,
         .names_behavior = .none,
     };
-}
-
-test "thinking instructions land inside an open thought block, and nowhere else" {
-    const alloc = testing.allocator;
-    var tpl = Instruct{
-        .enabled = true,
-        .output_sequence = "<|turn>model\n",
-        .last_output_sequence = "<|turn>model\n<|channel>thought\n",
-        .wrap = false,
-    };
-    const cue = ReasoningCue{
-        .prefix = "<|channel>thought",
-        .suffix = "<channel|>",
-        .instructions = "Decide, then write the reply once.",
-    };
-
-    const open = try continuationPrefixFull(alloc, tpl, "Angie", "", false, cue);
-    defer alloc.free(open);
-    try testing.expectEqualStrings("<|turn>model\n<|channel>thought\nDecide, then write the reply once.", open);
-
-    // A cue whose block is already closed (the template's thinking-off form) takes nothing.
-    tpl.last_output_sequence = "<|turn>model\n<|channel>thought\n<channel|>";
-    const closed = try continuationPrefixFull(alloc, tpl, "Angie", "", false, cue);
-    defer alloc.free(closed);
-    try testing.expectEqualStrings("<|turn>model\n<|channel>thought\n<channel|>", closed);
-
-    // So does a cue that never opens one.
-    tpl.last_output_sequence = "<|turn>model\n";
-    const none = try continuationPrefixFull(alloc, tpl, "Angie", "", false, cue);
-    defer alloc.free(none);
-    try testing.expectEqualStrings("<|turn>model\n", none);
-}
-
-test "an empty instructions field falls back to the default lead-in" {
-    const alloc = testing.allocator;
-    const tpl = Instruct{
-        .enabled = true,
-        .output_sequence = "<|turn>model\n",
-        .last_output_sequence = "<|turn>model\n<|channel>thought",
-        .wrap = false,
-    };
-
-    // A bare open block kills thinking (the model closes it unthought), so it is never left bare.
-    const cue = ReasoningCue{ .prefix = "<|channel>thought", .suffix = "<channel|>" };
-    const fallback = try continuationPrefixFull(alloc, tpl, "Angie", "", false, cue);
-    defer alloc.free(fallback);
-    try testing.expectEqualStrings("<|turn>model\n<|channel>thought\n" ++ ReasoningCue.default_instructions, fallback);
-
-    // Tags entirely unset: no block to seed, cue untouched.
-    const no_tags = try continuationPrefixFull(alloc, tpl, "Angie", "", false, .{});
-    defer alloc.free(no_tags);
-    try testing.expectEqualStrings("<|turn>model\n<|channel>thought", no_tags);
-}
-
-test "a template that already seeds the block takes no instructions" {
-    const alloc = testing.allocator;
-    const tpl = Instruct{
-        .enabled = true,
-        .output_sequence = "<|turn>model\n",
-        .last_output_sequence = "<|turn>model\n<|channel>thought\nWhat matters in this moment:",
-        .wrap = false,
-    };
-    const cue = ReasoningCue{
-        .prefix = "<|channel>thought",
-        .suffix = "<channel|>",
-        .instructions = "Decide, then write the reply once.",
-    };
-
-    const seeded = try continuationPrefixFull(alloc, tpl, "Angie", "", false, cue);
-    defer alloc.free(seeded);
-    try testing.expectEqualStrings("<|turn>model\n<|channel>thought\nWhat matters in this moment:", seeded);
-}
-
-test "instructions pasted with a leading tag do not double it" {
-    const alloc = testing.allocator;
-    const tpl = Instruct{
-        .enabled = true,
-        .output_sequence = "<|turn>model\n",
-        .last_output_sequence = "<|turn>model\n<|channel>thought",
-        .wrap = false,
-    };
-    const cue = ReasoningCue{
-        .prefix = "<|channel>thought",
-        .suffix = "<channel|>",
-        .instructions = "<|channel>thoughtPrepare response.",
-    };
-
-    const deduped = try continuationPrefixFull(alloc, tpl, "Angie", "", false, cue);
-    defer alloc.free(deduped);
-    try testing.expectEqualStrings("<|turn>model\n<|channel>thought\nPrepare response.", deduped);
 }
 
 test "parseTemplates mines both halves out of power_user" {

@@ -1652,12 +1652,6 @@ export async function createTextGenGenerationData(settings, model, finalPrompt =
         'samplers': settings.type === LLAMACPP ? settings.samplers : undefined,
         'stopping_strings': getStoppingStrings(isImpersonate, isContinue),
         'stop': getStoppingStrings(isImpersonate, isContinue),
-        // Consumed by the server, never forwarded upstream: text-completion backends do not bound
-        // thinking themselves, so the proxy closes an overrunning block and resumes for the reply.
-        'reasoning_budget': power_user.reasoning.budget,
-        'reasoning_prefix': substituteParams(power_user.reasoning.prefix),
-        'reasoning_suffix': substituteParams(power_user.reasoning.suffix),
-        'reasoning_budget_message': substituteParams(power_user.reasoning.budget_message),
         'truncation_length': max_context,
         'ban_eos_token': settings.ban_eos_token,
         'skip_special_tokens': settings.skip_special_tokens,

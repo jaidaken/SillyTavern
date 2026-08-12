@@ -2588,26 +2588,6 @@ router.post('/generate', async function (request, response, next) {
             }
         }
 
-        // llama.cpp bounds thinking with a per-request token budget, so the same setting can drive
-        // both APIs and the server needs no --reasoning-budget on its command line.
-        if (request.body.reasoning_budget > 0 && request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.CUSTOM) {
-            bodyParams['reasoning_budget_tokens'] = Number(request.body.reasoning_budget);
-        }
-
-        // Thinking instructions ride as a prefill of the final assistant turn's reasoning, which the
-        // chat template opens the thought channel around. That puts them INSIDE the block, where
-        // they steer the reasoning and cannot be narrated into the reply. The generation prompt has
-        // to be off: llama.cpp rejects continuing a message and starting a new one at once.
-        const reasoningInstructions = String(request.body.reasoning_instructions ?? '').trim();
-        if (reasoningInstructions && request.body.chat_completion_source === CHAT_COMPLETION_SOURCES.CUSTOM && Array.isArray(request.body.messages)) {
-            request.body.messages = [
-                ...request.body.messages,
-                { role: 'assistant', content: '', reasoning_content: request.body.reasoning_instructions },
-            ];
-            bodyParams['continue_final_message'] = true;
-            bodyParams['add_generation_prompt'] = false;
-        }
-
         if (request.body.verbosity && [CHAT_COMPLETION_SOURCES.CUSTOM, CHAT_COMPLETION_SOURCES.OPENAI].includes(request.body.chat_completion_source)) {
             if (OPENAI_VERBOSITY_MODELS.test(request.body.model)) {
                 bodyParams['verbosity'] = request.body.verbosity;

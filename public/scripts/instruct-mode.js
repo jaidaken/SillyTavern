@@ -7,7 +7,6 @@ import {
     power_user,
     context_presets,
 } from './power-user.js';
-import { PromptReasoning } from './reasoning.js';
 import { onlyUnique, regexFromString, resetScrollHeight } from './utils.js';
 import { log } from './log.js';
 
@@ -649,16 +648,7 @@ export function formatInstructModePrompt(name, isImpersonate, promptBias, name1,
         text += (includeNames ? promptBias : (separator + promptBias.trimStart()));
     }
 
-    let result = (instruct.wrap ? text.trimEnd() : text) + (includeNames ? '' : separator);
-
-    if (!isImpersonate) {
-        // Instructions land INSIDE the thought block, so they steer the thinking without competing
-        // with the roleplay prompt and without any chance of being narrated into the reply.
-        result += PromptReasoning.reasoningCueAddition(result);
-        PromptReasoning.markPrefixOpenedByPrompt(result);
-    }
-
-    return result;
+    return (instruct.wrap ? text.trimEnd() : text) + (includeNames ? '' : separator);
 }
 
 /**
@@ -781,20 +771,6 @@ export function getInstructMacros(env) {
             key: 'chatStart',
             value: power_user.context.chat_start,
             enabled: true,
-        },
-        // The thinking budget, so a prompt can tell the model how much room it has before the
-        // block is closed for it. Empty when no budget is set, since there is no limit to state.
-        {
-            key: 'reasoningBudget',
-            value: String(power_user.reasoning.budget || ''),
-            enabled: power_user.reasoning.budget > 0,
-        },
-        {
-            key: 'reasoningBudgetWords',
-            // Tokens are meaningless to a model counting its own prose; words are what it can pace
-            // against. Roughly three quarters of a word per token for English.
-            value: String(Math.round((power_user.reasoning.budget || 0) * 0.75)),
-            enabled: power_user.reasoning.budget > 0,
         },
     ];
 

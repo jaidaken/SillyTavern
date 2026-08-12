@@ -2877,8 +2877,6 @@ export async function createGenerationParameters(settings, model, type, messages
         generate_data.custom_include_body = substituteParams(settings.custom_include_body);
         generate_data.custom_exclude_body = substituteParams(settings.custom_exclude_body);
         generate_data.custom_include_headers = substituteParams(settings.custom_include_headers);
-        generate_data.reasoning_budget = power_user.reasoning.budget;
-        generate_data.reasoning_instructions = substituteParams(power_user.reasoning.instructions);
     }
 
     if (settings.chat_completion_source === chat_completion_sources.COHERE) {

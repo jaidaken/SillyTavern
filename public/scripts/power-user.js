@@ -282,9 +282,6 @@ export const power_user = {
         suffix: '</think>',
         separator: '\n',
         max_additions: 1,
-        budget: 0,
-        budget_message: '',
-        instructions: '',
     },
 
     personas: {},

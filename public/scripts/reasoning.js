@@ -48,9 +48,6 @@ const UI = {
     $showHidden: $('#reasoning_show_hidden'),
     $addToPrompts: $('#reasoning_add_to_prompts'),
     $maxAdditions: $('#reasoning_max_additions'),
-    $budget: $('#reasoning_budget'),
-    $budgetMessage: $('#reasoning_budget_message'),
-    $instructions: $('#reasoning_instructions'),
 };
 
 /**
@@ -700,118 +697,6 @@ export class PromptReasoning {
     }
 
     /**
-     * Marks the reasoning block as already opened by the prompt itself, so a response that carries
-     * only the closing suffix still parses. Models that seed the thinking channel from their chat
-     * template open the block in the assistant prefix, optionally with a lead-in after it.
-     * @param {string} promptTail Text appended to the prompt as the assistant prefix
-     */
-    /**
-     * @readonly Lead-in used when no thinking instructions are configured. A thought block opened
-     * with nothing after the tag reads as already finished, and the model closes it unthought.
-     * @type {string}
-     */
-    static DEFAULT_INSTRUCTIONS = 'What matters in this moment:';
-
-    /**
-     * The instructions that open the thought block, written as text the model continues rather than
-     * as an order to it. Falls back to the default lead-in, since a bare open block kills thinking.
-     * @returns {string} Text to append after the reasoning prefix in the prompt.
-     */
-    static getReasoningInstructions() {
-        if (!power_user.reasoning.auto_parse) {
-            return '';
-        }
-
-        const instructions = substituteParams(power_user.reasoning.instructions || '');
-        return instructions.trim() ? instructions : PromptReasoning.DEFAULT_INSTRUCTIONS;
-    }
-
-    /**
-     * The text a prompt's assistant cue needs appended so its thought block actually thinks:
-     * the configured instructions (or the default lead-in) when the cue opens an EMPTY block,
-     * nothing when there is no block or the template already seeded it.
-     * @param {string} cue Assistant cue about to be appended to the prompt.
-     * @returns {string} Text to append to the cue, empty when nothing is needed.
-     */
-    static reasoningCueAddition(cue) {
-        const openBlock = PromptReasoning.openReasoningBlock(cue);
-        if (openBlock === null) {
-            return '';
-        }
-
-        const prefix = substituteParams(power_user.reasoning.prefix || '');
-        if (openBlock.slice(prefix.length).trim()) {
-            return '';
-        }
-
-        let instructions = PromptReasoning.getReasoningInstructions();
-        // A pasted leading tag would double the one the cue already carries.
-        if (instructions.startsWith(prefix)) {
-            instructions = instructions.slice(prefix.length);
-        }
-        if (!instructions.trim()) {
-            return '';
-        }
-
-        const separator = /\s$/.test(cue) ? '' : '\n';
-        return separator + instructions;
-    }
-
-    /**
-     * The part of the text that sits inside a thought block still waiting to be closed, or null
-     * when nothing opened one. A block counts as open only if no suffix follows the last prefix.
-     * @param {string} text Text to inspect, usually the assistant prefix of a prompt.
-     * @returns {string?} The open block, prefix included.
-     */
-    static openReasoningBlock(text) {
-        if (!power_user.reasoning.auto_parse) {
-            return null;
-        }
-
-        const prefix = substituteParams(power_user.reasoning.prefix || '');
-        const suffix = substituteParams(power_user.reasoning.suffix || '');
-        if (!prefix.trim() || !suffix.trim()) {
-            return null;
-        }
-
-        const opened = String(text).lastIndexOf(prefix);
-        if (opened < 0) {
-            return null;
-        }
-
-        const block = String(text).slice(opened);
-        return block.includes(suffix) ? null : block;
-    }
-
-    /**
-     * @param {string} text Text to inspect.
-     * @returns {boolean} Whether the text leaves a thought block open.
-     */
-    static opensReasoning(text) {
-        return PromptReasoning.openReasoningBlock(text) !== null;
-    }
-
-    static markPrefixOpenedByPrompt(promptTail) {
-        const latest = PromptReasoning.#LATEST;
-        if (!latest || latest.prefixReasoningFormatted) {
-            return;
-        }
-
-        const openBlock = PromptReasoning.openReasoningBlock(promptTail);
-        if (openBlock === null) {
-            return;
-        }
-
-        // Only the tag is carried forward, never the lead-in or instructions that follow it: those
-        // are prompt text, and showing them in the thinking block reads as something the model
-        // wrote. Parsing needs the tag alone, since the response continues from after them.
-        const prefix = substituteParams(power_user.reasoning.prefix || '');
-        latest.prefixReasoning = '';
-        latest.prefixReasoningFormatted = prefix;
-        latest.prefixIncomplete = true;
-    }
-
-    /**
      * Free the latest reasoning instance.
      * To be called when the generation has ended or stopped.
      */
@@ -941,24 +826,6 @@ function loadReasoningSettings() {
     UI.$maxAdditions.val(power_user.reasoning.max_additions);
     UI.$maxAdditions.on('input', function () {
         power_user.reasoning.max_additions = Number($(this).val());
-        saveSettingsDebounced();
-    });
-
-    UI.$budget.val(power_user.reasoning.budget);
-    UI.$budget.on('input', function () {
-        power_user.reasoning.budget = Number($(this).val());
-        saveSettingsDebounced();
-    });
-
-    UI.$budgetMessage.val(power_user.reasoning.budget_message);
-    UI.$budgetMessage.on('input', function () {
-        power_user.reasoning.budget_message = String($(this).val());
-        saveSettingsDebounced();
-    });
-
-    UI.$instructions.val(power_user.reasoning.instructions);
-    UI.$instructions.on('input', function () {
-        power_user.reasoning.instructions = String($(this).val());
         saveSettingsDebounced();
     });
 
