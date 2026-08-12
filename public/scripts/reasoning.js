@@ -717,10 +717,6 @@ export class PromptReasoning {
      * @returns {string?} The open block including its prefix, or null if nothing left one open
      */
     static openReasoningBlock(text) {
-        if (!power_user.reasoning.auto_parse) {
-            return null;
-        }
-
         const prefix = substituteParams(power_user.reasoning.prefix || '');
         const suffix = substituteParams(power_user.reasoning.suffix || '');
         if (!prefix.trim() || !suffix.trim()) {
@@ -737,23 +733,28 @@ export class PromptReasoning {
     }
 
     /**
-     * Closes a reasoning block the prompt left open, discarding whatever seeded it. An opened-and-
-     * immediately-closed block is how these templates say "not thinking this turn", so this is the
-     * off switch rather than simply declining to open one.
-     * @param {string} text Text whose trailing open block should be closed
-     * @returns {string} The text with the block closed, unchanged if none was open
+     * Rewrites an assistant cue to say "not thinking this turn", which these templates express as a
+     * thought block opened and closed with nothing inside. Left to itself a model opens its own block,
+     * so declining to open one is not enough to stop it.
+     * @param {string} cue Assistant cue about to end the prompt
+     * @returns {string} The cue with an empty closed block, unchanged if the tags are not configured
      */
-    static closeOpenReasoningBlock(text) {
-        const openBlock = PromptReasoning.openReasoningBlock(text);
-        if (openBlock === null) {
-            return text;
-        }
-
+    static disableThinkingInCue(cue) {
         const prefix = substituteParams(power_user.reasoning.prefix || '');
         const suffix = substituteParams(power_user.reasoning.suffix || '');
-        // Keep the template's own spacing after the tag, so the result matches the shape it emits itself.
-        const spacing = openBlock.slice(prefix.length).match(/^\s*/)[0];
-        return String(text).slice(0, String(text).length - openBlock.length) + prefix + spacing + suffix;
+        if (!prefix.trim() || !suffix.trim()) {
+            return cue;
+        }
+
+        const openBlock = PromptReasoning.openReasoningBlock(cue);
+        if (openBlock === null) {
+            // Nothing open: either the cue already closes one, or it never mentions thinking at all.
+            return String(cue).includes(prefix) ? cue : String(cue) + prefix + '\n' + suffix;
+        }
+
+        // Keep the cue's own spacing after the tag so the result matches the shape the template emits.
+        const spacing = openBlock.slice(prefix.length).match(/^\s*/)[0] || '\n';
+        return String(cue).slice(0, String(cue).length - openBlock.length) + prefix + spacing + suffix;
     }
 
     /**
@@ -763,7 +764,7 @@ export class PromptReasoning {
      */
     static markPrefixOpenedByPrompt(promptTail) {
         const latest = PromptReasoning.#LATEST;
-        if (!latest || latest.prefixReasoningFormatted) {
+        if (!latest || latest.prefixReasoningFormatted || !power_user.reasoning.auto_parse) {
             return;
         }
 

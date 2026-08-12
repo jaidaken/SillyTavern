@@ -1608,19 +1608,28 @@ export function replaceMacrosInList(str) {
  */
 function getReasoningBudgetParams(prompt) {
     const budget = Number(power_user.reasoning?.budget) || 0;
-    const openBlock = budget > 0 ? PromptReasoning.openReasoningBlock(prompt) : null;
-    if (!openBlock) {
+    const prefix = substituteParams(power_user.reasoning?.prefix || '');
+    const suffix = substituteParams(power_user.reasoning?.suffix || '');
+    if (budget <= 0 || power_user.reasoning?.enabled === false || !prefix.trim() || !suffix.trim()) {
         return {};
     }
 
-    return {
-        generation_prompt: openBlock,
+    const params = {
         reasoning_budget_tokens: budget,
-        reasoning_budget_start_tag: substituteParams(power_user.reasoning.prefix || ''),
-        reasoning_budget_end_tags: [substituteParams(power_user.reasoning.suffix || '')],
+        reasoning_budget_start_tag: prefix,
+        reasoning_budget_end_tags: [suffix],
         reasoning_budget_message: String(power_user.reasoning.budget_message ?? ''),
         reasoning_control: true,
     };
+
+    // Only when the PROMPT opened the block: it primes the sampler that one is already counting. A model
+    // that opens its own emits the start tag, which the sampler sees for itself.
+    const openBlock = PromptReasoning.openReasoningBlock(prompt);
+    if (openBlock !== null) {
+        params.generation_prompt = openBlock;
+    }
+
+    return params;
 }
 
 export async function createTextGenGenerationData(settings, model, finalPrompt = null, maxTokens = null, isImpersonate = false, isContinue = false, cfgValues = null, type = 'quiet') {
