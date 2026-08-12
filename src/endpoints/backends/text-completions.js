@@ -519,6 +519,13 @@ async function forwardWithReasoningBudget(upstream, response, params, settings, 
             response.write(buildPayload(tracker.closingText(), tracker.llamaShape));
         }
 
+        // Cancel the abandoned generation before asking for the continuation. Left running it holds
+        // its slot and its cached prompt, so the continuation lands on a cold one and re-processes
+        // the whole prompt: measured at 46.9s of silence on a 35k-character chat.
+        if (upstream.body instanceof Readable && !upstream.body.destroyed) {
+            upstream.body.destroy();
+        }
+
         const continuation = await refetch(tracker.continuationParams(params));
         if (continuation.ok && continuation.body) {
             await pump(continuation, false);
