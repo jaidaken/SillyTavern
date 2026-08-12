@@ -501,6 +501,10 @@ async function forwardWithReasoningBudget(upstream, response, params, settings, 
         }
 
         if (!response.writableEnded) {
+            // The cut lands mid-event, before the blank line that terminates it. Without this the
+            // client joins both data lines into one event and throws parsing it, which aborts the
+            // generation and loses the reply.
+            response.write('\n');
             response.write(buildPayload(tracker.closingText(), tracker.llamaShape));
         }
 
