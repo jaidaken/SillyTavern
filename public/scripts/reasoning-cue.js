@@ -110,6 +110,22 @@ export function disableThinkingInCue(cue, tags) {
 }
 
 /**
+ * The opening tag a reply will be missing because the prompt already supplied it, or null when the
+ * reply must be read as written. Getting a non-null answer wrong is expensive in one direction: claim a
+ * tag the prompt never opened and the parser reads the entire reply as a thought.
+ * @param {string} promptTail Text appended to the prompt as the assistant prefix
+ * @param {ReasoningTags & { autoParse?: boolean, alreadyCarrying?: boolean }} options Tags and state
+ * @returns {string?} The tag to prepend before parsing, or null
+ */
+export function prefixCarriedByCue(promptTail, options) {
+    if (options?.autoParse === false || options?.alreadyCarrying) {
+        return null;
+    }
+
+    return openReasoningBlock(promptTail, options) === null ? null : options.prefix;
+}
+
+/**
  * Whether a generation is the assistant's own turn, and so the one whose cue may carry a thought.
  * An impersonation writes as the user, and a quiet prompt is a utility call whose budget should go to
  * the answer rather than to a thought nobody reads.

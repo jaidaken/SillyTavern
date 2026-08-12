@@ -773,18 +773,24 @@ export class PromptReasoning {
      */
     static markPrefixOpenedByPrompt(promptTail) {
         const latest = PromptReasoning.#LATEST;
-        if (!latest || latest.prefixReasoningFormatted || !power_user.reasoning.auto_parse) {
+        if (!latest) {
             return;
         }
 
-        if (PromptReasoning.openReasoningBlock(promptTail) === null) {
+        // The tag alone, never the lead-in seeded after it: that is prompt text and would read as
+        // something the model wrote.
+        const carried = cue.prefixCarriedByCue(promptTail, {
+            ...PromptReasoning.#tags(),
+            autoParse: !!power_user.reasoning.auto_parse,
+            alreadyCarrying: !!latest.prefixReasoningFormatted,
+        });
+
+        if (carried === null) {
             return;
         }
 
-        // The tag alone, never the lead-in seeded after it: that is prompt text, and it would read as
-        // something the model wrote. The response continues from after the seed, so parsing is unaffected.
         latest.prefixReasoning = '';
-        latest.prefixReasoningFormatted = substituteParams(power_user.reasoning.prefix || '');
+        latest.prefixReasoningFormatted = carried;
         latest.prefixIncomplete = true;
     }
 

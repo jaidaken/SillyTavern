@@ -7,6 +7,7 @@ import {
     enableThinkingInCue,
     isThinkingTurn,
     openReasoningBlock,
+    prefixCarriedByCue,
     resolveSeed,
 } from '../public/scripts/reasoning-cue.js';
 
@@ -139,6 +140,36 @@ describe('disableThinkingInCue', () => {
     it('never_emits_a_closing_tag_with_no_opening_tag_before_it', () => {
         const out = disableThinkingInCue(TURN, TAGS);
         expect(out.indexOf(TAGS.prefix)).toBeLessThan(out.indexOf(TAGS.suffix));
+    });
+});
+
+describe('prefixCarriedByCue', () => {
+    it('carries_the_tag_when_the_cue_left_a_thought_open', () => {
+        expect(prefixCarriedByCue(`${TURN}${TAGS.prefix}\n${SEED}`, OPTS)).toBe(TAGS.prefix);
+    });
+
+    it('carries_nothing_when_the_cue_never_opened_a_thought', () => {
+        expect(prefixCarriedByCue(TURN, OPTS)).toBeNull();
+    });
+
+    it('carries_nothing_when_the_cue_closed_the_block_for_thinking_off', () => {
+        expect(prefixCarriedByCue(`${TURN}${TAGS.prefix}\n${TAGS.suffix}`, OPTS)).toBeNull();
+    });
+
+    it('carries_nothing_when_a_tag_is_already_being_carried', () => {
+        expect(prefixCarriedByCue(`${TURN}${TAGS.prefix}\n${SEED}`, { ...OPTS, alreadyCarrying: true })).toBeNull();
+    });
+
+    it('carries_nothing_when_auto_parse_is_off', () => {
+        expect(prefixCarriedByCue(`${TURN}${TAGS.prefix}\n${SEED}`, { ...OPTS, autoParse: false })).toBeNull();
+    });
+
+    it('never_claims_a_tag_for_a_cue_that_disableThinkingInCue_produced', () => {
+        expect(prefixCarriedByCue(disableThinkingInCue(TURN, TAGS), OPTS)).toBeNull();
+    });
+
+    it('always_claims_the_tag_for_a_cue_that_enableThinkingInCue_produced', () => {
+        expect(prefixCarriedByCue(enableThinkingInCue(TURN, OPTS), OPTS)).toBe(TAGS.prefix);
     });
 });
 
