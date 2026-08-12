@@ -764,9 +764,12 @@ export class PromptReasoning {
             return;
         }
 
+        // Only the tag is carried forward, never the lead-in or instructions that follow it: those
+        // are prompt text, and showing them in the thinking block reads as something the model
+        // wrote. Parsing needs the tag alone, since the response continues from after them.
         const prefix = substituteParams(power_user.reasoning.prefix || '');
-        latest.prefixReasoning = openBlock.slice(prefix.length);
-        latest.prefixReasoningFormatted = openBlock;
+        latest.prefixReasoning = '';
+        latest.prefixReasoningFormatted = prefix;
         latest.prefixIncomplete = true;
     }
 
