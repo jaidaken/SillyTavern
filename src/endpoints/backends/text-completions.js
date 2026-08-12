@@ -489,10 +489,6 @@ async function forwardWithReasoningBudget(upstream, response, params, settings, 
             return void (!response.writableEnded && response.end());
         }
 
-        if (upstream.body instanceof Readable && !upstream.body.destroyed) {
-            upstream.body.destroy();
-        }
-
         if (!response.writableEnded) {
             response.write(buildPayload(tracker.closingText(), tracker.llamaShape));
         }
@@ -506,6 +502,11 @@ async function forwardWithReasoningBudget(upstream, response, params, settings, 
     } catch (error) {
         log.net.error('[ReasoningBudget] streaming failed:', error);
     } finally {
+        // Abandoned only once the continuation has its own generation running: cancelling it any
+        // earlier takes the shared abort signal down with it.
+        if (upstream.body instanceof Readable && !upstream.body.destroyed) {
+            upstream.body.destroy();
+        }
         if (!response.writableEnded) {
             response.end();
         }
@@ -551,7 +552,11 @@ router.post('/generate', async function (request, response) {
             const completionsStream = await fetch(url, args);
 
             if (reasoningBudget) {
-                const refetch = (nextParams) => fetch(url, { ...args, body: JSON.stringify(nextParams) });
+                // Its own signal: the first generation is abandoned mid-flight, and sharing one
+                // would abort the continuation along with it.
+                const continuation = new AbortController();
+                request.socket.on('close', () => continuation.abort());
+                const refetch = (nextParams) => fetch(url, { ...args, signal: continuation.signal, body: JSON.stringify(nextParams) });
                 await forwardWithReasoningBudget(completionsStream, response, params, reasoningBudget, refetch);
             } else {
                 await forwardFetchResponse(completionsStream, response);
