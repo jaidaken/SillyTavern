@@ -4605,11 +4605,12 @@
                                 </div>
                                 <div class="flex-container alignItemsBaseline">
                                     <div class="flex1 flex-container alignItemsBaseline" title="Stop thinking after this many tokens and continue with the reply. On chat completions this is sent to llama.cpp as its own reasoning budget; on text completion the server enforces it. 0 disables." data-i18n="[title]reasoning_budget">
-                                        <input aria-label="Reasoning budget" id="reasoning_budget" name="reasoning_budget" class="text_pole textarea_compact widthUnset" type="number" min="0" max="99999" />
+                                        <input aria-label="Budget" id="reasoning_budget" name="reasoning_budget" class="text_pole textarea_compact widthUnset" type="number" min="0" max="99999" />
                                         <small data-i18n="Budget">Budget</small>
                                     </div>
                                     <div class="flex2 flex-container alignItemsBaseline" title="Optional text written before the closing tag when the budget runs out." data-i18n="[title]reasoning_budget_message">
-                                        <input aria-label="Reasoning budget message" id="reasoning_budget_message" name="reasoning_budget_message" class="text_pole textarea_compact flex1" type="text" autocomplete="off" />
+                                        <input aria-label="Cutoff Text" id="reasoning_budget_message" name="reasoning_budget_message" class="text_pole textarea_compact flex1" type="text" autocomplete="off" />
+                                        <small data-i18n="Cutoff Text">Cutoff Text</small>
                                     </div>
                                 </div>
                                 <details>
