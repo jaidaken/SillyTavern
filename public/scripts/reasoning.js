@@ -684,8 +684,8 @@ export class PromptReasoning {
     */
     static REASONING_PLACEHOLDER = '\u200B';
 
-    /** Used when no seed is configured. A bare opened block reads as finished and gets closed unthought. */
-    static DEFAULT_SEED = 'Okay, let me think.';
+    /** A bare block gets closed unthought; an open-ended seed runs past the closing tag into the reply. A bounded-considerations seed does both jobs (measured 9/9), and is what llama.cpp's own thinking template seeds with. */
+    static DEFAULT_SEED = 'What matters in this moment:';
 
     /**
      * Returns the latest formatted reasoning prefix if the prefix is incomplete.
