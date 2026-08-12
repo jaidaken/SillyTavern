@@ -656,7 +656,10 @@ export function formatInstructModePrompt(name, isImpersonate, promptBias, name1,
         // with the roleplay prompt and without any chance of being narrated into the reply.
         const instructions = PromptReasoning.getReasoningInstructions();
         if (instructions && PromptReasoning.opensReasoning(result)) {
-            result += instructions;
+            // A cue that ends on its own tag would otherwise run straight into the first word,
+            // breaking the tag's token boundary.
+            const separator = /\s$/.test(result) ? '' : '\n';
+            result += separator + instructions;
         }
 
         PromptReasoning.markPrefixOpenedByPrompt(result);
