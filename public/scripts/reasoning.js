@@ -294,6 +294,9 @@ export class ReasoningHandler {
     /** @type {number} Characters of already-written reply the stream is continuing; never thought text. */
     continuePreamble = 0;
 
+    /** @type {string} Thought the continued message already had, joined ahead of the new one. */
+    #continuedReasoning = '';
+
     /**
      * @param {Date?} [timeStarted=null] - When the generation started
      */
@@ -502,13 +505,17 @@ export class ReasoningHandler {
 
         const wasParsing = this.#isParsingReasoning || this.#splitter?.closed;
         const carry = promptReasoning?.prefixIncomplete ? promptReasoning.prefixReasoningFormatted : '';
-        this.#splitter ??= new ReasoningSplitter({
-            prefix: power_user.reasoning.prefix,
-            suffix: power_user.reasoning.suffix,
-            carry,
-            trim: !!power_user.trim_spaces,
-            preamble: this.continuePreamble,
-        });
+        if (!this.#splitter) {
+            this.#splitter = new ReasoningSplitter({
+                prefix: power_user.reasoning.prefix,
+                suffix: power_user.reasoning.suffix,
+                carry,
+                trim: !!power_user.trim_spaces,
+                preamble: this.continuePreamble,
+            });
+            // A continued message may already carry a thought; the continuation's joins it, never replaces it.
+            this.#continuedReasoning = this.continuePreamble > 0 ? String(message.extra?.reasoning ?? '') : '';
+        }
 
         const split = final ? this.#splitter.finalize(message.mes) : this.#splitter.update(message.mes);
 
@@ -522,7 +529,7 @@ export class ReasoningHandler {
             this.endTime = null;
         }
 
-        this.reasoning = split.reasoning;
+        this.reasoning = cue.joinContinuedReasoning(this.#continuedReasoning, split.reasoning);
         message.mes = split.content;
         this.#isParsingReasoning = split.parsing;
         this.#parsingReasoningMesStartIndex = this.#splitter.closed ? 1 : null;
@@ -774,6 +781,10 @@ export class PromptReasoning {
      * @param {string} anchor Reply text being continued, whose ending the thought quotes
      * @returns {string} The prompt with an anchored thought block left open
      */
+    static cueTagsUsable() {
+        return cue.hasUsableTags(PromptReasoning.#tags());
+    }
+
     static enableContinueThinkingInCue(text, anchor) {
         if (!power_user.reasoning.auto_parse) {
             return text;
@@ -835,6 +846,8 @@ export class PromptReasoning {
 
         /** @type {number} */
         this.counter = 0;
+        /** @type {boolean} Continue will reopen a thought, so the finished one stays out of the prompt. */
+        this.suppressPrefixReplay = false;
         /** @type {number} */
         this.prefixLength = -1;
         /** @type {string} */
@@ -870,6 +883,12 @@ export class PromptReasoning {
     addToMessage(content, reasoning, isPrefix, duration) {
         // Disabled or reached limit of additions
         if (!isPrefix && (!power_user.reasoning.add_to_prompts || this.counter >= power_user.reasoning.max_additions)) {
+            return content;
+        }
+
+        // A continue that reopens its own thought must not carry the finished one in the prompt.
+        // Continuing INSIDE a thought (no content yet) still replays: that block is the one continued.
+        if (isPrefix && content && this.suppressPrefixReplay) {
             return content;
         }
 

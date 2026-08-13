@@ -157,6 +157,23 @@ export function prefixCarriedByCue(promptTail, options) {
 }
 
 /**
+ * Joins the thought a message already had with the one its continuation produced. Losing the first
+ * thought would silently discard what the user watched the model write minutes earlier.
+ * @param {string} base Thought recorded before the continue
+ * @param {string} addition Thought the continuation produced
+ * @returns {string} Both thoughts, or whichever exists
+ */
+export function joinContinuedReasoning(base, addition) {
+    const a = String(base ?? '');
+    const b = String(addition ?? '');
+    if (!a.trim() || !b.trim()) {
+        return b.trim() ? b : a;
+    }
+
+    return `${a}\n\n${b}`;
+}
+
+/**
  * Whether a generation is the assistant's own turn, and so the one whose cue may carry a thought.
  * An impersonation writes as the user, and a quiet prompt is a utility call whose budget should go to
  * the answer rather than to a thought nobody reads.

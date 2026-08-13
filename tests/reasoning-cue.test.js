@@ -9,6 +9,7 @@ import {
     disableThinkingInCue,
     enableThinkingInCue,
     isThinkingTurn,
+    joinContinuedReasoning,
     openReasoningBlock,
     prefixCarriedByCue,
     resolveSeed,
@@ -203,6 +204,25 @@ describe('continueThinkingCue', () => {
         const out = continueThinkingCue(PROMPT, { ...TAGS, anchor: REPLY + ' more'.repeat(200) });
         const quoted = out.slice(PROMPT.length).match(/ends with: "([^"]*)"/)[1];
         expect(quoted.length).toBeLessThanOrEqual(CONTINUE_ANCHOR_CHARS);
+    });
+});
+
+describe('joinContinuedReasoning', () => {
+    it('joins_old_and_new_thoughts_in_order', () => {
+        expect(joinContinuedReasoning('first thought', 'second thought')).toBe('first thought\n\nsecond thought');
+    });
+
+    it('keeps_the_old_thought_when_the_continuation_produced_none', () => {
+        expect(joinContinuedReasoning('first thought', '')).toBe('first thought');
+    });
+
+    it('keeps_the_new_thought_when_there_was_none_before', () => {
+        expect(joinContinuedReasoning('', 'second thought')).toBe('second thought');
+    });
+
+    it('is_empty_when_neither_exists', () => {
+        expect(joinContinuedReasoning('', '')).toBe('');
+        expect(joinContinuedReasoning(undefined, undefined)).toBe('');
     });
 });
 

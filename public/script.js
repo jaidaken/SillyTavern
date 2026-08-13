@@ -3579,9 +3579,12 @@ class StreamingProcessor {
         this.toolCalls = [];
         // Initialize reasoning in its own handler
         this.reasoningHandler = new ReasoningHandler(timeStarted);
-        // On continue the parse target is continueMessage + stream; that lead-in is finished reply
-        // text and must never be read into a thought block.
-        this.reasoningHandler.continuePreamble = this.continueMessage.length;
+        // On continue the parse target is continueMessage + stream. When the prompt opened a fresh
+        // thought (tag-alone carry), that lead-in is finished reply text and must never be read into
+        // the block. When it instead replays a formatted thought, the lead-in IS that block and the
+        // splitter must parse it out as stock did, so no preamble.
+        const promptOpenedFreshThought = !!promptReasoning?.prefixIncomplete && !promptReasoning?.prefixReasoning;
+        this.reasoningHandler.continuePreamble = promptOpenedFreshThought ? this.continueMessage.length : 0;
         /** @type {PromptReasoning} */
         this.promptReasoning = promptReasoning;
         /** @type {string[]} */
@@ -4537,6 +4540,10 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     }));
 
     const promptReasoning = new PromptReasoning();
+    // A continue that will reopen an anchored thought must not also replay the finished one: two
+    // blocks in one parse target, and the stop point sits right after the replayed block anyway.
+    promptReasoning.suppressPrefixReplay = isContinue && isInstruct && power_user.reasoning.enabled !== false
+        && isStreamingEnabled() && power_user.reasoning.auto_parse && PromptReasoning.cueTagsUsable();
     for (let i = coreChat.length - 1; i >= 0; i--) {
         const depth = coreChat.length - i - (isContinue ? 2 : 1);
         const isPrefix = isContinue && i === coreChat.length - 1;
