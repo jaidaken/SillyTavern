@@ -160,6 +160,31 @@ describe('ReasoningSplitter on a continue (preamble before the opened block)', (
     });
 });
 
+describe('stray closing tag after the thought', () => {
+    it('consumes_one_stray_closing_tag_that_immediately_follows', () => {
+        const out = stream(splitter(), `${PREFIX}\nthink${SUFFIX}\n${SUFFIX}*A little heat radiates.*`);
+        expect(out.reasoning).toBe('\nthink');
+        expect(out.content).toBe('*A little heat radiates.*');
+    });
+
+    it('consumes_the_stray_even_when_it_arrives_in_a_later_chunk', () => {
+        const s = splitter();
+        s.update(`${PREFIX}\nthink${SUFFIX}`);
+        const out = s.update(`${PREFIX}\nthink${SUFFIX}\n${SUFFIX}prose`);
+        expect(out.content).toBe('prose');
+    });
+
+    it('does_not_consume_a_suffix_once_real_prose_has_started', () => {
+        const out = stream(splitter(), `${PREFIX}\nthink${SUFFIX}prose ${SUFFIX} more`);
+        expect(out.content).toBe(`prose ${SUFFIX} more`);
+    });
+
+    it('consumes_only_one_stray_not_two', () => {
+        const out = stream(splitter(), `${PREFIX}\nthink${SUFFIX}${SUFFIX}${SUFFIX}prose`);
+        expect(out.content).toBe(`${SUFFIX}prose`);
+    });
+});
+
 describe('trim behaviour', () => {
     it('trims_the_reply_when_trimming_is_enabled', () => {
         const out = stream(splitter({ trim: true }), `${PREFIX}\nthink${SUFFIX}\n  reply  `);

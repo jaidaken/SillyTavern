@@ -5253,7 +5253,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     // token cap). Skipped when the prompt already replays a thought: two blocks in one parse target
     // is a shape the splitter does not model. Streaming only, the non-streaming parser is anchored.
     if (isContinue && isInstruct && power_user.reasoning.enabled !== false && isStreamingEnabled() && !PromptReasoning.latestPromptHasReasoning()) {
-        finalPrompt = PromptReasoning.enableThinkingInCue(finalPrompt);
+        finalPrompt = PromptReasoning.enableContinueThinkingInCue(finalPrompt, String(chat[chat.length - 1]?.mes ?? ''));
         PromptReasoning.markPrefixOpenedByPrompt(finalPrompt);
     }
 

@@ -283,6 +283,7 @@ export const power_user = {
         separator: '\n',
         max_additions: 1,
         seed: '',
+        continue_seed: '',
         budget: 0,
         budget_message: '',
         enabled: true,

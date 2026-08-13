@@ -90,7 +90,7 @@ export class ReasoningSplitter {
         if (this.#contentStart !== null) {
             return {
                 reasoning: this.#reasoningBefore(target),
-                content: this.#trimmed(target.slice(this.#contentStart)),
+                content: this.#contentAfterClose(target),
                 parsing: false,
             };
         }
@@ -113,9 +113,24 @@ export class ReasoningSplitter {
         this.#parsing = false;
         return {
             reasoning: inside.slice(0, end),
-            content: this.#trimmed(target.slice(this.#contentStart)),
+            content: this.#contentAfterClose(target),
             parsing: false,
         };
+    }
+
+    /**
+     * Reply text after the closing tag. Gemma sometimes emits one stray extra closing tag right after
+     * the thought; consume it, as llama.cpp's own parser does.
+     * @param {string} target Full parse target
+     * @returns {string} Reply text
+     */
+    #contentAfterClose(target) {
+        let start = this.#contentStart;
+        const lead = target.slice(start).match(/^\s*/)[0].length;
+        if (target.startsWith(this.#suffix, start + lead)) {
+            start += lead + this.#suffix.length;
+        }
+        return this.#trimmed(target.slice(start));
     }
 
     /**

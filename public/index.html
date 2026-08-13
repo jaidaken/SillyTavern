@@ -4647,6 +4647,12 @@
                                         </div>
                                     </div>
                                     <div class="flex-container">
+                                        <div class="flex1" title="The instruction the thought opens with when you press Continue. The last words of the reply are quoted in front of it automatically, which is what stops the model writing a second draft of the whole message and gluing it onto the first. This text is the instruction that follows the quote. Macros allowed." data-i18n="[title]reasoning_continue_seed">
+                                            <small data-i18n="Continue Seed">Continue Seed</small>
+                                            <textarea aria-label="Continue Seed" id="reasoning_continue_seed" name="reasoning_continue_seed" data-macros class="text_pole textarea_compact autoSetHeight" rows="2"></textarea>
+                                        </div>
+                                    </div>
+                                    <div class="flex-container">
                                         <div class="flex1" title="Stop thinking after this many tokens and continue with the reply. Requires the prefix and suffix above, and a backend that accepts a reasoning budget (llama.cpp). 0 disables." data-i18n="[title]reasoning_budget">
                                             <small data-i18n="Budget">Budget</small>
                                             <input aria-label="Budget" id="reasoning_budget" name="reasoning_budget" class="text_pole textarea_compact wide100p" type="number" min="0" max="99999" />

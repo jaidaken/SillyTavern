@@ -54,6 +54,7 @@ const UI = {
     $budgetMessage: $('#reasoning_budget_message'),
     $enabled: $('#reasoning_enabled'),
     $seed: $('#reasoning_seed'),
+    $continueSeed: $('#reasoning_continue_seed'),
 };
 
 /**
@@ -685,7 +686,7 @@ export class PromptReasoning {
     static REASONING_PLACEHOLDER = '\u200B';
 
     /** A bare block gets closed unthought; an open-ended seed runs past the closing tag into the reply. A bounded-considerations seed does both jobs (measured 9/9), and is what llama.cpp's own thinking template seeds with. */
-    static DEFAULT_SEED = 'What matters in this moment:';
+    static DEFAULT_SEED = cue.DEFAULT_SEED;
 
     /**
      * Returns the latest formatted reasoning prefix if the prefix is incomplete.
@@ -750,12 +751,12 @@ export class PromptReasoning {
      * @param {string} cue Assistant cue about to end the prompt
      * @returns {string} The cue with a thought block left open
      */
-    static enableThinkingInCue(text) {
+    static enableThinkingInCue(text, seed = undefined) {
         if (!power_user.reasoning.auto_parse) {
             return text;
         }
 
-        return cue.enableThinkingInCue(text, { ...PromptReasoning.#tags(), seed: PromptReasoning.getThinkingSeed() });
+        return cue.enableThinkingInCue(text, { ...PromptReasoning.#tags(), seed: seed ?? PromptReasoning.getThinkingSeed() });
     }
 
     /**
@@ -765,6 +766,21 @@ export class PromptReasoning {
      */
     static getThinkingSeed() {
         return cue.resolveSeed(substituteParams(power_user.reasoning.seed || ''));
+    }
+
+    /**
+     * Rewrites a continue prompt to end inside a thought anchored to the reply's own last words.
+     * @param {string} text Prompt about to be continued
+     * @param {string} anchor Reply text being continued, whose ending the thought quotes
+     * @returns {string} The prompt with an anchored thought block left open
+     */
+    static enableContinueThinkingInCue(text, anchor) {
+        if (!power_user.reasoning.auto_parse) {
+            return text;
+        }
+
+        const lead = substituteParams(power_user.reasoning.continue_seed || '');
+        return cue.continueThinkingCue(text, { ...PromptReasoning.#tags(), lead, anchor });
     }
 
     /**
@@ -949,6 +965,13 @@ function loadReasoningSettings() {
     UI.$seed.attr('placeholder', PromptReasoning.DEFAULT_SEED);
     UI.$seed.on('input', function () {
         power_user.reasoning.seed = String($(this).val());
+        saveSettingsDebounced();
+    });
+
+    UI.$continueSeed.val(power_user.reasoning.continue_seed ?? '');
+    UI.$continueSeed.attr('placeholder', cue.DEFAULT_CONTINUE_LEAD);
+    UI.$continueSeed.on('input', function () {
+        power_user.reasoning.continue_seed = String($(this).val());
         saveSettingsDebounced();
     });
 
