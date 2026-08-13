@@ -54,7 +54,7 @@ const UI = {
     $budgetMessage: $('#reasoning_budget_message'),
     $enabled: $('#reasoning_enabled'),
     $seed: $('#reasoning_seed'),
-    $continueSeed: $('#reasoning_continue_seed'),
+    $continueForce: $('#continue_force_tokens'),
 };
 
 /**
@@ -776,25 +776,6 @@ export class PromptReasoning {
     }
 
     /**
-     * Rewrites a continue prompt to end inside a thought anchored to the reply's own last words.
-     * @param {string} text Prompt about to be continued
-     * @param {string} anchor Reply text being continued, whose ending the thought quotes
-     * @returns {string} The prompt with an anchored thought block left open
-     */
-    static cueTagsUsable() {
-        return cue.hasUsableTags(PromptReasoning.#tags());
-    }
-
-    static enableContinueThinkingInCue(text, anchor) {
-        if (!power_user.reasoning.auto_parse) {
-            return text;
-        }
-
-        const lead = substituteParams(power_user.reasoning.continue_seed || '');
-        return cue.continueThinkingCue(text, { ...PromptReasoning.#tags(), lead, anchor });
-    }
-
-    /**
      * Rewrites an assistant cue to say "not thinking this turn", which these templates express as a
      * thought block opened and closed with nothing inside. Left to itself a model opens its own block,
      * so declining to open one is not enough to stop it.
@@ -846,8 +827,6 @@ export class PromptReasoning {
 
         /** @type {number} */
         this.counter = 0;
-        /** @type {boolean} Continue will reopen a thought, so the finished one stays out of the prompt. */
-        this.suppressPrefixReplay = false;
         /** @type {number} */
         this.prefixLength = -1;
         /** @type {string} */
@@ -883,12 +862,6 @@ export class PromptReasoning {
     addToMessage(content, reasoning, isPrefix, duration) {
         // Disabled or reached limit of additions
         if (!isPrefix && (!power_user.reasoning.add_to_prompts || this.counter >= power_user.reasoning.max_additions)) {
-            return content;
-        }
-
-        // A continue that reopens its own thought must not carry the finished one in the prompt.
-        // Continuing INSIDE a thought (no content yet) still replays: that block is the one continued.
-        if (isPrefix && content && this.suppressPrefixReplay) {
             return content;
         }
 
@@ -987,10 +960,9 @@ function loadReasoningSettings() {
         saveSettingsDebounced();
     });
 
-    UI.$continueSeed.val(power_user.reasoning.continue_seed ?? '');
-    UI.$continueSeed.attr('placeholder', cue.DEFAULT_CONTINUE_LEAD);
-    UI.$continueSeed.on('input', function () {
-        power_user.reasoning.continue_seed = String($(this).val());
+    UI.$continueForce.val(power_user.continue_force_tokens ?? 200);
+    UI.$continueForce.on('input', function () {
+        power_user.continue_force_tokens = Number($(this).val());
         saveSettingsDebounced();
     });
 

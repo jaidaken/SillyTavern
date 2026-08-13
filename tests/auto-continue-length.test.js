@@ -1,7 +1,7 @@
 // @ts-check
 import { describe, expect, it } from '@jest/globals';
 
-import { isBelowTargetLength, measuredReplyText } from '../public/scripts/auto-continue-length.js';
+import { continueForceParams, isBelowTargetLength, measuredReplyText } from '../public/scripts/auto-continue-length.js';
 import { ReasoningSplitter } from '../public/scripts/reasoning-split.js';
 
 const PREFIX = '<|channel>thought';
@@ -82,5 +82,32 @@ describe('the length target against a real split generation', () => {
         const message = splitToMessage(generated);
         expect(message.extra.reasoning).toBe('');
         expect(isBelowTargetLength(measuredReplyText(message).length, 200)).toBe(false);
+    });
+});
+
+describe('continueForceParams', () => {
+    it('bans_the_stop_token_and_caps_the_generation_on_continue', () => {
+        const p = continueForceParams(true, 2048, 200);
+        expect(p.ignore_eos).toBe(true);
+        expect(p.ban_eos_token).toBe(true);
+        expect(p.n_predict).toBe(200);
+        expect(p.max_new_tokens).toBe(200);
+    });
+
+    it('never_exceeds_the_response_length', () => {
+        expect(continueForceParams(true, 150, 200).n_predict).toBe(150);
+    });
+
+    it('does_nothing_for_a_normal_generation', () => {
+        expect(continueForceParams(false, 2048, 200)).toEqual({});
+    });
+
+    it('is_disabled_by_a_zero_or_missing_setting', () => {
+        expect(continueForceParams(true, 2048, 0)).toEqual({});
+        expect(continueForceParams(true, 2048, undefined)).toEqual({});
+    });
+
+    it('uses_its_own_cap_when_no_response_length_is_configured', () => {
+        expect(continueForceParams(true, null, 200).n_predict).toBe(200);
     });
 });

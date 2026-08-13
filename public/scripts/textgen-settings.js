@@ -14,6 +14,7 @@ import {
     startStatusLoading,
     substituteParams,
 } from '../script.js';
+import { continueForceParams } from './auto-continue-length.js';
 import { deriveTemplatesFromChatTemplate } from './chat-templates.js';
 import { t } from './i18n.js';
 import { autoSelectInstructPreset, selectContextPreset, selectInstructPreset } from './instruct-mode.js';
@@ -1891,6 +1892,9 @@ export async function createTextGenGenerationData(settings, model, finalPrompt =
             delete params.guided_json;
         }
     }
+
+    Object.assign(params, continueForceParams(isContinue, maxTokens, power_user.continue_force_tokens));
+
     return params;
 }
 

@@ -19,6 +19,33 @@ export function measuredReplyText(message) {
 }
 
 /**
+ * Generation overrides that force a continue to produce text. A continue prompt ends where the model
+ * chose its stop token and re-sampling re-picks it (measured: 1 token, empty, every trial); banning
+ * the stop is the only measured escape that neither re-drafts the message nor opens a new thought
+ * (3/3 next-beat). The model no longer ends the generation, the cap does.
+ * @param {boolean} isContinue Whether this generation continues an existing message
+ * @param {number?} maxTokens Response length configured for this generation
+ * @param {number?} forceTokens Continue length setting, zero or less disables forcing
+ * @returns {object} Parameter overrides, empty when not a forced continue
+ */
+export function continueForceParams(isContinue, maxTokens, forceTokens) {
+    const force = Number(forceTokens) || 0;
+    if (!isContinue || force <= 0) {
+        return {};
+    }
+
+    const cap = Math.min(force, Number(maxTokens) > 0 ? Number(maxTokens) : force);
+    return {
+        'max_new_tokens': cap,
+        'max_tokens': cap,
+        'n_predict': cap,
+        'num_predict': cap,
+        'ignore_eos': true,
+        'ban_eos_token': true,
+    };
+}
+
+/**
  * Whether a reply is short enough to continue.
  * @param {number} replyTokens Token count of the reply alone
  * @param {number} targetLength Configured target, zero or less disables the feature

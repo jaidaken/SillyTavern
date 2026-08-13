@@ -125,6 +125,7 @@ export const power_user = {
     always_force_name2: false,
     user_prompt_bias: '',
     show_user_prompt_bias: true,
+    continue_force_tokens: 200,
     auto_continue: {
         enabled: false,
         allow_chat_completions: false,
@@ -283,7 +284,6 @@ export const power_user = {
         separator: '\n',
         max_additions: 1,
         seed: '',
-        continue_seed: '',
         budget: 0,
         budget_message: '',
         enabled: true,

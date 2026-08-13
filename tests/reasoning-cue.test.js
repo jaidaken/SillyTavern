@@ -2,9 +2,6 @@
 import { describe, expect, it } from '@jest/globals';
 
 import {
-    CONTINUE_ANCHOR_CHARS,
-    continueThinkingCue,
-    DEFAULT_CONTINUE_LEAD,
     DEFAULT_SEED,
     disableThinkingInCue,
     enableThinkingInCue,
@@ -47,16 +44,6 @@ describe('openReasoningBlock', () => {
     it('returns_null_when_either_tag_is_unconfigured', () => {
         expect(openReasoningBlock(`${TURN}${TAGS.prefix}`, { prefix: '', suffix: TAGS.suffix })).toBeNull();
         expect(openReasoningBlock(`${TURN}${TAGS.prefix}`, { prefix: TAGS.prefix, suffix: '   ' })).toBeNull();
-    });
-});
-
-describe('DEFAULT_CONTINUE_LEAD', () => {
-    it('is_never_blank_because_a_bare_block_is_closed_unthought', () => {
-        expect(DEFAULT_CONTINUE_LEAD.trim()).not.toBe('');
-    });
-
-    it('differs_from_the_reply_seed_which_makes_the_model_redraft_the_message', () => {
-        expect(DEFAULT_CONTINUE_LEAD).not.toBe(DEFAULT_SEED);
     });
 });
 
@@ -154,56 +141,6 @@ describe('disableThinkingInCue', () => {
     it('never_emits_a_closing_tag_with_no_opening_tag_before_it', () => {
         const out = disableThinkingInCue(TURN, TAGS);
         expect(out.indexOf(TAGS.prefix)).toBeLessThan(out.indexOf(TAGS.suffix));
-    });
-});
-
-describe('continueThinkingCue', () => {
-    const REPLY = 'She looks away quickly, her tail twitching nervously against the seat.';
-    const PROMPT = `<|turn>user\nhi<turn|>\n${TURN}${REPLY}`;
-
-    it('opens_a_thought_that_quotes_the_replys_own_ending', () => {
-        const out = continueThinkingCue(PROMPT, { ...TAGS, anchor: REPLY });
-        expect(out.startsWith(PROMPT)).toBe(true);
-        const seed = out.slice(PROMPT.length + TAGS.prefix.length);
-        expect(seed).toContain(`ends with: "${REPLY}"`);
-        expect(seed).toContain(DEFAULT_CONTINUE_LEAD);
-        expect(out).not.toContain(TAGS.suffix);
-    });
-
-    it('anchors_to_the_trimmed_ending_not_trailing_whitespace', () => {
-        const out = continueThinkingCue(PROMPT, { ...TAGS, anchor: REPLY + '\n  ' });
-        expect(out).toContain(`${REPLY.slice(-30)}"`);
-    });
-
-    it('never_quotes_template_markers_because_the_anchor_is_the_message_not_the_prompt', () => {
-        const out = continueThinkingCue(PROMPT, { ...TAGS, anchor: REPLY });
-        const seed = out.slice(PROMPT.length);
-        expect(seed).not.toContain('<|turn>');
-    });
-
-    it('falls_back_to_an_unanchored_seed_when_no_reply_text_is_supplied', () => {
-        const out = continueThinkingCue(PROMPT, { ...TAGS, anchor: '' });
-        expect(out).toBe(`${PROMPT}${TAGS.prefix}\n${DEFAULT_CONTINUE_LEAD}`);
-    });
-
-    it('uses_a_configured_lead_in_place_of_the_default', () => {
-        const out = continueThinkingCue(PROMPT, { ...TAGS, anchor: REPLY, lead: 'Carry on:' });
-        expect(out).toContain('Carry on:');
-        expect(out).not.toContain(DEFAULT_CONTINUE_LEAD);
-    });
-
-    it('falls_back_to_the_default_lead_for_a_blank_one', () => {
-        expect(continueThinkingCue(PROMPT, { ...TAGS, anchor: REPLY, lead: '  ' })).toContain(DEFAULT_CONTINUE_LEAD);
-    });
-
-    it('leaves_the_prompt_alone_when_tags_are_not_configured', () => {
-        expect(continueThinkingCue(PROMPT, { prefix: '', suffix: '' })).toBe(PROMPT);
-    });
-
-    it('quotes_at_most_the_anchor_window', () => {
-        const out = continueThinkingCue(PROMPT, { ...TAGS, anchor: REPLY + ' more'.repeat(200) });
-        const quoted = out.slice(PROMPT.length).match(/ends with: "([^"]*)"/)[1];
-        expect(quoted.length).toBeLessThanOrEqual(CONTINUE_ANCHOR_CHARS);
     });
 });
 

@@ -4647,9 +4647,9 @@
                                         </div>
                                     </div>
                                     <div class="flex-container">
-                                        <div class="flex1" title="The instruction the thought opens with when you press Continue. The last words of the reply are quoted in front of it automatically, which is what stops the model writing a second draft of the whole message and gluing it onto the first. This text is the instruction that follows the quote. Macros allowed." data-i18n="[title]reasoning_continue_seed">
-                                            <small data-i18n="Continue Seed">Continue Seed</small>
-                                            <textarea aria-label="Continue Seed" id="reasoning_continue_seed" name="reasoning_continue_seed" data-macros class="text_pole textarea_compact autoSetHeight" rows="2"></textarea>
+                                        <div class="flex1" title="How many tokens a Continue writes. A continue prompt ends exactly where the model chose to stop, so asked to go on it just stops again; instead, Continue bans the stop token and writes this many tokens of new material, then ends. No new thinking is generated, the reply keeps the thought it already has. 0 turns this off and restores stock behavior." data-i18n="[title]continue_force_tokens">
+                                            <small data-i18n="Continue length (tokens)">Continue length (tokens)</small>
+                                            <input id="continue_force_tokens" name="continue_force_tokens" type="number" min="0" max="2048" class="text_pole textarea_compact" />
                                         </div>
                                     </div>
                                     <div class="flex-container">

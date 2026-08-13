@@ -4540,10 +4540,6 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     }));
 
     const promptReasoning = new PromptReasoning();
-    // A continue that will reopen an anchored thought must not also replay the finished one: two
-    // blocks in one parse target, and the stop point sits right after the replayed block anyway.
-    promptReasoning.suppressPrefixReplay = isContinue && isInstruct && power_user.reasoning.enabled !== false
-        && isStreamingEnabled() && power_user.reasoning.auto_parse && PromptReasoning.cueTagsUsable();
     for (let i = coreChat.length - 1; i >= 0; i--) {
         const depth = coreChat.length - i - (isContinue ? 2 : 1);
         const isPrefix = isContinue && i === coreChat.length - 1;
@@ -5253,16 +5249,6 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     }
 
     let finalPrompt = await getCombinedPrompt(false);
-
-    // A continue prompt ends at the exact position the model chose to stop, and re-sampling there
-    // yields the stop token again (measured 3/3 at temp 1.43: one token, empty). Opening a seeded
-    // thought moves the model off the stop point; it plans the next beat and writes it (3/3 to the
-    // token cap). Skipped when the prompt already replays a thought: two blocks in one parse target
-    // is a shape the splitter does not model. Streaming only, the non-streaming parser is anchored.
-    if (isContinue && isInstruct && power_user.reasoning.enabled !== false && isStreamingEnabled() && !PromptReasoning.latestPromptHasReasoning()) {
-        finalPrompt = PromptReasoning.enableContinueThinkingInCue(finalPrompt, String(chat[chat.length - 1]?.mes ?? ''));
-        PromptReasoning.markPrefixOpenedByPrompt(finalPrompt);
-    }
 
     const eventData = { prompt: finalPrompt, dryRun: dryRun };
     await eventSource.emit(event_types.GENERATE_AFTER_COMBINE_PROMPTS, eventData);

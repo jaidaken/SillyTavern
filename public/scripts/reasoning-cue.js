@@ -10,37 +10,6 @@
 /** A bare opened block reads as already finished and gets closed unthought, so a seed is never empty. */
 export const DEFAULT_SEED = 'What matters in this moment:';
 
-/** Instruction half of a continue seed; the quoted-ending anchor is prepended by continueThinkingCue. */
-export const DEFAULT_CONTINUE_LEAD = 'What happens in the beat AFTER that ending. New material only, nothing restated:';
-
-/** How much of the reply's ending the continue seed quotes back at the model. */
-export const CONTINUE_ANCHOR_CHARS = 160;
-
-/**
- * Rewrites an assistant cue for a CONTINUE: a thought anchored to the reply's own last words. The
- * anchor is the mechanism, not decoration: an unanchored continue seed re-drafts the whole message
- * half the time (measured 2/4, and 0/2 for the reply seed); quoting the ending scored 4/4 next-beat.
- * @param {string} text Prompt about to be continued, ending in the partial reply
- * @param {ReasoningTags & { lead?: string, anchor?: string }} options Tags, the instruction half of the
- *   seed, and the reply text to quote the ending of. Anchoring on the prompt tail instead would quote
- *   template markers into the thought whenever the reply is shorter than the window.
- * @returns {string} The prompt with an anchored thought block left open
- */
-export function continueThinkingCue(text, options) {
-    if (!hasUsableTags(options)) {
-        return text;
-    }
-
-    const lead = String(options.lead ?? '').trim() ? String(options.lead) : DEFAULT_CONTINUE_LEAD;
-    const tail = String(options.anchor ?? '').trimEnd().slice(-CONTINUE_ANCHOR_CHARS);
-    if (!tail) {
-        return enableThinkingInCue(text, { ...options, seed: lead });
-    }
-
-    const seed = `The reply is mid-scene and already ends with: "${tail}" ${lead}`;
-    return enableThinkingInCue(text, { ...options, seed });
-}
-
 /**
  * @typedef {object} ReasoningTags
  * @property {string} prefix Opening tag
