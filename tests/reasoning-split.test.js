@@ -128,6 +128,38 @@ describe('finalize', () => {
     });
 });
 
+describe('ReasoningSplitter on a continue (preamble before the opened block)', () => {
+    const OLD = '*She looks away quickly, blushing.*';
+
+    it('keeps_the_old_reply_out_of_the_thought', () => {
+        const s = splitter({ carry: PREFIX, preamble: OLD.length });
+        const out = stream(s, `${OLD}\nplanning the next beat${SUFFIX}\nNew prose.`);
+        expect(out.reasoning).toBe(`${OLD.slice(OLD.length)}\nplanning the next beat`);
+        expect(out.content).toBe(`${OLD}\nNew prose.`);
+    });
+
+    it('holds_only_the_new_tokens_while_the_thought_is_open', () => {
+        const s = splitter({ carry: PREFIX, preamble: OLD.length });
+        const out = stream(s, `${OLD}\nstill thinking`);
+        expect(out.parsing).toBe(true);
+        expect(out.content).toBe(OLD);
+    });
+
+    it('finalize_keeps_everything_when_the_continued_thought_never_closes', () => {
+        const s = splitter({ carry: PREFIX, preamble: OLD.length });
+        const full = `${OLD}\nthought that never closes`;
+        stream(s, full);
+        expect(s.finalize(full).content).toBe(full);
+    });
+
+    it('a_zero_preamble_behaves_exactly_as_before', () => {
+        const a = splitter({ carry: PREFIX, preamble: 0 });
+        const b = splitter({ carry: PREFIX });
+        const text = `\nthink${SUFFIX}reply`;
+        expect(a.update(text)).toEqual(b.update(text));
+    });
+});
+
 describe('trim behaviour', () => {
     it('trims_the_reply_when_trimming_is_enabled', () => {
         const out = stream(splitter({ trim: true }), `${PREFIX}\nthink${SUFFIX}\n  reply  `);

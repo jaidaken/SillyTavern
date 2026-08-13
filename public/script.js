@@ -3579,6 +3579,9 @@ class StreamingProcessor {
         this.toolCalls = [];
         // Initialize reasoning in its own handler
         this.reasoningHandler = new ReasoningHandler(timeStarted);
+        // On continue the parse target is continueMessage + stream; that lead-in is finished reply
+        // text and must never be read into a thought block.
+        this.reasoningHandler.continuePreamble = this.continueMessage.length;
         /** @type {PromptReasoning} */
         this.promptReasoning = promptReasoning;
         /** @type {string[]} */
@@ -5243,6 +5246,16 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     }
 
     let finalPrompt = await getCombinedPrompt(false);
+
+    // A continue prompt ends at the exact position the model chose to stop, and re-sampling there
+    // yields the stop token again (measured 3/3 at temp 1.43: one token, empty). Opening a seeded
+    // thought moves the model off the stop point; it plans the next beat and writes it (3/3 to the
+    // token cap). Skipped when the prompt already replays a thought: two blocks in one parse target
+    // is a shape the splitter does not model. Streaming only, the non-streaming parser is anchored.
+    if (isContinue && isInstruct && power_user.reasoning.enabled !== false && isStreamingEnabled() && !PromptReasoning.latestPromptHasReasoning()) {
+        finalPrompt = PromptReasoning.enableThinkingInCue(finalPrompt);
+        PromptReasoning.markPrefixOpenedByPrompt(finalPrompt);
+    }
 
     const eventData = { prompt: finalPrompt, dryRun: dryRun };
     await eventSource.emit(event_types.GENERATE_AFTER_COMBINE_PROMPTS, eventData);

@@ -290,6 +290,9 @@ export class ReasoningHandler {
     /** @type {ReasoningSplitter?} Splits the stream; owns the tag state this class used to track inline. */
     #splitter = null;
 
+    /** @type {number} Characters of already-written reply the stream is continuing; never thought text. */
+    continuePreamble = 0;
+
     /**
      * @param {Date?} [timeStarted=null] - When the generation started
      */
@@ -503,6 +506,7 @@ export class ReasoningHandler {
             suffix: power_user.reasoning.suffix,
             carry,
             trim: !!power_user.trim_spaces,
+            preamble: this.continuePreamble,
         });
 
         const split = final ? this.#splitter.finalize(message.mes) : this.#splitter.update(message.mes);
@@ -697,6 +701,14 @@ export class PromptReasoning {
         }
 
         return PromptReasoning.#LATEST.prefixReasoningFormatted;
+    }
+
+    /**
+     * Whether the latest prompt already carries a reasoning block for the last message, open or closed.
+     * @returns {boolean} True when a block was replayed or opened
+     */
+    static latestPromptHasReasoning() {
+        return !!PromptReasoning.#LATEST?.prefixReasoningFormatted;
     }
 
     /**

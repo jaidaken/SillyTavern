@@ -18,6 +18,7 @@ export class ReasoningSplitter {
     /** @type {string} */ #suffix;
     /** @type {string} */ #carry;
     /** @type {boolean} */ #trim;
+    /** @type {number} */ #preamble;
 
     /** Whether everything arriving now belongs to the thought. */
     #parsing = false;
@@ -31,12 +32,15 @@ export class ReasoningSplitter {
      * @param {string} options.suffix Closing tag
      * @param {string} [options.carry] Opening tag the prompt supplied, absent from the model's output
      * @param {boolean} [options.trim] Whether to trim surrounding whitespace, as power_user.trim_spaces does
+     * @param {number} [options.preamble] Characters at the start of the stream that precede the opened
+     *   block and stay reply text: on a continue, the already-written message the new tokens follow.
      */
-    constructor({ prefix, suffix, carry = '', trim = false }) {
+    constructor({ prefix, suffix, carry = '', trim = false, preamble = 0 }) {
         this.#prefix = prefix;
         this.#suffix = suffix;
         this.#carry = carry;
         this.#trim = trim;
+        this.#preamble = Math.max(0, preamble);
     }
 
     /** @returns {boolean} Whether a thought is currently open */
@@ -67,6 +71,20 @@ export class ReasoningSplitter {
             return { reasoning: '', content: streamed, parsing: false };
         }
 
+        if (this.#preamble > 0) {
+            const pre = String(streamed).slice(0, this.#preamble);
+            const inner = this.#split(String(streamed).slice(this.#preamble));
+            return { ...inner, content: inner.parsing ? pre : pre + inner.content };
+        }
+
+        return this.#split(streamed);
+    }
+
+    /**
+     * @param {string} streamed Stream text after any preamble
+     * @returns {SplitResult} The split as it stands
+     */
+    #split(streamed) {
         const target = this.#carry + streamed;
 
         if (this.#contentStart !== null) {
