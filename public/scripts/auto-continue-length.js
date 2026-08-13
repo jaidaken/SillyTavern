@@ -46,6 +46,22 @@ export function continueForceParams(isContinue, maxTokens, forceTokens) {
 }
 
 /**
+ * Strips the filler a forced continue pads with. With the stop token banned, a model that has finished
+ * cannot stop, so it emits no-word junk lines (underscores, dashes, lone punctuation) until the cap;
+ * the sentence trimmer keeps them because it counts several of those characters as sentence endings.
+ * @param {string} text Generated continuation text
+ * @returns {string} Text without trailing no-word lines
+ */
+export function trimForcedContinueTail(text) {
+    const lines = String(text ?? '').split('\n');
+    while (lines.length && !/[\p{L}\p{N}]/u.test(lines[lines.length - 1])) {
+        lines.pop();
+    }
+
+    return lines.join('\n').replace(/[_\s]+$/u, '');
+}
+
+/**
  * Whether a reply is short enough to continue.
  * @param {number} replyTokens Token count of the reply alone
  * @param {number} targetLength Configured target, zero or less disables the feature

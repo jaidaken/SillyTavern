@@ -1,7 +1,7 @@
 // @ts-check
 import { describe, expect, it } from '@jest/globals';
 
-import { continueForceParams, isBelowTargetLength, measuredReplyText } from '../public/scripts/auto-continue-length.js';
+import { continueForceParams, isBelowTargetLength, measuredReplyText, trimForcedContinueTail } from '../public/scripts/auto-continue-length.js';
 import { ReasoningSplitter } from '../public/scripts/reasoning-split.js';
 
 const PREFIX = '<|channel>thought';
@@ -109,5 +109,29 @@ describe('continueForceParams', () => {
 
     it('uses_its_own_cap_when_no_response_length_is_configured', () => {
         expect(continueForceParams(true, null, 200).n_predict).toBe(200);
+    });
+});
+
+describe('trimForcedContinueTail', () => {
+    it('strips_the_underscore_lines_a_forced_continue_pads_with', () => {
+        const text = 'She waves over her shoulder. "Peace out!"_\n_\n_\n_\n_';
+        expect(trimForcedContinueTail(text)).toBe('She waves over her shoulder. "Peace out!"');
+    });
+
+    it('strips_multiline_padding_of_mixed_punctuation', () => {
+        expect(trimForcedContinueTail('A real sentence.\n---\n***\n...\n')).toBe('A real sentence.');
+    });
+
+    it('leaves_a_normal_ending_alone', () => {
+        expect(trimForcedContinueTail('*She hops off the bus.* "See ya!"')).toBe('*She hops off the bus.* "See ya!"');
+    });
+
+    it('keeps_junk_looking_lines_in_the_middle_of_the_text', () => {
+        const text = 'First beat.\n---\nSecond beat.';
+        expect(trimForcedContinueTail(text)).toBe(text);
+    });
+
+    it('returns_empty_for_pure_padding', () => {
+        expect(trimForcedContinueTail('_\n_\n---\n')).toBe('');
     });
 });

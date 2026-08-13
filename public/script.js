@@ -266,7 +266,7 @@ import { initServerHistory } from './scripts/server-history.js';
 import { initSettingsSearch } from './scripts/setting-search.js';
 import { initBulkEdit } from './scripts/bulk-edit.js';
 import { getContext } from './scripts/st-context.js';
-import { isBelowTargetLength, measuredReplyText } from './scripts/auto-continue-length.js';
+import { isBelowTargetLength, measuredReplyText, trimForcedContinueTail } from './scripts/auto-continue-length.js';
 import { extractReasoningFromData, extractReasoningSignatureFromData, initReasoning, parseReasoningInSwipes, PromptReasoning, ReasoningHandler, removeReasoningFromString, updateReasoningUI } from './scripts/reasoning.js';
 import { accountStorage } from './scripts/util/AccountStorage.js';
 import { initWelcomeScreen, openPermanentAssistantChat, openPermanentAssistantCard, getPermanentAssistantAvatar } from './scripts/welcome-screen.js';
@@ -6590,6 +6590,12 @@ export function cleanUpMessage({ getMessage, isImpersonate, isContinue, displayI
 
     if (isImpersonate) {
         getMessage = getMessage.trim();
+    }
+
+    // Before the sentence trim: it counts underscores and dashes as sentence endings, so it would keep
+    // the filler a forced continue pads with after the scene is done.
+    if (isContinue && Number(power_user.continue_force_tokens) > 0) {
+        getMessage = trimForcedContinueTail(getMessage);
     }
 
     if (!displayIncompleteSentences && power_user.trim_sentences) {
