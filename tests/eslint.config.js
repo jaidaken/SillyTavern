@@ -12,7 +12,7 @@ export default [
     },
     js.configs.recommended,
     { ...jest.configs['flat/recommended'], files: ['**/*.test.js'] },
-    { ...playwright.configs['flat/recommended'], files: ['**/*.e2e.js'] },
+    { ...playwright.configs['flat/recommended'], files: ['**/*.e2e.js', 'frontend/**/*.js'] },
     {
         languageOptions: {
             ecmaVersion: 'latest',
@@ -20,6 +20,8 @@ export default [
             globals: {
                 ...globals.es2015,
                 ...globals.node,
+                ...globals.browser,
+                ...globals.jquery,
                 ...jest.environments.globals.globals,
                 SillyTavern: 'readonly',
             },

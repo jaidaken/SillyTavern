@@ -7,6 +7,7 @@ import { readSecret, SECRET_KEYS } from './secrets.js';
 import { trimV1 } from '../util.js';
 import { setAdditionalHeaders } from '../additional-headers.js';
 import { log } from '../log.js';
+import { getUntrustedRequestAgent } from '../private-request-filter.js';
 
 export const router = express.Router();
 
@@ -417,8 +418,14 @@ router.post('/visit', async (request, response) => {
                 throw new Error('Invalid port');
             }
 
-            // Reject IP addresses
-            if (ipRegex.v4({ exact: true }).test(urlObj.hostname) || ipRegex.v6({ exact: true }).test(urlObj.hostname)) {
+            // Reject IP addresses. A bracketed IPv6 literal keeps its brackets in URL.hostname.
+            const bareHostname = urlObj.hostname.replace(/^\[|\]$/g, '');
+            if (ipRegex.v4({ exact: true }).test(bareHostname) || ipRegex.v6({ exact: true }).test(bareHostname)) {
+                throw new Error('Invalid hostname');
+            }
+
+            // Reject localhost and .localhost domains to prevent SSRF bypass
+            if (urlObj.hostname === 'localhost' || urlObj.hostname.endsWith('.localhost')) {
                 throw new Error('Invalid hostname');
             }
         } catch (error) {
@@ -428,7 +435,10 @@ router.post('/visit', async (request, response) => {
 
         log.search.info('Visiting web URL', url);
 
-        const result = await fetch(url, { headers: visitHeaders });
+        // The URL checks above only guard the literal input. The agent enforces the actual network
+        // boundary: it blocks connections to private addresses after DNS resolution, on every redirect
+        // hop, and pins the connection to the validated IP to prevent DNS rebinding.
+        const result = await fetch(url, { headers: visitHeaders, agent: getUntrustedRequestAgent() });
 
         if (!result.ok) {
             log.search.error(`Visit failed ${result.status} ${result.statusText}`);

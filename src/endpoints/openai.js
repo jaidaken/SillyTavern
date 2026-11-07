@@ -238,19 +238,6 @@ router.post('/caption-image', async (request, response) => {
             apiUrl = `${trimV1(request.body.server_url)}/v1/chat/completions`;
         }
 
-        if (request.body.api === 'ooba') {
-            const imgMessage = body.messages.pop();
-            body.messages.push({
-                role: 'user',
-                content: imgMessage?.content?.[0]?.text,
-            });
-            body.messages.push({
-                role: 'user',
-                content: [],
-                image_url: imgMessage?.content?.[1]?.image_url?.url,
-            });
-        }
-
         await setAdditionalHeaders(request, { headers }, apiUrl);
         log.net.debug('Multimodal captioning request', body);
 

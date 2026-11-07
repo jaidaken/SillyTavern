@@ -15,7 +15,7 @@ import storage from 'node-persist';
 
 import { AVATAR_WIDTH, AVATAR_HEIGHT, DEFAULT_AVATAR_PATH } from '../constants.js';
 import { default as validateAvatarUrlMiddleware, getFileNameValidationFunction, forbiddenRegExp } from '../middleware/validateFileName.js';
-import { deepMerge, humanizedDateTime, tryParse, MemoryLimitedMap, getConfigValue, mutateJsonString, clientRelativePath, getUniqueNameAsync, sanitizeSafeCharacterReplacements } from '../util.js';
+import { deepMerge, humanizedDateTime, tryParse, MemoryLimitedMap, getConfigValue, mutateJsonString, clientRelativePath, getUniqueNameAsync, sanitizeSafeCharacterReplacements, getArrayBufferSlice } from '../util.js';
 import { TavernCardValidator } from '../validator/TavernCardValidator.js';
 import { parse, read, write } from '../character-card-parser.js';
 import { readWorldInfoFile } from './worldinfo.js';
@@ -852,7 +852,7 @@ async function importFromYaml(uploadPath, context, preservedFileName) {
 async function importFromCharX(uploadPath, { request }, preservedFileName) {
     const fileBuffer = await fs.promises.readFile(uploadPath);
     // Create a properly-sized ArrayBuffer (Node's buffer pool can cause oversized .buffer)
-    const data = fileBuffer.buffer.slice(fileBuffer.byteOffset, fileBuffer.byteOffset + fileBuffer.byteLength);
+    const data = getArrayBufferSlice(fileBuffer);
     await fs.promises.unlink(uploadPath);
 
     const parser = new CharXParser(data);
@@ -888,7 +888,7 @@ async function importFromCharX(uploadPath, { request }, preservedFileName) {
 }
 
 async function importFromByaf(uploadPath, { request }, preservedFileName) {
-    const data = (await fsPromises.readFile(uploadPath)).buffer;
+    const data = getArrayBufferSlice(await fsPromises.readFile(uploadPath));
     await fsPromises.unlink(uploadPath);
     log.chars.info('Importing from BYAF');
 
@@ -1172,7 +1172,9 @@ router.post('/rename', validateAvatarUrlMiddleware, async function (request, res
 
         // Rename chats folder
         if (await fs.promises.stat(oldChatsPath).catch(() => null) && !(await fs.promises.stat(newChatsPath).catch(() => null))) {
-            await fs.promises.cp(oldChatsPath, newChatsPath, { recursive: true });
+            // Supplying a filter avoids a Node.js Windows copyDir crash while preserving all entries.
+            // https://github.com/nodejs/node/issues/63970
+            await fs.promises.cp(oldChatsPath, newChatsPath, { recursive: true, filter: () => true });
             await fs.promises.rm(oldChatsPath, { recursive: true, force: true });
         }
 

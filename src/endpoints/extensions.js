@@ -6,7 +6,7 @@ import sanitize from 'sanitize-filename';
 import { CheckRepoActions, default as simpleGit } from 'simple-git';
 
 import { PUBLIC_DIRECTORIES } from '../constants.js';
-import { getConfigValue, isValidUrl } from '../util.js';
+import { color, getConfigValue, isValidUrl } from '../util.js';
 import { createGitClient } from '../git/client.js';
 import { log } from '../log.js';
 
@@ -488,11 +488,28 @@ router.get('/discover', async function (request, response) {
         await fs.promises.mkdir(PUBLIC_DIRECTORIES.globalExtensions);
     }
 
+    /**
+     * A directory without a manifest.json is not a usable extension: typically a leftover
+     * from a manual deletion (e.g. a locked .git directory on Windows). Listing it would
+     * make the client report a ghost extension and request its manifest in vain on every load.
+     * @param {string} parentDirectory Directory containing extension folders
+     * @param {string} folder Extension folder name
+     * @returns {Promise<boolean>} Whether the folder contains a manifest
+     */
+    const hasManifest = async (parentDirectory, folder) => {
+        const manifestPath = path.join(parentDirectory, folder, 'manifest.json');
+        const manifestExists = Boolean(await fs.promises.stat(manifestPath).catch(() => null));
+        if (!manifestExists) {
+            log.ext.warn(color.yellow(`Extension folder "${path.join(parentDirectory, folder)}" has no manifest.json and was skipped. Remove the folder to get rid of this warning.`));
+        }
+        return manifestExists;
+    };
+
     // Get all folders in system extensions folder, excluding third-party
     const builtInExtensions = [];
     for (const f of await fs.promises.readdir(PUBLIC_DIRECTORIES.extensions)) {
         const entryStat = await fs.promises.stat(path.join(PUBLIC_DIRECTORIES.extensions, f));
-        if (entryStat.isDirectory() && f !== 'third-party') {
+        if (entryStat.isDirectory() && f !== 'third-party' && await hasManifest(PUBLIC_DIRECTORIES.extensions, f)) {
             builtInExtensions.push({ type: 'system', name: f });
         }
     }
@@ -501,7 +518,7 @@ router.get('/discover', async function (request, response) {
     const userExtensions = [];
     for (const f of await fs.promises.readdir(path.join(request.user.directories.extensions))) {
         const entryStat = await fs.promises.stat(path.join(request.user.directories.extensions, f));
-        if (entryStat.isDirectory()) {
+        if (entryStat.isDirectory() && await hasManifest(request.user.directories.extensions, f)) {
             userExtensions.push({ type: 'local', name: `third-party/${f}` });
         }
     }
@@ -512,7 +529,7 @@ router.get('/discover', async function (request, response) {
     for (const f of await fs.promises.readdir(PUBLIC_DIRECTORIES.globalExtensions)) {
         const entryStat = await fs.promises.stat(path.join(PUBLIC_DIRECTORIES.globalExtensions, f));
         const name = `third-party/${f}`;
-        if (entryStat.isDirectory() && !userExtensions.some(e => e.name === name)) {
+        if (entryStat.isDirectory() && await hasManifest(PUBLIC_DIRECTORIES.globalExtensions, f) && !userExtensions.some(e => e.name === name)) {
             globalExtensions.push({ type: 'global', name });
         }
     }

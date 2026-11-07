@@ -56,10 +56,6 @@ class MiniMaxTtsProvider {
                     <i class="fa-solid fa-key"></i>
                     <span>Click to set API Key</span>
                 </div>
-                <div id="minimax_group_id" class="menu_button menu_button_icon manage-api-keys" data-key="minimax_group_id">
-                    <i class="fa-solid fa-key"></i>
-                    <span>Click to set Group ID</span>
-                </div>
             </div>
             <div class="tts_block">
                 <label for="minimax_tts_api_host">API Host</label>
@@ -174,9 +170,8 @@ class MiniMaxTtsProvider {
 
     constructor() {
         this.handler = async function (/** @type {string} */ key) {
-            if (![SECRET_KEYS.MINIMAX, SECRET_KEYS.MINIMAX_GROUP_ID].includes(key)) return;
+            if (key !== SECRET_KEYS.MINIMAX) return;
             $('#api_key_minimax').toggleClass('success', !!secret_state[SECRET_KEYS.MINIMAX]);
-            $('#minimax_group_id').toggleClass('success', !!secret_state[SECRET_KEYS.MINIMAX_GROUP_ID]);
             await this.onRefreshClick();
         }.bind(this);
     }
@@ -589,13 +584,12 @@ class MiniMaxTtsProvider {
         }
 
         $('#api_key_minimax').toggleClass('success', !!secret_state[SECRET_KEYS.MINIMAX]);
-        $('#minimax_group_id').toggleClass('success', !!secret_state[SECRET_KEYS.MINIMAX_GROUP_ID]);
         [event_types.SECRET_WRITTEN, event_types.SECRET_DELETED, event_types.SECRET_ROTATED].forEach(event => {
             eventSource.on(event, this.handler);
         });
 
         // Only check ready status when API credentials are available
-        if (secret_state[SECRET_KEYS.MINIMAX] && secret_state[SECRET_KEYS.MINIMAX_GROUP_ID]) {
+        if (secret_state[SECRET_KEYS.MINIMAX]) {
             try {
                 await this.checkReady();
                 log.tts.debug('MiniMax TTS: Settings loaded and ready');
@@ -609,8 +603,8 @@ class MiniMaxTtsProvider {
 
     // Perform a simple readiness check
     async checkReady() {
-        if (!secret_state[SECRET_KEYS.MINIMAX] || !secret_state[SECRET_KEYS.MINIMAX_GROUP_ID]) {
-            const error = new Error('API Key and Group ID are required');
+        if (!secret_state[SECRET_KEYS.MINIMAX]) {
+            const error = new Error('API Key is required');
             log.tts.error('MiniMax TTS checkReady error:', error.message);
             throw error;
         }
@@ -710,8 +704,8 @@ class MiniMaxTtsProvider {
 
     async fetchTtsVoiceObjects() {
         try {
-            if (!secret_state[SECRET_KEYS.MINIMAX] || !secret_state[SECRET_KEYS.MINIMAX_GROUP_ID]) {
-                log.tts.warn('MiniMax TTS: API Key and Group ID required for fetching voices');
+            if (!secret_state[SECRET_KEYS.MINIMAX]) {
+                log.tts.warn('MiniMax TTS: API Key required for fetching voices');
                 log.tts.warn('Using all available voices (default + custom). Please check your API credentials');
                 return this.getAllVoices();
             }
@@ -776,8 +770,8 @@ class MiniMaxTtsProvider {
     async fetchTtsGeneration(inputText, voiceId, language = null) {
         log.tts.debug(`Generating new MiniMax TTS for voice_id ${voiceId}`);
 
-        if (!secret_state[SECRET_KEYS.MINIMAX] || !secret_state[SECRET_KEYS.MINIMAX_GROUP_ID]) {
-            const error = new Error('API Key and Group ID are required');
+        if (!secret_state[SECRET_KEYS.MINIMAX]) {
+            const error = new Error('API Key is required');
             log.tts.error('MiniMax TTS fetchTtsGeneration error:', error.message);
             throw error;
         }

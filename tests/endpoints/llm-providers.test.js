@@ -842,14 +842,13 @@ describe('SillyTavern LLM provider and tokenizer endpoints', () => {
         test('generate_voice_with_missing_fields_returns_400_with_a_json_error_body', async () => {
             const response = await client.postJson('/api/minimax/generate-voice', {});
             expect(response.status).toBe(400);
-            expect(await response.json()).toEqual({ error: 'Missing required parameters: text, voiceId, apiKey, and groupId are required' });
+            expect(await response.json()).toEqual({ error: 'Missing required parameters: text, voiceId, and apiKey are required' });
         }, CASE_TIMEOUT_MS);
 
         test('generate_voice_with_a_configured_api_host_forwards_the_request_and_decodes_the_hex_audio_payload', async () => {
             await writeSecret(SECRET_KEYS.MINIMAX, 'fake-minimax-key');
-            await writeSecret(SECRET_KEYS.MINIMAX_GROUP_ID, 'fake-group-id');
             mock.handler = (req, res) => {
-                expect(req.url).toBe('/v1/t2a_v2?GroupId=fake-group-id');
+                expect(req.url).toBe('/v1/t2a_v2');
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ base_resp: { status_code: 0 }, data: { audio: '48656c6c6f' } }));
             };
