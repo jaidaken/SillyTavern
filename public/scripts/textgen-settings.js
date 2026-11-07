@@ -797,8 +797,8 @@ async function getStatusTextgen() {
                     }
                     log.settings.debug(`We have chat template ${chat_template.split('\n')[0]}...`);
                     const savedTemplate = power_user.model_templates_mappings[chat_template_hash];
-                    const derivedTemplate = await deriveTemplatesFromChatTemplate(chat_template, chat_template_hash);
-                    const { context, instruct } = savedTemplate ?? derivedTemplate;
+                    // A template bound to this hash wins; derive only without one, so a bound model logs no unknown-hash warning.
+                    const { context, instruct } = savedTemplate ?? await deriveTemplatesFromChatTemplate(chat_template, chat_template_hash);
 
                     if (wantsContextDerivation && context) {
                         selectContextPreset(context, { isAuto: true });

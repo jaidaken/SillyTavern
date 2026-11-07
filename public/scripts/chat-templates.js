@@ -106,6 +106,8 @@ const hash_derivations = {
 const substr_derivations = [
     ['Moonshot AI', ['<|im_user|>user<|im_middle|>', '<|im_assistant|>assistant<|im_middle|>', '<|im_end|>']],
     ['OpenAI Harmony', ['<|start|>user<|message|>', '<|start|>assistant<|channel|>final<|message|>', '<|end|>']],
+    // Gemma 4: GGUF builds ship many template variants (tool-call and continuation patches), so match the turn tokens, not a hash.
+    ['Gemma 4', ['<|turn>model', '<turn|>']],
 
     // Generic cases. No '<|im_start|>user' literal: generic templates build the tag as '<|im_start|>' + message['role'].
     ['ChatML', ['<|im_start|>assistant', '<|im_end|>']],
